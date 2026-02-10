@@ -287,10 +287,60 @@ save_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
 section "Setup Complete"
 ok "Deployed to $CLAUDE_DIR"
 
+# ---------------------------------------------------------------------------
+# Install Claude Code CLI if not present
+# ---------------------------------------------------------------------------
+if ! command -v claude &>/dev/null; then
+  printf "\n"
+  warn "Claude Code CLI is not installed."
+  info "Install it now? (requires npm)"
+  printf "  1) Yes, install now (npm install -g @anthropic-ai/claude-code)\n"
+  printf "  2) No, I'll install it later\n"
+  local install_choice=""
+  read -r -p "Choice: " install_choice
+  case "$install_choice" in
+    1)
+      if command -v npm &>/dev/null; then
+        info "Installing Claude Code CLI..."
+        npm install -g @anthropic-ai/claude-code
+        if command -v claude &>/dev/null; then
+          ok "Claude Code CLI installed: $(claude --version 2>/dev/null || echo 'installed')"
+        else
+          warn "Installation completed but 'claude' not found in PATH."
+          warn "You may need to restart your terminal or add npm global bin to PATH."
+        fi
+      else
+        error "npm is not available. Please install Node.js first, then run:"
+        error "  npm install -g @anthropic-ai/claude-code"
+      fi
+      ;;
+    *)
+      info "To install later, run:"
+      printf "  npm install -g @anthropic-ai/claude-code\n"
+      ;;
+  esac
+else
+  ok "Claude Code CLI is already installed: $(claude --version 2>/dev/null || echo 'found')"
+fi
+
+# ---------------------------------------------------------------------------
+# Plugin hints
+# ---------------------------------------------------------------------------
 if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
+  printf "\n"
   info "To install plugins, start 'claude' and run:"
   IFS=',' read -r -a _plugins <<< "$SELECTED_PLUGINS"
   for p in "${_plugins[@]}"; do
     [[ -n "$p" ]] && printf "  /install %s\n" "$p"
   done
+fi
+
+# ---------------------------------------------------------------------------
+# WSL hint
+# ---------------------------------------------------------------------------
+if is_wsl; then
+  printf "\n"
+  info "You are running inside WSL."
+  info "Always run 'claude' from a WSL terminal (Ubuntu), not from PowerShell."
+  info "To start WSL from Windows: open a terminal and type 'wsl'"
 fi

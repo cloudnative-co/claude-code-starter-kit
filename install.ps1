@@ -207,3 +207,11 @@ Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
 Write-Ok "Setup complete!"
+Write-Host ""
+Write-Info "IMPORTANT: Claude Code runs inside WSL, not in PowerShell."
+Write-Info "To use Claude Code:"
+Write-Info "  1. Open a terminal and type: wsl"
+Write-Info "  2. Navigate to your project: cd /path/to/your/project"
+Write-Info "  3. Run: claude"
+Write-Host ""
+Write-Info "Or directly from PowerShell: wsl -d Ubuntu -- bash -lc 'cd /path/to/project && claude'"
