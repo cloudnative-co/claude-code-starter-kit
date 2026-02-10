@@ -207,3 +207,18 @@ Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
 Write-Ok "Setup complete!"
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  Next Step / 次のステップ" -ForegroundColor White
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Info "Claude Code runs inside WSL, not in PowerShell."
+Write-Info "Claude Code は WSL 内で実行します（PowerShell ではありません）。"
+Write-Host ""
+Write-Info "Option 1: Open a terminal and type 'wsl', then run 'claude'"
+Write-Info "方法 1: ターミナルで 'wsl' と入力し、'claude' を実行"
+Write-Host ""
+Write-Info "Option 2: Run directly from PowerShell:"
+Write-Info "方法 2: PowerShell から直接実行:"
+Write-Host "  wsl -d Ubuntu -- bash -lc 'cd ~ && claude'" -ForegroundColor Yellow
+Write-Host ""

@@ -334,10 +334,12 @@ if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
   printf "\n"
   IFS=',' read -r -a _plugins <<< "$SELECTED_PLUGINS"
   if command -v claude &>/dev/null; then
+    # Ensure the official marketplace is registered
+    claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null || true
     info "$STR_DEPLOY_PLUGINS_INSTALLING"
     for p in "${_plugins[@]}"; do
       if [[ -n "$p" ]]; then
-        if claude plugin install "$p" --scope user 2>/dev/null; then
+        if claude plugin install "$p" --scope user; then
           ok "$STR_DEPLOY_PLUGINS_INSTALLED $p"
         else
           warn "$STR_DEPLOY_PLUGINS_FAILED $p"
