@@ -195,7 +195,7 @@ build_settings() {
     fi
   fi
 
-  build_settings_json "$base" "$permissions" "$out" "${hook_fragments[@]}"
+  build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
 
   # Set language name in settings
   local lang_name
@@ -242,8 +242,15 @@ write_manifest() {
   local ts
   ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+  # Only track files in starter-kit-managed directories (not plugins, sessions, etc.)
   local files_json
-  files_json="$(find "$CLAUDE_DIR" -type f ! -name ".starter-kit-manifest.json" | sort | jq -R -s 'split("\n")[:-1]')"
+  files_json="$({
+    find "$CLAUDE_DIR/agents" "$CLAUDE_DIR/rules" "$CLAUDE_DIR/commands" \
+         "$CLAUDE_DIR/skills" "$CLAUDE_DIR/memory" "$CLAUDE_DIR/hooks" \
+         -type f 2>/dev/null || true
+    [[ -f "$CLAUDE_DIR/CLAUDE.md" ]] && echo "$CLAUDE_DIR/CLAUDE.md"
+    [[ -f "$CLAUDE_DIR/settings.json" ]] && echo "$CLAUDE_DIR/settings.json"
+  } | sort -u | jq -R -s 'split("\n")[:-1]')"
 
   jq -n \
     --arg ts "$ts" \

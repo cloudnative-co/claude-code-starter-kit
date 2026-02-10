@@ -76,7 +76,7 @@ build_settings_json() {
   local permissions_file="$2"
   local output_file="$3"
   shift 3
-  local hook_fragments=("$@")
+  # Remaining positional args are hook fragment files (may be empty)
 
   # Validate inputs
   if [[ ! -f "$base_file" ]]; then
@@ -94,8 +94,8 @@ build_settings_json() {
   local merged
   merged="$(jq -s '.[0] * .[1]' "$base_file" "$permissions_file")"
 
-  # Merge each hook fragment
-  for fragment in "${hook_fragments[@]}"; do
+  # Merge each hook fragment (iterating "$@" is safe even when empty on Bash 3.2)
+  for fragment in "$@"; do
     if [[ ! -f "$fragment" ]]; then
       warn "Hook fragment not found, skipping: $fragment"
       continue
