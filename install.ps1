@@ -37,60 +37,123 @@ if ($build -lt 19041) {
 Write-Ok "Windows version compatible with WSL2"
 
 # ---------------------------------------------------------------------------
-# WSL status check
+# Helper: Test if Ubuntu is ready (can execute commands)
 # ---------------------------------------------------------------------------
-$wslInstalled = $false
-$ubuntuAvailable = $false
-
-try {
-    $wslStatus = wsl --status 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        $wslInstalled = $true
-    }
-} catch {
-    $wslInstalled = $false
-}
-
-if ($wslInstalled) {
+function Test-UbuntuReady {
     try {
-        $distros = wsl -l -q 2>&1 | Where-Object { $_ -match "Ubuntu" }
-        if ($distros) {
-            $ubuntuAvailable = $true
-        }
-    } catch {}
+        $result = wsl -d Ubuntu -- echo "READY" 2>&1
+        # wsl output may contain null bytes (UTF-16LE), clean it
+        $cleaned = ($result | Out-String).Trim()
+        return $cleaned -match "READY"
+    } catch {
+        return $false
+    }
 }
 
 # ---------------------------------------------------------------------------
-# Install WSL + Ubuntu if needed
+# Helper: Check if WSL command exists and works
 # ---------------------------------------------------------------------------
-if (-not $wslInstalled) {
+function Test-WslInstalled {
+    try {
+        $null = wsl --status 2>&1
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Helper: Check if Ubuntu distro is registered (may not be ready yet)
+# wsl -l outputs UTF-16LE with null bytes, so use .NET to decode
+# ---------------------------------------------------------------------------
+function Test-UbuntuRegistered {
+    try {
+        $rawBytes = [System.Text.Encoding]::Unicode.GetBytes("")
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo.FileName = "wsl.exe"
+        $proc.StartInfo.Arguments = "-l -q"
+        $proc.StartInfo.UseShellExecute = $false
+        $proc.StartInfo.RedirectStandardOutput = $true
+        $proc.StartInfo.StandardOutputEncoding = [System.Text.Encoding]::Unicode
+        $proc.Start() | Out-Null
+        $output = $proc.StandardOutput.ReadToEnd()
+        $proc.WaitForExit()
+        return $output -match "Ubuntu"
+    } catch {
+        return $false
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Step 1: Ensure WSL is installed
+# ---------------------------------------------------------------------------
+if (-not (Test-WslInstalled)) {
     Write-Info "WSL is not installed. Installing WSL with Ubuntu..."
     wsl --install -d Ubuntu
+
+    Write-Host ""
+    Write-Warn "============================================="
+    Write-Warn "  WSL has been installed. RESTART REQUIRED."
+    Write-Warn "============================================="
     Write-Warn ""
-    Write-Warn "WSL has been installed. A RESTART is required."
-    Write-Warn "After restart:"
-    Write-Warn "  1. Open Ubuntu from the Start menu"
-    Write-Warn "  2. Complete the initial user setup"
-    Write-Warn "  3. Run this script again"
+    Write-Warn "After restart, run this command again:"
+    Write-Warn ""
+    Write-Warn '  irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex'
+    Write-Warn ""
+    Write-Warn "The setup will automatically continue from where it left off."
     Write-Warn ""
     Read-Host "Press Enter to restart now (or Ctrl+C to cancel)"
     Restart-Computer -Force
     exit 0
 }
 
-if (-not $ubuntuAvailable) {
-    Write-Info "Ubuntu is not installed in WSL. Installing..."
-    wsl --install -d Ubuntu
-    Write-Warn ""
-    Write-Warn "Ubuntu has been installed in WSL."
-    Write-Warn "Please complete the Ubuntu user setup, then run this script again."
-    exit 0
-}
-
-Write-Ok "WSL2 with Ubuntu is available"
+Write-Ok "WSL is installed"
 
 # ---------------------------------------------------------------------------
-# Run Linux bootstrap inside WSL
+# Step 2: Ensure Ubuntu is registered and ready
+# ---------------------------------------------------------------------------
+if (-not (Test-UbuntuRegistered)) {
+    Write-Info "Ubuntu is not installed in WSL. Installing..."
+    wsl --install -d Ubuntu
+    Write-Info "Waiting for Ubuntu installation to complete..."
+    Start-Sleep -Seconds 5
+}
+
+# If Ubuntu is registered but not ready, it means user setup is needed
+if (-not (Test-UbuntuReady)) {
+    Write-Host ""
+    Write-Info "Ubuntu needs initial user setup."
+    Write-Info "A new Ubuntu window will open. Please:"
+    Write-Info "  1. Create your UNIX username"
+    Write-Info "  2. Set a password"
+    Write-Info "  3. Close the Ubuntu window when done"
+    Write-Host ""
+    Read-Host "Press Enter to open Ubuntu setup"
+
+    # Launch Ubuntu for user to complete setup
+    Start-Process "ubuntu.exe" -Wait -ErrorAction SilentlyContinue
+
+    # Poll until Ubuntu is ready (max 120 seconds)
+    Write-Info "Waiting for Ubuntu to become ready..."
+    $maxWait = 120
+    $waited = 0
+    while (-not (Test-UbuntuReady)) {
+        Start-Sleep -Seconds 3
+        $waited += 3
+        if ($waited -ge $maxWait) {
+            Write-Err "Ubuntu did not become ready within ${maxWait} seconds."
+            Write-Err "Please open Ubuntu manually, complete the setup, then run this script again."
+            exit 1
+        }
+        Write-Host "." -NoNewline
+    }
+    Write-Host ""
+}
+
+Write-Ok "WSL2 with Ubuntu is ready"
+
+# ---------------------------------------------------------------------------
+# Step 3: Run Linux bootstrap inside WSL
 # ---------------------------------------------------------------------------
 Write-Info "Running Claude Code Starter Kit setup inside WSL..."
 
@@ -101,40 +164,46 @@ set -euo pipefail
 REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
 INSTALL_DIR="$HOME/.claude-starter-kit"
 
-if command -v dos2unix &>/dev/null; then
-    echo "[INFO] dos2unix available"
-elif command -v apt-get &>/dev/null; then
-    sudo apt-get update -qq && sudo apt-get install -y dos2unix git curl jq
+# Install essential tools
+if command -v apt-get &>/dev/null; then
+    echo "[INFO] Installing dependencies..."
+    sudo apt-get update -qq
+    sudo apt-get install -y git curl jq dos2unix 2>/dev/null || true
 fi
 
+# Clone or update the repo
 if [[ -d "$INSTALL_DIR/.git" ]]; then
+    echo "[INFO] Updating existing installation..."
     git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
         rm -rf "$INSTALL_DIR"
         git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
     }
 else
     [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR"
+    echo "[INFO] Cloning Claude Code Starter Kit..."
     git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 
 # Fix line endings for WSL
 find "$INSTALL_DIR" -name "*.sh" -exec dos2unix {} \; 2>/dev/null || true
+find "$INSTALL_DIR" -name "*.conf" -exec dos2unix {} \; 2>/dev/null || true
 
 chmod +x "$INSTALL_DIR/setup.sh"
+chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
+
+echo "[INFO] Starting interactive setup..."
 exec bash "$INSTALL_DIR/setup.sh"
 '@
 
+# Write script to temp file with Unix line endings
 $tempFile = [System.IO.Path]::GetTempFileName()
-$bootstrapScript | Set-Content -Path $tempFile -NoNewline
+[System.IO.File]::WriteAllText($tempFile, $bootstrapScript.Replace("`r`n", "`n"))
 
-# Convert to Unix line endings
-$content = Get-Content -Path $tempFile -Raw
-$content = $content -replace "`r`n", "`n"
-Set-Content -Path $tempFile -Value $content -NoNewline
-
+# Convert Windows path to WSL path and execute
 $wslPath = wsl wslpath -a ($tempFile -replace '\\', '/')
 wsl bash $wslPath
 
 Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
 
+Write-Host ""
 Write-Ok "Setup complete!"
