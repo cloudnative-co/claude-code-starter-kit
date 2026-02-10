@@ -10,7 +10,7 @@ STR_BANNER_SUB="Interactive Environment Setup"
 # Step 2: Profile
 STR_PROFILE_TITLE="Choose a configuration profile:"
 STR_PROFILE_MINIMAL="Minimal - Agents + rules only (lightweight)"
-STR_PROFILE_STANDARD="Standard - Agents + rules + commands + skills + core hooks (Recommended)"
+STR_PROFILE_STANDARD="Standard - Agents + rules + commands + skills + core hooks"
 STR_PROFILE_FULL="Full - Everything enabled including all hooks and Codex MCP"
 STR_PROFILE_CUSTOM="Custom - Choose individual components"
 
