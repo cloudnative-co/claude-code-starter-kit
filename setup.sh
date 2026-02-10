@@ -302,12 +302,11 @@ if ! command -v claude &>/dev/null; then
     1)
       if command -v npm &>/dev/null; then
         info "$STR_CLI_INSTALLING"
-        local npm_prefix
         npm_prefix="$(npm config get prefix 2>/dev/null || echo '/usr/local')"
         if [[ -w "${npm_prefix}/lib" ]]; then
-          npm install -g @anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code || true
         else
-          sudo npm install -g @anthropic-ai/claude-code
+          sudo npm install -g @anthropic-ai/claude-code || true
         fi
         if command -v claude &>/dev/null; then
           ok "$STR_CLI_INSTALLED"
