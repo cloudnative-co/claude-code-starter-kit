@@ -78,6 +78,10 @@ STR_DEPLOY_START="Deploying Claude Code configuration..."
 STR_DEPLOY_BACKUP="Backing up existing config..."
 STR_DEPLOY_DONE="Deployment complete!"
 STR_DEPLOY_PLUGINS_HINT="To install plugins, run 'claude' and use:"
+STR_DEPLOY_PLUGINS_INSTALLING="Installing plugins..."
+STR_DEPLOY_PLUGINS_INSTALLED="Installed plugin:"
+STR_DEPLOY_PLUGINS_FAILED="Failed to install plugin:"
+STR_DEPLOY_PLUGINS_SKIP="Skipping plugin install (Claude Code CLI not available)"
 
 # Post-deploy: CLI install
 STR_CLI_NOT_FOUND="Claude Code CLI is not installed."

@@ -76,6 +76,10 @@ STR_DEPLOY_START="Claude Code 設定をデプロイ中..."
 STR_DEPLOY_BACKUP="既存の設定をバックアップ中..."
 STR_DEPLOY_DONE="デプロイ完了！"
 STR_DEPLOY_PLUGINS_HINT="プラグインをインストールするには 'claude' を起動して以下を実行："
+STR_DEPLOY_PLUGINS_INSTALLING="プラグインをインストール中..."
+STR_DEPLOY_PLUGINS_INSTALLED="プラグインをインストールしました："
+STR_DEPLOY_PLUGINS_FAILED="プラグインのインストールに失敗："
+STR_DEPLOY_PLUGINS_SKIP="プラグインのインストールをスキップ（Claude Code CLI が利用不可）"
 
 # Post-deploy: CLI install
 STR_CLI_NOT_FOUND="Claude Code CLI がインストールされていません。"

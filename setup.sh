@@ -328,15 +328,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Plugin hints
+# Install plugins
 # ---------------------------------------------------------------------------
 if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
   printf "\n"
-  info "$STR_DEPLOY_PLUGINS_HINT"
   IFS=',' read -r -a _plugins <<< "$SELECTED_PLUGINS"
-  for p in "${_plugins[@]}"; do
-    [[ -n "$p" ]] && printf "  /install %s\n" "$p"
-  done
+  if command -v claude &>/dev/null; then
+    info "$STR_DEPLOY_PLUGINS_INSTALLING"
+    for p in "${_plugins[@]}"; do
+      if [[ -n "$p" ]]; then
+        if claude plugin install "$p" --scope user 2>/dev/null; then
+          ok "$STR_DEPLOY_PLUGINS_INSTALLED $p"
+        else
+          warn "$STR_DEPLOY_PLUGINS_FAILED $p"
+        fi
+      fi
+    done
+  else
+    warn "$STR_DEPLOY_PLUGINS_SKIP"
+    info "$STR_DEPLOY_PLUGINS_HINT"
+    for p in "${_plugins[@]}"; do
+      [[ -n "$p" ]] && printf "  /install %s\n" "$p"
+    done
+  fi
 fi
 
 # ---------------------------------------------------------------------------
