@@ -79,6 +79,26 @@ STR_DEPLOY_BACKUP="Backing up existing config..."
 STR_DEPLOY_DONE="Deployment complete!"
 STR_DEPLOY_PLUGINS_HINT="To install plugins, run 'claude' and use:"
 
+# Post-deploy: CLI install
+STR_CLI_NOT_FOUND="Claude Code CLI is not installed."
+STR_CLI_INSTALL_NOW="Install it now? (requires npm)"
+STR_CLI_INSTALL_YES="Yes, install now (npm install -g @anthropic-ai/claude-code)"
+STR_CLI_INSTALL_NO="No, I'll install it later"
+STR_CLI_INSTALLING="Installing Claude Code CLI..."
+STR_CLI_INSTALLED="Claude Code CLI installed"
+STR_CLI_INSTALL_LATER="To install later, run:"
+STR_CLI_ALREADY="Claude Code CLI is already installed"
+STR_CLI_NPM_MISSING="npm is not available. Please install Node.js first, then run:"
+STR_CLI_PATH_WARN="Installation completed but 'claude' not found in PATH. Restart your terminal."
+
+# Post-deploy: WSL hint
+STR_WSL_NOTICE="You are running inside WSL."
+STR_WSL_IMPORTANT="IMPORTANT: Claude Code runs inside WSL, not in PowerShell."
+STR_WSL_HOW_TO="To use Claude Code:"
+STR_WSL_STEP1="1. Open a terminal and type: wsl"
+STR_WSL_STEP2="2. Navigate to your project: cd /path/to/your/project"
+STR_WSL_STEP3="3. Run: claude"
+
 # Errors
 STR_ERR_JQ="jq is required but not installed."
 STR_ERR_GIT="git is required but not installed."

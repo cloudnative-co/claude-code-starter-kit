@@ -292,35 +292,34 @@ ok "Deployed to $CLAUDE_DIR"
 # ---------------------------------------------------------------------------
 if ! command -v claude &>/dev/null; then
   printf "\n"
-  warn "Claude Code CLI is not installed."
-  info "Install it now? (requires npm)"
-  printf "  1) Yes, install now (npm install -g @anthropic-ai/claude-code)\n"
-  printf "  2) No, I'll install it later\n"
-  local install_choice=""
-  read -r -p "Choice: " install_choice
+  warn "$STR_CLI_NOT_FOUND"
+  info "$STR_CLI_INSTALL_NOW"
+  printf "  1) %s\n" "$STR_CLI_INSTALL_YES"
+  printf "  2) %s\n" "$STR_CLI_INSTALL_NO"
+  install_choice=""
+  read -r -p "${STR_CHOICE}: " install_choice
   case "$install_choice" in
     1)
       if command -v npm &>/dev/null; then
-        info "Installing Claude Code CLI..."
+        info "$STR_CLI_INSTALLING"
         npm install -g @anthropic-ai/claude-code
         if command -v claude &>/dev/null; then
-          ok "Claude Code CLI installed: $(claude --version 2>/dev/null || echo 'installed')"
+          ok "$STR_CLI_INSTALLED"
         else
-          warn "Installation completed but 'claude' not found in PATH."
-          warn "You may need to restart your terminal or add npm global bin to PATH."
+          warn "$STR_CLI_PATH_WARN"
         fi
       else
-        error "npm is not available. Please install Node.js first, then run:"
-        error "  npm install -g @anthropic-ai/claude-code"
+        error "$STR_CLI_NPM_MISSING"
+        printf "  npm install -g @anthropic-ai/claude-code\n"
       fi
       ;;
     *)
-      info "To install later, run:"
+      info "$STR_CLI_INSTALL_LATER"
       printf "  npm install -g @anthropic-ai/claude-code\n"
       ;;
   esac
 else
-  ok "Claude Code CLI is already installed: $(claude --version 2>/dev/null || echo 'found')"
+  ok "$STR_CLI_ALREADY"
 fi
 
 # ---------------------------------------------------------------------------
@@ -328,7 +327,7 @@ fi
 # ---------------------------------------------------------------------------
 if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
   printf "\n"
-  info "To install plugins, start 'claude' and run:"
+  info "$STR_DEPLOY_PLUGINS_HINT"
   IFS=',' read -r -a _plugins <<< "$SELECTED_PLUGINS"
   for p in "${_plugins[@]}"; do
     [[ -n "$p" ]] && printf "  /install %s\n" "$p"
@@ -340,7 +339,9 @@ fi
 # ---------------------------------------------------------------------------
 if is_wsl; then
   printf "\n"
-  info "You are running inside WSL."
-  info "Always run 'claude' from a WSL terminal (Ubuntu), not from PowerShell."
-  info "To start WSL from Windows: open a terminal and type 'wsl'"
+  warn "$STR_WSL_IMPORTANT"
+  info "$STR_WSL_HOW_TO"
+  info "  $STR_WSL_STEP1"
+  info "  $STR_WSL_STEP2"
+  info "  $STR_WSL_STEP3"
 fi

@@ -77,6 +77,26 @@ STR_DEPLOY_BACKUP="既存の設定をバックアップ中..."
 STR_DEPLOY_DONE="デプロイ完了！"
 STR_DEPLOY_PLUGINS_HINT="プラグインをインストールするには 'claude' を起動して以下を実行："
 
+# Post-deploy: CLI install
+STR_CLI_NOT_FOUND="Claude Code CLI がインストールされていません。"
+STR_CLI_INSTALL_NOW="今すぐインストールしますか？（npm が必要）"
+STR_CLI_INSTALL_YES="はい（npm install -g @anthropic-ai/claude-code を実行）"
+STR_CLI_INSTALL_NO="いいえ（後でインストール）"
+STR_CLI_INSTALLING="Claude Code CLI をインストール中..."
+STR_CLI_INSTALLED="Claude Code CLI をインストールしました"
+STR_CLI_INSTALL_LATER="後でインストールするには以下を実行："
+STR_CLI_ALREADY="Claude Code CLI はインストール済みです"
+STR_CLI_NPM_MISSING="npm が見つかりません。Node.js をインストールしてから以下を実行："
+STR_CLI_PATH_WARN="インストールは完了しましたが 'claude' が PATH に見つかりません。ターミナルを再起動してください。"
+
+# Post-deploy: WSL hint
+STR_WSL_NOTICE="WSL 環境で実行しています。"
+STR_WSL_IMPORTANT="重要: Claude Code は WSL 内で実行してください（PowerShell ではありません）。"
+STR_WSL_HOW_TO="Claude Code の使い方："
+STR_WSL_STEP1="1. ターミナルを開いて wsl と入力"
+STR_WSL_STEP2="2. プロジェクトに移動: cd /path/to/your/project"
+STR_WSL_STEP3="3. 実行: claude"
+
 # Errors
 STR_ERR_JQ="jq が必要ですがインストールされていません。"
 STR_ERR_GIT="git が必要ですがインストールされていません。"
