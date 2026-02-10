@@ -302,7 +302,11 @@ if ! command -v claude &>/dev/null; then
     1)
       if command -v npm &>/dev/null; then
         info "$STR_CLI_INSTALLING"
-        npm install -g @anthropic-ai/claude-code
+        if is_linux; then
+          sudo npm install -g @anthropic-ai/claude-code
+        else
+          npm install -g @anthropic-ai/claude-code
+        fi
         if command -v claude &>/dev/null; then
           ok "$STR_CLI_INSTALLED"
         else
