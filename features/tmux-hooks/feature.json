@@ -1,0 +1,10 @@
+{
+  "name": "tmux-hooks",
+  "displayName": "Tmux Reminder",
+  "description": "Block dev servers outside tmux and suggest tmux for long-running commands",
+  "category": "hook",
+  "default": true,
+  "profiles": { "minimal": false, "standard": true, "full": true },
+  "dependencies": [],
+  "conflicts": []
+}

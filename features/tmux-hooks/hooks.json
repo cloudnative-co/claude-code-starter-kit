@@ -1,0 +1,22 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm run dev|pnpm( run)? dev|yarn dev|bun run dev)\"",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "#!/bin/bash\ninput=$(cat)\necho '[Hook] BLOCKED: Dev server must run in tmux for log access' >&2\necho '[Hook] Use: tmux new-session -d -s dev \"npm run dev\"' >&2\necho '[Hook] Then: tmux attach -t dev' >&2\nexit 1"
+        }
+      ]
+    },
+    {
+      "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm (install|test)|pnpm (install|test)|yarn (install|test)|bun (install|test)|cargo build|make|docker|pytest|vitest|playwright)\"",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "#!/bin/bash\ninput=$(cat)\nif [ -z \"$TMUX\" ]; then\n  echo '[Hook] Consider running in tmux for session persistence' >&2\nfi\necho \"$input\""
+        }
+      ]
+    }
+  ]
+}

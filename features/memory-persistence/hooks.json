@@ -1,0 +1,35 @@
+{
+  "PreCompact": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"
+        }
+      ]
+    }
+  ],
+  "SessionStart": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__HOME__/.claude/hooks/memory-persistence/session-start.sh"
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__HOME__/.claude/hooks/memory-persistence/session-end.sh"
+        }
+      ]
+    }
+  ]
+}

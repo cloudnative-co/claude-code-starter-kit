@@ -1,0 +1,11 @@
+{
+  "name": "memory-persistence",
+  "displayName": "Memory Persistence",
+  "description": "Save/restore session state across compactions and sessions",
+  "category": "hook",
+  "default": true,
+  "profiles": { "minimal": false, "standard": true, "full": true },
+  "dependencies": [],
+  "conflicts": [],
+  "hasScripts": true
+}

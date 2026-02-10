@@ -1,0 +1,13 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "tool == \"Edit\" || tool == \"Write\"",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__HOME__/.claude/hooks/strategic-compact/suggest-compact.sh"
+        }
+      ]
+    }
+  ]
+}

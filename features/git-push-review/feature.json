@@ -1,0 +1,10 @@
+{
+  "name": "git-push-review",
+  "displayName": "Git Push Review",
+  "description": "Pause before git push to review changes",
+  "category": "hook",
+  "default": true,
+  "profiles": { "minimal": false, "standard": true, "full": true },
+  "dependencies": [],
+  "conflicts": []
+}

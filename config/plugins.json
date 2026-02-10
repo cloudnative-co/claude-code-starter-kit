@@ -1,0 +1,64 @@
+{
+  "plugins": [
+    {
+      "name": "security-guidance",
+      "marketplace": "claude-plugins-official",
+      "description": "Security best practices and vulnerability detection",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "commit-commands",
+      "marketplace": "claude-plugins-official",
+      "description": "Git commit and PR workflow commands",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "typescript-lsp",
+      "marketplace": "claude-plugins-official",
+      "description": "TypeScript language server integration",
+      "profiles": ["full"]
+    },
+    {
+      "name": "pr-review-toolkit",
+      "marketplace": "claude-plugins-official",
+      "description": "Comprehensive PR review with specialized agents",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "feature-dev",
+      "marketplace": "claude-plugins-official",
+      "description": "Guided feature development with architecture focus",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "code-review",
+      "marketplace": "claude-plugins-official",
+      "description": "Code review for pull requests",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "claude-md-management",
+      "marketplace": "claude-plugins-official",
+      "description": "Audit and improve CLAUDE.md files",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "gopls-lsp",
+      "marketplace": "claude-plugins-official",
+      "description": "Go language server integration",
+      "profiles": ["full"]
+    },
+    {
+      "name": "pyright-lsp",
+      "marketplace": "claude-plugins-official",
+      "description": "Python language server integration",
+      "profiles": ["full"]
+    },
+    {
+      "name": "rust-analyzer-lsp",
+      "marketplace": "claude-plugins-official",
+      "description": "Rust language server integration",
+      "profiles": ["full"]
+    }
+  ]
+}

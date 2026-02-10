@@ -1,0 +1,92 @@
+---
+
+# Codex MCP Sub-Agent Operation Guide
+
+> The following rules apply only when the Codex MCP server is connected.
+> Simple tasks (single-file/few-line changes, config edits, doc updates) can be handled directly by Claude.
+
+## Architecture
+
+```
+User → Claude Code (Commander: Design & Integration)
+              ↓
+      Codex MCP (Executor)
+      ├── Code generation & implementation
+      ├── Code review & quality inspection
+      ├── Refactoring
+      ├── Test creation
+      ├── Debugging & root cause analysis
+      └── Security audits
+              ↓
+      Claude Code (Verification & Integration & Commit)
+```
+
+## MCP Tools
+
+Use the tools provided by the official `codex mcp-server`:
+
+| Tool | Purpose |
+|------|---------|
+| `mcp__codex__codex` | Delegate tasks to Codex (main tool) |
+| `mcp__codex__codex-reply` | Continue a session with sessionId |
+
+For multi-step tasks, use `sessionId` to maintain context across calls.
+
+## Delegation Criteria
+
+### Delegate to Codex when:
+- New code generation expected to be 20+ lines
+- Changes spanning multiple files
+- Code review (Codex is more thorough)
+- Test code creation
+- Refactoring / optimization
+- Root cause analysis of bugs
+- Security vulnerability scanning
+
+### Claude handles directly:
+- Single-file, few-line changes
+- Config file edits (YAML, JSON, TOML, etc.)
+- Documentation / README updates
+- Git operations (commit, branch, merge)
+- User communication / Q&A
+
+## Delegation Rules
+
+### 1. Make prompts self-contained
+
+Each Codex call is stateless (no memory of previous calls).
+Include all necessary information in every prompt unless using sessionId.
+
+**Use the 7-section format:**
+
+```
+TASK: What to do (1-2 clear sentences)
+EXPECTED OUTCOME: Expected deliverable format and content
+CONTEXT: Related code, file paths, dependencies, business logic
+CONSTRAINTS: Language, framework, coding standards, restrictions
+MUST DO: Required aspects (error handling, type safety, tests, etc.)
+MUST NOT DO: Prohibited actions (breaking changes, API modifications, etc.)
+OUTPUT FORMAT: Output format (code only, diff format, with explanation, etc.)
+```
+
+### 2. Delegate reviews to Codex
+
+Delegate code reviews to Codex. Claude makes the final judgment based on the review results.
+
+### 3. Use session continuation
+
+For related multi-step tasks, use sessionId to maintain context.
+
+### 4. Retry on errors
+
+For stateless calls, include the original task + error details when retrying.
+For session-based calls, use codex-reply to communicate the error.
+
+### 5. Never pass through raw output
+
+Never show Codex output directly to the user. Always verify, integrate, and report.
+
+## Security Notes
+
+- Never include API keys or secrets in Codex prompts
+- Always perform security reviews on Codex-generated code

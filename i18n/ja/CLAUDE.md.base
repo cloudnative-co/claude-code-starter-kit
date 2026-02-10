@@ -1,0 +1,7 @@
+# グローバル設定
+
+## 基本方針
+- Conventional Commits 形式でコミットする（feat: / fix: / refactor: / test: / docs: / chore:）
+- 長いセッションでは `/clear` を活用してコンテキストをリフレッシュする
+
+{{FEATURE:codex-mcp}}

@@ -1,0 +1,11 @@
+{
+  "name": "strategic-compact",
+  "displayName": "Strategic Compact",
+  "description": "Suggest manual compaction at logical intervals to preserve context",
+  "category": "hook",
+  "default": true,
+  "profiles": { "minimal": false, "standard": true, "full": true },
+  "dependencies": [],
+  "conflicts": [],
+  "hasScripts": true
+}

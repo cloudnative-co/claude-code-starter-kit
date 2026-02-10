@@ -1,0 +1,13 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "#!/bin/bash\necho '[Hook] Review changes before push...' >&2\necho '[Hook] Press Enter to continue or Ctrl+C to abort...' >&2\nread -r"
+        }
+      ]
+    }
+  ]
+}
