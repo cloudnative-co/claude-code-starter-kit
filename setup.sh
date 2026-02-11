@@ -568,7 +568,7 @@ _setup_codex_mcp() {
   if command -v codex &>/dev/null \
     && [[ -n "${OPENAI_API_KEY:-}" ]] \
     && command -v claude &>/dev/null \
-    && claude mcp list 2>/dev/null | grep -q "codex" 2>/dev/null; then
+    && claude mcp list -s user 2>/dev/null | grep -q "codex" 2>/dev/null; then
     ok "$STR_CODEX_CLI_ALREADY"
     ok "$STR_CODEX_MCP_ALREADY"
     return
@@ -673,16 +673,16 @@ _setup_codex_mcp() {
   if command -v claude &>/dev/null && command -v codex &>/dev/null; then
     printf "\n"
     local _mcp_list
-    _mcp_list="$(claude mcp list 2>/dev/null || true)"
+    _mcp_list="$(claude mcp list -s user 2>/dev/null || true)"
     if echo "$_mcp_list" | grep -q "codex" 2>/dev/null; then
       ok "$STR_CODEX_MCP_ALREADY"
     else
       info "$STR_CODEX_MCP_REGISTERING"
-      if claude mcp add codex -- codex mcp-server 2>/dev/null; then
+      if claude mcp add -s user codex -- codex mcp-server 2>/dev/null; then
         ok "$STR_CODEX_MCP_REGISTERED"
       else
         warn "$STR_CODEX_MCP_REG_FAILED"
-        info "  claude mcp add codex -- codex mcp-server"
+        info "  claude mcp add -s user codex -- codex mcp-server"
       fi
     fi
   fi
@@ -728,7 +728,7 @@ _setup_codex_mcp() {
             warn "$STR_CODEX_E2E_SKIP_HINT"
             info "  1. export OPENAI_API_KEY=\"your-api-key-here\""
             info "  2. printenv OPENAI_API_KEY | codex login --with-api-key"
-            info "  3. claude mcp add codex -- codex mcp-server"
+            info "  3. claude mcp add -s user codex -- codex mcp-server"
             break
             ;;
         esac
