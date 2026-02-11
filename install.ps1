@@ -15,10 +15,11 @@ function Write-Err($msg) { Write-Host "[ERROR] $msg" -ForegroundColor Red }
 # being treated as a terminating error under $ErrorActionPreference=Stop.
 # ---------------------------------------------------------------------------
 function Test-UbuntuReady {
+    param([string]$Distro = "Ubuntu")
     $savedEAP = $ErrorActionPreference
     $ErrorActionPreference = "SilentlyContinue"
     try {
-        $result = wsl -d Ubuntu -- echo "READY" 2>&1
+        $result = wsl -d $Distro -- echo "READY" 2>&1
         $ErrorActionPreference = $savedEAP
         if ($null -eq $result) { return $false }
         $cleaned = ($result | Out-String).Trim()
@@ -47,10 +48,10 @@ function Test-WslInstalled {
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Check if Ubuntu distro is registered
+# Helper: Find the actual Ubuntu distro name (e.g. "Ubuntu", "Ubuntu-24.04")
 # wsl -l outputs UTF-16LE with null bytes, so use .NET to decode
 # ---------------------------------------------------------------------------
-function Test-UbuntuRegistered {
+function Find-UbuntuDistro {
     try {
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo.FileName = "wsl.exe"
@@ -61,9 +62,16 @@ function Test-UbuntuRegistered {
         $proc.Start() | Out-Null
         $output = $proc.StandardOutput.ReadToEnd()
         $proc.WaitForExit()
-        return $output -match "Ubuntu"
+        # Parse lines and find first Ubuntu distro (e.g. "Ubuntu", "Ubuntu-24.04")
+        $lines = $output -split "`n" | ForEach-Object {
+            ($_ -replace "`0", "").Trim()
+        } | Where-Object { $_ -ne "" }
+        foreach ($line in $lines) {
+            if ($line -match "^Ubuntu") { return $line }
+        }
+        return $null
     } catch {
-        return $false
+        return $null
     }
 }
 
@@ -160,14 +168,18 @@ function Install-ViaWSL {
     Write-Ok "WSL is installed"
 
     # Step 2: Ensure Ubuntu is registered and ready
-    if (-not (Test-UbuntuRegistered)) {
+    $ubuntuDistro = Find-UbuntuDistro
+    if (-not $ubuntuDistro) {
         Write-Info "Ubuntu is not installed in WSL. Installing..."
         wsl --install -d Ubuntu
         Write-Info "Waiting for Ubuntu installation to complete..."
         Start-Sleep -Seconds 5
+        $ubuntuDistro = Find-UbuntuDistro
+        if (-not $ubuntuDistro) { $ubuntuDistro = "Ubuntu" }
     }
+    Write-Info "WSL distro: $ubuntuDistro"
 
-    if (-not (Test-UbuntuReady)) {
+    if (-not (Test-UbuntuReady -Distro $ubuntuDistro)) {
         Write-Host ""
         Write-Info "Ubuntu の初期設定が必要です。"
         Write-Info "Ubuntu needs initial user setup."
@@ -186,11 +198,11 @@ function Install-ViaWSL {
         Write-Host ""
         $savedEAP = $ErrorActionPreference
         $ErrorActionPreference = "SilentlyContinue"
-        wsl -d Ubuntu
+        wsl -d $ubuntuDistro
         $ErrorActionPreference = $savedEAP
 
         # Verify Ubuntu is now ready
-        if (-not (Test-UbuntuReady)) {
+        if (-not (Test-UbuntuReady -Distro $ubuntuDistro)) {
             Write-Warn "Ubuntu の準備確認に失敗しましたが、セットアップを続行します..."
             Write-Warn "Ubuntu readiness check failed, but continuing setup..."
         }
@@ -205,6 +217,21 @@ function Install-ViaWSL {
     $bootstrapScript = @'
 #!/bin/bash
 set -euo pipefail
+
+# If running as root and a normal user exists, re-exec as that user
+# (WSL defaults to root when initial user setup was skipped or failed)
+if [[ "$(id -u)" -eq 0 ]]; then
+    _normal_user=$(awk -F: '$3 >= 1000 && $3 < 65534 && $7 !~ /(nologin|false)$/ { print $1; exit }' /etc/passwd)
+    if [[ -n "${_normal_user:-}" ]]; then
+        echo "[INFO] root で実行中。ユーザー $_normal_user に切り替えます..."
+        echo "[INFO] Running as root. Switching to user: $_normal_user"
+        if sudo -H -u "$_normal_user" bash "$0"; then
+            exit 0
+        fi
+        echo "[WARN] ユーザー切り替えに失敗。root で続行します。"
+        echo "[WARN] Failed to switch user. Continuing as root."
+    fi
+fi
 
 REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
 INSTALL_DIR="$HOME/.claude-starter-kit"
@@ -256,8 +283,8 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
     $tempFile = [System.IO.Path]::GetTempFileName()
     [System.IO.File]::WriteAllText($tempFile, $bootstrapScript.Replace("`r`n", "`n"))
 
-    $wslPath = wsl wslpath -a ($tempFile -replace '\\', '/')
-    wsl bash $wslPath
+    $wslPath = wsl -d $ubuntuDistro wslpath -a ($tempFile -replace '\\', '/')
+    wsl -d $ubuntuDistro bash $wslPath
 
     Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
 
@@ -318,10 +345,10 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
     Write-Warn "必ず WSL (Ubuntu) 環境内で実行してください。"
     Write-Host ""
     Write-Host "  PowerShell からワンコマンドで起動する場合:" -ForegroundColor DarkGray
-    Write-Host "  wsl -d Ubuntu -- bash -lc 'claude'" -ForegroundColor DarkGray
+    Write-Host "  wsl -d $ubuntuDistro -- bash -lc 'claude'" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  アンインストール / Uninstall:" -ForegroundColor DarkGray
-    Write-Host "  wsl -d Ubuntu -- bash -lc '~/.claude-starter-kit/uninstall.sh'" -ForegroundColor DarkGray
+    Write-Host "  wsl -d $ubuntuDistro -- bash -lc '~/.claude-starter-kit/uninstall.sh'" -ForegroundColor DarkGray
     Write-Host ""
 }
 
