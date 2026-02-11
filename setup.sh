@@ -428,21 +428,26 @@ _save_openai_key() {
   export OPENAI_API_KEY="$key"
 }
 
-# Test Codex MCP server end-to-end: start the server, send JSON-RPC initialize,
-# check it responds without auth errors.
+# Test Codex MCP connectivity by verifying the API key works with
+# the OpenAI Responses API endpoint (which Codex actually uses).
 _test_codex_mcp() {
-  if ! command -v codex &>/dev/null; then
+  local _key="${OPENAI_API_KEY:-}"
+  if [[ -z "$_key" ]]; then
     return 1
   fi
-  local _test_result
-  _test_result="$(printf '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}\n' \
-    | timeout 10 codex mcp-server 2>&1 | head -5 || true)"
-  # Check for auth errors
-  if echo "$_test_result" | grep -qi "unauthorized\|authentication\|401" 2>/dev/null; then
-    return 1
-  fi
-  # Check for valid JSON-RPC response
-  if echo "$_test_result" | grep -q "jsonrpc" 2>/dev/null; then
+  # Test /v1/models (basic auth) and /v1/responses (Codex endpoint)
+  local _models_code _responses_code
+  _models_code="$(curl -s -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $_key" \
+    https://api.openai.com/v1/models 2>/dev/null || echo "000")"
+  _responses_code="$(curl -s -o /dev/null -w '%{http_code}' \
+    -X POST \
+    -H "Authorization: Bearer $_key" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"gpt-4o-mini","input":"test"}' \
+    https://api.openai.com/v1/responses 2>/dev/null || echo "000")"
+  # 200=success, 400=bad request (but auth works), 401/403=auth failure
+  if [[ "$_models_code" == "200" ]] && [[ "$_responses_code" != "401" ]] && [[ "$_responses_code" != "403" ]]; then
     return 0
   fi
   return 1
