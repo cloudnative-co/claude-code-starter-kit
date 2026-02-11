@@ -40,7 +40,6 @@ function Test-WslInstalled {
 # ---------------------------------------------------------------------------
 function Test-UbuntuRegistered {
     try {
-        $rawBytes = [System.Text.Encoding]::Unicode.GetBytes("")
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo.FileName = "wsl.exe"
         $proc.StartInfo.Arguments = "-l -q"
@@ -137,8 +136,18 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
     [System.IO.File]::WriteAllText($tempFile, $bootstrapScript.Replace("`r`n", "`n"))
 
     & $gitBash --login -i $tempFile
+    $bashExitCode = $LASTEXITCODE
 
     Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+
+    if ($bashExitCode -ne 0) {
+        Write-Err "Setup may not have completed successfully."
+        Write-Err "セットアップが正常に完了しなかった可能性があります。"
+        Write-Err ""
+        Write-Err "To retry / 再実行:"
+        Write-Err "  Open Git Bash and run: ~/.claude-starter-kit/setup.sh"
+        exit $bashExitCode
+    }
 
     Write-Host ""
     Write-Ok "Setup complete! / セットアップ完了！"

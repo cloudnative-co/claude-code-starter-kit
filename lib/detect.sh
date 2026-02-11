@@ -12,6 +12,7 @@ DISTRO="unknown"
 DISTRO_FAMILY="unknown"
 IS_WSL=false
 WSL_BUILD=0
+WIN_BUILD=0
 
 # ---------------------------------------------------------------------------
 # detect_os - Populate OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD
@@ -38,9 +39,10 @@ detect_os() {
       ARCH="$(uname -m)"
       DISTRO="msys"
       DISTRO_FAMILY="msys"
-      # Extract Windows build from uname (e.g. MSYS_NT-10.0-19045 → 19045)
+      # Extract Windows build number (e.g. MSYS_NT-10.0-19045 → 19045)
+      # Stored in WIN_BUILD (not WSL_BUILD — this is native Windows, not WSL)
       if [[ "$uname_s" =~ [0-9]+\.[0-9]+-([0-9]+) ]]; then
-        WSL_BUILD="${BASH_REMATCH[1]}"
+        WIN_BUILD="${BASH_REMATCH[1]}"
       fi
       ;;
     *)

@@ -110,6 +110,8 @@ check_jq() {
     local jq_dest="$HOME/.local/bin/jq.exe"
     mkdir -p "$HOME/.local/bin"
     if curl -fsSL "$jq_url" -o "$jq_dest" && chmod +x "$jq_dest"; then
+      # Also create a symlink without .exe for compatibility
+      ln -sf "$jq_dest" "$HOME/.local/bin/jq" 2>/dev/null || true
       export PATH="$HOME/.local/bin:$PATH"
       ok "jq installed to $jq_dest"
       return 0

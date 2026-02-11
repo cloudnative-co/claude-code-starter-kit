@@ -472,11 +472,7 @@ _step_ghostty() {
   if is_wsl || is_msys; then ENABLE_GHOSTTY_SETUP="false"; return; fi
 
   section "$STR_GHOSTTY_TITLE"
-  if is_msys; then
-    printf "  %s\n\n" "${STR_GHOSTTY_DESC_WINDOWS:-$STR_GHOSTTY_DESC}"
-  else
-    printf "  %s\n\n" "$STR_GHOSTTY_DESC"
-  fi
+  printf "  %s\n\n" "$STR_GHOSTTY_DESC"
   printf "  1) %s\n" "$STR_GHOSTTY_YES"
   printf "  2) %s\n" "$STR_GHOSTTY_NO"
   local choice=""

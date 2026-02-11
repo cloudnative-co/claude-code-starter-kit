@@ -317,11 +317,16 @@ _ensure_local_bin_in_path() {
   local rc_file=""
 
   # Determine the correct shell RC file
-  case "${SHELL:-/bin/bash}" in
-    */zsh)  rc_file="$HOME/.zshrc" ;;
-    */bash) rc_file="$HOME/.bashrc" ;;
-    *)      rc_file="$HOME/.profile" ;;
-  esac
+  if is_msys; then
+    # Git Bash sources .bash_profile, not .bashrc
+    rc_file="$HOME/.bash_profile"
+  else
+    case "${SHELL:-/bin/bash}" in
+      */zsh)  rc_file="$HOME/.zshrc" ;;
+      */bash) rc_file="$HOME/.bashrc" ;;
+      *)      rc_file="$HOME/.profile" ;;
+    esac
+  fi
 
   # Create RC file if it doesn't exist
   [[ -f "$rc_file" ]] || touch "$rc_file"
@@ -349,7 +354,13 @@ if ! command -v claude &>/dev/null; then
       if is_msys; then
         # Native Windows: use PowerShell installer
         if powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"; then
-          export PATH="$HOME/.local/bin:$PATH"
+          # Probe common install locations (PowerShell installer, npm, etc.)
+          for _win_dir in \
+            "$(cygpath -u "${LOCALAPPDATA:-}/Programs/claude" 2>/dev/null)" \
+            "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
+            "$HOME/.local/bin"; do
+            [[ -n "$_win_dir" ]] && export PATH="$_win_dir:$PATH"
+          done
           _ensure_local_bin_in_path
           if command -v claude &>/dev/null; then
             ok "$STR_CLI_INSTALLED"
