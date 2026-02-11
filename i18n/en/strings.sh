@@ -134,12 +134,12 @@ STR_FINAL_INCOMPLETE_HINT="Install Homebrew with an admin account, then re-run s
 STR_FINAL_INCOMPLETE_BREW="Install Homebrew:"
 STR_FINAL_INCOMPLETE_RERUN="Re-run setup:"
 
-# Post-deploy: Ghostty hint
-STR_GHOSTTY_HINT_TITLE="Using Ghostty Terminal"
-STR_GHOSTTY_HINT_OPEN="To launch Ghostty:"
-STR_GHOSTTY_HINT_STEP1="1. Search for \"Ghostty\" in Launchpad or Spotlight (Cmd+Space)"
-STR_GHOSTTY_HINT_STEP2="2. You can use Ghostty as your main terminal from now on"
-STR_GHOSTTY_HINT_FONT="HackGen NF font is configured (programming Nerd Font)"
+# Post-deploy: Ghostty final steps
+STR_FINAL_GHOSTTY_NEXT="Ghostty has been installed. Next steps:"
+STR_FINAL_GHOSTTY_STEP1="1. Search for \"Ghostty\" in Launchpad or Spotlight (Cmd+Space) to launch it"
+STR_FINAL_GHOSTTY_STEP2="2. In the Ghostty terminal, navigate to your project directory"
+STR_FINAL_GHOSTTY_STEP3="3. Run: claude"
+STR_FINAL_GHOSTTY_FONT="HackGen NF font and custom config are already applied"
 
 # Post-deploy: Codex MCP setup
 STR_CODEX_SETUP_TITLE="Codex MCP Setup"

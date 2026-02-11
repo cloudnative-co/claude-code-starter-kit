@@ -397,19 +397,6 @@ if is_wsl; then
 fi
 
 # ---------------------------------------------------------------------------
-# Ghostty usage hint (macOS only, when successfully installed)
-# ---------------------------------------------------------------------------
-if is_true "${ENABLE_GHOSTTY_SETUP:-false}" && [[ -z "${GHOSTTY_INCOMPLETE:-}" ]] && [[ "$DISTRO_FAMILY" == "macos" ]]; then
-  printf "\n"
-  section "$STR_GHOSTTY_HINT_TITLE"
-  info "$STR_GHOSTTY_HINT_OPEN"
-  info "  $STR_GHOSTTY_HINT_STEP1"
-  info "  $STR_GHOSTTY_HINT_STEP2"
-  info ""
-  info "$STR_GHOSTTY_HINT_FONT"
-fi
-
-# ---------------------------------------------------------------------------
 # Codex MCP interactive setup
 # ---------------------------------------------------------------------------
 _setup_codex_mcp() {
@@ -522,7 +509,15 @@ if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]]; then
   info "  $STR_FINAL_STEP3"
 else
   section "$STR_FINAL_TITLE"
-  if ! is_wsl; then
+  if is_true "${ENABLE_GHOSTTY_SETUP:-false}" && [[ "$DISTRO_FAMILY" == "macos" ]]; then
+    # Ghostty was successfully installed - guide user to launch it
+    info "$STR_FINAL_GHOSTTY_NEXT"
+    info "  $STR_FINAL_GHOSTTY_STEP1"
+    info "  $STR_FINAL_GHOSTTY_STEP2"
+    info "  $STR_FINAL_GHOSTTY_STEP3"
+    printf "\n"
+    ok "$STR_FINAL_GHOSTTY_FONT"
+  elif ! is_wsl; then
     info "$STR_FINAL_NEXT"
     info "  $STR_FINAL_STEP1"
     info "  $STR_FINAL_STEP2"

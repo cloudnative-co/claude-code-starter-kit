@@ -132,12 +132,12 @@ STR_FINAL_INCOMPLETE_HINT="管理者権限のあるアカウントで Homebrew �
 STR_FINAL_INCOMPLETE_BREW="Homebrew のインストール："
 STR_FINAL_INCOMPLETE_RERUN="再セットアップ："
 
-# Post-deploy: Ghostty hint
-STR_GHOSTTY_HINT_TITLE="Ghostty ターミナルの使い方"
-STR_GHOSTTY_HINT_OPEN="Ghostty を起動するには："
-STR_GHOSTTY_HINT_STEP1="1. Launchpad または Spotlight（⌘+Space）で「Ghostty」と検索して起動"
-STR_GHOSTTY_HINT_STEP2="2. 今後は Ghostty をメインターミナルとして使えます"
-STR_GHOSTTY_HINT_FONT="フォント HackGen NF が設定済みです（プログラミング用 Nerd Font）"
+# Post-deploy: Ghostty final steps
+STR_FINAL_GHOSTTY_NEXT="Ghostty がインストールされました。次のステップ："
+STR_FINAL_GHOSTTY_STEP1="1. Launchpad または Spotlight（⌘+Space）で「Ghostty」と検索して起動"
+STR_FINAL_GHOSTTY_STEP2="2. Ghostty のターミナル上でプロジェクトディレクトリに移動"
+STR_FINAL_GHOSTTY_STEP3="3. 実行: claude"
+STR_FINAL_GHOSTTY_FONT="HackGen NF フォントとカスタム設定が適用済みです"
 
 # Post-deploy: Codex MCP setup
 STR_CODEX_SETUP_TITLE="Codex MCP のセットアップ"
