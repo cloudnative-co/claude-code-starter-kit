@@ -166,7 +166,9 @@ STR_CODEX_MCP_REG_FAILED="Codex MCP サーバーの登録に失敗しました�
 STR_CODEX_E2E_TESTING="Codex MCP の接続テスト中..."
 STR_CODEX_E2E_SUCCESS="Codex MCP の接続テストに成功しました"
 STR_CODEX_E2E_FAILED="Codex MCP の接続テストに失敗しました。API キーまたは接続に問題がある可能性があります"
-STR_CODEX_E2E_STILL_FAILED="接続テストに再度失敗しました。後で手動で確認してください"
+STR_CODEX_E2E_RETRY="API キーを再入力してもう一度試す"
+STR_CODEX_E2E_SKIP="後で手動で設定する"
+STR_CODEX_E2E_SKIP_HINT="後で以下を実行して Codex MCP を設定してください："
 STR_CODEX_SETUP_DONE="Codex MCP のセットアップが完了しました"
 
 # Errors

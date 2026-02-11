@@ -587,31 +587,35 @@ _setup_codex_mcp() {
     fi
   fi
 
-  # Step 4: End-to-end smoke test
-  if [[ "$_key_ok" == "true" ]] && command -v codex &>/dev/null; then
-    printf "\n"
-    info "$STR_CODEX_E2E_TESTING"
-    if _test_codex_mcp; then
-      ok "$STR_CODEX_E2E_SUCCESS"
-    else
-      warn "$STR_CODEX_E2E_FAILED"
-      # Offer to re-enter the key
+  # Step 4: End-to-end smoke test (retry loop)
+  if command -v codex &>/dev/null; then
+    while true; do
       printf "\n"
-      printf "  1) %s\n" "$STR_CODEX_API_KEY_RETRY_YES"
-      printf "  2) %s\n" "$STR_CODEX_API_KEY_RETRY_NO"
-      local _e2e_retry=""
-      read -r -p "${STR_CHOICE}: " _e2e_retry
-      if [[ "$_e2e_retry" == "1" ]]; then
-        if _prompt_openai_key "$_rc_file"; then
-          info "$STR_CODEX_E2E_TESTING"
-          if _test_codex_mcp; then
-            ok "$STR_CODEX_E2E_SUCCESS"
-          else
-            warn "$STR_CODEX_E2E_STILL_FAILED"
-          fi
-        fi
+      info "$STR_CODEX_E2E_TESTING"
+      if _test_codex_mcp; then
+        ok "$STR_CODEX_E2E_SUCCESS"
+        break
+      else
+        warn "$STR_CODEX_E2E_FAILED"
+        printf "\n"
+        printf "  1) %s\n" "$STR_CODEX_E2E_RETRY"
+        printf "  2) %s\n" "$STR_CODEX_E2E_SKIP"
+        local _e2e_choice=""
+        read -r -p "${STR_CHOICE}: " _e2e_choice
+        case "$_e2e_choice" in
+          1)
+            _prompt_openai_key "$_rc_file" || true
+            # Loop continues to re-test
+            ;;
+          *)
+            warn "$STR_CODEX_E2E_SKIP_HINT"
+            info "  1. export OPENAI_API_KEY=\"your-api-key-here\""
+            info "  2. claude mcp add codex -- codex mcp-server"
+            break
+            ;;
+        esac
       fi
-    fi
+    done
   fi
 
   printf "\n"

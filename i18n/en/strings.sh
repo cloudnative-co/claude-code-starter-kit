@@ -168,7 +168,9 @@ STR_CODEX_MCP_REG_FAILED="Failed to register Codex MCP server. Run manually:"
 STR_CODEX_E2E_TESTING="Testing Codex MCP connection..."
 STR_CODEX_E2E_SUCCESS="Codex MCP connection test passed"
 STR_CODEX_E2E_FAILED="Codex MCP connection test failed. There may be an issue with your API key or connection"
-STR_CODEX_E2E_STILL_FAILED="Connection test failed again. Please verify manually later"
+STR_CODEX_E2E_RETRY="Re-enter API key and try again"
+STR_CODEX_E2E_SKIP="Configure manually later"
+STR_CODEX_E2E_SKIP_HINT="To set up Codex MCP later, run the following:"
 STR_CODEX_SETUP_DONE="Codex MCP setup complete"
 
 # Errors
