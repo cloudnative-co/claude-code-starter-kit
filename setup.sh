@@ -373,3 +373,17 @@ if is_wsl; then
   info "  $STR_WSL_STEP2"
   info "  $STR_WSL_STEP3"
 fi
+
+# ---------------------------------------------------------------------------
+# Final message
+# ---------------------------------------------------------------------------
+printf "\n"
+section "$STR_FINAL_TITLE"
+if ! is_wsl; then
+  info "$STR_FINAL_NEXT"
+  info "  $STR_FINAL_STEP1"
+  info "  $STR_FINAL_STEP2"
+fi
+printf "\n"
+ok "$STR_FINAL_ENJOY"
+printf "\n"

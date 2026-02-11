@@ -102,6 +102,13 @@ STR_WSL_STEP1="1. ターミナルを開いて wsl と入力"
 STR_WSL_STEP2="2. プロジェクトに移動: cd /path/to/your/project"
 STR_WSL_STEP3="3. 実行: claude"
 
+# Final message
+STR_FINAL_TITLE="セットアップ完了！"
+STR_FINAL_NEXT="Claude Code を使い始めるには："
+STR_FINAL_STEP1="1. プロジェクトディレクトリに移動"
+STR_FINAL_STEP2="2. 実行: claude"
+STR_FINAL_ENJOY="Happy coding!"
+
 # Errors
 STR_ERR_JQ="jq が必要ですがインストールされていません。"
 STR_ERR_GIT="git が必要ですがインストールされていません。"
