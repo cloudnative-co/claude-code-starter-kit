@@ -290,15 +290,15 @@ build_settings
 deploy_hook_scripts
 
 # ---------------------------------------------------------------------------
-# Ghostty terminal setup
+# Ghostty terminal setup (macOS only — skip on WSL / MSYS)
 # ---------------------------------------------------------------------------
+if is_wsl || is_msys; then
+  ENABLE_GHOSTTY_SETUP="false"
+fi
+
 if is_true "${ENABLE_GHOSTTY_SETUP:-false}"; then
-  if is_msys || is_wsl; then
-    info "Ghostty is not supported on Windows. Skipping."
-  else
-    section "Setting up Ghostty terminal"
-    setup_ghostty "$PROJECT_DIR/features/ghostty/config.template"
-  fi
+  section "Setting up Ghostty terminal"
+  setup_ghostty "$PROJECT_DIR/features/ghostty/config.template"
 fi
 
 write_manifest
