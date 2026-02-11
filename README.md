@@ -335,6 +335,7 @@ cd claude-code-starter-kit
 | スキル（専門知識） | - | ✅ | ✅ |
 | フック（安全装置） | - | 主要 | 全部 |
 | メモリ（記憶の永続化） | - | ✅ | ✅ |
+| フォント（IBM Plex Mono / HackGen NF） | - | ✅ | ✅ |
 | Codex MCP（外部 AI 連携） | - | 任意 | ✅ |
 | Ghostty（ターミナル設定） | - | - | macOS のみ |
 
@@ -404,6 +405,35 @@ Full プロファイル、または `--ghostty=true` オプションで有効に
   - Shift+Enter でのマルチライン入力
 
 > **注意**: 現在、Ghostty の自動インストールは macOS のみ対応しています。
+
+### 🔤 プログラミングフォント（macOS / Windows）
+
+Claude Code をターミナルで快適に使うための **プログラミング用フォント** を自動インストールします。
+Standard / Full プロファイルでデフォルト有効です。`--fonts=true` オプションでも有効にできます。
+
+| フォント | 特徴 |
+|---|---|
+| **IBM Plex Mono** | IBM 開発の等幅フォント。可読性が高くコーディングに最適 |
+| **HackGen NF（HackGen35 Console NF）** | 日本語対応のプログラミングフォント + Nerd Fonts アイコン付き |
+
+#### インストール方法（OS別）
+
+| OS | 方法 |
+|---|---|
+| **macOS** | Homebrew cask で自動インストール。すべてのアプリですぐに使える |
+| **Windows（WSL / MSYS）** | PowerShell 経由で Windows 側のユーザーフォントディレクトリに自動インストール |
+
+#### Windows Terminal でフォントを設定する
+
+Windows の場合、フォントのインストール後に **Windows Terminal 側で手動設定が必要** です：
+
+1. Windows Terminal を開く
+2. `Ctrl + ,`（設定）を開く
+3. **プロファイル** → **既定値** → **外観** を選択
+4. **フォント フェイス** を **`HackGen35 Console NF`**（または `IBM Plex Mono`）に変更
+5. 保存して閉じる
+
+> **ヒント**: HackGen35 Console NF は日本語の表示幅が半角 3：全角 5 の比率で、ターミナルでの日本語表示がきれいに揃います。Nerd Fonts 対応なのでアイコン表示にも対応しています。
 
 ---
 
