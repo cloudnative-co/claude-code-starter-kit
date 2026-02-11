@@ -427,10 +427,8 @@ _step_editor() {
 }
 
 _step_ghostty() {
-  # Already set by CLI or profile
-  if [[ -n "$ENABLE_GHOSTTY_SETUP" && "$PROFILE" != "custom" ]]; then return; fi
-  # Only ask for custom or full profiles
-  if [[ "$PROFILE" != "custom" && "$PROFILE" != "full" ]]; then return; fi
+  # Skip if explicitly set by CLI arg
+  if [[ "$_CLI_OVERRIDES" == *"ENABLE_GHOSTTY_SETUP"* ]]; then return; fi
 
   section "$STR_GHOSTTY_TITLE"
   printf "  %s\n\n" "$STR_GHOSTTY_DESC"
