@@ -167,9 +167,34 @@ _install_node_via_nvm() {
     # shellcheck source=/dev/null
     [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
     nvm install "$NODE_MAJOR"
+    # nvm installer only writes to the running shell's rc file (bash).
+    # If the user's login shell is zsh, also add nvm init to .zshrc.
+    _ensure_nvm_in_zshrc
   else
     return 1
   fi
+}
+
+_ensure_nvm_in_zshrc() {
+  local login_shell
+  login_shell="$(basename "${SHELL:-}")"
+  # Only needed when the login shell is zsh but we're running under bash
+  [[ "$login_shell" == "zsh" ]] || return 0
+
+  local zshrc="$HOME/.zshrc"
+  # Skip if nvm init is already present
+  if [[ -f "$zshrc" ]] && grep -q 'NVM_DIR' "$zshrc" 2>/dev/null; then
+    return 0
+  fi
+
+  info "Adding nvm to ~/.zshrc (login shell is zsh)..."
+  cat >> "$zshrc" <<'ZSHRC'
+
+# nvm - Node Version Manager (added by claude-code-starter-kit)
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+ZSHRC
 }
 
 _install_node() {
