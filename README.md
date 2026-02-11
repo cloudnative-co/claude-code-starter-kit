@@ -423,9 +423,11 @@ Standard / Full プロファイルでデフォルト有効です。`--fonts=true
 | **macOS** | Homebrew cask で自動インストール。すべてのアプリですぐに使える |
 | **Windows（WSL / MSYS）** | PowerShell 経由で Windows 側のユーザーフォントディレクトリに自動インストール |
 
-#### Windows Terminal でフォントを設定する
+#### Windows Terminal のフォント自動適用
 
-Windows の場合、フォントのインストール後に **Windows Terminal 側で手動設定が必要** です：
+Windows では、フォントのインストール後に **Windows Terminal の設定（`settings.json`）も自動で書き換え**、デフォルトのフォントを `HackGen35 Console NF` に設定します。変更前のバックアップは `settings.json.bak` として保存されるので安心です。
+
+Windows Terminal がインストールされていない場合や、自動設定に失敗した場合は、以下の手順で手動設定できます：
 
 1. Windows Terminal を開く
 2. `Ctrl + ,`（設定）を開く

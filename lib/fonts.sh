@@ -152,6 +152,50 @@ install_hackgen_nf() {
 }
 
 # ---------------------------------------------------------------------------
+# Configure Windows Terminal default font (via powershell.exe)
+# Reads settings.json, sets profiles.defaults.font.face, writes back.
+# Creates a .bak backup before modifying.
+# Args: $1=font_name (e.g. "HackGen35 Console NF")
+# ---------------------------------------------------------------------------
+_configure_windows_terminal_font() {
+  local font_name="$1"
+
+  local ps_script
+  ps_script='
+$ErrorActionPreference = "Stop"
+$settingsPath = "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+if (-not (Test-Path $settingsPath)) {
+  $previewPath = "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json"
+  if (Test-Path $previewPath) { $settingsPath = $previewPath }
+  else { Write-Output "NOT_FOUND"; exit 0 }
+}
+try {
+  Copy-Item $settingsPath "$settingsPath.bak" -Force
+  $raw = Get-Content -Path $settingsPath -Raw -Encoding UTF8
+  $cleaned = $raw -replace "(?m)^\s*//.*$", "" -replace "/\*[\s\S]*?\*/", ""
+  $settings = $cleaned | ConvertFrom-Json
+  if (-not $settings.profiles) { $settings | Add-Member -NotePropertyName "profiles" -NotePropertyValue ([PSCustomObject]@{}) -Force }
+  if (-not $settings.profiles.defaults) { $settings.profiles | Add-Member -NotePropertyName "defaults" -NotePropertyValue ([PSCustomObject]@{}) -Force }
+  if (-not $settings.profiles.defaults.font) { $settings.profiles.defaults | Add-Member -NotePropertyName "font" -NotePropertyValue ([PSCustomObject]@{}) -Force }
+  $settings.profiles.defaults.font | Add-Member -NotePropertyName "face" -NotePropertyValue "'"$font_name"'" -Force
+  $settings | ConvertTo-Json -Depth 32 | Set-Content -Path $settingsPath -Encoding UTF8
+  Write-Output "OK"
+} catch {
+  Write-Output "FAILED"
+}
+'
+
+  local result
+  result="$(powershell.exe -NoProfile -Command "$ps_script" 2>/dev/null | tr -d '\r')"
+
+  case "$result" in
+    OK)        return 0 ;;
+    NOT_FOUND) return 2 ;;
+    *)         return 1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 setup_fonts() {
@@ -162,7 +206,7 @@ setup_fonts() {
 
   FONTS_INCOMPLETE="${incomplete% }"
 
-  # Print Windows Terminal configuration hints
+  # Configure Windows Terminal font or show hints
   if [[ -z "$incomplete" ]]; then
     local uname_s
     uname_s="$(uname -s)"
@@ -171,12 +215,26 @@ setup_fonts() {
         # macOS: fonts are automatically available in all apps
         ;;
       *)
-        # WSL or MSYS: show Windows Terminal hint
+        # WSL or MSYS: auto-configure Windows Terminal, fall back to manual hint
         if command -v powershell.exe &>/dev/null; then
           printf "\n"
-          info "${STR_FONT_WT_HINT:-To use the installed fonts in Windows Terminal:}"
-          info "  ${STR_FONT_WT_STEP1:-1. Open Settings (Ctrl+,) > Profiles > Defaults > Appearance}"
-          info "  ${STR_FONT_WT_STEP2:-2. Set Font face to 'HackGen35 Console NF' (or 'IBM Plex Mono')}"
+          info "${STR_FONT_WT_CONFIGURING:-Configuring Windows Terminal font...}"
+          _configure_windows_terminal_font "HackGen35 Console NF"
+          local wt_result=$?
+          if [[ $wt_result -eq 0 ]]; then
+            ok "${STR_FONT_WT_CONFIGURED:-Windows Terminal font set to 'HackGen35 Console NF'}"
+            info "  ${STR_FONT_WT_BACKUP:-A backup was saved as settings.json.bak}"
+          elif [[ $wt_result -eq 2 ]]; then
+            info "${STR_FONT_WT_NOT_FOUND:-Windows Terminal settings not found (not installed?)}"
+            info "${STR_FONT_WT_HINT:-To use the installed fonts in Windows Terminal:}"
+            info "  ${STR_FONT_WT_STEP1:-1. Open Settings (Ctrl+,) > Profiles > Defaults > Appearance}"
+            info "  ${STR_FONT_WT_STEP2:-2. Set Font face to 'HackGen35 Console NF' (or 'IBM Plex Mono')}"
+          else
+            warn "${STR_FONT_WT_CONFIGURE_FAILED:-Failed to auto-configure Windows Terminal font}"
+            info "${STR_FONT_WT_HINT:-To use the installed fonts in Windows Terminal:}"
+            info "  ${STR_FONT_WT_STEP1:-1. Open Settings (Ctrl+,) > Profiles > Defaults > Appearance}"
+            info "  ${STR_FONT_WT_STEP2:-2. Set Font face to 'HackGen35 Console NF' (or 'IBM Plex Mono')}"
+          fi
         fi
         ;;
     esac
