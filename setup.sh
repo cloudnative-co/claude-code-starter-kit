@@ -412,7 +412,7 @@ fi
 # ---------------------------------------------------------------------------
 # Codex MCP interactive setup
 # ---------------------------------------------------------------------------
-if is_true "${ENABLE_CODEX_MCP:-false}"; then
+_setup_codex_mcp() {
   printf "\n"
   section "$STR_CODEX_SETUP_TITLE"
   warn "$STR_CODEX_SETUP_NOTE"
@@ -489,6 +489,10 @@ if is_true "${ENABLE_CODEX_MCP:-false}"; then
 
   printf "\n"
   ok "$STR_CODEX_SETUP_DONE"
+}
+
+if is_true "${ENABLE_CODEX_MCP:-false}"; then
+  _setup_codex_mcp
 fi
 
 # ---------------------------------------------------------------------------
