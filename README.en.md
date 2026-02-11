@@ -7,6 +7,8 @@
 
 One-command setup of a complete Claude Code development environment with an interactive wizard.
 
+> **This kit reproduces the exact Claude Code environment used by Shinji Saito, CEO of Cloud Native Inc. and Chief Information Security Advisor to Japan's Ministry of Education, Culture, Sports, Science and Technology (MEXT).**
+
 ## Table of Contents
 
 - [Why This Repo](#why-this-repo)
