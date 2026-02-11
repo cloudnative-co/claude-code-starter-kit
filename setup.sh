@@ -319,22 +319,41 @@ if ! command -v claude &>/dev/null; then
   case "$install_choice" in
     1)
       info "$STR_CLI_INSTALLING"
-      if curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null; then
-        # Ensure newly installed binary is in PATH
-        export PATH="$HOME/.local/bin:$PATH"
-        if command -v claude &>/dev/null; then
-          ok "$STR_CLI_INSTALLED"
+      if is_msys; then
+        # Native Windows: use PowerShell installer
+        if powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex" 2>/dev/null; then
+          export PATH="$HOME/.local/bin:$PATH"
+          if command -v claude &>/dev/null; then
+            ok "$STR_CLI_INSTALLED"
+          else
+            warn "$STR_CLI_PATH_WARN"
+          fi
         else
-          warn "$STR_CLI_PATH_WARN"
+          warn "$STR_CLI_INSTALL_FAILED"
+          info "  powershell -c 'irm https://claude.ai/install.ps1 | iex'"
         fi
       else
-        warn "$STR_CLI_INSTALL_FAILED"
-        info "  curl -fsSL https://claude.ai/install.sh | bash"
+        # Unix (macOS/Linux/WSL): use bash installer
+        if curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null; then
+          export PATH="$HOME/.local/bin:$PATH"
+          if command -v claude &>/dev/null; then
+            ok "$STR_CLI_INSTALLED"
+          else
+            warn "$STR_CLI_PATH_WARN"
+          fi
+        else
+          warn "$STR_CLI_INSTALL_FAILED"
+          info "  curl -fsSL https://claude.ai/install.sh | bash"
+        fi
       fi
       ;;
     *)
       info "$STR_CLI_INSTALL_LATER"
-      printf "  curl -fsSL https://claude.ai/install.sh | bash\n"
+      if is_msys; then
+        printf "  powershell -c 'irm https://claude.ai/install.ps1 | iex'\n"
+      else
+        printf "  curl -fsSL https://claude.ai/install.sh | bash\n"
+      fi
       ;;
   esac
 else
@@ -384,18 +403,6 @@ if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
       [[ -n "$p" ]] && printf "  /install %s\n" "$p"
     done
   fi
-fi
-
-# ---------------------------------------------------------------------------
-# WSL hint
-# ---------------------------------------------------------------------------
-if is_wsl; then
-  printf "\n"
-  warn "$STR_WSL_IMPORTANT"
-  info "$STR_WSL_HOW_TO"
-  info "  $STR_WSL_STEP1"
-  info "  $STR_WSL_STEP2"
-  info "  $STR_WSL_STEP3"
 fi
 
 # ---------------------------------------------------------------------------
@@ -587,35 +594,21 @@ _setup_codex_mcp() {
     fi
   fi
 
-  # Step 4: Register MCP server with Claude Code (with API key in env)
+  # Step 4: Register MCP server with Claude Code
+  # Note: codex login handles authentication; no need to embed API key in MCP config
   if command -v claude &>/dev/null && command -v codex &>/dev/null; then
     printf "\n"
-    local _current_key="${OPENAI_API_KEY:-}"
-    # Always (re-)register to ensure the API key is embedded in MCP config
-    if [[ -n "$_current_key" ]]; then
+    local _mcp_list
+    _mcp_list="$(claude mcp list 2>/dev/null || true)"
+    if echo "$_mcp_list" | grep -q "codex" 2>/dev/null; then
+      ok "$STR_CODEX_MCP_ALREADY"
+    else
       info "$STR_CODEX_MCP_REGISTERING"
-      # Remove existing registration first (ignore errors)
-      claude mcp remove codex 2>/dev/null || true
-      if claude mcp add codex -e "OPENAI_API_KEY=${_current_key}" -- codex mcp-server 2>/dev/null; then
+      if claude mcp add codex -- codex mcp-server 2>/dev/null; then
         ok "$STR_CODEX_MCP_REGISTERED"
       else
         warn "$STR_CODEX_MCP_REG_FAILED"
-        info "  claude mcp add codex -e OPENAI_API_KEY=sk-... -- codex mcp-server"
-      fi
-    else
-      # No key available — register without env (user must set it themselves)
-      local _mcp_list
-      _mcp_list="$(claude mcp list 2>/dev/null || true)"
-      if echo "$_mcp_list" | grep -q "codex" 2>/dev/null; then
-        ok "$STR_CODEX_MCP_ALREADY"
-      else
-        info "$STR_CODEX_MCP_REGISTERING"
-        if claude mcp add codex -- codex mcp-server 2>/dev/null; then
-          ok "$STR_CODEX_MCP_REGISTERED"
-        else
-          warn "$STR_CODEX_MCP_REG_FAILED"
-          info "  claude mcp add codex -e OPENAI_API_KEY=sk-... -- codex mcp-server"
-        fi
+        info "  claude mcp add codex -- codex mcp-server"
       fi
     fi
   fi
@@ -647,14 +640,9 @@ _setup_codex_mcp() {
                 ok "$STR_CODEX_API_KEY_VALID"
                 _save_openai_key "$_retry_key" "$_rc_file"
                 ok "$STR_CODEX_API_KEY_SAVED ($_rc_file)"
-                # Re-login and re-register MCP with updated key
+                # Re-login with updated key
                 if command -v codex &>/dev/null; then
                   printf '%s' "$_retry_key" | codex login --with-api-key &>/dev/null || true
-                fi
-                if command -v claude &>/dev/null; then
-                  claude mcp remove codex 2>/dev/null || true
-                  claude mcp add codex -e "OPENAI_API_KEY=${_retry_key}" -- codex mcp-server 2>/dev/null || true
-                  ok "$STR_CODEX_MCP_REGISTERED"
                 fi
               else
                 warn "$STR_CODEX_API_KEY_INVALID"
@@ -666,7 +654,7 @@ _setup_codex_mcp() {
             warn "$STR_CODEX_E2E_SKIP_HINT"
             info "  1. export OPENAI_API_KEY=\"your-api-key-here\""
             info "  2. printenv OPENAI_API_KEY | codex login --with-api-key"
-            info "  3. claude mcp add codex -e OPENAI_API_KEY=sk-... -- codex mcp-server"
+            info "  3. claude mcp add codex -- codex mcp-server"
             break
             ;;
         esac
@@ -718,7 +706,17 @@ else
     info "  $STR_FINAL_GHOSTTY_STEP3"
     printf "\n"
     ok "$STR_FINAL_GHOSTTY_FONT"
-  elif ! is_wsl; then
+  elif is_wsl; then
+    info "$STR_FINAL_WSL_NEXT"
+    info "  $STR_FINAL_WSL_STEP1"
+    info "  $STR_FINAL_WSL_STEP2"
+    info "  $STR_FINAL_WSL_STEP3"
+  elif is_msys; then
+    info "$STR_FINAL_MSYS_NEXT"
+    info "  $STR_FINAL_MSYS_STEP1"
+    info "  $STR_FINAL_MSYS_STEP2"
+    info "  $STR_FINAL_MSYS_STEP3"
+  else
     info "$STR_FINAL_NEXT"
     info "  $STR_FINAL_STEP1"
     info "  $STR_FINAL_STEP2"

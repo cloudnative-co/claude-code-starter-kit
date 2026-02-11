@@ -33,6 +33,16 @@ detect_os() {
       _detect_linux_distro
       _detect_wsl
       ;;
+    MSYS_NT*|MINGW64_NT*|MINGW32_NT*)
+      OS="windows"
+      ARCH="$(uname -m)"
+      DISTRO="msys"
+      DISTRO_FAMILY="msys"
+      # Extract Windows build from uname (e.g. MSYS_NT-10.0-19045 → 19045)
+      if [[ "$uname_s" =~ [0-9]+\.[0-9]+-([0-9]+) ]]; then
+        WSL_BUILD="${BASH_REMATCH[1]}"
+      fi
+      ;;
     *)
       OS="unsupported"
       ARCH="$(uname -m)"
@@ -133,6 +143,12 @@ is_linux() { [[ "$OS" == "linux" ]]; }
 
 # Returns 0 (true) if running inside WSL
 is_wsl() { [[ "$IS_WSL" == "true" ]]; }
+
+# Returns 0 (true) if running in Git Bash (MSYS/MINGW) on native Windows
+is_msys() { [[ "$OS" == "windows" ]]; }
+
+# Returns 0 (true) if running on Windows (either WSL or native Git Bash)
+is_windows() { is_wsl || is_msys; }
 
 # Returns 0 (true) if Apple Silicon
 is_apple_silicon() { [[ "$OS" == "macos" && "$ARCH" == "arm64" ]]; }

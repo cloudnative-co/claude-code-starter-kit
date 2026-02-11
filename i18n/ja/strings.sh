@@ -28,6 +28,7 @@ STR_EDITOR_NONE="なし / エディタ連携をスキップ"
 # Step 4.5: Ghostty
 STR_GHOSTTY_TITLE="Ghostty ターミナルエミュレータをセットアップしますか？"
 STR_GHOSTTY_DESC="Homebrew 経由で Ghostty と HackGen NF フォントをインストールし、最適化された設定を配置します。"
+STR_GHOSTTY_DESC_WINDOWS="winget 経由で Ghostty をインストールし、最適化された設定を配置します。"
 STR_GHOSTTY_YES="はい - Ghostty + HackGen NF フォントをインストールして設定を配置"
 STR_GHOSTTY_NO="いいえ - Ghostty セットアップをスキップ"
 STR_GHOSTTY_ALREADY_INSTALLED="Ghostty はインストール済みです"
@@ -119,6 +120,18 @@ STR_WSL_HOW_TO="Claude Code の使い方："
 STR_WSL_STEP1="1. ターミナルを開いて wsl と入力"
 STR_WSL_STEP2="2. プロジェクトに移動: cd /path/to/your/project"
 STR_WSL_STEP3="3. 実行: claude"
+
+# Post-deploy: WSL final message
+STR_FINAL_WSL_NEXT="Claude Code は WSL 内で実行します。使い方："
+STR_FINAL_WSL_STEP1="1. ターミナルを開いて wsl と入力"
+STR_FINAL_WSL_STEP2="2. プロジェクトに移動: cd /path/to/your/project"
+STR_FINAL_WSL_STEP3="3. 実行: claude"
+
+# Post-deploy: Native Windows (Git Bash)
+STR_FINAL_MSYS_NEXT="Claude Code を使い始めるには："
+STR_FINAL_MSYS_STEP1="1. Git Bash を開く（または現在のウィンドウを再起動）"
+STR_FINAL_MSYS_STEP2="2. プロジェクトディレクトリに移動"
+STR_FINAL_MSYS_STEP3="3. 実行: claude"
 
 # Final message
 STR_FINAL_TITLE="セットアップ完了！"

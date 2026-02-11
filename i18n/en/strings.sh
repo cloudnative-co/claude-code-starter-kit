@@ -30,6 +30,7 @@ STR_EDITOR_NONE="None / Skip editor integration"
 # Step 4.5: Ghostty
 STR_GHOSTTY_TITLE="Set up Ghostty terminal emulator?"
 STR_GHOSTTY_DESC="Installs Ghostty and HackGen NF font via Homebrew, then deploys an optimized config."
+STR_GHOSTTY_DESC_WINDOWS="Installs Ghostty via winget and deploys an optimized config."
 STR_GHOSTTY_YES="Yes - Install Ghostty + HackGen NF font and deploy config"
 STR_GHOSTTY_NO="No - Skip Ghostty setup"
 STR_GHOSTTY_ALREADY_INSTALLED="Ghostty is already installed"
@@ -121,6 +122,18 @@ STR_WSL_HOW_TO="To use Claude Code:"
 STR_WSL_STEP1="1. Open a terminal and type: wsl"
 STR_WSL_STEP2="2. Navigate to your project: cd /path/to/your/project"
 STR_WSL_STEP3="3. Run: claude"
+
+# Post-deploy: WSL final message
+STR_FINAL_WSL_NEXT="Claude Code runs inside WSL. To use it:"
+STR_FINAL_WSL_STEP1="1. Open a terminal and type: wsl"
+STR_FINAL_WSL_STEP2="2. Navigate to your project: cd /path/to/your/project"
+STR_FINAL_WSL_STEP3="3. Run: claude"
+
+# Post-deploy: Native Windows (Git Bash)
+STR_FINAL_MSYS_NEXT="To start using Claude Code:"
+STR_FINAL_MSYS_STEP1="1. Open Git Bash (or restart the current window)"
+STR_FINAL_MSYS_STEP2="2. Navigate to your project directory"
+STR_FINAL_MSYS_STEP3="3. Run: claude"
 
 # Final message
 STR_FINAL_TITLE="All done!"

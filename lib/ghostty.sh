@@ -12,6 +12,13 @@ GHOSTTY_INCOMPLETE=""
 _ghostty_config_dir() {
   case "$(uname -s)" in
     Darwin) printf '%s' "$HOME/Library/Application Support/com.mitchellh.ghostty" ;;
+    MSYS_NT*|MINGW64_NT*|MINGW32_NT*)
+      if [[ -n "${APPDATA:-}" ]]; then
+        printf '%s' "$(cygpath -u "$APPDATA")/Ghostty"
+      else
+        printf '%s' "$HOME/.config/ghostty"
+      fi
+      ;;
     *)      printf '%s' "$HOME/.config/ghostty" ;;
   esac
 }
@@ -69,46 +76,90 @@ install_ghostty() {
     ok "$STR_GHOSTTY_ALREADY_INSTALLED"
     return 0
   fi
-  if [[ "$(uname -s)" != "Darwin" ]]; then
-    warn "$STR_GHOSTTY_SKIP_PLATFORM"
-    return 1
-  fi
-  if ! _ghostty_ensure_brew; then
-    warn "Homebrew is not available. Cannot install Ghostty."
-    info "  Install manually: https://ghostty.org/"
-    return 1
-  fi
-  info "Installing Ghostty..."
-  if brew install --cask ghostty; then
-    ok "Ghostty installed"
-    return 0
-  else
-    warn "Failed to install Ghostty. Install manually: https://ghostty.org/"
-    return 1
-  fi
+
+  local uname_s
+  uname_s="$(uname -s)"
+
+  case "$uname_s" in
+    Darwin)
+      if ! _ghostty_ensure_brew; then
+        warn "Homebrew is not available. Cannot install Ghostty."
+        info "  Install manually: https://ghostty.org/"
+        return 1
+      fi
+      info "Installing Ghostty..."
+      if brew install --cask ghostty; then
+        ok "Ghostty installed"
+        return 0
+      else
+        warn "Failed to install Ghostty. Install manually: https://ghostty.org/"
+        return 1
+      fi
+      ;;
+    MSYS_NT*|MINGW64_NT*|MINGW32_NT*)
+      if command -v winget.exe &>/dev/null; then
+        info "Installing Ghostty via winget..."
+        if winget.exe install --id=com.mitchellh.ghostty --accept-package-agreements --accept-source-agreements 2>/dev/null; then
+          ok "Ghostty installed"
+          return 0
+        else
+          warn "Failed to install Ghostty via winget."
+          info "  Install manually: https://ghostty.org/download"
+          return 1
+        fi
+      else
+        warn "winget not available. Cannot install Ghostty."
+        info "  Install manually: https://ghostty.org/download"
+        return 1
+      fi
+      ;;
+    *)
+      warn "$STR_GHOSTTY_SKIP_PLATFORM"
+      return 1
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
 # Install HackGen NF font
 # ---------------------------------------------------------------------------
 install_hackgen_font() {
-  if ! command -v brew &>/dev/null; then
-    warn "Homebrew is not available. Cannot install HackGen NF font."
-    info "  Install manually: https://github.com/yuru7/HackGen"
-    return 1
-  fi
-  if brew list --cask font-hackgen-nerd &>/dev/null; then
-    ok "$STR_GHOSTTY_FONT_ALREADY"
-    return 0
-  fi
-  info "Installing HackGen NF font..."
-  if brew install --cask font-hackgen-nerd; then
-    ok "HackGen NF font installed"
-    return 0
-  else
-    warn "Failed to install HackGen NF font. Install manually: https://github.com/yuru7/HackGen"
-    return 1
-  fi
+  local uname_s
+  uname_s="$(uname -s)"
+
+  case "$uname_s" in
+    Darwin)
+      if ! command -v brew &>/dev/null; then
+        warn "Homebrew is not available. Cannot install HackGen NF font."
+        info "  Install manually: https://github.com/yuru7/HackGen"
+        return 1
+      fi
+      if brew list --cask font-hackgen-nerd &>/dev/null; then
+        ok "$STR_GHOSTTY_FONT_ALREADY"
+        return 0
+      fi
+      info "Installing HackGen NF font..."
+      if brew install --cask font-hackgen-nerd; then
+        ok "HackGen NF font installed"
+        return 0
+      else
+        warn "Failed to install HackGen NF font."
+        info "  Install manually: https://github.com/yuru7/HackGen"
+        return 1
+      fi
+      ;;
+    MSYS_NT*|MINGW64_NT*|MINGW32_NT*)
+      warn "Automatic font installation is not supported on Windows."
+      info "  Download HackGen NF: https://github.com/yuru7/HackGen/releases"
+      info "  Double-click the .ttf files to install."
+      return 1
+      ;;
+    *)
+      warn "Cannot install HackGen NF font on this platform."
+      info "  Install manually: https://github.com/yuru7/HackGen"
+      return 1
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -122,7 +173,19 @@ deploy_ghostty_config() {
 
   mkdir -p "$config_dir"
   _backup_ghostty_config
-  cp -a "$template_file" "$config_file"
+
+  local uname_s
+  uname_s="$(uname -s)"
+  case "$uname_s" in
+    MSYS_NT*|MINGW64_NT*|MINGW32_NT*)
+      # Strip macOS-specific settings (macos-*)
+      grep -v '^macos-' "$template_file" > "$config_file"
+      ;;
+    *)
+      cp -a "$template_file" "$config_file"
+      ;;
+  esac
+
   ok "$STR_GHOSTTY_CONFIG_DEPLOYED: $config_file"
 }
 

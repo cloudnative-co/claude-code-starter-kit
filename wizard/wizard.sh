@@ -468,9 +468,15 @@ _step_ghostty() {
   if [[ "$_CLI_OVERRIDES" == *"ENABLE_GHOSTTY_SETUP"* ]]; then return; fi
   # Only ask for custom profile; other profiles use their preset value
   if [[ "$PROFILE" != "custom" ]]; then return; fi
+  # Skip on WSL (cannot install Windows GUI apps from WSL)
+  if is_wsl; then ENABLE_GHOSTTY_SETUP="false"; return; fi
 
   section "$STR_GHOSTTY_TITLE"
-  printf "  %s\n\n" "$STR_GHOSTTY_DESC"
+  if is_msys; then
+    printf "  %s\n\n" "${STR_GHOSTTY_DESC_WINDOWS:-$STR_GHOSTTY_DESC}"
+  else
+    printf "  %s\n\n" "$STR_GHOSTTY_DESC"
+  fi
   printf "  1) %s\n" "$STR_GHOSTTY_YES"
   printf "  2) %s\n" "$STR_GHOSTTY_NO"
   local choice=""
@@ -617,7 +623,9 @@ _step_confirm() {
   printf "%-20s : %s\n" "$STR_CONFIRM_PROFILE" "$(_profile_label "$PROFILE")"
   printf "%-20s : %s\n" "$STR_CONFIRM_CODEX" "$(_bool_label_enabled "$ENABLE_CODEX_MCP")"
   printf "%-20s : %s\n" "$STR_CONFIRM_EDITOR" "$(_editor_label "$EDITOR_CHOICE")"
-  printf "%-20s : %s\n" "$STR_CONFIRM_GHOSTTY" "$(_bool_label_enabled "$ENABLE_GHOSTTY_SETUP")"
+  if ! is_wsl; then
+    printf "%-20s : %s\n" "$STR_CONFIRM_GHOSTTY" "$(_bool_label_enabled "$ENABLE_GHOSTTY_SETUP")"
+  fi
 
   # Hooks summary
   local hook_labels=()

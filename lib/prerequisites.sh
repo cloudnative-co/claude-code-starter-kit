@@ -68,6 +68,11 @@ _pkg_install() {
     alpine)
       sudo apk add --no-cache "$@"
       ;;
+    msys)
+      error "Package manager not available in Git Bash."
+      error "Please install $* manually using winget or from their official websites."
+      return 1
+      ;;
     *)
       error "Unsupported package manager for DISTRO_FAMILY=$DISTRO_FAMILY"
       return 1
@@ -84,6 +89,11 @@ check_git() {
     ok "git $(git --version | awk '{print $3}')"
     return 0
   fi
+  if is_msys; then
+    error "Git not found. This should not happen in Git Bash."
+    error "Please reinstall Git for Windows: https://gitforwindows.org/"
+    return 1
+  fi
   info "Installing git..."
   _pkg_install git
   ok "git installed"
@@ -93,6 +103,20 @@ check_jq() {
   if command -v jq &>/dev/null; then
     ok "jq $(jq --version 2>/dev/null || echo '?')"
     return 0
+  fi
+  if is_msys; then
+    info "Installing jq (standalone binary for Windows)..."
+    local jq_url="https://github.com/jqlang/jq/releases/latest/download/jq-windows-amd64.exe"
+    local jq_dest="$HOME/.local/bin/jq.exe"
+    mkdir -p "$HOME/.local/bin"
+    if curl -fsSL "$jq_url" -o "$jq_dest" && chmod +x "$jq_dest"; then
+      export PATH="$HOME/.local/bin:$PATH"
+      ok "jq installed to $jq_dest"
+      return 0
+    else
+      error "Failed to download jq. Install manually: https://jqlang.github.io/jq/download/"
+      return 1
+    fi
   fi
   info "Installing jq..."
   _pkg_install jq
@@ -124,6 +148,7 @@ _tmux_install_hint() {
     debian) echo "sudo apt-get install tmux" ;;
     rhel)   echo "sudo dnf install tmux" ;;
     alpine) echo "sudo apk add tmux" ;;
+    msys)   echo "tmux is not available in Git Bash" ;;
     *)      echo "see https://github.com/tmux/tmux/wiki/Installing" ;;
   esac
 }
@@ -217,6 +242,18 @@ _install_node() {
     alpine)
       sudo apk add --no-cache "nodejs" "npm"
       ;;
+    msys)
+      # Try winget (available on Windows 10+), then fall back to nvm
+      if command -v winget.exe &>/dev/null; then
+        info "Installing Node.js via winget..."
+        winget.exe install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements 2>/dev/null || true
+        # winget installs to Program Files; add to PATH
+        export PATH="/c/Program Files/nodejs:$PATH"
+      fi
+      if ! command -v node &>/dev/null; then
+        _install_node_via_nvm
+      fi
+      ;;
     *)
       _install_node_via_nvm
       ;;
@@ -271,6 +308,11 @@ check_prerequisites() {
 
   # macOS: try to ensure Homebrew is available (not fatal if it fails)
   _ensure_homebrew
+
+  # MSYS/Git Bash: ensure ~/.local/bin is in PATH for standalone tools
+  if is_msys; then
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
 
   local failed=0
 
