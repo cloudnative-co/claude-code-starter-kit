@@ -123,7 +123,7 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 
 ### 方法 2: Windows PowerShell（管理者として実行）
 
-**ステップ 1**: スタートメニューで「PowerShell」と検索し、**右クリック → 「管理者として実行」**を選びます
+**ステップ 1**: スタートメニューで「PowerShell」と検索し、**右クリック → 「管理者として実行」** を選びます
 
 **ステップ 2**: 以下のコマンドをコピーして貼り付け、`Enter` を押します
 
