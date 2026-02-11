@@ -428,6 +428,26 @@ _save_openai_key() {
   export OPENAI_API_KEY="$key"
 }
 
+# Test Codex MCP server end-to-end: start the server, send JSON-RPC initialize,
+# check it responds without auth errors.
+_test_codex_mcp() {
+  if ! command -v codex &>/dev/null; then
+    return 1
+  fi
+  local _test_result
+  _test_result="$(printf '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}\n' \
+    | timeout 10 codex mcp-server 2>&1 | head -5 || true)"
+  # Check for auth errors
+  if echo "$_test_result" | grep -qi "unauthorized\|authentication\|401" 2>/dev/null; then
+    return 1
+  fi
+  # Check for valid JSON-RPC response
+  if echo "$_test_result" | grep -q "jsonrpc" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 _prompt_openai_key() {
   local rc_file="$1"
   while true; do
@@ -446,15 +466,15 @@ _prompt_openai_key() {
         if [[ -z "$_api_key" ]]; then
           info "$STR_CODEX_API_KEY_SKIPPED"
           info "  export OPENAI_API_KEY=\"your-api-key-here\""
-          return
+          return 1
         fi
-        # Verify the key
+        # Verify the key against OpenAI API
         info "$STR_CODEX_API_KEY_VERIFYING"
         if _verify_openai_key "$_api_key"; then
           ok "$STR_CODEX_API_KEY_VALID"
           _save_openai_key "$_api_key" "$rc_file"
           ok "$STR_CODEX_API_KEY_SAVED ($rc_file)"
-          return
+          return 0
         else
           warn "$STR_CODEX_API_KEY_INVALID"
           printf "\n"
@@ -465,16 +485,15 @@ _prompt_openai_key() {
           if [[ "$_retry" != "1" ]]; then
             info "$STR_CODEX_API_KEY_SKIPPED"
             info "  export OPENAI_API_KEY=\"your-api-key-here\""
-            return
+            return 1
           fi
           printf "\n"
-          # Loop continues for retry
         fi
         ;;
       *)
         info "$STR_CODEX_API_KEY_SKIPPED"
         info "  export OPENAI_API_KEY=\"your-api-key-here\""
-        return
+        return 1
         ;;
     esac
   done
@@ -512,8 +531,7 @@ _setup_codex_mcp() {
     fi
   fi
 
-  # Step 2: OpenAI API key
-  # Determine the shell rc file
+  # Step 2: OpenAI API key (setup + verification)
   local _rc_file="$HOME/.bashrc"
   local _login_shell
   _login_shell="$(basename "${SHELL:-bash}")"
@@ -521,33 +539,39 @@ _setup_codex_mcp() {
     _rc_file="$HOME/.zshrc"
   fi
 
-  # Check if API key is already configured (env var or rc file)
   local _existing_key=""
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     _existing_key="$OPENAI_API_KEY"
   elif grep -q 'OPENAI_API_KEY' "$_rc_file" 2>/dev/null; then
     _existing_key="$(grep 'OPENAI_API_KEY' "$_rc_file" | sed 's/.*OPENAI_API_KEY=["]*//;s/["]*$//' | tail -1)"
+    # Load into current session
+    export OPENAI_API_KEY="$_existing_key"
   fi
 
+  local _key_ok=false
   if [[ -n "$_existing_key" ]]; then
     printf "\n"
     ok "$STR_CODEX_API_KEY_ALREADY"
-    # Verify existing key
     info "$STR_CODEX_API_KEY_VERIFYING"
     if _verify_openai_key "$_existing_key"; then
       ok "$STR_CODEX_API_KEY_VALID"
+      _key_ok=true
     else
       warn "$STR_CODEX_API_KEY_INVALID"
-      _prompt_openai_key "$_rc_file"
+      if _prompt_openai_key "$_rc_file"; then
+        _key_ok=true
+      fi
     fi
   else
     printf "\n"
-    _prompt_openai_key "$_rc_file"
+    if _prompt_openai_key "$_rc_file"; then
+      _key_ok=true
+    fi
   fi
 
   # Step 3: Register MCP server with Claude Code
   if command -v claude &>/dev/null && command -v codex &>/dev/null; then
-    # Check if already registered
+    printf "\n"
     local _mcp_list
     _mcp_list="$(claude mcp list 2>/dev/null || true)"
     if echo "$_mcp_list" | grep -q "codex" 2>/dev/null; then
@@ -559,6 +583,33 @@ _setup_codex_mcp() {
       else
         warn "$STR_CODEX_MCP_REG_FAILED"
         info "  claude mcp add codex -- codex mcp-server"
+      fi
+    fi
+  fi
+
+  # Step 4: End-to-end smoke test
+  if [[ "$_key_ok" == "true" ]] && command -v codex &>/dev/null; then
+    printf "\n"
+    info "$STR_CODEX_E2E_TESTING"
+    if _test_codex_mcp; then
+      ok "$STR_CODEX_E2E_SUCCESS"
+    else
+      warn "$STR_CODEX_E2E_FAILED"
+      # Offer to re-enter the key
+      printf "\n"
+      printf "  1) %s\n" "$STR_CODEX_API_KEY_RETRY_YES"
+      printf "  2) %s\n" "$STR_CODEX_API_KEY_RETRY_NO"
+      local _e2e_retry=""
+      read -r -p "${STR_CHOICE}: " _e2e_retry
+      if [[ "$_e2e_retry" == "1" ]]; then
+        if _prompt_openai_key "$_rc_file"; then
+          info "$STR_CODEX_E2E_TESTING"
+          if _test_codex_mcp; then
+            ok "$STR_CODEX_E2E_SUCCESS"
+          else
+            warn "$STR_CODEX_E2E_STILL_FAILED"
+          fi
+        fi
       fi
     fi
   fi

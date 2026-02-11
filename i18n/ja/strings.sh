@@ -163,6 +163,10 @@ STR_CODEX_MCP_REGISTERING="Codex MCP サーバーを Claude Code に登録中...
 STR_CODEX_MCP_REGISTERED="Codex MCP サーバーを登録しました"
 STR_CODEX_MCP_ALREADY="Codex MCP サーバーは登録済みです"
 STR_CODEX_MCP_REG_FAILED="Codex MCP サーバーの登録に失敗しました。手動で実行してください："
+STR_CODEX_E2E_TESTING="Codex MCP の接続テスト中..."
+STR_CODEX_E2E_SUCCESS="Codex MCP の接続テストに成功しました"
+STR_CODEX_E2E_FAILED="Codex MCP の接続テストに失敗しました。API キーまたは接続に問題がある可能性があります"
+STR_CODEX_E2E_STILL_FAILED="接続テストに再度失敗しました。後で手動で確認してください"
 STR_CODEX_SETUP_DONE="Codex MCP のセットアップが完了しました"
 
 # Errors
