@@ -38,27 +38,10 @@ _ensure_homebrew() {
     return 0
   fi
 
-  # Not installed at all - try to install it
-  info "Homebrew が見つかりません。インストールしています... / Homebrew not found. Installing..."
-  info "パスワードの入力を求められる場合があります / You may be prompted for your password"
-  if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
-    # Add to PATH for this session
-    if [[ -x /opt/homebrew/bin/brew ]]; then
-      eval "$(/opt/homebrew/bin/brew shellenv)"
-    elif [[ -x /usr/local/bin/brew ]]; then
-      eval "$(/usr/local/bin/brew shellenv)"
-    fi
-  fi
-
-  if command -v brew &>/dev/null; then
-    ok "Homebrew installed"
-  else
-    # Homebrew install failed (e.g., no admin privileges) - not fatal,
-    # individual checks will use alternative installers (nvm for Node.js)
-    warn "Homebrew をインストールできませんでした（管理者権限が必要な場合があります）"
-    warn "Homebrew could not be installed (admin privileges may be required)."
-    warn "代替手段で依存ツールをインストールします / Will use alternative methods for dependencies."
-  fi
+  # Not installed - not fatal at this stage.
+  # Homebrew will be installed later only if the selected profile requires it
+  # (e.g., Ghostty setup). Individual checks use alternative installers (nvm for Node.js).
+  return 0
 }
 
 # ---------------------------------------------------------------------------
