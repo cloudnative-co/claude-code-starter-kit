@@ -775,6 +775,23 @@ if is_true "${ENABLE_CODEX_MCP:-false}"; then
 fi
 
 # ---------------------------------------------------------------------------
+# Final safety net: ensure Claude CLI is actually installed
+# (catches edge cases where the earlier installation was skipped or failed)
+# ---------------------------------------------------------------------------
+if [[ ! -x "$HOME/.local/bin/claude" ]] && ! command -v claude &>/dev/null; then
+  printf "\n"
+  warn "Claude CLI not found after setup. Running installer..."
+  if curl -fsSL https://claude.ai/install.sh | bash; then
+    export PATH="$HOME/.local/bin:$PATH"
+    _ensure_local_bin_in_path
+    ok "$STR_CLI_INSTALLED"
+  else
+    warn "$STR_CLI_INSTALL_FAILED"
+    info "  curl -fsSL https://claude.ai/install.sh | bash"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Final message
 # ---------------------------------------------------------------------------
 printf "\n"
