@@ -124,7 +124,7 @@ STR_WSL_STEP3="3. 実行: claude"
 
 # Post-deploy: WSL final message
 STR_FINAL_WSL_NEXT="Claude Code は WSL 内で実行します。使い方："
-STR_FINAL_WSL_STEP1="1. Windows Terminal を開き、ドロップダウンから Ubuntu を選択"
+STR_FINAL_WSL_STEP1="1. ターミナル（Windows Terminal）を開き、ドロップダウンから Ubuntu を選択"
 STR_FINAL_WSL_STEP2="2. プロジェクトに移動: cd /path/to/your/project"
 STR_FINAL_WSL_STEP3="3. 実行: claude"
 
