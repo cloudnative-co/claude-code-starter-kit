@@ -339,8 +339,20 @@ _ensure_local_bin_in_path() {
 
 # ---------------------------------------------------------------------------
 # Install Claude Code CLI if not present
+# In WSL, Windows PATH can leak (e.g. /mnt/c/.../npm/claude) causing false
+# positives for 'command -v claude'. Check for the actual Linux binary first.
 # ---------------------------------------------------------------------------
-if ! command -v claude &>/dev/null; then
+_need_cli_install=false
+if [[ -x "$HOME/.local/bin/claude" ]]; then
+  _need_cli_install=false
+elif is_wsl; then
+  # In WSL, ignore Windows PATH — require local Linux binary
+  _need_cli_install=true
+elif ! command -v claude &>/dev/null; then
+  _need_cli_install=true
+fi
+
+if $_need_cli_install; then
   printf "\n"
   info "$STR_CLI_INSTALLING"
   if is_msys; then
