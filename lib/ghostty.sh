@@ -3,6 +3,9 @@
 # Requires: lib/colors.sh and lib/detect.sh to be sourced first
 set -euo pipefail
 
+# Track incomplete installations for final summary
+GHOSTTY_INCOMPLETE=""
+
 # ---------------------------------------------------------------------------
 # Config path detection
 # ---------------------------------------------------------------------------
@@ -30,7 +33,7 @@ _ghostty_ensure_brew() {
   # Not installed - try to install (macOS only)
   if [[ "$(uname -s)" == "Darwin" ]]; then
     info "Homebrew not found. Installing Homebrew..."
-    if NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" 2>&1; then
+    if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
       if [[ -x /opt/homebrew/bin/brew ]]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
       elif [[ -x /usr/local/bin/brew ]]; then
@@ -68,18 +71,20 @@ install_ghostty() {
   fi
   if [[ "$(uname -s)" != "Darwin" ]]; then
     warn "$STR_GHOSTTY_SKIP_PLATFORM"
-    return 0
+    return 1
   fi
   if ! _ghostty_ensure_brew; then
     warn "Homebrew is not available. Cannot install Ghostty."
     info "  Install manually: https://ghostty.org/"
-    return 0
+    return 1
   fi
   info "Installing Ghostty..."
   if brew install --cask ghostty; then
     ok "Ghostty installed"
+    return 0
   else
     warn "Failed to install Ghostty. Install manually: https://ghostty.org/"
+    return 1
   fi
 }
 
@@ -90,7 +95,7 @@ install_hackgen_font() {
   if ! command -v brew &>/dev/null; then
     warn "Homebrew is not available. Cannot install HackGen NF font."
     info "  Install manually: https://github.com/yuru7/HackGen"
-    return 0
+    return 1
   fi
   if brew list --cask font-hackgen-nerd &>/dev/null; then
     ok "$STR_GHOSTTY_FONT_ALREADY"
@@ -99,8 +104,10 @@ install_hackgen_font() {
   info "Installing HackGen NF font..."
   if brew install --cask font-hackgen-nerd; then
     ok "HackGen NF font installed"
+    return 0
   else
     warn "Failed to install HackGen NF font. Install manually: https://github.com/yuru7/HackGen"
+    return 1
   fi
 }
 
@@ -124,9 +131,14 @@ deploy_ghostty_config() {
 # ---------------------------------------------------------------------------
 setup_ghostty() {
   local template_file="${1:-}"
-  install_ghostty
-  install_hackgen_font
+  local incomplete=""
+
+  install_ghostty  || incomplete+="Ghostty "
+  install_hackgen_font || incomplete+="HackGen-NF "
+
   if [[ -n "$template_file" && -f "$template_file" ]]; then
     deploy_ghostty_config "$template_file"
   fi
+
+  GHOSTTY_INCOMPLETE="$incomplete"
 }

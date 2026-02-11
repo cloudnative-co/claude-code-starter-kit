@@ -389,13 +389,33 @@ fi
 # Final message
 # ---------------------------------------------------------------------------
 printf "\n"
-section "$STR_FINAL_TITLE"
-if ! is_wsl; then
+if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]]; then
+  section "$STR_FINAL_INCOMPLETE_TITLE"
+  warn "$STR_FINAL_INCOMPLETE_GHOSTTY"
+  for _item in $GHOSTTY_INCOMPLETE; do
+    warn "  - $_item"
+  done
+  printf "\n"
+  info "$STR_FINAL_INCOMPLETE_HINT"
+  info "  $STR_FINAL_INCOMPLETE_BREW"
+  info "    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+  info ""
+  info "  $STR_FINAL_INCOMPLETE_RERUN"
+  info "    ~/.claude-starter-kit/setup.sh"
+  printf "\n"
   info "$STR_FINAL_NEXT"
   info "  $STR_FINAL_STEP1"
   info "  $STR_FINAL_STEP2"
   info "  $STR_FINAL_STEP3"
+else
+  section "$STR_FINAL_TITLE"
+  if ! is_wsl; then
+    info "$STR_FINAL_NEXT"
+    info "  $STR_FINAL_STEP1"
+    info "  $STR_FINAL_STEP2"
+    info "  $STR_FINAL_STEP3"
+  fi
+  printf "\n"
+  ok "$STR_FINAL_ENJOY"
 fi
-printf "\n"
-ok "$STR_FINAL_ENJOY"
 printf "\n"

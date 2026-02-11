@@ -128,6 +128,11 @@ STR_FINAL_STEP1="1. Restart your terminal (or open a new tab)"
 STR_FINAL_STEP2="2. Navigate to your project directory"
 STR_FINAL_STEP3="3. Run: claude"
 STR_FINAL_ENJOY="Happy coding!"
+STR_FINAL_INCOMPLETE_TITLE="Setup partially complete"
+STR_FINAL_INCOMPLETE_GHOSTTY="The following components could not be installed (Homebrew is required):"
+STR_FINAL_INCOMPLETE_HINT="Install Homebrew with an admin account, then re-run setup:"
+STR_FINAL_INCOMPLETE_BREW="Install Homebrew:"
+STR_FINAL_INCOMPLETE_RERUN="Re-run setup:"
 
 # Errors
 STR_ERR_JQ="jq is required but not installed."

@@ -126,6 +126,11 @@ STR_FINAL_STEP1="1. ターミナルを再起動（または新しいタブを開
 STR_FINAL_STEP2="2. プロジェクトディレクトリに移動"
 STR_FINAL_STEP3="3. 実行: claude"
 STR_FINAL_ENJOY="Happy coding!"
+STR_FINAL_INCOMPLETE_TITLE="セットアップは一部完了です"
+STR_FINAL_INCOMPLETE_GHOSTTY="以下のコンポーネントはインストールできませんでした（Homebrew が必要です）："
+STR_FINAL_INCOMPLETE_HINT="管理者権限のあるアカウントで Homebrew をインストールしてから、再度セットアップを実行してください："
+STR_FINAL_INCOMPLETE_BREW="Homebrew のインストール："
+STR_FINAL_INCOMPLETE_RERUN="再セットアップ："
 
 # Errors
 STR_ERR_JQ="jq が必要ですがインストールされていません。"
