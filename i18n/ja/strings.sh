@@ -159,6 +159,10 @@ STR_CODEX_API_KEY_RETRY="再入力しますか？"
 STR_CODEX_API_KEY_RETRY_YES="はい、再入力する"
 STR_CODEX_API_KEY_RETRY_NO="いいえ、後で設定する"
 STR_CODEX_API_KEY_SKIPPED="API キーの設定をスキップしました。後で以下を実行してください："
+STR_CODEX_MCP_REGISTERING="Codex MCP サーバーを Claude Code に登録中..."
+STR_CODEX_MCP_REGISTERED="Codex MCP サーバーを登録しました"
+STR_CODEX_MCP_ALREADY="Codex MCP サーバーは登録済みです"
+STR_CODEX_MCP_REG_FAILED="Codex MCP サーバーの登録に失敗しました。手動で実行してください："
 STR_CODEX_SETUP_DONE="Codex MCP のセットアップが完了しました"
 
 # Errors

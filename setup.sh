@@ -199,17 +199,6 @@ build_settings() {
 
   build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
 
-  # Codex MCP: merge mcpServers configuration
-  if is_true "$ENABLE_CODEX_MCP"; then
-    local mcp_fragment="$PROJECT_DIR/features/codex-mcp/mcp-servers.json"
-    if [[ -f "$mcp_fragment" ]]; then
-      local tmp_mcp
-      tmp_mcp="$(mktemp)"
-      jq --slurpfile frag "$mcp_fragment" '. * $frag[0]' "$out" > "$tmp_mcp"
-      mv "$tmp_mcp" "$out"
-    fi
-  fi
-
   # Set language name in settings
   local lang_name
   lang_name="$(language_name)"
@@ -554,6 +543,24 @@ _setup_codex_mcp() {
   else
     printf "\n"
     _prompt_openai_key "$_rc_file"
+  fi
+
+  # Step 3: Register MCP server with Claude Code
+  if command -v claude &>/dev/null && command -v codex &>/dev/null; then
+    # Check if already registered
+    local _mcp_list
+    _mcp_list="$(claude mcp list 2>/dev/null || true)"
+    if echo "$_mcp_list" | grep -q "codex" 2>/dev/null; then
+      ok "$STR_CODEX_MCP_ALREADY"
+    else
+      info "$STR_CODEX_MCP_REGISTERING"
+      if claude mcp add codex -- codex mcp-server 2>/dev/null; then
+        ok "$STR_CODEX_MCP_REGISTERED"
+      else
+        warn "$STR_CODEX_MCP_REG_FAILED"
+        info "  claude mcp add codex -- codex mcp-server"
+      fi
+    fi
   fi
 
   printf "\n"
