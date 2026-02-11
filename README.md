@@ -3,7 +3,7 @@
 # Claude Code Starter Kit
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform: macOS/Linux/WSL](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg)](#-インストール)
+[![Platform: macOS/Linux/Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)](#-インストール)
 
 Claude Code を初めて使う人でも、**ワンコマンドで開発環境を整えられる**セットアップキットです。
 プログラミングやターミナルが初めての方にもわかるように、やさしく説明しています。
@@ -83,8 +83,8 @@ Claude Code をインストールしただけでは、まっさらな状態で�
 | メモリ | 4GB 以上（8GB あると安心） |
 | 管理者権限 | ソフトのインストールに必要です |
 
-> **補足**: Windows の場合、WSL（Windows Subsystem for Linux）という仕組みを使います。
-> WSL は「Windows の中で Linux を動かす機能」で、これにより Claude Code が動作します。
+> **補足**: Windows の場合、Git for Windows（Git Bash）を使ってセットアップを行います。
+> Git Bash が入っていなくても、セットアップ時に自動でインストールされます。
 
 ---
 
@@ -124,9 +124,9 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 
 ---
 
-### 方法 2: Windows PowerShell（管理者として実行）
+### 方法 2: Windows PowerShell
 
-**ステップ 1**: スタートメニューで「PowerShell」と検索し、**右クリック → 「管理者として実行」** を選びます
+**ステップ 1**: スタートメニューで「PowerShell」と検索して起動します（管理者権限は不要です）
 
 **ステップ 2**: 以下のコマンドをコピーして貼り付け、`Enter` を押します
 
@@ -136,9 +136,7 @@ irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/mai
 
 > このコマンドは PowerShell 版のインストールスクリプトをダウンロードして実行します。
 > `irm` はダウンロード、`iex` は実行を意味します。
-
-> **Windows の方へ**: 初回実行時に OS の再起動を求められる場合があります（WSL や必要なツールのインストールのため）。
-> その場合は **再起動後にもう一度同じコマンドを実行してください**。前回の続きから自動で再開します。
+> Git for Windows が未インストールの場合は自動でインストールされます。
 
 ---
 
@@ -395,17 +393,10 @@ CI/CD（自動デプロイ）やチーム全員の環境を統一したい場合
 ~/.claude-starter-kit/uninstall.sh
 ```
 
-**Windows（WSL）：**
+**Windows（Git Bash）：**
 
-PowerShell では `.sh` スクリプトは実行できません。以下の手順で WSL に切り替えてから実行してください。
+Git Bash を開いて実行してください：
 
-1. PowerShell を開く（スタートメニューで「PowerShell」と検索）
-2. `wsl` と入力して Enter → Linux 環境に切り替わります
-3. アンインストールコマンドを実行：
-
-```powershell
-wsl
-```
 ```bash
 ~/.claude-starter-kit/uninstall.sh
 ```

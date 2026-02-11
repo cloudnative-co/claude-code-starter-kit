@@ -1,5 +1,6 @@
 # install.ps1 - Windows bootstrap for Claude Code Starter Kit
 # Usage: irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
+# WSL mode: powershell -File install.ps1 --wsl
 
 $ErrorActionPreference = "Stop"
 
@@ -315,26 +316,14 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
 }
 
 # ---------------------------------------------------------------------------
-# Main: Mode selection
+# Main: Auto-select mode (default: Git Bash, --wsl for WSL)
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "Claude Code Starter Kit - Windows Setup" -ForegroundColor White -BackgroundColor DarkCyan
 Write-Host ""
-Write-Host "How would you like to install?" -ForegroundColor Cyan
-Write-Host "インストール方法を選択してください：" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  1) Native Windows (Git Bash) - Recommended / 推奨" -ForegroundColor Green
-Write-Host "     No admin required. Claude Code runs directly on Windows."
-Write-Host "     管理者権限不要。Windows 上で直接 Claude Code を実行します。"
-Write-Host ""
-Write-Host "  2) WSL (Ubuntu) - Full Linux environment" -ForegroundColor Yellow
-Write-Host "     Requires admin. Installs WSL2 + Ubuntu."
-Write-Host "     管理者権限が必要。WSL2 + Ubuntu をインストールします。"
-Write-Host ""
 
-$mode = Read-Host "Choice / 選択 (1 or 2)"
-
-switch ($mode) {
-    "2" { Install-ViaWSL }
-    default { Install-ViaGitBash }
+if ($args -contains "--wsl") {
+    Install-ViaWSL
+} else {
+    Install-ViaGitBash
 }

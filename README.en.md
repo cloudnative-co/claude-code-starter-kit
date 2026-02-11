@@ -3,7 +3,7 @@
 [日本語 README](README.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform: macOS/Linux/WSL](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg)](#installation)
+[![Platform: macOS/Linux/Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)](#installation)
 
 One-command setup of a complete Claude Code development environment with an interactive wizard.
 
@@ -48,7 +48,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
 ```
 
-### Windows PowerShell (Administrator)
+### Windows PowerShell
 
 ```powershell
 irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
@@ -177,17 +177,10 @@ If you installed via the one-liner, the repo is saved at `~/.claude-starter-kit/
 ~/.claude-starter-kit/uninstall.sh
 ```
 
-**Windows (WSL):**
+**Windows (Git Bash):**
 
-`.sh` scripts cannot run in PowerShell. Switch to WSL first:
+Open Git Bash and run:
 
-1. Open PowerShell (search "PowerShell" in the Start menu)
-2. Type `wsl` and press Enter to switch to the Linux environment
-3. Run the uninstall command:
-
-```powershell
-wsl
-```
 ```bash
 ~/.claude-starter-kit/uninstall.sh
 ```
