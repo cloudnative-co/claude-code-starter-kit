@@ -10,6 +10,30 @@ MANIFEST="$CLAUDE_DIR/.starter-kit-manifest.json"
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---------------------------------------------------------------------------
+# Platform detection (inline — uninstall.sh is standalone, no lib/detect.sh)
+# ---------------------------------------------------------------------------
+_uname_s="$(uname -s 2>/dev/null || echo "Unknown")"
+_IS_MSYS=false
+_IS_WSL=false
+
+case "$_uname_s" in
+  MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*) _IS_MSYS=true ;;
+esac
+
+if [[ -f /proc/version ]] && grep -qi "microsoft" /proc/version 2>/dev/null; then
+  _IS_WSL=true
+fi
+
+# On MSYS/Git Bash, probe Windows install paths for Claude CLI
+if [[ "$_IS_MSYS" == "true" ]]; then
+  for _win_dir in \
+    "$(cygpath -u "${LOCALAPPDATA:-}/Programs/claude" 2>/dev/null)" \
+    "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)"; do
+    [[ -n "$_win_dir" ]] && export PATH="$_win_dir:$PATH"
+  done
+fi
+
+# ---------------------------------------------------------------------------
 # Colors
 # ---------------------------------------------------------------------------
 if [[ -t 1 ]] && [[ "${TERM:-}" != "dumb" ]]; then
@@ -250,40 +274,55 @@ if command -v claude &>/dev/null; then
   read -r -p "$STR_CLI_UNINSTALL_ASK " cli_confirm
   case "$cli_confirm" in
     y|Y|yes|YES)
-      local_bin_claude="$HOME/.local/bin/claude"
-      if [[ -f "$local_bin_claude" ]] || [[ -L "$local_bin_claude" ]]; then
-        # Native installer: use claude uninstall
+      if [[ "$_IS_MSYS" == "true" ]]; then
+        # Windows native (Git Bash): Claude was installed via PowerShell installer
+        # Binary is typically at %LOCALAPPDATA%\Programs\claude\claude.exe
         info "$STR_CLI_UNINSTALL_NATIVE"
-        if claude uninstall 2>/dev/null; then
-          ok "$STR_CLI_UNINSTALL_DONE"
-        else
-          # Fallback: remove binary directly
-          rm -f "$local_bin_claude"
-          ok "$STR_CLI_UNINSTALL_DONE"
-        fi
-      elif npm list -g @anthropic-ai/claude-code &>/dev/null 2>&1; then
-        # npm installation
-        info "$STR_CLI_UNINSTALL_NPM"
-        if npm uninstall -g @anthropic-ai/claude-code 2>/dev/null; then
-          ok "$STR_CLI_UNINSTALL_DONE"
-        else
-          warn "$STR_CLI_UNINSTALL_FAILED"
-        fi
-      elif brew list claude-code &>/dev/null 2>&1; then
-        # Homebrew installation
-        info "$STR_CLI_UNINSTALL_BREW"
-        if brew uninstall claude-code 2>/dev/null; then
+        _win_claude_dir="$(cygpath -u "${LOCALAPPDATA:-}/Programs/claude" 2>/dev/null)"
+        if [[ -n "$_win_claude_dir" ]] && [[ -d "$_win_claude_dir" ]]; then
+          rm -rf "$_win_claude_dir" 2>/dev/null && ok "$STR_CLI_UNINSTALL_DONE" || warn "$STR_CLI_UNINSTALL_FAILED"
+        elif claude uninstall 2>/dev/null; then
           ok "$STR_CLI_UNINSTALL_DONE"
         else
           warn "$STR_CLI_UNINSTALL_FAILED"
         fi
       else
-        # Unknown installation method — try claude uninstall
-        info "$STR_CLI_UNINSTALL_NATIVE"
-        if claude uninstall 2>/dev/null; then
-          ok "$STR_CLI_UNINSTALL_DONE"
+        # Unix (macOS / Linux / WSL)
+        local_bin_claude="$HOME/.local/bin/claude"
+        if [[ -f "$local_bin_claude" ]] || [[ -L "$local_bin_claude" ]]; then
+          # Native installer: use claude uninstall
+          info "$STR_CLI_UNINSTALL_NATIVE"
+          if claude uninstall 2>/dev/null; then
+            ok "$STR_CLI_UNINSTALL_DONE"
+          else
+            # Fallback: remove binary directly
+            rm -f "$local_bin_claude"
+            ok "$STR_CLI_UNINSTALL_DONE"
+          fi
+        elif npm list -g @anthropic-ai/claude-code &>/dev/null 2>&1; then
+          # npm installation
+          info "$STR_CLI_UNINSTALL_NPM"
+          if npm uninstall -g @anthropic-ai/claude-code 2>/dev/null; then
+            ok "$STR_CLI_UNINSTALL_DONE"
+          else
+            warn "$STR_CLI_UNINSTALL_FAILED"
+          fi
+        elif brew list claude-code &>/dev/null 2>&1; then
+          # Homebrew installation
+          info "$STR_CLI_UNINSTALL_BREW"
+          if brew uninstall claude-code 2>/dev/null; then
+            ok "$STR_CLI_UNINSTALL_DONE"
+          else
+            warn "$STR_CLI_UNINSTALL_FAILED"
+          fi
         else
-          warn "$STR_CLI_UNINSTALL_FAILED"
+          # Unknown installation method — try claude uninstall
+          info "$STR_CLI_UNINSTALL_NATIVE"
+          if claude uninstall 2>/dev/null; then
+            ok "$STR_CLI_UNINSTALL_DONE"
+          else
+            warn "$STR_CLI_UNINSTALL_FAILED"
+          fi
         fi
       fi
       ;;
