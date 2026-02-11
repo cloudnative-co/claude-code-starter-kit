@@ -557,6 +557,15 @@ _setup_codex_mcp() {
   warn "$STR_CODEX_SETUP_NOTE"
   printf "\n"
 
+  # On MSYS/Git Bash, ensure npm global bin is in PATH
+  if is_msys; then
+    for _npm_dir in \
+      "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
+      "$(npm config get prefix 2>/dev/null)/bin"; do
+      [[ -n "$_npm_dir" ]] && [[ -d "$_npm_dir" ]] && export PATH="$_npm_dir:$PATH"
+    done
+  fi
+
   # Step 1: Install Codex CLI
   if command -v codex &>/dev/null; then
     ok "$STR_CODEX_CLI_ALREADY"
@@ -572,6 +581,14 @@ _setup_codex_mcp() {
         sudo npm install -g @openai/codex 2>/dev/null && _codex_installed=true
       fi
     fi
+    # After npm install, re-probe PATH on MSYS (npm global bin may not be in PATH)
+    if [[ "$_codex_installed" == "true" ]] && ! command -v codex &>/dev/null && is_msys; then
+      for _npm_dir in \
+        "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
+        "$(npm config get prefix 2>/dev/null)/bin"; do
+        [[ -n "$_npm_dir" ]] && [[ -d "$_npm_dir" ]] && export PATH="$_npm_dir:$PATH"
+      done
+    fi
     if [[ "$_codex_installed" == "true" ]] && command -v codex &>/dev/null; then
       ok "$STR_CODEX_CLI_INSTALLED"
     else
@@ -582,10 +599,15 @@ _setup_codex_mcp() {
 
   # Step 2: OpenAI API key (setup + verification)
   local _rc_file="$HOME/.bashrc"
-  local _login_shell
-  _login_shell="$(basename "${SHELL:-bash}")"
-  if [[ "$_login_shell" == "zsh" ]]; then
-    _rc_file="$HOME/.zshrc"
+  if is_msys; then
+    # Git Bash sources .bash_profile, not .bashrc
+    _rc_file="$HOME/.bash_profile"
+  else
+    local _login_shell
+    _login_shell="$(basename "${SHELL:-bash}")"
+    if [[ "$_login_shell" == "zsh" ]]; then
+      _rc_file="$HOME/.zshrc"
+    fi
   fi
 
   local _existing_key=""

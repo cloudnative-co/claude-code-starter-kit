@@ -203,6 +203,13 @@ if command -v apt-get &>/dev/null; then
     echo "[INFO] Installing dependencies..."
     sudo apt-get update -qq
     sudo apt-get install -y git curl jq dos2unix 2>/dev/null || true
+
+    # Install Node.js if not present (needed for Codex CLI / npm plugins)
+    if ! command -v node &>/dev/null; then
+        echo "[INFO] Installing Node.js..."
+        curl -fsSL https://deb.nodesource.com/setup_20.x 2>/dev/null | sudo -E bash - 2>/dev/null || true
+        sudo apt-get install -y nodejs 2>/dev/null || true
+    fi
 fi
 
 # Clone or update the repo
