@@ -306,6 +306,29 @@ section "Setup Complete"
 ok "Deployed to $CLAUDE_DIR"
 
 # ---------------------------------------------------------------------------
+# Helper: Ensure ~/.local/bin is in shell RC file for PATH persistence
+# ---------------------------------------------------------------------------
+_ensure_local_bin_in_path() {
+  local local_bin="$HOME/.local/bin"
+  local rc_file=""
+
+  # Determine the correct shell RC file
+  case "${SHELL:-/bin/bash}" in
+    */zsh)  rc_file="$HOME/.zshrc" ;;
+    */bash) rc_file="$HOME/.bashrc" ;;
+    *)      rc_file="$HOME/.profile" ;;
+  esac
+
+  # Create RC file if it doesn't exist
+  [[ -f "$rc_file" ]] || touch "$rc_file"
+
+  # Add PATH entry if not already present
+  if ! grep -q "$local_bin" "$rc_file" 2>/dev/null; then
+    printf '\n# Claude Code CLI\nexport PATH="%s:$PATH"\n' "$local_bin" >> "$rc_file"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Install Claude Code CLI if not present
 # ---------------------------------------------------------------------------
 if ! command -v claude &>/dev/null; then
@@ -334,8 +357,10 @@ if ! command -v claude &>/dev/null; then
         fi
       else
         # Unix (macOS/Linux/WSL): use bash installer
-        if curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null; then
+        if curl -fsSL https://claude.ai/install.sh | bash; then
           export PATH="$HOME/.local/bin:$PATH"
+          # Ensure ~/.local/bin is in shell RC for next login
+          _ensure_local_bin_in_path
           if command -v claude &>/dev/null; then
             ok "$STR_CLI_INSTALLED"
           else

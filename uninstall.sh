@@ -66,6 +66,14 @@ _load_strings() {
       STR_SKIPPED="スキップ: %s ファイル（既に存在しない）"
       STR_REMAINING="%s のユーザーファイルが %s に残っています（スターターキット管理外）"
       STR_DIR_EMPTY="%s は空になりました"
+      STR_CLI_UNINSTALL_ASK="Claude Code CLI もアンインストールしますか？ [y/N]"
+      STR_CLI_UNINSTALL_NATIVE="ネイティブ版 Claude Code をアンインストール中..."
+      STR_CLI_UNINSTALL_NPM="npm 版 Claude Code をアンインストール中..."
+      STR_CLI_UNINSTALL_BREW="Homebrew 版 Claude Code をアンインストール中..."
+      STR_CLI_UNINSTALL_DONE="Claude Code CLI をアンインストールしました"
+      STR_CLI_UNINSTALL_FAILED="Claude Code CLI のアンインストールに失敗しました。手動で削除してください。"
+      STR_CLI_UNINSTALL_SKIP="Claude Code CLI のアンインストールをスキップしました"
+      STR_CLI_NOT_INSTALLED="Claude Code CLI はインストールされていません"
       ;;
     *)
       STR_TITLE="Claude Code Starter Kit - Uninstall"
@@ -83,6 +91,14 @@ _load_strings() {
       STR_SKIPPED="Skipped: %s files (already missing)"
       STR_REMAINING="%s user files remain in %s (not managed by starter kit)"
       STR_DIR_EMPTY="%s is now empty"
+      STR_CLI_UNINSTALL_ASK="Also uninstall Claude Code CLI? [y/N]"
+      STR_CLI_UNINSTALL_NATIVE="Uninstalling native Claude Code..."
+      STR_CLI_UNINSTALL_NPM="Uninstalling npm Claude Code..."
+      STR_CLI_UNINSTALL_BREW="Uninstalling Homebrew Claude Code..."
+      STR_CLI_UNINSTALL_DONE="Claude Code CLI uninstalled"
+      STR_CLI_UNINSTALL_FAILED="Failed to uninstall Claude Code CLI. Please remove it manually."
+      STR_CLI_UNINSTALL_SKIP="Skipped Claude Code CLI uninstall"
+      STR_CLI_NOT_INSTALLED="Claude Code CLI is not installed"
       ;;
   esac
 }
@@ -191,6 +207,59 @@ info "$(printf "$STR_REMOVED" "$removed")"
 if [[ "$skipped" -gt 0 ]]; then
   # shellcheck disable=SC2059
   info "$(printf "$STR_SKIPPED" "$skipped")"
+fi
+
+# ---------------------------------------------------------------------------
+# Claude Code CLI uninstall
+# ---------------------------------------------------------------------------
+if command -v claude &>/dev/null; then
+  printf "\n"
+  read -r -p "$STR_CLI_UNINSTALL_ASK " cli_confirm
+  case "$cli_confirm" in
+    y|Y|yes|YES)
+      local_bin_claude="$HOME/.local/bin/claude"
+      if [[ -f "$local_bin_claude" ]] || [[ -L "$local_bin_claude" ]]; then
+        # Native installer: use claude uninstall
+        info "$STR_CLI_UNINSTALL_NATIVE"
+        if claude uninstall 2>/dev/null; then
+          ok "$STR_CLI_UNINSTALL_DONE"
+        else
+          # Fallback: remove binary directly
+          rm -f "$local_bin_claude"
+          ok "$STR_CLI_UNINSTALL_DONE"
+        fi
+      elif npm list -g @anthropic-ai/claude-code &>/dev/null 2>&1; then
+        # npm installation
+        info "$STR_CLI_UNINSTALL_NPM"
+        if npm uninstall -g @anthropic-ai/claude-code 2>/dev/null; then
+          ok "$STR_CLI_UNINSTALL_DONE"
+        else
+          warn "$STR_CLI_UNINSTALL_FAILED"
+        fi
+      elif brew list claude-code &>/dev/null 2>&1; then
+        # Homebrew installation
+        info "$STR_CLI_UNINSTALL_BREW"
+        if brew uninstall claude-code 2>/dev/null; then
+          ok "$STR_CLI_UNINSTALL_DONE"
+        else
+          warn "$STR_CLI_UNINSTALL_FAILED"
+        fi
+      else
+        # Unknown installation method — try claude uninstall
+        info "$STR_CLI_UNINSTALL_NATIVE"
+        if claude uninstall 2>/dev/null; then
+          ok "$STR_CLI_UNINSTALL_DONE"
+        else
+          warn "$STR_CLI_UNINSTALL_FAILED"
+        fi
+      fi
+      ;;
+    *)
+      info "$STR_CLI_UNINSTALL_SKIP"
+      ;;
+  esac
+else
+  info "$STR_CLI_NOT_INSTALLED"
 fi
 
 # Check if ~/.claude still has content
