@@ -35,13 +35,16 @@ install.ps1 (Windows: WSL2 setup + clone repo via WSL + bootstrap)
       → wizard/wizard.sh (CLI parsing + interactive prompts)
       → lib/detect.sh (OS/WSL/MSYS detection)
       → lib/prerequisites.sh (dependency checks)
-      → lib/fonts.sh (cross-platform font install + Windows Terminal auto-config)
       → build_claude_md() — template engine assembles ~/.claude/CLAUDE.md
       → build_settings() — jq merges base JSON + permissions + hook fragments → settings.json
       → deploy files to ~/.claude/{agents,rules,commands,skills,memory}/
+      → lib/ghostty.sh (Ghostty install + config, macOS only, if enabled)
+      → lib/fonts.sh (cross-platform font install + Windows Terminal auto-config)
       → write_manifest() — tracks deployed files for uninstall
       → Codex MCP setup (if enabled)
 ```
+
+Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
 
 ### Profile System
 
@@ -52,7 +55,20 @@ Three profiles (`profiles/*.conf`) define feature toggles as `VAR=true/false`:
 
 ### i18n
 
-`load_strings "$LANGUAGE"` sources `i18n/{en,ja}/strings.sh`. All UI text uses `STR_*` variables. CLAUDE.md templates use `{{FEATURE:name}}` markers injected by `lib/template.sh`.
+`load_strings "$LANGUAGE"` sources `i18n/{en,ja}/strings.sh`. All UI text uses `STR_*` variables.
+
+### Template Engine (`lib/template.sh`)
+
+`build_claude_md()` assembles the user's `~/.claude/CLAUDE.md` in three phases:
+1. `process_template()` — replaces `{{VAR}}` placeholders with values from a config file
+2. `inject_feature()` — replaces `{{FEATURE:name}}` markers with contents of partial files (feature-specific docs)
+3. `remove_unresolved()` — strips any remaining `{{...}}` markers for disabled features
+
+### Plugin System
+
+`config/plugins.json` defines available plugins with profile assignments. Each plugin has a `name`, `description`, and `profiles` array (which profiles include it by default).
+
+Wizard flow: `_load_plugins()` reads the JSON → `_init_plugins_for_profile()` pre-selects plugins based on the chosen profile → user can customize in interactive mode → `_compute_selected_plugins()` produces the final `SELECTED_PLUGINS` CSV → `setup.sh` installs via `claude plugin add`.
 
 ### Hook Fragment Assembly
 
@@ -77,6 +93,20 @@ Key helpers: `Test-WslInstalled`, `Test-UbuntuReady`, `Find-UbuntuDistro`, `Find
 ### Manifest-Based Uninstall
 
 `write_manifest()` records all deployed file paths in `~/.claude/.starter-kit-manifest.json`. `uninstall.sh` reads this manifest and removes only tracked files, preserving user-added content. Uninstall is self-contained (inline platform detection, jq with grep/sed fallback).
+
+### Deploy Targets
+
+`setup.sh` deploys content from this repo to `~/.claude/`:
+
+| Source | Target | Condition |
+|--------|--------|-----------|
+| `agents/*.md` | `~/.claude/agents/` | `INSTALL_AGENTS=true` |
+| `rules/*.md` | `~/.claude/rules/` | `INSTALL_RULES=true` |
+| `commands/` | `~/.claude/commands/` | `INSTALL_COMMANDS=true` |
+| `skills/` | `~/.claude/skills/` | `INSTALL_SKILLS=true` |
+| `memory/` | `~/.claude/memory/` | `INSTALL_MEMORY=true` |
+| assembled CLAUDE.md | `~/.claude/CLAUDE.md` | always |
+| assembled settings.json | `~/.claude/settings.json` | always |
 
 ## Key Conventions
 
