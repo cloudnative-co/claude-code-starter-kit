@@ -1,0 +1,184 @@
+#!/bin/bash
+# lib/fonts.sh - Cross-platform programming font installation
+# Installs IBM Plex Mono and HackGen NF (Nerd Fonts)
+# Requires: lib/colors.sh and lib/detect.sh to be sourced first
+set -euo pipefail
+
+FONTS_INCOMPLETE=""
+
+# ---------------------------------------------------------------------------
+# Windows font installation helper (via powershell.exe)
+# Downloads a zip, extracts .ttf files, installs to user-level font directory.
+# Works from both WSL and MSYS/Git Bash.
+# Args: $1=download_url  $2=zip_filename  $3=file_filter (e.g. "*.ttf")
+# ---------------------------------------------------------------------------
+_install_font_windows() {
+  local font_url="$1"
+  local font_zip_name="$2"
+  local font_filter="$3"
+
+  local ps_script
+  ps_script='
+$ErrorActionPreference = "Stop"
+$fontDir = "$env:LOCALAPPDATA\Microsoft\Windows\Fonts"
+if (-not (Test-Path $fontDir)) { New-Item -ItemType Directory -Path $fontDir -Force | Out-Null }
+$tmpDir = Join-Path $env:TEMP "claude-fonts-install"
+if (Test-Path $tmpDir) { Remove-Item -Path $tmpDir -Recurse -Force }
+New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+$zipPath = Join-Path $tmpDir "'"$font_zip_name"'"
+try {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  Invoke-WebRequest -Uri "'"$font_url"'" -OutFile $zipPath -UseBasicParsing
+  Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force
+  $fonts = Get-ChildItem -Path $tmpDir -Recurse -Filter "'"$font_filter"'"
+  $regPath = "HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+  if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+  foreach ($f in $fonts) {
+    $dest = Join-Path $fontDir $f.Name
+    if (-not (Test-Path $dest)) {
+      Copy-Item $f.FullName $dest -Force
+      $fontName = [System.IO.Path]::GetFileNameWithoutExtension($f.Name) + " (TrueType)"
+      New-ItemProperty -Path $regPath -Name $fontName -Value $dest -PropertyType String -Force | Out-Null
+    }
+  }
+  Write-Output "OK"
+} finally {
+  Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+'
+
+  if powershell.exe -NoProfile -Command "$ps_script" 2>/dev/null | grep -q "OK"; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Install IBM Plex Mono
+# ---------------------------------------------------------------------------
+install_ibm_plex_mono() {
+  local uname_s
+  uname_s="$(uname -s)"
+
+  case "$uname_s" in
+    Darwin)
+      if ! command -v brew &>/dev/null; then
+        warn "${STR_FONT_BREW_MISSING:-Homebrew not available}"
+        info "  ${STR_FONT_IBM_MANUAL:-https://fonts.google.com/specimen/IBM+Plex+Mono}"
+        return 1
+      fi
+      if brew list --cask font-ibm-plex-mono &>/dev/null 2>&1; then
+        ok "${STR_FONT_IBM_ALREADY:-IBM Plex Mono is already installed}"
+        return 0
+      fi
+      info "${STR_FONT_IBM_INSTALLING:-Installing IBM Plex Mono...}"
+      if brew install --cask font-ibm-plex-mono; then
+        ok "${STR_FONT_IBM_INSTALLED:-IBM Plex Mono installed}"
+        return 0
+      else
+        warn "${STR_FONT_IBM_FAILED:-Failed to install IBM Plex Mono}"
+        info "  ${STR_FONT_IBM_MANUAL:-https://fonts.google.com/specimen/IBM+Plex+Mono}"
+        return 1
+      fi
+      ;;
+    *)
+      # WSL or MSYS: install to Windows side via PowerShell
+      if ! command -v powershell.exe &>/dev/null; then
+        warn "${STR_FONT_NO_POWERSHELL:-powershell.exe not found}"
+        info "  ${STR_FONT_IBM_MANUAL:-https://fonts.google.com/specimen/IBM+Plex+Mono}"
+        return 1
+      fi
+      info "${STR_FONT_IBM_INSTALLING:-Installing IBM Plex Mono...}"
+      local url="https://fonts.google.com/download?family=IBM+Plex+Mono"
+      if _install_font_windows "$url" "IBMPlexMono.zip" "*.ttf"; then
+        ok "${STR_FONT_IBM_INSTALLED:-IBM Plex Mono installed}"
+        return 0
+      else
+        warn "${STR_FONT_IBM_FAILED:-Failed to install IBM Plex Mono}"
+        info "  ${STR_FONT_IBM_MANUAL:-https://fonts.google.com/specimen/IBM+Plex+Mono}"
+        return 1
+      fi
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Install HackGen NF (Nerd Fonts version)
+# ---------------------------------------------------------------------------
+install_hackgen_nf() {
+  local uname_s
+  uname_s="$(uname -s)"
+
+  case "$uname_s" in
+    Darwin)
+      if ! command -v brew &>/dev/null; then
+        warn "${STR_FONT_BREW_MISSING:-Homebrew not available}"
+        info "  ${STR_FONT_HACKGEN_MANUAL:-https://github.com/yuru7/HackGen/releases}"
+        return 1
+      fi
+      if brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
+        ok "${STR_FONT_HACKGEN_ALREADY:-HackGen NF is already installed}"
+        return 0
+      fi
+      info "${STR_FONT_HACKGEN_INSTALLING:-Installing HackGen NF...}"
+      if brew install --cask font-hackgen-nerd; then
+        ok "${STR_FONT_HACKGEN_INSTALLED:-HackGen NF installed}"
+        return 0
+      else
+        warn "${STR_FONT_HACKGEN_FAILED:-Failed to install HackGen NF}"
+        info "  ${STR_FONT_HACKGEN_MANUAL:-https://github.com/yuru7/HackGen/releases}"
+        return 1
+      fi
+      ;;
+    *)
+      if ! command -v powershell.exe &>/dev/null; then
+        warn "${STR_FONT_NO_POWERSHELL:-powershell.exe not found}"
+        info "  ${STR_FONT_HACKGEN_MANUAL:-https://github.com/yuru7/HackGen/releases}"
+        return 1
+      fi
+      info "${STR_FONT_HACKGEN_INSTALLING:-Installing HackGen NF...}"
+      local url="https://github.com/yuru7/HackGen/releases/download/v2.10.0/HackGen_NF_v2.10.0.zip"
+      if _install_font_windows "$url" "HackGen_NF.zip" "*.ttf"; then
+        ok "${STR_FONT_HACKGEN_INSTALLED:-HackGen NF installed}"
+        return 0
+      else
+        warn "${STR_FONT_HACKGEN_FAILED:-Failed to install HackGen NF}"
+        info "  ${STR_FONT_HACKGEN_MANUAL:-https://github.com/yuru7/HackGen/releases}"
+        return 1
+      fi
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+setup_fonts() {
+  local incomplete=""
+
+  install_ibm_plex_mono || incomplete+="IBM-Plex-Mono "
+  install_hackgen_nf    || incomplete+="HackGen-NF "
+
+  FONTS_INCOMPLETE="${incomplete% }"
+
+  # Print Windows Terminal configuration hints
+  if [[ -z "$incomplete" ]]; then
+    local uname_s
+    uname_s="$(uname -s)"
+    case "$uname_s" in
+      Darwin)
+        # macOS: fonts are automatically available in all apps
+        ;;
+      *)
+        # WSL or MSYS: show Windows Terminal hint
+        if command -v powershell.exe &>/dev/null; then
+          printf "\n"
+          info "${STR_FONT_WT_HINT:-To use the installed fonts in Windows Terminal:}"
+          info "  ${STR_FONT_WT_STEP1:-1. Open Settings (Ctrl+,) > Profiles > Defaults > Appearance}"
+          info "  ${STR_FONT_WT_STEP2:-2. Set Font face to 'HackGen35 Console NF' (or 'IBM Plex Mono')}"
+        fi
+        ;;
+    esac
+  fi
+}

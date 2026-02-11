@@ -40,6 +40,8 @@ parse_cli_args "$@"
 . "$PROJECT_DIR/lib/json-builder.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/ghostty.sh"
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/fonts.sh"
 
 # ---------------------------------------------------------------------------
 # Prerequisites
@@ -299,6 +301,14 @@ fi
 if is_true "${ENABLE_GHOSTTY_SETUP:-false}"; then
   section "Setting up Ghostty terminal"
   setup_ghostty "$PROJECT_DIR/features/ghostty/config.template"
+fi
+
+# ---------------------------------------------------------------------------
+# Programming font installation (cross-platform)
+# ---------------------------------------------------------------------------
+if is_true "${ENABLE_FONTS_SETUP:-false}"; then
+  section "$STR_FONTS_SECTION_TITLE"
+  setup_fonts
 fi
 
 write_manifest
@@ -859,6 +869,14 @@ else
     info "  $STR_FINAL_STEP1"
     info "  $STR_FINAL_STEP2"
     info "  $STR_FINAL_STEP3"
+  fi
+  # Font incomplete warning
+  if [[ -n "${FONTS_INCOMPLETE:-}" ]]; then
+    printf "\n"
+    warn "$STR_FINAL_INCOMPLETE_FONTS"
+    for _item in $FONTS_INCOMPLETE; do
+      warn "  - $_item"
+    done
   fi
   printf "\n"
   warn "${STR_FINAL_RESTART_WARN:-Important: Restart your terminal for settings to take effect.}"

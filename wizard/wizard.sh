@@ -27,6 +27,7 @@ ENABLE_MEMORY_PERSISTENCE="${ENABLE_MEMORY_PERSISTENCE:-}"
 ENABLE_STRATEGIC_COMPACT="${ENABLE_STRATEGIC_COMPACT:-}"
 ENABLE_PR_CREATION_LOG="${ENABLE_PR_CREATION_LOG:-}"
 ENABLE_GHOSTTY_SETUP="${ENABLE_GHOSTTY_SETUP:-}"
+ENABLE_FONTS_SETUP="${ENABLE_FONTS_SETUP:-}"
 
 SELECTED_PLUGINS="${SELECTED_PLUGINS:-}"
 WIZARD_RESULT="${WIZARD_RESULT:-}"
@@ -170,6 +171,7 @@ ENABLE_MEMORY_PERSISTENCE="${ENABLE_MEMORY_PERSISTENCE}"
 ENABLE_STRATEGIC_COMPACT="${ENABLE_STRATEGIC_COMPACT}"
 ENABLE_PR_CREATION_LOG="${ENABLE_PR_CREATION_LOG}"
 ENABLE_GHOSTTY_SETUP="${ENABLE_GHOSTTY_SETUP}"
+ENABLE_FONTS_SETUP="${ENABLE_FONTS_SETUP}"
 
 SELECTED_PLUGINS="${SELECTED_PLUGINS}"
 EOF
@@ -332,6 +334,8 @@ parse_cli_args() {
       --commit-attribution)   shift; _set_bool COMMIT_ATTRIBUTION "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} COMMIT_ATTRIBUTION" ;;
       --ghostty=*)     _set_bool ENABLE_GHOSTTY_SETUP "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_GHOSTTY_SETUP" ;;
       --ghostty)       shift; _set_bool ENABLE_GHOSTTY_SETUP "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_GHOSTTY_SETUP" ;;
+      --fonts=*)       _set_bool ENABLE_FONTS_SETUP "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_FONTS_SETUP" ;;
+      --fonts)         shift; _set_bool ENABLE_FONTS_SETUP "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_FONTS_SETUP" ;;
       --hooks=*)
         _apply_hooks_csv "${arg#*=}"
         ;;
@@ -492,6 +496,24 @@ _step_ghostty() {
   esac
 }
 
+_step_fonts() {
+  # Skip if explicitly set by CLI arg
+  if [[ "$_CLI_OVERRIDES" == *"ENABLE_FONTS_SETUP"* ]]; then return; fi
+  # Only ask for custom profile; other profiles use their preset value
+  if [[ "$PROFILE" != "custom" ]]; then return; fi
+
+  section "$STR_FONTS_TITLE"
+  printf "  %s\n\n" "$STR_FONTS_DESC"
+  printf "  1) %s\n" "$STR_FONTS_YES"
+  printf "  2) %s\n" "$STR_FONTS_NO"
+  local choice=""
+  read -r -p "${STR_CHOICE}: " choice
+  case "$choice" in
+    1) ENABLE_FONTS_SETUP="true" ;;
+    *) ENABLE_FONTS_SETUP="false" ;;
+  esac
+}
+
 _step_hooks() {
   local HOOK_LABELS=(
     "$STR_HOOKS_TMUX"
@@ -629,6 +651,7 @@ _step_confirm() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
     printf "%-20s : %s\n" "$STR_CONFIRM_GHOSTTY" "$(_bool_label_enabled "$ENABLE_GHOSTTY_SETUP")"
   fi
+  printf "%-20s : %s\n" "$STR_CONFIRM_FONTS" "$(_bool_label_enabled "$ENABLE_FONTS_SETUP")"
 
   # Hooks summary
   local hook_labels=()
@@ -706,6 +729,7 @@ _fill_noninteractive_defaults() {
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
+  [[ -z "$ENABLE_FONTS_SETUP" ]] && ENABLE_FONTS_SETUP="false"
 
   # Force-disable Ghostty on non-macOS platforms
   if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -791,6 +815,7 @@ run_wizard() {
     COMMIT_ATTRIBUTION=""
     ENABLE_CODEX_MCP=""
     ENABLE_GHOSTTY_SETUP=""
+    ENABLE_FONTS_SETUP=""
   fi
 
   # Interactive wizard loop
@@ -805,6 +830,7 @@ run_wizard() {
     _step_codex
     _step_editor
     _step_ghostty
+    _step_fonts
     _step_hooks
     _step_plugins
     _step_commit
@@ -818,6 +844,7 @@ run_wizard() {
       COMMIT_ATTRIBUTION=""
       ENABLE_CODEX_MCP=""
       ENABLE_GHOSTTY_SETUP=""
+      ENABLE_FONTS_SETUP=""
       continue
     fi
     break

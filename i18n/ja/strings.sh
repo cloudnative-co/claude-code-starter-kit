@@ -39,6 +39,32 @@ STR_GHOSTTY_CONFIG_BACKED_UP="既存の Ghostty 設定をバックアップし�
 STR_GHOSTTY_SKIP_PLATFORM="このプラットフォームでは Ghostty の自動インストールに対応していません。詳細: https://ghostty.org/"
 STR_CONFIRM_GHOSTTY="Ghostty"
 
+# Step 4.6: Fonts
+STR_FONTS_TITLE="プログラミングフォントをインストールしますか？"
+STR_FONTS_DESC="IBM Plex Mono と HackGen NF（Nerd Fonts）をインストールして、ターミナルの視認性を向上させます。"
+STR_FONTS_YES="はい - IBM Plex Mono + HackGen NF をインストール"
+STR_FONTS_NO="いいえ - フォントのインストールをスキップ"
+STR_CONFIRM_FONTS="フォント"
+
+# Font installation messages
+STR_FONTS_SECTION_TITLE="プログラミングフォントのインストール"
+STR_FONT_BREW_MISSING="Homebrew が利用できません — フォントの自動インストールができません"
+STR_FONT_NO_POWERSHELL="powershell.exe が見つかりません — フォントの自動インストールができません"
+STR_FONT_IBM_ALREADY="IBM Plex Mono はインストール済みです"
+STR_FONT_IBM_INSTALLING="IBM Plex Mono をインストール中..."
+STR_FONT_IBM_INSTALLED="IBM Plex Mono をインストールしました"
+STR_FONT_IBM_FAILED="IBM Plex Mono のインストールに失敗しました"
+STR_FONT_IBM_MANUAL="手動ダウンロード: https://fonts.google.com/specimen/IBM+Plex+Mono"
+STR_FONT_HACKGEN_ALREADY="HackGen NF はインストール済みです"
+STR_FONT_HACKGEN_INSTALLING="HackGen NF をインストール中..."
+STR_FONT_HACKGEN_INSTALLED="HackGen NF をインストールしました"
+STR_FONT_HACKGEN_FAILED="HackGen NF のインストールに失敗しました"
+STR_FONT_HACKGEN_MANUAL="手動ダウンロード: https://github.com/yuru7/HackGen/releases"
+STR_FONT_WT_HINT="インストールしたフォントを Windows Terminal で使用するには："
+STR_FONT_WT_STEP1="1. 設定（Ctrl+,）> プロファイル > 既定値 > 外観 を開く"
+STR_FONT_WT_STEP2="2. フォントフェイスを 'HackGen35 Console NF'（または 'IBM Plex Mono'）に設定"
+STR_FINAL_INCOMPLETE_FONTS="以下のフォントはインストールできませんでした："
+
 # Step 5: Hooks
 STR_HOOKS_TITLE="有効にするフックを選択してください（番号をスペース区切りで入力）："
 STR_HOOKS_TMUX="Tmux リマインダー - 長時間コマンドに tmux を提案"
