@@ -776,15 +776,14 @@ else
     fi
   fi
   # Detect platform for final message (inline — don't rely on is_wsl/is_msys)
-  local _uname_final
   _uname_final="$(uname -s)"
-  local _is_wsl_final=false
+  _is_wsl_final=false
   if [[ -f /proc/version ]] && grep -qi "microsoft" /proc/version 2>/dev/null; then
     _is_wsl_final=true
   elif [[ -n "${WSL_DISTRO_NAME:-}" ]] || [[ -n "${WSLENV:-}" ]]; then
     _is_wsl_final=true
   fi
-  local _is_msys_final=false
+  _is_msys_final=false
   case "$_uname_final" in
     MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*) _is_msys_final=true ;;
   esac
