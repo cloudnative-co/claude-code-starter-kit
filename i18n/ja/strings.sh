@@ -84,6 +84,11 @@ STR_DEFAULT="デフォルト"
 STR_RECOMMENDED="推奨"
 STR_TOGGLE_HINT="番号=切替, a=全選択, n=全解除, Enter=確定"
 
+# Saved config detection
+STR_SAVED_CONFIG_FOUND="前回の設定が見つかりました。"
+STR_SAVED_CONFIG_REUSE="前回の設定を使用する（確認画面へ）"
+STR_SAVED_CONFIG_FRESH="最初からやり直す（すべて再設定）"
+
 # Deploy
 STR_DEPLOY_START="Claude Code 設定をデプロイ中..."
 STR_DEPLOY_BACKUP="既存の設定をバックアップ中..."

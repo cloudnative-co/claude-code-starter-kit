@@ -393,6 +393,8 @@ _step_profile() {
 _step_codex() {
   # Skip if explicitly set by CLI arg
   if [[ "$_CLI_OVERRIDES" == *"ENABLE_CODEX_MCP"* ]]; then return; fi
+  # Only ask for custom profile; other profiles use their preset value
+  if [[ "$PROFILE" != "custom" ]]; then return; fi
 
   section "$STR_CODEX_TITLE"
   printf "  1) %s\n" "$STR_CODEX_YES"
@@ -427,6 +429,8 @@ _step_editor() {
 _step_ghostty() {
   # Skip if explicitly set by CLI arg
   if [[ "$_CLI_OVERRIDES" == *"ENABLE_GHOSTTY_SETUP"* ]]; then return; fi
+  # Only ask for custom profile; other profiles use their preset value
+  if [[ "$PROFILE" != "custom" ]]; then return; fi
 
   section "$STR_GHOSTTY_TITLE"
   printf "  %s\n\n" "$STR_GHOSTTY_DESC"
@@ -700,6 +704,31 @@ run_wizard() {
     load_strings "$LANGUAGE"
     info "Non-interactive mode: PROFILE=$PROFILE LANGUAGE=$LANGUAGE"
     return
+  fi
+
+  # Detect saved config and offer to reuse
+  local _config_file="${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+  if [[ -f "$_config_file" ]]; then
+    load_strings "${LANGUAGE:-en}"
+    printf "\n"
+    info "$STR_SAVED_CONFIG_FOUND"
+    printf "  1) %s\n" "$STR_SAVED_CONFIG_REUSE"
+    printf "  2) %s\n" "$STR_SAVED_CONFIG_FRESH"
+    local _config_choice=""
+    read -r -p "${STR_CHOICE}: " _config_choice
+    if [[ "$_config_choice" == "1" ]]; then
+      # Show confirm with saved settings
+      _step_confirm
+      if [[ "$WIZARD_RESULT" != "edit" ]]; then
+        return
+      fi
+      # User chose to edit - fall through to full wizard
+    fi
+    # Reset for fresh start
+    LANGUAGE=""
+    PROFILE=""
+    EDITOR_CHOICE=""
+    COMMIT_ATTRIBUTION=""
   fi
 
   # Interactive wizard loop

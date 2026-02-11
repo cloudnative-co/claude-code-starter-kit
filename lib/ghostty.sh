@@ -14,6 +14,35 @@ _ghostty_config_dir() {
 }
 
 # ---------------------------------------------------------------------------
+# Ensure Homebrew is available (find in PATH or standard locations)
+# ---------------------------------------------------------------------------
+_ghostty_ensure_brew() {
+  command -v brew &>/dev/null && return 0
+
+  # Try standard Homebrew paths (may not be in PATH yet)
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [[ -x /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  fi
+  command -v brew &>/dev/null && return 0
+
+  # Not installed - try to install (macOS only)
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    info "Homebrew not found. Installing Homebrew..."
+    if NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" 2>&1; then
+      if [[ -x /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+      elif [[ -x /usr/local/bin/brew ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+      fi
+    fi
+  fi
+
+  command -v brew &>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # Backup existing config
 # ---------------------------------------------------------------------------
 _backup_ghostty_config() {
@@ -41,7 +70,7 @@ install_ghostty() {
     warn "$STR_GHOSTTY_SKIP_PLATFORM"
     return 0
   fi
-  if ! command -v brew &>/dev/null; then
+  if ! _ghostty_ensure_brew; then
     warn "Homebrew is not available. Cannot install Ghostty."
     info "  Install manually: https://ghostty.org/"
     return 0

@@ -86,6 +86,11 @@ STR_DEFAULT="default"
 STR_RECOMMENDED="Recommended"
 STR_TOGGLE_HINT="Numbers=toggle, a=all, n=none, Enter=confirm"
 
+# Saved config detection
+STR_SAVED_CONFIG_FOUND="Previous configuration found."
+STR_SAVED_CONFIG_REUSE="Use previous settings (go to confirmation)"
+STR_SAVED_CONFIG_FRESH="Start fresh (reconfigure everything)"
+
 # Deploy
 STR_DEPLOY_START="Deploying Claude Code configuration..."
 STR_DEPLOY_BACKUP="Backing up existing config..."
