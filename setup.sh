@@ -342,61 +342,43 @@ _ensure_local_bin_in_path() {
 # ---------------------------------------------------------------------------
 if ! command -v claude &>/dev/null; then
   printf "\n"
-  warn "$STR_CLI_NOT_FOUND"
-  info "$STR_CLI_INSTALL_NOW"
-  printf "  1) %s\n" "$STR_CLI_INSTALL_YES"
-  printf "  2) %s\n" "$STR_CLI_INSTALL_NO"
-  install_choice=""
-  read -r -p "${STR_CHOICE}: " install_choice
-  case "$install_choice" in
-    1)
-      info "$STR_CLI_INSTALLING"
-      if is_msys; then
-        # Native Windows: use PowerShell installer
-        if powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"; then
-          # Probe common install locations (PowerShell installer, npm, etc.)
-          for _win_dir in \
-            "$(cygpath -u "${LOCALAPPDATA:-}/Programs/claude" 2>/dev/null)" \
-            "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
-            "$HOME/.local/bin"; do
-            [[ -n "$_win_dir" ]] && export PATH="$_win_dir:$PATH"
-          done
-          _ensure_local_bin_in_path
-          if command -v claude &>/dev/null; then
-            ok "$STR_CLI_INSTALLED"
-          else
-            warn "$STR_CLI_PATH_WARN"
-          fi
-        else
-          warn "$STR_CLI_INSTALL_FAILED"
-          info "  powershell -c 'irm https://claude.ai/install.ps1 | iex'"
-        fi
+  info "$STR_CLI_INSTALLING"
+  if is_msys; then
+    # Native Windows: use PowerShell installer
+    if powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"; then
+      # Probe common install locations (PowerShell installer, npm, etc.)
+      for _win_dir in \
+        "$(cygpath -u "${LOCALAPPDATA:-}/Programs/claude" 2>/dev/null)" \
+        "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
+        "$HOME/.local/bin"; do
+        [[ -n "$_win_dir" ]] && export PATH="$_win_dir:$PATH"
+      done
+      _ensure_local_bin_in_path
+      if command -v claude &>/dev/null; then
+        ok "$STR_CLI_INSTALLED"
       else
-        # Unix (macOS/Linux/WSL): use bash installer
-        if curl -fsSL https://claude.ai/install.sh | bash; then
-          export PATH="$HOME/.local/bin:$PATH"
-          # Ensure ~/.local/bin is in shell RC for next login
-          _ensure_local_bin_in_path
-          if command -v claude &>/dev/null; then
-            ok "$STR_CLI_INSTALLED"
-          else
-            warn "$STR_CLI_PATH_WARN"
-          fi
-        else
-          warn "$STR_CLI_INSTALL_FAILED"
-          info "  curl -fsSL https://claude.ai/install.sh | bash"
-        fi
+        warn "$STR_CLI_PATH_WARN"
       fi
-      ;;
-    *)
-      info "$STR_CLI_INSTALL_LATER"
-      if is_msys; then
-        printf "  powershell -c 'irm https://claude.ai/install.ps1 | iex'\n"
+    else
+      warn "$STR_CLI_INSTALL_FAILED"
+      info "  powershell -c 'irm https://claude.ai/install.ps1 | iex'"
+    fi
+  else
+    # Unix (macOS/Linux/WSL): use bash installer
+    if curl -fsSL https://claude.ai/install.sh | bash; then
+      export PATH="$HOME/.local/bin:$PATH"
+      # Ensure ~/.local/bin is in shell RC for next login
+      _ensure_local_bin_in_path
+      if command -v claude &>/dev/null; then
+        ok "$STR_CLI_INSTALLED"
       else
-        printf "  curl -fsSL https://claude.ai/install.sh | bash\n"
+        warn "$STR_CLI_PATH_WARN"
       fi
-      ;;
-  esac
+    else
+      warn "$STR_CLI_INSTALL_FAILED"
+      info "  curl -fsSL https://claude.ai/install.sh | bash"
+    fi
+  fi
 else
   ok "$STR_CLI_ALREADY"
 fi
