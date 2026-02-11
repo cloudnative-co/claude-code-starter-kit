@@ -123,24 +123,3 @@ remove_unresolved() {
 
   mv "$tmp_file" "$file"
 }
-
-# ---------------------------------------------------------------------------
-# process_template_string - Process a template string (not file) with variables
-#
-# Usage: result=$(process_template_string "Hello {{NAME}}" "NAME=World")
-#
-# Accepts variable assignments as additional arguments.
-# ---------------------------------------------------------------------------
-process_template_string() {
-  local template="$1"
-  shift
-
-  local content="$template"
-  for assignment in "$@"; do
-    local key="${assignment%%=*}"
-    local value="${assignment#*=}"
-    content="${content//\{\{${key}\}\}/${value}}"
-  done
-
-  printf '%s' "$content"
-}

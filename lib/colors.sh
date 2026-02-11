@@ -48,13 +48,6 @@ error() {
   printf "${RED}[ERROR]${NC} %s\n" "$*" >&2
 }
 
-# Step indicator for multi-step processes (cyan + bold label)
-step() {
-  local label="$1"
-  shift
-  printf "${CYAN}${BOLD}[%s]${NC} %s\n" "$label" "$*"
-}
-
 # Section header with a visual separator
 section() {
   printf "\n${BOLD}── %s ──${NC}\n\n" "$*"

@@ -159,13 +159,3 @@ is_windows() { is_wsl || is_msys; }
 
 # Returns 0 (true) if Apple Silicon
 is_apple_silicon() { [[ "$OS" == "macos" && "$ARCH" == "arm64" ]]; }
-
-# Returns 0 (true) if WSL2 (build >= 19041)
-is_wsl2() {
-  is_wsl && [[ "$WSL_BUILD" -ge 19041 ]] 2>/dev/null
-}
-
-# Print a summary of the detected environment
-print_detect_summary() {
-  echo "OS=$OS  ARCH=$ARCH  DISTRO=$DISTRO  FAMILY=$DISTRO_FAMILY  WSL=$IS_WSL  WSL_BUILD=$WSL_BUILD"
-}
