@@ -363,12 +363,29 @@ if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
   printf "\n"
   IFS=',' read -r -a _plugins <<< "$SELECTED_PLUGINS"
   if command -v claude &>/dev/null; then
-    # Ensure the official marketplace is registered
-    claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null || true
-    info "$STR_DEPLOY_PLUGINS_INSTALLING"
+    # Get list of already installed plugins
+    _installed_plugins="$(claude plugin list 2>/dev/null || true)"
+
+    # Check if any plugins need installing
+    _need_install=false
+    for p in "${_plugins[@]}"; do
+      if [[ -n "$p" ]] && ! echo "$_installed_plugins" | grep -q "$p" 2>/dev/null; then
+        _need_install=true
+        break
+      fi
+    done
+
+    if [[ "$_need_install" == "true" ]]; then
+      # Ensure the official marketplace is registered
+      claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null || true
+      info "$STR_DEPLOY_PLUGINS_INSTALLING"
+    fi
+
     for p in "${_plugins[@]}"; do
       if [[ -n "$p" ]]; then
-        if claude plugin install "$p" --scope user; then
+        if echo "$_installed_plugins" | grep -q "$p" 2>/dev/null; then
+          ok "$STR_DEPLOY_PLUGINS_ALREADY $p"
+        elif claude plugin install "$p" --scope user; then
           ok "$STR_DEPLOY_PLUGINS_INSTALLED $p"
         else
           warn "$STR_DEPLOY_PLUGINS_FAILED $p"
@@ -571,8 +588,8 @@ if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]]; then
   info "  $STR_FINAL_STEP3"
 else
   section "$STR_FINAL_TITLE"
-  if is_true "${ENABLE_GHOSTTY_SETUP:-false}" && [[ "$DISTRO_FAMILY" == "macos" ]]; then
-    # Ghostty was successfully installed - guide user to launch it
+  if [[ "$DISTRO_FAMILY" == "macos" ]] && { [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; }; then
+    # Ghostty is installed - guide user to launch it
     info "$STR_FINAL_GHOSTTY_NEXT"
     info "  $STR_FINAL_GHOSTTY_STEP1"
     info "  $STR_FINAL_GHOSTTY_STEP2"
