@@ -396,10 +396,16 @@ CI/CD（自動デプロイ）やチーム全員の環境を統一したい場合
 
 **Windows（WSL）：**
 
-WSL のターミナルを開いて実行してください（PowerShell では `.sh` スクリプトは実行できません）。
+PowerShell では `.sh` スクリプトは実行できません。以下の手順で WSL に切り替えてから実行してください。
 
-```bash
+1. PowerShell を開く（スタートメニューで「PowerShell」と検索）
+2. `wsl` と入力して Enter → Linux 環境に切り替わります
+3. アンインストールコマンドを実行：
+
+```powershell
 wsl
+```
+```bash
 ~/.claude-starter-kit/uninstall.sh
 ```
 

@@ -179,10 +179,16 @@ If you installed via the one-liner, the repo is saved at `~/.claude-starter-kit/
 
 **Windows (WSL):**
 
-Open a WSL terminal to run (`.sh` scripts cannot run in PowerShell):
+`.sh` scripts cannot run in PowerShell. Switch to WSL first:
 
-```bash
+1. Open PowerShell (search "PowerShell" in the Start menu)
+2. Type `wsl` and press Enter to switch to the Linux environment
+3. Run the uninstall command:
+
+```powershell
 wsl
+```
+```bash
 ~/.claude-starter-kit/uninstall.sh
 ```
 
