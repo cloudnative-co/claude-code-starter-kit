@@ -132,6 +132,21 @@ STR_FINAL_INCOMPLETE_HINT="管理者権限のあるアカウントで Homebrew �
 STR_FINAL_INCOMPLETE_BREW="Homebrew のインストール："
 STR_FINAL_INCOMPLETE_RERUN="再セットアップ："
 
+# Post-deploy: Ghostty hint
+STR_GHOSTTY_HINT_TITLE="Ghostty ターミナルの使い方"
+STR_GHOSTTY_HINT_OPEN="Ghostty を起動するには："
+STR_GHOSTTY_HINT_STEP1="1. Launchpad または Spotlight（⌘+Space）で「Ghostty」と検索して起動"
+STR_GHOSTTY_HINT_STEP2="2. 今後は Ghostty をメインターミナルとして使えます"
+STR_GHOSTTY_HINT_FONT="フォント HackGen NF が設定済みです（プログラミング用 Nerd Font）"
+
+# Post-deploy: Codex MCP hint
+STR_CODEX_HINT_TITLE="Codex MCP の設定"
+STR_CODEX_HINT_DESC="Codex MCP を使うには、OpenAI の API キーの設定と Codex CLI のインストールが必要です："
+STR_CODEX_HINT_STEP1="1. Codex CLI をインストール："
+STR_CODEX_HINT_STEP2="2. OpenAI API キーを設定（~/.zshrc または ~/.bashrc に追加）："
+STR_CODEX_HINT_STEP3="3. ターミナルを再起動してから claude を実行"
+STR_CODEX_HINT_NOTE="※ ChatGPT の有料プラン（Plus 以上）が必要です"
+
 # Errors
 STR_ERR_JQ="jq が必要ですがインストールされていません。"
 STR_ERR_GIT="git が必要ですがインストールされていません。"

@@ -199,6 +199,17 @@ build_settings() {
 
   build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
 
+  # Codex MCP: merge mcpServers configuration
+  if is_true "$ENABLE_CODEX_MCP"; then
+    local mcp_fragment="$PROJECT_DIR/features/codex-mcp/mcp-servers.json"
+    if [[ -f "$mcp_fragment" ]]; then
+      local tmp_mcp
+      tmp_mcp="$(mktemp)"
+      jq --slurpfile frag "$mcp_fragment" '. * $frag[0]' "$out" > "$tmp_mcp"
+      mv "$tmp_mcp" "$out"
+    fi
+  fi
+
   # Set language name in settings
   local lang_name
   lang_name="$(language_name)"
@@ -383,6 +394,38 @@ if is_wsl; then
   info "  $STR_WSL_STEP1"
   info "  $STR_WSL_STEP2"
   info "  $STR_WSL_STEP3"
+fi
+
+# ---------------------------------------------------------------------------
+# Ghostty usage hint (macOS only, when successfully installed)
+# ---------------------------------------------------------------------------
+if is_true "${ENABLE_GHOSTTY_SETUP:-false}" && [[ -z "${GHOSTTY_INCOMPLETE:-}" ]] && [[ "$DISTRO_FAMILY" == "macos" ]]; then
+  printf "\n"
+  section "$STR_GHOSTTY_HINT_TITLE"
+  info "$STR_GHOSTTY_HINT_OPEN"
+  info "  $STR_GHOSTTY_HINT_STEP1"
+  info "  $STR_GHOSTTY_HINT_STEP2"
+  info ""
+  info "$STR_GHOSTTY_HINT_FONT"
+fi
+
+# ---------------------------------------------------------------------------
+# Codex MCP setup hint
+# ---------------------------------------------------------------------------
+if is_true "${ENABLE_CODEX_MCP:-false}"; then
+  printf "\n"
+  section "$STR_CODEX_HINT_TITLE"
+  info "$STR_CODEX_HINT_DESC"
+  printf "\n"
+  info "  $STR_CODEX_HINT_STEP1"
+  info "    npm install -g @openai/codex"
+  printf "\n"
+  info "  $STR_CODEX_HINT_STEP2"
+  info "    export OPENAI_API_KEY=\"your-api-key-here\""
+  printf "\n"
+  info "  $STR_CODEX_HINT_STEP3"
+  printf "\n"
+  warn "  $STR_CODEX_HINT_NOTE"
 fi
 
 # ---------------------------------------------------------------------------

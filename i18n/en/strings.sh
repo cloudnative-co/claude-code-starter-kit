@@ -134,6 +134,21 @@ STR_FINAL_INCOMPLETE_HINT="Install Homebrew with an admin account, then re-run s
 STR_FINAL_INCOMPLETE_BREW="Install Homebrew:"
 STR_FINAL_INCOMPLETE_RERUN="Re-run setup:"
 
+# Post-deploy: Ghostty hint
+STR_GHOSTTY_HINT_TITLE="Using Ghostty Terminal"
+STR_GHOSTTY_HINT_OPEN="To launch Ghostty:"
+STR_GHOSTTY_HINT_STEP1="1. Search for \"Ghostty\" in Launchpad or Spotlight (Cmd+Space)"
+STR_GHOSTTY_HINT_STEP2="2. You can use Ghostty as your main terminal from now on"
+STR_GHOSTTY_HINT_FONT="HackGen NF font is configured (programming Nerd Font)"
+
+# Post-deploy: Codex MCP hint
+STR_CODEX_HINT_TITLE="Codex MCP Setup"
+STR_CODEX_HINT_DESC="To use Codex MCP, you need to install Codex CLI and set your OpenAI API key:"
+STR_CODEX_HINT_STEP1="1. Install Codex CLI:"
+STR_CODEX_HINT_STEP2="2. Set your OpenAI API key (add to ~/.zshrc or ~/.bashrc):"
+STR_CODEX_HINT_STEP3="3. Restart your terminal, then run claude"
+STR_CODEX_HINT_NOTE="Note: Requires a paid ChatGPT plan (Plus or higher)"
+
 # Errors
 STR_ERR_JQ="jq is required but not installed."
 STR_ERR_GIT="git is required but not installed."
