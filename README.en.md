@@ -115,6 +115,18 @@ Language → Profile → Codex MCP → Editor → Hooks → Plugins → Commit A
 
 Each step shows numbered options with descriptions. Recommended choices are marked.
 
+> **About the Editor step**: The wizard asks which code editor you use. This is for the git push review hook (opens a diff view in your editor before pushing code). **If you don't have an editor installed or aren't sure, choose "None"** — Claude Code works entirely in the terminal and does not require an editor.
+
+### Editor Setup (Optional)
+
+A code editor is a dedicated application for writing and editing code. While Claude Code runs in the terminal and doesn't require one, having an editor enables the git push review hook feature.
+
+**Recommended: [VS Code](https://code.visualstudio.com/)** (free, by Microsoft)
+- **macOS**: Download from [code.visualstudio.com](https://code.visualstudio.com/), then run `Cmd + Shift + P` → "Shell Command: Install 'code' command in PATH"
+- **Windows**: Download and run the installer from [code.visualstudio.com](https://code.visualstudio.com/)
+
+Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](https://zed.dev/) (fast & lightweight), [Neovim](https://neovim.io/) (advanced, terminal-based).
+
 ## Profiles
 
 | Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Codex MCP | Ghostty |
