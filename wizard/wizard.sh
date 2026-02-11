@@ -351,6 +351,43 @@ parse_cli_args() {
 }
 
 # ---------------------------------------------------------------------------
+# Display width helper (ASCII=1col, CJK/fullwidth=2col)
+# ---------------------------------------------------------------------------
+_display_width() {
+  local str="$1"
+  local bytes chars multibyte
+  bytes=$(printf '%s' "$str" | LC_ALL=C wc -c | tr -d ' ')
+  chars=$(printf '%s' "$str" | wc -m | tr -d ' ')
+  multibyte=$(( (bytes - chars) / 2 ))
+  printf '%d' $(( chars + multibyte ))
+}
+
+_print_banner() {
+  local line1="$1"
+  local line2="$2"
+  local w1 w2 max_w box_inner pad1 pad2
+
+  w1=$(_display_width "$line1")
+  w2=$(_display_width "$line2")
+  max_w=$w1
+  [[ $w2 -gt $max_w ]] && max_w=$w2
+
+  box_inner=$((max_w + 4))
+
+  local border=""
+  local i
+  for ((i = 0; i < box_inner; i++)); do border+="═"; done
+
+  pad1=$((max_w - w1))
+  pad2=$((max_w - w2))
+
+  printf "${BOLD}${CYAN}╔%s╗${NC}\n" "$border"
+  printf "${BOLD}${CYAN}║  %s%*s  ║${NC}\n" "$line1" "$pad1" ""
+  printf "${BOLD}${CYAN}║  %s%*s  ║${NC}\n" "$line2" "$pad2" ""
+  printf "${BOLD}${CYAN}╚%s╝${NC}\n" "$border"
+}
+
+# ---------------------------------------------------------------------------
 # Interactive steps
 # ---------------------------------------------------------------------------
 _step_language() {
@@ -737,10 +774,7 @@ run_wizard() {
     load_strings "$LANGUAGE"
 
     printf "\n"
-    printf "${BOLD}${CYAN}╔════════════════════════════════════════╗${NC}\n"
-    printf "${BOLD}${CYAN}║  %s  ║${NC}\n" "$STR_BANNER"
-    printf "${BOLD}${CYAN}║  %-36s  ║${NC}\n" "$STR_BANNER_SUB"
-    printf "${BOLD}${CYAN}╚════════════════════════════════════════╝${NC}\n"
+    _print_banner "$STR_BANNER" "$STR_BANNER_SUB"
 
     _step_profile
     _step_codex

@@ -11,7 +11,7 @@ STR_BANNER_SUB="Interactive Environment Setup"
 STR_PROFILE_TITLE="Choose a configuration profile:"
 STR_PROFILE_MINIMAL="Minimal - Agents + rules only (lightweight)"
 STR_PROFILE_STANDARD="Standard - Agents + rules + commands + skills + core hooks"
-STR_PROFILE_FULL="Full - Everything enabled including all hooks and Codex MCP"
+STR_PROFILE_FULL="Full - Everything enabled including all hooks, Codex MCP, and Ghostty setup"
 STR_PROFILE_CUSTOM="Custom - Choose individual components"
 
 # Step 3: Codex MCP
