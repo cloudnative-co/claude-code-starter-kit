@@ -150,6 +150,10 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
     Write-Info "Open Git Bash and run 'claude' in your project directory."
     Write-Info "Git Bash を開いてプロジェクトディレクトリで 'claude' を実行してください。"
     Write-Host ""
+    Write-Host "----------------------------------------" -ForegroundColor DarkGray
+    Write-Info "To uninstall / アンインストール:"
+    Write-Host "  ~/.claude-starter-kit/uninstall.sh" -ForegroundColor Yellow
+    Write-Host ""
 }
 
 # ---------------------------------------------------------------------------
@@ -303,6 +307,10 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
     Write-Info "Option 2: Run directly from PowerShell:"
     Write-Info "方法 2: PowerShell から直接実行:"
     Write-Host "  wsl -d Ubuntu -- bash -lc 'cd ~ && claude'" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "----------------------------------------" -ForegroundColor DarkGray
+    Write-Info "To uninstall / アンインストール:"
+    Write-Host "  wsl -d Ubuntu -- bash -lc '~/.claude-starter-kit/uninstall.sh'" -ForegroundColor Yellow
     Write-Host ""
 }
 

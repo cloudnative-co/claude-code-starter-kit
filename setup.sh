@@ -344,8 +344,9 @@ if ! command -v claude &>/dev/null; then
       info "$STR_CLI_INSTALLING"
       if is_msys; then
         # Native Windows: use PowerShell installer
-        if powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex" 2>/dev/null; then
+        if powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"; then
           export PATH="$HOME/.local/bin:$PATH"
+          _ensure_local_bin_in_path
           if command -v claude &>/dev/null; then
             ok "$STR_CLI_INSTALLED"
           else
