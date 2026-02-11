@@ -409,7 +409,10 @@ _step_profile() {
   section "$STR_PROFILE_TITLE"
   printf "  1) %s\n" "$STR_PROFILE_MINIMAL"
   printf "  2) %s (%s)\n" "$STR_PROFILE_STANDARD" "$STR_RECOMMENDED"
-  printf "  3) %s\n" "$STR_PROFILE_FULL"
+  # Windows (WSL/MSYS) では Ghostty 非対応のため説明文を切り替え
+  local _full_label="$STR_PROFILE_FULL"
+  if is_wsl || is_msys; then _full_label="${STR_PROFILE_FULL_NO_GHOSTTY:-$STR_PROFILE_FULL}"; fi
+  printf "  3) %s\n" "$_full_label"
   printf "  4) %s\n" "$STR_PROFILE_CUSTOM"
   local choice=""
   read -r -p "${STR_CHOICE}: " choice

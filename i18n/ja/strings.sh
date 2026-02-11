@@ -10,6 +10,7 @@ STR_PROFILE_TITLE="構成プロファイルを選択してください："
 STR_PROFILE_MINIMAL="Minimal - エージェント + ルールのみ（軽量）"
 STR_PROFILE_STANDARD="Standard - エージェント + ルール + コマンド + スキル + 基本フック"
 STR_PROFILE_FULL="Full - 全機能有効（全フック + Codex MCP + Ghostty セットアップ含む）"
+STR_PROFILE_FULL_NO_GHOSTTY="Full - 全機能有効（全フック + Codex MCP）"
 STR_PROFILE_CUSTOM="Custom - 個別にコンポーネントを選択"
 
 # Step 3: Codex MCP
