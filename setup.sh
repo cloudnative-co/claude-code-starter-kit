@@ -410,22 +410,85 @@ if is_true "${ENABLE_GHOSTTY_SETUP:-false}" && [[ -z "${GHOSTTY_INCOMPLETE:-}" ]
 fi
 
 # ---------------------------------------------------------------------------
-# Codex MCP setup hint
+# Codex MCP interactive setup
 # ---------------------------------------------------------------------------
 if is_true "${ENABLE_CODEX_MCP:-false}"; then
   printf "\n"
-  section "$STR_CODEX_HINT_TITLE"
-  info "$STR_CODEX_HINT_DESC"
+  section "$STR_CODEX_SETUP_TITLE"
+  warn "$STR_CODEX_SETUP_NOTE"
   printf "\n"
-  info "  $STR_CODEX_HINT_STEP1"
-  info "    npm install -g @openai/codex"
+
+  # Step 1: Install Codex CLI
+  if command -v codex &>/dev/null; then
+    ok "$STR_CODEX_CLI_ALREADY"
+  else
+    info "$STR_CODEX_CLI_INSTALLING"
+    local _codex_installed=false
+    if command -v npm &>/dev/null; then
+      local _npm_prefix
+      _npm_prefix="$(npm config get prefix 2>/dev/null || echo '/usr/local')"
+      if [[ -w "${_npm_prefix}/lib" ]]; then
+        npm install -g @openai/codex 2>/dev/null && _codex_installed=true
+      else
+        sudo npm install -g @openai/codex 2>/dev/null && _codex_installed=true
+      fi
+    fi
+    if [[ "$_codex_installed" == "true" ]] && command -v codex &>/dev/null; then
+      ok "$STR_CODEX_CLI_INSTALLED"
+    else
+      warn "$STR_CODEX_CLI_FAILED"
+      info "  npm install -g @openai/codex"
+    fi
+  fi
+
+  # Step 2: OpenAI API key
   printf "\n"
-  info "  $STR_CODEX_HINT_STEP2"
-  info "    export OPENAI_API_KEY=\"your-api-key-here\""
+  info "$STR_CODEX_API_KEY_HINT"
   printf "\n"
-  info "  $STR_CODEX_HINT_STEP3"
+  printf "  1) %s\n" "$STR_CODEX_API_KEY_PROMPT"
+  printf "  2) %s\n" "$STR_CODEX_API_KEY_SKIP"
+  local _key_choice=""
+  read -r -p "${STR_CHOICE}: " _key_choice
+
+  case "$_key_choice" in
+    1)
+      local _api_key=""
+      read -r -p "  API Key: " _api_key
+      if [[ -n "$_api_key" ]]; then
+        # Determine the shell rc file
+        local _rc_file="$HOME/.bashrc"
+        local _login_shell
+        _login_shell="$(basename "${SHELL:-bash}")"
+        if [[ "$_login_shell" == "zsh" ]]; then
+          _rc_file="$HOME/.zshrc"
+        fi
+
+        # Check if already set
+        if grep -q 'OPENAI_API_KEY' "$_rc_file" 2>/dev/null; then
+          # Replace existing
+          local _tmp_rc
+          _tmp_rc="$(mktemp)"
+          sed "s|^export OPENAI_API_KEY=.*|export OPENAI_API_KEY=\"$_api_key\"|" "$_rc_file" > "$_tmp_rc"
+          mv "$_tmp_rc" "$_rc_file"
+        else
+          # Append
+          printf '\n# OpenAI API Key (added by claude-code-starter-kit)\nexport OPENAI_API_KEY="%s"\n' "$_api_key" >> "$_rc_file"
+        fi
+        export OPENAI_API_KEY="$_api_key"
+        ok "$STR_CODEX_API_KEY_SAVED ($_rc_file)"
+      else
+        info "$STR_CODEX_API_KEY_SKIPPED"
+        info "  export OPENAI_API_KEY=\"your-api-key-here\""
+      fi
+      ;;
+    *)
+      info "$STR_CODEX_API_KEY_SKIPPED"
+      info "  export OPENAI_API_KEY=\"your-api-key-here\""
+      ;;
+  esac
+
   printf "\n"
-  warn "  $STR_CODEX_HINT_NOTE"
+  ok "$STR_CODEX_SETUP_DONE"
 fi
 
 # ---------------------------------------------------------------------------

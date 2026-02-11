@@ -141,13 +141,19 @@ STR_GHOSTTY_HINT_STEP1="1. Search for \"Ghostty\" in Launchpad or Spotlight (Cmd
 STR_GHOSTTY_HINT_STEP2="2. You can use Ghostty as your main terminal from now on"
 STR_GHOSTTY_HINT_FONT="HackGen NF font is configured (programming Nerd Font)"
 
-# Post-deploy: Codex MCP hint
-STR_CODEX_HINT_TITLE="Codex MCP Setup"
-STR_CODEX_HINT_DESC="To use Codex MCP, you need to install Codex CLI and set your OpenAI API key:"
-STR_CODEX_HINT_STEP1="1. Install Codex CLI:"
-STR_CODEX_HINT_STEP2="2. Set your OpenAI API key (add to ~/.zshrc or ~/.bashrc):"
-STR_CODEX_HINT_STEP3="3. Restart your terminal, then run claude"
-STR_CODEX_HINT_NOTE="Note: Requires a paid ChatGPT plan (Plus or higher)"
+# Post-deploy: Codex MCP setup
+STR_CODEX_SETUP_TITLE="Codex MCP Setup"
+STR_CODEX_SETUP_NOTE="Note: Codex MCP requires a paid ChatGPT plan (Plus or higher) and an OpenAI API key"
+STR_CODEX_CLI_INSTALLING="Installing Codex CLI..."
+STR_CODEX_CLI_INSTALLED="Codex CLI installed"
+STR_CODEX_CLI_ALREADY="Codex CLI is already installed"
+STR_CODEX_CLI_FAILED="Failed to install Codex CLI. Install it manually later:"
+STR_CODEX_API_KEY_PROMPT="Enter your OpenAI API key (starts with sk-...):"
+STR_CODEX_API_KEY_SKIP="Skip (configure later)"
+STR_CODEX_API_KEY_HINT="Get your API key at https://platform.openai.com/api-keys"
+STR_CODEX_API_KEY_SAVED="OpenAI API key configured"
+STR_CODEX_API_KEY_SKIPPED="API key setup skipped. To configure later, run:"
+STR_CODEX_SETUP_DONE="Codex MCP setup complete"
 
 # Errors
 STR_ERR_JQ="jq is required but not installed."

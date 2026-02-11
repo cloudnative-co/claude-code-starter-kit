@@ -139,13 +139,19 @@ STR_GHOSTTY_HINT_STEP1="1. Launchpad または Spotlight（⌘+Space）で「Gho
 STR_GHOSTTY_HINT_STEP2="2. 今後は Ghostty をメインターミナルとして使えます"
 STR_GHOSTTY_HINT_FONT="フォント HackGen NF が設定済みです（プログラミング用 Nerd Font）"
 
-# Post-deploy: Codex MCP hint
-STR_CODEX_HINT_TITLE="Codex MCP の設定"
-STR_CODEX_HINT_DESC="Codex MCP を使うには、OpenAI の API キーの設定と Codex CLI のインストールが必要です："
-STR_CODEX_HINT_STEP1="1. Codex CLI をインストール："
-STR_CODEX_HINT_STEP2="2. OpenAI API キーを設定（~/.zshrc または ~/.bashrc に追加）："
-STR_CODEX_HINT_STEP3="3. ターミナルを再起動してから claude を実行"
-STR_CODEX_HINT_NOTE="※ ChatGPT の有料プラン（Plus 以上）が必要です"
+# Post-deploy: Codex MCP setup
+STR_CODEX_SETUP_TITLE="Codex MCP のセットアップ"
+STR_CODEX_SETUP_NOTE="※ Codex MCP には ChatGPT の有料プラン（Plus 以上）と OpenAI API キーが必要です"
+STR_CODEX_CLI_INSTALLING="Codex CLI をインストール中..."
+STR_CODEX_CLI_INSTALLED="Codex CLI をインストールしました"
+STR_CODEX_CLI_ALREADY="Codex CLI はインストール済みです"
+STR_CODEX_CLI_FAILED="Codex CLI のインストールに失敗しました。後で手動でインストールしてください："
+STR_CODEX_API_KEY_PROMPT="OpenAI API キーを入力してください（sk-... で始まるキー）："
+STR_CODEX_API_KEY_SKIP="スキップ（後で設定する）"
+STR_CODEX_API_KEY_HINT="API キーは https://platform.openai.com/api-keys で取得できます"
+STR_CODEX_API_KEY_SAVED="OpenAI API キーを設定しました"
+STR_CODEX_API_KEY_SKIPPED="API キーの設定をスキップしました。後で以下を実行してください："
+STR_CODEX_SETUP_DONE="Codex MCP のセットアップが完了しました"
 
 # Errors
 STR_ERR_JQ="jq が必要ですがインストールされていません。"
