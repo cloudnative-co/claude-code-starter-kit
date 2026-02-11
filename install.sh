@@ -72,4 +72,6 @@ chmod +x "$INSTALL_DIR/setup.sh"
 chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
 
 info "Starting interactive setup..."
-exec bash "$INSTALL_DIR/setup.sh" "$@"
+# When run via 'curl | bash', stdin is the pipe, not the terminal.
+# Redirect stdin from /dev/tty so the interactive wizard can read input.
+exec bash "$INSTALL_DIR/setup.sh" "$@" </dev/tty

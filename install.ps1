@@ -192,7 +192,7 @@ chmod +x "$INSTALL_DIR/setup.sh"
 chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
 
 echo "[INFO] Starting interactive setup..."
-exec bash "$INSTALL_DIR/setup.sh"
+exec bash "$INSTALL_DIR/setup.sh" </dev/tty
 '@
 
 # Write script to temp file with Unix line endings

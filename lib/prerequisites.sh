@@ -94,14 +94,26 @@ check_node() {
     return 0
   fi
   info "Node.js not found. Installing Node.js ${NODE_MAJOR}.x..."
-  _install_node
-  ok "node $(node --version) installed"
+  if _install_node && command -v node &>/dev/null; then
+    ok "node $(node --version) installed"
+  else
+    error "Failed to install Node.js."
+    _show_node_manual_instructions
+    return 1
+  fi
 }
 
 _install_node() {
   case "$DISTRO_FAMILY" in
     macos)
-      brew install "node@${NODE_MAJOR}"
+      if command -v brew &>/dev/null; then
+        brew install "node@${NODE_MAJOR}"
+      else
+        error "Homebrew is not installed."
+        error "Install Homebrew first: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        _show_node_manual_instructions
+        return 1
+      fi
       ;;
     debian)
       # NodeSource setup for Debian/Ubuntu
