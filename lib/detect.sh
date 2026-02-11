@@ -1,6 +1,6 @@
 #!/bin/bash
 # lib/detect.sh - OS, architecture, and WSL detection
-# Exports: OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD
+# Exports: OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD, WIN_BUILD
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ detect_os() {
       _detect_linux_distro
       _detect_wsl
       ;;
-    MSYS_NT*|MINGW64_NT*|MINGW32_NT*)
+    MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*)
       OS="windows"
       ARCH="$(uname -m)"
       DISTRO="msys"

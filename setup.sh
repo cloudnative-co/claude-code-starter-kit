@@ -293,7 +293,7 @@ deploy_hook_scripts
 # Ghostty terminal setup
 # ---------------------------------------------------------------------------
 if is_true "${ENABLE_GHOSTTY_SETUP:-false}"; then
-  if is_msys; then
+  if is_msys || is_wsl; then
     info "Ghostty is not supported on Windows. Skipping."
   else
     section "Setting up Ghostty terminal"

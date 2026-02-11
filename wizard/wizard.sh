@@ -464,12 +464,13 @@ _step_editor() {
 }
 
 _step_ghostty() {
+  # Skip on WSL and MSYS/Git Bash — Ghostty not supported on Windows
+  # This MUST come first to override profile presets (e.g. full.conf sets ENABLE_GHOSTTY_SETUP=true)
+  if is_wsl || is_msys; then ENABLE_GHOSTTY_SETUP="false"; return; fi
   # Skip if explicitly set by CLI arg
   if [[ "$_CLI_OVERRIDES" == *"ENABLE_GHOSTTY_SETUP"* ]]; then return; fi
   # Only ask for custom profile; other profiles use their preset value
   if [[ "$PROFILE" != "custom" ]]; then return; fi
-  # Skip on WSL and MSYS/Git Bash (Ghostty not supported on Windows yet)
-  if is_wsl || is_msys; then ENABLE_GHOSTTY_SETUP="false"; return; fi
 
   section "$STR_GHOSTTY_TITLE"
   printf "  %s\n\n" "$STR_GHOSTTY_DESC"
@@ -696,6 +697,11 @@ _fill_noninteractive_defaults() {
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
+
+  # Force-disable Ghostty on Windows (WSL and MSYS) regardless of profile
+  if is_wsl || is_msys; then
+    ENABLE_GHOSTTY_SETUP="false"
+  fi
 
   # Compute plugins if not already set
   if [[ -z "$SELECTED_PLUGINS" ]]; then

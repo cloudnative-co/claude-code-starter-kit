@@ -48,14 +48,18 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
 ```
 
-### Windows PowerShell
+### Windows PowerShell (uses WSL2)
+
+Run PowerShell **as Administrator**, then:
 
 ```powershell
 irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
 ```
 
-> **Important**: After setup, use **Git Bash** (not PowerShell) to run `claude`.
-> To open Git Bash: right-click on your desktop → **"Git Bash Here"**, or press the `Windows` key and type **"Git Bash"**.
+> **Important**: After setup, use **Windows Terminal + WSL (Ubuntu)** to run `claude`.
+> Open Windows Terminal → click the dropdown arrow → select **Ubuntu**.
+>
+> If admin is unavailable, use Git Bash mode: `powershell -File install.ps1 --git-bash`
 
 ### Manual
 
@@ -180,12 +184,12 @@ If you installed via the one-liner, the repo is saved at `~/.claude-starter-kit/
 ~/.claude-starter-kit/uninstall.sh
 ```
 
-**Windows (Git Bash):**
+**Windows (WSL):**
 
-Open Git Bash and run:
+From PowerShell or Terminal:
 
 ```bash
-~/.claude-starter-kit/uninstall.sh
+wsl -d Ubuntu -- bash -lc '~/.claude-starter-kit/uninstall.sh'
 ```
 
 **If you cloned manually**, run from the cloned directory:
