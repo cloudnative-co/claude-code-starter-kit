@@ -126,7 +126,7 @@ STR_WSL_STEP3="3. Run: claude"
 
 # Post-deploy: WSL final message
 STR_FINAL_WSL_NEXT="Claude Code runs inside WSL. To use it:"
-STR_FINAL_WSL_STEP1="1. Open a terminal and type: wsl"
+STR_FINAL_WSL_STEP1="1. Open Windows Terminal and select Ubuntu from the dropdown"
 STR_FINAL_WSL_STEP2="2. Navigate to your project: cd /path/to/your/project"
 STR_FINAL_WSL_STEP3="3. Run: claude"
 

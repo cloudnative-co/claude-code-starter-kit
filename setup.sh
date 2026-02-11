@@ -775,6 +775,20 @@ else
       _ghostty_found=true
     fi
   fi
+  # Detect platform for final message (inline — don't rely on is_wsl/is_msys)
+  local _uname_final
+  _uname_final="$(uname -s)"
+  local _is_wsl_final=false
+  if [[ -f /proc/version ]] && grep -qi "microsoft" /proc/version 2>/dev/null; then
+    _is_wsl_final=true
+  elif [[ -n "${WSL_DISTRO_NAME:-}" ]] || [[ -n "${WSLENV:-}" ]]; then
+    _is_wsl_final=true
+  fi
+  local _is_msys_final=false
+  case "$_uname_final" in
+    MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*) _is_msys_final=true ;;
+  esac
+
   if [[ "$_ghostty_found" == "true" ]]; then
     # Ghostty is installed - guide user to launch it
     info "$STR_FINAL_GHOSTTY_NEXT"
@@ -783,12 +797,12 @@ else
     info "  $STR_FINAL_GHOSTTY_STEP3"
     printf "\n"
     ok "$STR_FINAL_GHOSTTY_FONT"
-  elif is_wsl; then
+  elif [[ "$_is_wsl_final" == "true" ]]; then
     info "$STR_FINAL_WSL_NEXT"
     info "  $STR_FINAL_WSL_STEP1"
     info "  $STR_FINAL_WSL_STEP2"
     info "  $STR_FINAL_WSL_STEP3"
-  elif is_msys; then
+  elif [[ "$_is_msys_final" == "true" ]]; then
     info "$STR_FINAL_MSYS_NEXT"
     info "  $STR_FINAL_MSYS_STEP1"
     info "  ${STR_FINAL_MSYS_STEP1_HINT:-}"
