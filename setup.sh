@@ -452,6 +452,9 @@ _setup_codex_mcp() {
 
   case "$_key_choice" in
     1)
+      printf "\n"
+      info "  $STR_CODEX_API_KEY_HINT"
+      printf "\n"
       local _api_key=""
       read -r -p "  API Key: " _api_key
       if [[ -n "$_api_key" ]]; then
