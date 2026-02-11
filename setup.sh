@@ -737,7 +737,8 @@ fi
 # Final message
 # ---------------------------------------------------------------------------
 printf "\n"
-if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]]; then
+# Ghostty incomplete message is only relevant on macOS
+if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]] && ! is_wsl && ! is_msys; then
   section "$STR_FINAL_INCOMPLETE_TITLE"
   warn "$STR_FINAL_INCOMPLETE_GHOSTTY"
   for _item in $GHOSTTY_INCOMPLETE; do
@@ -758,8 +759,10 @@ if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]]; then
 else
   section "$STR_FINAL_TITLE"
   _ghostty_found=false
-  if [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; then
-    _ghostty_found=true
+  if ! is_wsl && ! is_msys; then
+    if [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; then
+      _ghostty_found=true
+    fi
   fi
   if [[ "$_ghostty_found" == "true" ]]; then
     # Ghostty is installed - guide user to launch it
