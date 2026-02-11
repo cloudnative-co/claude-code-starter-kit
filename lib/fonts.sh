@@ -55,6 +55,24 @@ try {
 }
 
 # ---------------------------------------------------------------------------
+# Check if font files matching a glob pattern exist in Windows user font dir.
+# Uses powershell.exe to inspect %LOCALAPPDATA%\Microsoft\Windows\Fonts.
+# Args: $1=glob_pattern (e.g. "IBMPlex*.ttf", "HackGen*NF*.ttf")
+# Returns: 0 if at least one match, 1 otherwise
+# ---------------------------------------------------------------------------
+_is_font_installed_windows() {
+  local pattern="$1"
+  local result
+  result="$(powershell.exe -NoProfile -Command '
+    $fontDir = "$env:LOCALAPPDATA\Microsoft\Windows\Fonts"
+    if ((Test-Path $fontDir) -and (Get-ChildItem -Path $fontDir -Filter "'"$pattern"'" -ErrorAction SilentlyContinue)) {
+      Write-Output "YES"
+    } else { Write-Output "NO" }
+  ' 2>/dev/null | tr -d '\r')"
+  [[ "$result" == "YES" ]]
+}
+
+# ---------------------------------------------------------------------------
 # Install IBM Plex Mono
 # ---------------------------------------------------------------------------
 install_ibm_plex_mono() {
@@ -88,6 +106,10 @@ install_ibm_plex_mono() {
         warn "${STR_FONT_NO_POWERSHELL:-powershell.exe not found}"
         info "  ${STR_FONT_IBM_MANUAL:-https://fonts.google.com/specimen/IBM+Plex+Mono}"
         return 1
+      fi
+      if _is_font_installed_windows "IBMPlex*.ttf"; then
+        ok "${STR_FONT_IBM_ALREADY:-IBM Plex Mono is already installed}"
+        return 0
       fi
       info "${STR_FONT_IBM_INSTALLING:-Installing IBM Plex Mono...}"
       local url="https://fonts.google.com/download?family=IBM+Plex+Mono"
@@ -136,6 +158,10 @@ install_hackgen_nf() {
         warn "${STR_FONT_NO_POWERSHELL:-powershell.exe not found}"
         info "  ${STR_FONT_HACKGEN_MANUAL:-https://github.com/yuru7/HackGen/releases}"
         return 1
+      fi
+      if _is_font_installed_windows "HackGen*NF*.ttf"; then
+        ok "${STR_FONT_HACKGEN_ALREADY:-HackGen NF is already installed}"
+        return 0
       fi
       info "${STR_FONT_HACKGEN_INSTALLING:-Installing HackGen NF...}"
       local url="https://github.com/yuru7/HackGen/releases/download/v2.10.0/HackGen_NF_v2.10.0.zip"
@@ -206,37 +232,42 @@ setup_fonts() {
 
   FONTS_INCOMPLETE="${incomplete% }"
 
-  # Configure Windows Terminal font or show hints
-  if [[ -z "$incomplete" ]]; then
-    local uname_s
-    uname_s="$(uname -s)"
-    case "$uname_s" in
-      Darwin)
-        # macOS: fonts are automatically available in all apps
-        ;;
-      *)
-        # WSL or MSYS: auto-configure Windows Terminal, fall back to manual hint
-        if command -v powershell.exe &>/dev/null; then
-          printf "\n"
-          info "${STR_FONT_WT_CONFIGURING:-Configuring Windows Terminal font...}"
-          _configure_windows_terminal_font "HackGen35 Console NF"
-          local wt_result=$?
-          if [[ $wt_result -eq 0 ]]; then
-            ok "${STR_FONT_WT_CONFIGURED:-Windows Terminal font set to 'HackGen35 Console NF'}"
-            info "  ${STR_FONT_WT_BACKUP:-A backup was saved as settings.json.bak}"
-          elif [[ $wt_result -eq 2 ]]; then
-            info "${STR_FONT_WT_NOT_FOUND:-Windows Terminal settings not found (not installed?)}"
-            info "${STR_FONT_WT_HINT:-To use the installed fonts in Windows Terminal:}"
-            info "  ${STR_FONT_WT_STEP1:-1. Open Settings (Ctrl+,) > Profiles > Defaults > Appearance}"
-            info "  ${STR_FONT_WT_STEP2:-2. Set Font face to 'HackGen35 Console NF' (or 'IBM Plex Mono')}"
-          else
-            warn "${STR_FONT_WT_CONFIGURE_FAILED:-Failed to auto-configure Windows Terminal font}"
-            info "${STR_FONT_WT_HINT:-To use the installed fonts in Windows Terminal:}"
-            info "  ${STR_FONT_WT_STEP1:-1. Open Settings (Ctrl+,) > Profiles > Defaults > Appearance}"
-            info "  ${STR_FONT_WT_STEP2:-2. Set Font face to 'HackGen35 Console NF' (or 'IBM Plex Mono')}"
-          fi
-        fi
-        ;;
-    esac
-  fi
+  # Configure Windows Terminal font.
+  # This runs independently of font install success — if HackGen NF is
+  # already present from a previous install, we still configure WT.
+  local uname_s
+  uname_s="$(uname -s)"
+  case "$uname_s" in
+    Darwin)
+      # macOS: fonts are automatically available in all apps
+      ;;
+    *)
+      # WSL or MSYS: auto-configure Windows Terminal if HackGen NF is available
+      if ! command -v powershell.exe &>/dev/null; then
+        return 0
+      fi
+      # Check if HackGen NF is available (installed now or previously)
+      if ! _is_font_installed_windows "HackGen*NF*.ttf"; then
+        return 0
+      fi
+      printf "\n"
+      info "${STR_FONT_WT_CONFIGURING:-Configuring Windows Terminal font...}"
+      _configure_windows_terminal_font "HackGen35 Console NF"
+      local wt_result=$?
+      if [[ $wt_result -eq 0 ]]; then
+        ok "${STR_FONT_WT_CONFIGURED:-Windows Terminal font set to 'HackGen35 Console NF'}"
+        info "  ${STR_FONT_WT_BACKUP:-A backup was saved as settings.json.bak}"
+      elif [[ $wt_result -eq 2 ]]; then
+        info "${STR_FONT_WT_NOT_FOUND:-Windows Terminal settings not found (not installed?)}"
+        info "${STR_FONT_WT_HINT:-To use the installed fonts in Windows Terminal:}"
+        info "  ${STR_FONT_WT_STEP1:-1. Open Settings (Ctrl+,) > Profiles > Defaults > Appearance}"
+        info "  ${STR_FONT_WT_STEP2:-2. Set Font face to 'HackGen35 Console NF' (or 'IBM Plex Mono')}"
+      else
+        warn "${STR_FONT_WT_CONFIGURE_FAILED:-Failed to auto-configure Windows Terminal font}"
+        info "${STR_FONT_WT_HINT:-To use the installed fonts in Windows Terminal:}"
+        info "  ${STR_FONT_WT_STEP1:-1. Open Settings (Ctrl+,) > Profiles > Defaults > Appearance}"
+        info "  ${STR_FONT_WT_STEP2:-2. Set Font face to 'HackGen35 Console NF' (or 'IBM Plex Mono')}"
+      fi
+      ;;
+  esac
 }

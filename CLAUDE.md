@@ -78,9 +78,9 @@ Each feature in `features/*/` has a `hooks.json` containing Claude Code hook def
 
 `lib/fonts.sh` installs IBM Plex Mono and HackGen NF via platform-specific methods:
 - **macOS**: Homebrew cask (`font-ibm-plex-mono`, `font-hackgen-nerd`)
-- **Windows (WSL/MSYS)**: `_install_font_windows()` runs PowerShell to download, extract, and register fonts in `%LOCALAPPDATA%\Microsoft\Windows\Fonts` + HKCU registry
+- **Windows (WSL/MSYS)**: `_is_font_installed_windows()` checks `%LOCALAPPDATA%\Microsoft\Windows\Fonts` first; if already present, skips download. Otherwise `_install_font_windows()` runs PowerShell to download, extract, and register fonts + HKCU registry.
 
-After font install on Windows, `_configure_windows_terminal_font()` auto-patches Windows Terminal's `settings.json` (both stable and Preview editions) to set `profiles.defaults.font.face`. Creates `.bak` backup before modifying. Returns exit codes: 0=OK, 2=NOT_FOUND (WT not installed), 1=FAILED — callers fall back to manual hints on non-zero.
+Windows Terminal font configuration (`_configure_windows_terminal_font()`) runs **independently of font install success** — it checks if HackGen NF font files exist on disk (via `_is_font_installed_windows`) and configures WT regardless of whether fonts were installed in this run or a previous one. This ensures re-runs always apply WT settings even when font downloads are skipped or fail. Creates `.bak` backup before modifying. Returns exit codes: 0=OK, 2=NOT_FOUND (WT not installed), 1=FAILED.
 
 ### Windows Bootstrap (`install.ps1`)
 
