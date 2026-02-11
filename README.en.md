@@ -169,6 +169,28 @@ and recommend the best option for this project.
 
 Claude Code helps with more than just writing code — it can set up **infrastructure, deployment configs, and CI/CD pipelines** too.
 
+### Sending Screenshots to Claude Code
+
+You can send screenshots directly to Claude Code to show UI bugs, error screens, or layout issues. Claude Code understands images and can fix problems just by seeing them.
+
+**macOS:**
+
+| Step | Action | Description |
+|------|--------|-------------|
+| 1. Take screenshot | `Cmd + Shift + Ctrl + 4` | Select an area to copy to clipboard |
+| 2. Paste into Claude Code | `Ctrl + V` (NOT `Cmd + V`) | Paste while Claude Code prompt is focused |
+
+> **Important**: Use `Ctrl + V` (not `Cmd + V`) to paste screenshots into Claude Code. This is easy to mix up.
+
+**Windows (WSL):**
+
+| Step | Action | Description |
+|------|--------|-------------|
+| 1. Take screenshot | `Win + Shift + S` | Snipping Tool opens, select area to copy |
+| 2. Paste into Claude Code | `Ctrl + V` | Paste in Windows Terminal |
+
+You can also **drag and drop image files** into the terminal to send them to Claude Code.
+
 ## Non-Interactive Mode
 
 For CI, automation, or scripted setups:
