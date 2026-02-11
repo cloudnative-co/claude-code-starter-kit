@@ -96,11 +96,21 @@ _load_strings "$LANG_CODE"
 printf "\n${BOLD}%s${NC}\n\n" "$STR_TITLE"
 
 if [[ ! -f "$MANIFEST" ]]; then
-  # shellcheck disable=SC2059
-  error "$(printf "$STR_NO_MANIFEST" "$MANIFEST")"
-  error "$STR_NO_MANIFEST_HINT"
-  # shellcheck disable=SC2059
-  error "$(printf "$STR_NO_MANIFEST_MANUAL" "$CLAUDE_DIR")"
+  warn "マニフェストが見つかりません / Manifest not found"
+  info ""
+  info "  セットアップが途中で失敗した場合、マニフェストが作成されていない"
+  info "  可能性があります。その場合は以下の方法で対処できます："
+  info ""
+  info "  1) もう一度セットアップを実行する（推奨）："
+  info "     ~/.claude-starter-kit/setup.sh"
+  info ""
+  info "  2) Claude Code の設定をすべて手動で削除する："
+  info "     rm -rf $CLAUDE_DIR"
+  info ""
+  info "  ---"
+  info ""
+  info "  If the setup was interrupted, the manifest may not have been created."
+  info "  You can either re-run setup or manually remove $CLAUDE_DIR"
   exit 1
 fi
 
