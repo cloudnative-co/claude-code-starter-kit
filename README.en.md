@@ -169,7 +169,27 @@ To re-apply the starter kit config (e.g., after updating the repo), run `./setup
 
 ## Uninstall
 
+If you installed via the one-liner, the repo is saved at `~/.claude-starter-kit/`.
+
+**Mac / Linux:**
+
 ```bash
+~/.claude-starter-kit/uninstall.sh
+```
+
+**Windows (WSL):**
+
+Open a WSL terminal to run (`.sh` scripts cannot run in PowerShell):
+
+```bash
+wsl
+~/.claude-starter-kit/uninstall.sh
+```
+
+**If you cloned manually**, run from the cloned directory:
+
+```bash
+cd claude-code-starter-kit
 ./uninstall.sh
 ```
 

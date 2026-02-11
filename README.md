@@ -388,11 +388,22 @@ CI/CD（自動デプロイ）やチーム全員の環境を統一したい場合
 
 ワンライナーでインストールした場合、リポジトリは `~/.claude-starter-kit/` に保存されています。
 
+**Mac / Linux：**
+
 ```bash
 ~/.claude-starter-kit/uninstall.sh
 ```
 
-手動で `git clone` した場合は、clone したディレクトリ内で実行してください。
+**Windows（WSL）：**
+
+WSL のターミナルを開いて実行してください（PowerShell では `.sh` スクリプトは実行できません）。
+
+```bash
+wsl
+~/.claude-starter-kit/uninstall.sh
+```
+
+**手動で `git clone` した場合** は、clone したディレクトリ内で実行してください。
 
 ```bash
 cd claude-code-starter-kit
