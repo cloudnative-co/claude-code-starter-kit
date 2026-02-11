@@ -588,7 +588,11 @@ if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]]; then
   info "  $STR_FINAL_STEP3"
 else
   section "$STR_FINAL_TITLE"
-  if [[ "$DISTRO_FAMILY" == "macos" ]] && { [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; }; then
+  _ghostty_found=false
+  if [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; then
+    _ghostty_found=true
+  fi
+  if [[ "$_ghostty_found" == "true" ]]; then
     # Ghostty is installed - guide user to launch it
     info "$STR_FINAL_GHOSTTY_NEXT"
     info "  $STR_FINAL_GHOSTTY_STEP1"
