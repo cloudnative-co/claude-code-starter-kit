@@ -182,26 +182,29 @@ _install_node() {
       fi
       ;;
     debian)
-      # NodeSource setup for Debian/Ubuntu
-      if ! curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -; then
-        _show_node_manual_instructions
-        return 1
+      # Try NodeSource first, fall back to nvm
+      if curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" 2>/dev/null | sudo -E bash - 2>/dev/null \
+         && sudo apt-get install -y nodejs 2>/dev/null; then
+        :
+      else
+        warn "NodeSource setup failed. Falling back to nvm..."
+        _install_node_via_nvm
       fi
-      sudo apt-get install -y nodejs
       ;;
     rhel)
-      if ! curl -fsSL "https://rpm.nodesource.com/setup_${NODE_MAJOR}.x" | sudo bash -; then
-        _show_node_manual_instructions
-        return 1
+      if curl -fsSL "https://rpm.nodesource.com/setup_${NODE_MAJOR}.x" 2>/dev/null | sudo bash - 2>/dev/null \
+         && sudo dnf install -y nodejs 2>/dev/null; then
+        :
+      else
+        warn "NodeSource setup failed. Falling back to nvm..."
+        _install_node_via_nvm
       fi
-      sudo dnf install -y nodejs
       ;;
     alpine)
       sudo apk add --no-cache "nodejs" "npm"
       ;;
     *)
-      _show_node_manual_instructions
-      return 1
+      _install_node_via_nvm
       ;;
   esac
 }
