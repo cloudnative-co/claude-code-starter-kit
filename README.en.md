@@ -37,8 +37,44 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **8 optional hooks**: tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log
 - **10 plugin recommendations**
 - **i18n**: English & Japanese
-- **Codex MCP** sub-agent integration (optional, requires a paid ChatGPT plan)
+- **Codex MCP** sub-agent integration (optional, requires ChatGPT Plus + OpenAI API key)
 - **Non-interactive mode** for CI/automation
+
+## Prerequisites: Claude Account (Paid)
+
+**Claude Code requires a paid Anthropic account.** It does not work with free plans.
+
+### Pricing
+
+| Plan | Price | For | Features |
+|------|-------|-----|----------|
+| **Pro** | $20/mo | Individuals (starter) | Claude Code access, standard usage |
+| **Max (5x)** | $100/mo | Individuals (heavy use) | 5x Pro usage, ideal for extended coding |
+| **Max (20x)** | $200/mo | Individuals (power user) | 20x Pro usage, for large-scale projects |
+| **Teams** | $30/user/mo | Teams | Shared workspace, admin controls |
+| **Enterprise** | Contact sales | Large orgs | SSO, audit logs, custom contracts |
+
+> **Note**: Prices shown are as of 2025. Check [claude.ai/pricing](https://claude.ai/pricing) for current rates.
+> Using Codex MCP (OpenAI integration) requires a separate ChatGPT Plus subscription ($20+/mo) and OpenAI API usage fees.
+
+### For individuals
+
+Subscribe to [Claude Pro or Max](https://claude.ai/pricing). Create an account at [claude.ai](https://claude.ai) and upgrade your plan.
+
+### For teams and organizations
+
+Use **Claude for Teams** or **Claude for Enterprise**. If your organization already has a plan, ask your admin to invite you. For cloud provider integration (AWS Bedrock, Google Vertex AI, Microsoft Foundry), see the [third-party integration docs](https://code.claude.com/docs/en/third-party-integrations).
+
+### First-time login
+
+When you run `claude` for the first time, you'll be asked to choose an authentication method:
+
+| Method | Recommended for | Description |
+|--------|----------------|-------------|
+| **Claude.ai account (OAuth)** (Recommended) | Individuals & teams | Browser opens, log in to claude.ai. Works with Pro/Max/Teams/Enterprise |
+| **Anthropic Console (API key)** | Developers preferring per-token billing | Generate a key at [console.anthropic.com](https://console.anthropic.com) |
+
+**If unsure, choose OAuth.** Just log in via browser — no additional setup needed.
 
 ## Installation
 
@@ -104,6 +140,34 @@ After setup, start `claude` in your project directory. The installed slash comma
 /refactor-clean  # Find and clean up unused code
 /update-docs     # Update documentation to latest state
 ```
+
+### Deployment: Let Claude Code Set Up Your Infrastructure
+
+Not sure how to deploy your application? Just ask Claude Code — it can guide you through the entire process:
+
+**Deploy to AWS Lambda:**
+
+```
+I want to deploy this project to AWS Lambda.
+Please set up all necessary config files, IAM roles, and deployment steps.
+```
+
+**Deploy to Google Cloud Functions:**
+
+```
+I want to deploy this to Google Cloud Functions.
+Please set up the required configuration and walk me through the process.
+```
+
+**Not sure which platform to use:**
+
+```
+I want to run this in production.
+Compare AWS Lambda, Google Cloud Functions, and Vercel,
+and recommend the best option for this project.
+```
+
+Claude Code helps with more than just writing code — it can set up **infrastructure, deployment configs, and CI/CD pipelines** too.
 
 ## Non-Interactive Mode
 
