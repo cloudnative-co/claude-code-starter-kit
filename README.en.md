@@ -37,7 +37,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **8 optional hooks**: tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log
 - **10 plugin recommendations**
 - **i18n**: English & Japanese
-- **Codex MCP** sub-agent integration (optional)
+- **Codex MCP** sub-agent integration (optional, requires a paid ChatGPT plan)
 - **Non-interactive mode** for CI/automation
 
 ## Installation
