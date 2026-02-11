@@ -104,14 +104,14 @@ STR_DEPLOY_PLUGINS_SKIP="Skipping plugin install (Claude Code CLI not available)
 
 # Post-deploy: CLI install
 STR_CLI_NOT_FOUND="Claude Code CLI is not installed."
-STR_CLI_INSTALL_NOW="Install it now? (requires npm)"
-STR_CLI_INSTALL_YES="Yes, install now (npm install -g @anthropic-ai/claude-code)"
+STR_CLI_INSTALL_NOW="Install it now?"
+STR_CLI_INSTALL_YES="Yes, install now (native installer)"
 STR_CLI_INSTALL_NO="No, I'll install it later"
 STR_CLI_INSTALLING="Installing Claude Code CLI..."
 STR_CLI_INSTALLED="Claude Code CLI installed"
+STR_CLI_INSTALL_FAILED="Installation failed. Install manually:"
 STR_CLI_INSTALL_LATER="To install later, run:"
 STR_CLI_ALREADY="Claude Code CLI is already installed"
-STR_CLI_NPM_MISSING="npm is not available. Please install Node.js first, then run:"
 STR_CLI_PATH_WARN="Installation completed but 'claude' not found in PATH. Restart your terminal."
 
 # Post-deploy: WSL hint
@@ -176,4 +176,4 @@ STR_CODEX_SETUP_DONE="Codex MCP setup complete"
 # Errors
 STR_ERR_JQ="jq is required but not installed."
 STR_ERR_GIT="git is required but not installed."
-STR_ERR_NODE="Node.js >= 18 is required."
+STR_ERR_NODE="Node.js >= 18 is recommended (needed for Codex CLI)."

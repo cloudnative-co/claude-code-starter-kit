@@ -133,13 +133,17 @@ check_node() {
     ok "node $(node --version)"
     return 0
   fi
-  info "Node.js not found. Installing Node.js ${NODE_MAJOR}.x..."
+  # Node.js is optional: Claude Code uses a native installer and no longer requires Node.js.
+  # However, Node.js is still needed for Codex CLI and npm-based plugins.
+  warn "Node.js not found (optional, needed for Codex CLI / npm plugins)."
+  info "Installing Node.js ${NODE_MAJOR}.x..."
   if _install_node && command -v node &>/dev/null; then
     ok "node $(node --version) installed"
   else
-    error "Failed to install Node.js."
+    warn "Could not install Node.js. Codex CLI setup will be skipped if selected."
     _show_node_manual_instructions
-    return 1
+    # Not fatal - return success since Node.js is no longer required for Claude Code itself
+    return 0
   fi
 }
 
@@ -273,7 +277,7 @@ check_prerequisites() {
   check_git   || failed=1
   check_jq    || failed=1
   check_curl  || failed=1
-  check_node  || failed=1
+  check_node  # Optional: needed for Codex CLI / npm plugins only
   check_tmux
   check_dos2unix
   check_gh

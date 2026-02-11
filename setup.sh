@@ -318,27 +318,23 @@ if ! command -v claude &>/dev/null; then
   read -r -p "${STR_CHOICE}: " install_choice
   case "$install_choice" in
     1)
-      if command -v npm &>/dev/null; then
-        info "$STR_CLI_INSTALLING"
-        npm_prefix="$(npm config get prefix 2>/dev/null || echo '/usr/local')"
-        if [[ -w "${npm_prefix}/lib" ]]; then
-          npm install -g @anthropic-ai/claude-code || true
-        else
-          sudo npm install -g @anthropic-ai/claude-code || true
-        fi
+      info "$STR_CLI_INSTALLING"
+      if curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null; then
+        # Ensure newly installed binary is in PATH
+        export PATH="$HOME/.local/bin:$PATH"
         if command -v claude &>/dev/null; then
           ok "$STR_CLI_INSTALLED"
         else
           warn "$STR_CLI_PATH_WARN"
         fi
       else
-        error "$STR_CLI_NPM_MISSING"
-        printf "  npm install -g @anthropic-ai/claude-code\n"
+        warn "$STR_CLI_INSTALL_FAILED"
+        info "  curl -fsSL https://claude.ai/install.sh | bash"
       fi
       ;;
     *)
       info "$STR_CLI_INSTALL_LATER"
-      printf "  npm install -g @anthropic-ai/claude-code\n"
+      printf "  curl -fsSL https://claude.ai/install.sh | bash\n"
       ;;
   esac
 else
