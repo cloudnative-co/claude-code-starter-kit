@@ -27,6 +27,18 @@ STR_EDITOR_ZED="Zed"
 STR_EDITOR_NEOVIM="Neovim"
 STR_EDITOR_NONE="None / Skip editor integration"
 
+# Step 4.5: Ghostty
+STR_GHOSTTY_TITLE="Set up Ghostty terminal emulator?"
+STR_GHOSTTY_DESC="Installs Ghostty and HackGen NF font via Homebrew, then deploys an optimized config."
+STR_GHOSTTY_YES="Yes - Install Ghostty + HackGen NF font and deploy config"
+STR_GHOSTTY_NO="No - Skip Ghostty setup"
+STR_GHOSTTY_ALREADY_INSTALLED="Ghostty is already installed"
+STR_GHOSTTY_FONT_ALREADY="HackGen NF font is already installed"
+STR_GHOSTTY_CONFIG_DEPLOYED="Ghostty config deployed"
+STR_GHOSTTY_CONFIG_BACKED_UP="Backed up existing Ghostty config to"
+STR_GHOSTTY_SKIP_PLATFORM="Ghostty auto-install not supported on this platform. See: https://ghostty.org/"
+STR_CONFIRM_GHOSTTY="Ghostty"
+
 # Step 5: Hooks
 STR_HOOKS_TITLE="Select hooks to enable (enter numbers separated by spaces):"
 STR_HOOKS_TMUX="Tmux Reminder - Suggest tmux for long-running commands"

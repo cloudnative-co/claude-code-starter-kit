@@ -1,0 +1,54 @@
+# ========================================
+# フォント設定
+# ========================================
+font-family = "HackGen35 Console NF"
+font-family = "Hiragino Kaku Gothic ProN"
+font-size = 14
+font-thicken = true
+adjust-cell-height = 2
+
+# ========================================
+# ウィンドウ設定
+# ========================================
+window-height = 40
+window-width = 160
+window-padding-x = 12
+window-padding-y = 12
+macos-titlebar-style = tabs
+
+# ========================================
+# テーマ（お好みで変更）
+# ========================================
+theme = Catppuccin Mocha
+# theme = light:catppuccin-latte,dark:catppuccin-mocha  # システム連動
+
+# ========================================
+# macOS最適化
+# ========================================
+macos-option-as-alt = true
+window-save-state = always
+confirm-close-surface = false
+
+# ========================================
+# Claude Code向けキーバインド
+# ========================================
+keybind = shift+enter=text:\n
+
+# ========================================
+# Quick Terminal（ホットキーで即起動）
+# ========================================
+keybind = global:cmd+grave_accent=toggle_quick_terminal
+quick-terminal-position = bottom
+quick-terminal-animation-duration = 0.1
+
+# ========================================
+# 半透明背景（お好みで）
+# ========================================
+# background-opacity = 0.92
+# background-blur-radius = 20
+
+# ========================================
+# SSH接続時の互換性
+# ========================================
+# リモートサーバーで "unknown terminal type" エラー回避
+shell-integration-features = no-cursor

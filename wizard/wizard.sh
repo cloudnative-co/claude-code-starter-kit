@@ -26,12 +26,16 @@ ENABLE_CONSOLE_LOG_GUARD="${ENABLE_CONSOLE_LOG_GUARD:-}"
 ENABLE_MEMORY_PERSISTENCE="${ENABLE_MEMORY_PERSISTENCE:-}"
 ENABLE_STRATEGIC_COMPACT="${ENABLE_STRATEGIC_COMPACT:-}"
 ENABLE_PR_CREATION_LOG="${ENABLE_PR_CREATION_LOG:-}"
+ENABLE_GHOSTTY_SETUP="${ENABLE_GHOSTTY_SETUP:-}"
 
 SELECTED_PLUGINS="${SELECTED_PLUGINS:-}"
 WIZARD_RESULT="${WIZARD_RESULT:-}"
 
 WIZARD_NONINTERACTIVE="${WIZARD_NONINTERACTIVE:-false}"
 WIZARD_CONFIG_FILE=""
+
+# Track CLI-overridden variables (restored after load_config/profile)
+_CLI_OVERRIDES=""
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -161,6 +165,7 @@ ENABLE_CONSOLE_LOG_GUARD="${ENABLE_CONSOLE_LOG_GUARD}"
 ENABLE_MEMORY_PERSISTENCE="${ENABLE_MEMORY_PERSISTENCE}"
 ENABLE_STRATEGIC_COMPACT="${ENABLE_STRATEGIC_COMPACT}"
 ENABLE_PR_CREATION_LOG="${ENABLE_PR_CREATION_LOG}"
+ENABLE_GHOSTTY_SETUP="${ENABLE_GHOSTTY_SETUP}"
 
 SELECTED_PLUGINS="${SELECTED_PLUGINS}"
 EOF
@@ -311,16 +316,18 @@ parse_cli_args() {
       --non-interactive)
         WIZARD_NONINTERACTIVE="true"
         ;;
-      --language=*)      LANGUAGE="${arg#*=}" ;;
-      --language)        shift; LANGUAGE="${1:-}" ;;
-      --profile=*)       PROFILE="${arg#*=}" ;;
-      --profile)         shift; PROFILE="${1:-}" ;;
-      --editor=*)        EDITOR_CHOICE="${arg#*=}" ;;
-      --editor)          shift; EDITOR_CHOICE="${1:-}" ;;
-      --codex-mcp=*)     _set_bool ENABLE_CODEX_MCP "${arg#*=}" ;;
-      --codex-mcp)       shift; _set_bool ENABLE_CODEX_MCP "${1:-}" ;;
-      --commit-attribution=*) _set_bool COMMIT_ATTRIBUTION "${arg#*=}" ;;
-      --commit-attribution)   shift; _set_bool COMMIT_ATTRIBUTION "${1:-}" ;;
+      --language=*)      LANGUAGE="${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} LANGUAGE" ;;
+      --language)        shift; LANGUAGE="${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} LANGUAGE" ;;
+      --profile=*)       PROFILE="${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} PROFILE" ;;
+      --profile)         shift; PROFILE="${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} PROFILE" ;;
+      --editor=*)        EDITOR_CHOICE="${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} EDITOR_CHOICE" ;;
+      --editor)          shift; EDITOR_CHOICE="${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} EDITOR_CHOICE" ;;
+      --codex-mcp=*)     _set_bool ENABLE_CODEX_MCP "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_CODEX_MCP" ;;
+      --codex-mcp)       shift; _set_bool ENABLE_CODEX_MCP "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_CODEX_MCP" ;;
+      --commit-attribution=*) _set_bool COMMIT_ATTRIBUTION "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} COMMIT_ATTRIBUTION" ;;
+      --commit-attribution)   shift; _set_bool COMMIT_ATTRIBUTION "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} COMMIT_ATTRIBUTION" ;;
+      --ghostty=*)     _set_bool ENABLE_GHOSTTY_SETUP "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_GHOSTTY_SETUP" ;;
+      --ghostty)       shift; _set_bool ENABLE_GHOSTTY_SETUP "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_GHOSTTY_SETUP" ;;
       --hooks=*)
         _apply_hooks_csv "${arg#*=}"
         ;;
@@ -416,6 +423,24 @@ _step_editor() {
     3) EDITOR_CHOICE="zed" ;;
     4) EDITOR_CHOICE="neovim" ;;
     *) EDITOR_CHOICE="none" ;;
+  esac
+}
+
+_step_ghostty() {
+  # Already set by CLI or profile
+  if [[ -n "$ENABLE_GHOSTTY_SETUP" && "$PROFILE" != "custom" ]]; then return; fi
+  # Only ask for custom or full profiles
+  if [[ "$PROFILE" != "custom" && "$PROFILE" != "full" ]]; then return; fi
+
+  section "$STR_GHOSTTY_TITLE"
+  printf "  %s\n\n" "$STR_GHOSTTY_DESC"
+  printf "  1) %s\n" "$STR_GHOSTTY_YES"
+  printf "  2) %s\n" "$STR_GHOSTTY_NO"
+  local choice=""
+  read -r -p "${STR_CHOICE}: " choice
+  case "$choice" in
+    1) ENABLE_GHOSTTY_SETUP="true" ;;
+    *) ENABLE_GHOSTTY_SETUP="false" ;;
   esac
 }
 
@@ -555,6 +580,7 @@ _step_confirm() {
   printf "%-20s : %s\n" "$STR_CONFIRM_PROFILE" "$(_profile_label "$PROFILE")"
   printf "%-20s : %s\n" "$STR_CONFIRM_CODEX" "$(_bool_label_enabled "$ENABLE_CODEX_MCP")"
   printf "%-20s : %s\n" "$STR_CONFIRM_EDITOR" "$(_editor_label "$EDITOR_CHOICE")"
+  printf "%-20s : %s\n" "$STR_CONFIRM_GHOSTTY" "$(_bool_label_enabled "$ENABLE_GHOSTTY_SETUP")"
 
   # Hooks summary
   local hook_labels=()
@@ -607,10 +633,28 @@ _fill_noninteractive_defaults() {
   [[ -z "$LANGUAGE" ]] && LANGUAGE="en"
   [[ -z "$PROFILE" ]] && PROFILE="standard"
 
+  # Save CLI-overridden values before loading profile/config
+  # (both load_config and load_profile_config unconditionally set ENABLE_* flags)
+  local _saved_overrides=()
+  local _var _val
+  for _var in $_CLI_OVERRIDES; do
+    eval "_val=\${$_var:-}"
+    if [[ -n "$_val" ]]; then
+      _saved_overrides+=("${_var}=${_val}")
+    fi
+  done
+
   load_profile_config "$PROFILE"
+
+  # Restore CLI-overridden values (CLI takes precedence over profile/config)
+  local _pair
+  for _pair in "${_saved_overrides[@]+"${_saved_overrides[@]}"}"; do
+    [[ -n "$_pair" ]] && eval "$_pair"
+  done
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
+  [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
 
   # Compute plugins if not already set
   if [[ -z "$SELECTED_PLUGINS" ]]; then
@@ -635,8 +679,24 @@ run_wizard() {
   # shellcheck source=/dev/null
   . "$dir/lib/detect.sh"
 
+  # Save CLI-overridden values before loading config file
+  local _saved_cli=()
+  local _v _vl
+  for _v in $_CLI_OVERRIDES; do
+    eval "_vl=\${$_v:-}"
+    if [[ -n "$_vl" ]]; then
+      _saved_cli+=("${_v}=${_vl}")
+    fi
+  done
+
   # Load previous config if available
   load_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+
+  # Restore CLI-overridden values (CLI takes precedence over saved config)
+  local _p
+  for _p in "${_saved_cli[@]+"${_saved_cli[@]}"}"; do
+    [[ -n "$_p" ]] && eval "$_p"
+  done
 
   # Non-interactive mode: fill defaults and return
   if [[ "$WIZARD_NONINTERACTIVE" == "true" ]]; then
@@ -660,6 +720,7 @@ run_wizard() {
     _step_profile
     _step_codex
     _step_editor
+    _step_ghostty
     _step_hooks
     _step_plugins
     _step_commit

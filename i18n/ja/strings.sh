@@ -25,6 +25,18 @@ STR_EDITOR_ZED="Zed"
 STR_EDITOR_NEOVIM="Neovim"
 STR_EDITOR_NONE="なし / エディタ連携をスキップ"
 
+# Step 4.5: Ghostty
+STR_GHOSTTY_TITLE="Ghostty ターミナルエミュレータをセットアップしますか？"
+STR_GHOSTTY_DESC="Homebrew 経由で Ghostty と HackGen NF フォントをインストールし、最適化された設定を配置します。"
+STR_GHOSTTY_YES="はい - Ghostty + HackGen NF フォントをインストールして設定を配置"
+STR_GHOSTTY_NO="いいえ - Ghostty セットアップをスキップ"
+STR_GHOSTTY_ALREADY_INSTALLED="Ghostty はインストール済みです"
+STR_GHOSTTY_FONT_ALREADY="HackGen NF フォントはインストール済みです"
+STR_GHOSTTY_CONFIG_DEPLOYED="Ghostty 設定を配置しました"
+STR_GHOSTTY_CONFIG_BACKED_UP="既存の Ghostty 設定をバックアップしました："
+STR_GHOSTTY_SKIP_PLATFORM="このプラットフォームでは Ghostty の自動インストールに対応していません。詳細: https://ghostty.org/"
+STR_CONFIRM_GHOSTTY="Ghostty"
+
 # Step 5: Hooks
 STR_HOOKS_TITLE="有効にするフックを選択してください（番号をスペース区切りで入力）："
 STR_HOOKS_TMUX="Tmux リマインダー - 長時間コマンドに tmux を提案"

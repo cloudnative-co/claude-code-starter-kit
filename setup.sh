@@ -38,6 +38,8 @@ parse_cli_args "$@"
 . "$PROJECT_DIR/lib/template.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/json-builder.sh"
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/ghostty.sh"
 
 # ---------------------------------------------------------------------------
 # Prerequisites
@@ -286,6 +288,15 @@ copy_if_enabled "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
 build_claude_md
 build_settings
 deploy_hook_scripts
+
+# ---------------------------------------------------------------------------
+# Ghostty terminal setup
+# ---------------------------------------------------------------------------
+if is_true "${ENABLE_GHOSTTY_SETUP:-false}"; then
+  section "Setting up Ghostty terminal"
+  setup_ghostty "$PROJECT_DIR/features/ghostty/config.template"
+fi
+
 write_manifest
 
 # Save config for re-runs
