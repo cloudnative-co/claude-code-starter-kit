@@ -755,6 +755,7 @@ else
   elif is_msys; then
     info "$STR_FINAL_MSYS_NEXT"
     info "  $STR_FINAL_MSYS_STEP1"
+    info "  ${STR_FINAL_MSYS_STEP1_HINT:-}"
     info "  $STR_FINAL_MSYS_STEP2"
     info "  $STR_FINAL_MSYS_STEP3"
   else

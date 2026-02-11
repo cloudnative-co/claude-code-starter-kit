@@ -156,23 +156,26 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
     Write-Host "  Claude Code の始め方" -ForegroundColor White
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  1. " -ForegroundColor Green -NoNewline
-    Write-Host "スタートメニューで「Git Bash」と検索して起動"
-    Write-Host "     (Search 'Git Bash' in the Start menu and open it)" -ForegroundColor DarkGray
+    Write-Host "  1. Git Bash を開く" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  2. " -ForegroundColor Green -NoNewline
-    Write-Host "作業したいフォルダに移動"
-    Write-Host "     例: " -NoNewline -ForegroundColor DarkGray
-    Write-Host "cd ~/Documents/my-project" -ForegroundColor Yellow
+    Write-Host "     方法 A: デスクトップの何もない場所を右クリック" -ForegroundColor White
+    Write-Host "            →「Git Bash Here」を選択" -ForegroundColor White
     Write-Host ""
-    Write-Host "  3. " -ForegroundColor Green -NoNewline
-    Write-Host "以下のコマンドを入力して Enter"
+    Write-Host "     方法 B: キーボードの Windows キーを押して" -ForegroundColor White
+    Write-Host "            「Git Bash」と入力して Enter" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  2. 作業したいフォルダに移動" -ForegroundColor Green
+    Write-Host "     以下のように入力して Enter:" -ForegroundColor White
+    Write-Host "     cd ~/Documents/my-project" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  3. Claude Code を起動" -ForegroundColor Green
+    Write-Host "     以下のように入力して Enter:" -ForegroundColor White
     Write-Host "     claude" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Warn "注意: この PowerShell ウィンドウでは claude は使えません。"
-    Write-Warn "      必ず Git Bash から実行してください。"
+    Write-Warn "      必ず上記の方法で Git Bash を開いてください。"
     Write-Host ""
     Write-Host "----------------------------------------" -ForegroundColor DarkGray
     Write-Host "  アンインストール (Git Bash で実行):" -ForegroundColor DarkGray

@@ -131,8 +131,9 @@ STR_FINAL_WSL_STEP3="3. Run: claude"
 
 # Post-deploy: Native Windows (Git Bash)
 STR_FINAL_MSYS_NEXT="To start using Claude Code:"
-STR_FINAL_MSYS_STEP1="1. Open Git Bash (or restart the current window)"
-STR_FINAL_MSYS_STEP2="2. Navigate to your project directory"
+STR_FINAL_MSYS_STEP1="1. Close this Git Bash window and reopen Git Bash"
+STR_FINAL_MSYS_STEP1_HINT="   How to open: Right-click desktop > 'Git Bash Here' / or press Windows key > type 'Git Bash'"
+STR_FINAL_MSYS_STEP2="2. Navigate to your project: cd ~/Documents/my-project"
 STR_FINAL_MSYS_STEP3="3. Run: claude"
 
 # Final message

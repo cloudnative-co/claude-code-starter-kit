@@ -54,6 +54,9 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
 ```
 
+> **Important**: After setup, use **Git Bash** (not PowerShell) to run `claude`.
+> To open Git Bash: right-click on your desktop → **"Git Bash Here"**, or press the `Windows` key and type **"Git Bash"**.
+
 ### Manual
 
 ```bash

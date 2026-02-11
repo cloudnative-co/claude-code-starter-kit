@@ -55,7 +55,7 @@ Claude Code を初めて使う人でも、**ワンコマンドで開発環境を
 | OS | ターミナルの開き方 |
 |---|---|
 | **macOS** | Spotlight（`Cmd + Space`）で「ターミナル」と入力して起動 |
-| **Windows** | スタートメニューから「PowerShell」を検索して起動 |
+| **Windows** | セットアップ時は「PowerShell」、セットアップ後は「**Git Bash**」を使います（[開き方はこちら](#git-bash-の開き方)） |
 | **Linux** | `Ctrl + Alt + T` でターミナルが開きます |
 
 ### このキットは何をしてくれるの？
@@ -126,7 +126,7 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 
 ### 方法 2: Windows PowerShell
 
-**ステップ 1**: スタートメニューで「PowerShell」と検索して起動します（管理者権限は不要です）
+**ステップ 1**: キーボードの `Windows` キーを押して「PowerShell」と入力し、起動します（管理者権限は不要です）
 
 **ステップ 2**: 以下のコマンドをコピーして貼り付け、`Enter` を押します
 
@@ -137,6 +137,25 @@ irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/mai
 > このコマンドは PowerShell 版のインストールスクリプトをダウンロードして実行します。
 > `irm` はダウンロード、`iex` は実行を意味します。
 > Git for Windows が未インストールの場合は自動でインストールされます。
+
+**ステップ 3**: セットアップが完了したら、**Git Bash** を開いて使い始めます
+
+> **重要**: Claude Code は PowerShell では動きません。必ず **Git Bash** から実行してください。
+
+### Git Bash の開き方
+
+Git Bash はセットアップ時に自動でインストールされています。以下のどちらかの方法で開けます：
+
+| 方法 | 手順 |
+|---|---|
+| **方法 A（おすすめ）** | デスクトップや作業フォルダの何もない場所を **右クリック** →「**Git Bash Here**」を選択 |
+| **方法 B** | キーボードの `Windows` キーを押して「**Git Bash**」と入力して `Enter` |
+
+Git Bash が開いたら、以下のように入力して `Enter` を押します：
+
+```bash
+claude
+```
 
 ---
 
@@ -288,7 +307,13 @@ Full プロファイル、または `--ghostty=true` オプションで有効に
 
 ## 🎉 セットアップ後にできること
 
-セットアップが完了したら、プロジェクトのフォルダで `claude` と入力するだけで使い始められます。
+セットアップが完了したら、ターミナルでプロジェクトのフォルダに移動して `claude` と入力するだけで使い始められます。
+
+| OS | 手順 |
+|---|---|
+| **macOS** | ターミナルを開いて `claude` と入力 |
+| **Windows** | **Git Bash** を開いて `claude` と入力（[Git Bash の開き方](#git-bash-の開き方)を参照） |
+| **Linux** | ターミナルを開いて `claude` と入力 |
 
 ```bash
 claude
