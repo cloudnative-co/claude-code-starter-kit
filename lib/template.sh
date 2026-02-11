@@ -84,24 +84,10 @@ inject_feature() {
     return 0
   fi
 
-  # Build the replacement using awk for reliable multi-line substitution
-  local tmp_file
-  tmp_file="$(mktemp)"
-
-  awk -v marker="$marker" -v replacement="$partial_content" '
-    {
-      idx = index($0, marker)
-      if (idx > 0) {
-        before = substr($0, 1, idx - 1)
-        after  = substr($0, idx + length(marker))
-        print before replacement after
-      } else {
-        print
-      }
-    }
-  ' "$file" > "$tmp_file"
-
-  mv "$tmp_file" "$file"
+  # Use bash string replacement (awk -v cannot handle multi-line content)
+  local file_content
+  file_content="$(< "$file")"
+  printf '%s\n' "${file_content//"$marker"/$partial_content}" > "$file"
 }
 
 # ---------------------------------------------------------------------------
