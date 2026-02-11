@@ -10,6 +10,54 @@ set -euo pipefail
 NODE_MAJOR="${NODE_MAJOR:-20}"
 
 # ---------------------------------------------------------------------------
+# Homebrew (macOS only)
+# ---------------------------------------------------------------------------
+
+# Ensure Homebrew is installed and in PATH.
+# On Apple Silicon, brew lives at /opt/homebrew/bin/brew.
+# On Intel, it lives at /usr/local/bin/brew.
+_ensure_homebrew() {
+  [[ "$DISTRO_FAMILY" != "macos" ]] && return 0
+
+  # Already in PATH
+  if command -v brew &>/dev/null; then
+    return 0
+  fi
+
+  # Installed but not in PATH (common on Apple Silicon after fresh install)
+  local brew_bin=""
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    brew_bin="/opt/homebrew/bin/brew"
+  elif [[ -x /usr/local/bin/brew ]]; then
+    brew_bin="/usr/local/bin/brew"
+  fi
+
+  if [[ -n "$brew_bin" ]]; then
+    info "Adding Homebrew to PATH..."
+    eval "$("$brew_bin" shellenv)"
+    return 0
+  fi
+
+  # Not installed at all - install it
+  info "Homebrew not found. Installing Homebrew..."
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+  # Add to PATH for this session
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [[ -x /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  fi
+
+  if command -v brew &>/dev/null; then
+    ok "Homebrew installed"
+  else
+    error "Homebrew installation completed but 'brew' not found in PATH."
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Package manager wrappers
 # ---------------------------------------------------------------------------
 
@@ -106,14 +154,7 @@ check_node() {
 _install_node() {
   case "$DISTRO_FAMILY" in
     macos)
-      if command -v brew &>/dev/null; then
-        brew install "node@${NODE_MAJOR}"
-      else
-        error "Homebrew is not installed."
-        error "Install Homebrew first: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-        _show_node_manual_instructions
-        return 1
-      fi
+      brew install "node@${NODE_MAJOR}"
       ;;
     debian)
       # NodeSource setup for Debian/Ubuntu
@@ -185,6 +226,12 @@ check_gh() {
 # Run all prerequisite checks. Returns non-zero on critical failure.
 check_prerequisites() {
   section "Checking prerequisites"
+
+  # macOS: ensure Homebrew is available before checking other deps
+  _ensure_homebrew || {
+    error "Homebrew is required on macOS. Please install it manually and re-run."
+    return 1
+  }
 
   local failed=0
 
