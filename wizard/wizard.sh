@@ -471,7 +471,6 @@ _step_hooks() {
         done
         ;;
     esac
-    done
     printf "\n"
   done
 }
