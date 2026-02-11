@@ -442,24 +442,35 @@ _step_hooks() {
       if [[ "$state" == "true" ]]; then mark="[*]"; fi
       printf "  %2d) %s %s\n" "$((i+1))" "$mark" "${HOOK_LABELS[$i]}"
     done
-    printf "\n"
+    printf "\n  %s\n\n" "$STR_TOGGLE_HINT"
 
     local choice=""
-    read -r -p "${STR_CHOICE} (Enter to confirm): " choice
+    read -r -p "${STR_CHOICE}: " choice
     if [[ -z "$choice" ]]; then break; fi
 
-    for token in $choice; do
-      if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#HOOK_KEYS[@]}" ]]; then
-        local idx=$((token-1))
-        local key="${HOOK_KEYS[$idx]}"
-        local current=""
-        eval "current=\${$key}"
-        if [[ "$current" == "true" ]]; then
-          eval "$key=\"false\""
-        else
-          eval "$key=\"true\""
-        fi
-      fi
+    case "$choice" in
+      a|A|all)
+        for i in "${!HOOK_KEYS[@]}"; do eval "${HOOK_KEYS[$i]}=\"true\""; done
+        ;;
+      n|N|none)
+        for i in "${!HOOK_KEYS[@]}"; do eval "${HOOK_KEYS[$i]}=\"false\""; done
+        ;;
+      *)
+        for token in $choice; do
+          if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#HOOK_KEYS[@]}" ]]; then
+            local idx=$((token-1))
+            local key="${HOOK_KEYS[$idx]}"
+            local current=""
+            eval "current=\${$key}"
+            if [[ "$current" == "true" ]]; then
+              eval "$key=\"false\""
+            else
+              eval "$key=\"true\""
+            fi
+          fi
+        done
+        ;;
+    esac
     done
     printf "\n"
   done
@@ -483,22 +494,32 @@ _step_plugins() {
       if [[ "${PLUGIN_SELECTED[$i]}" == "true" ]]; then mark="[*]"; fi
       printf "  %2d) %s %s\n" "$((i+1))" "$mark" "${PLUGIN_NAMES[$i]}"
     done
-    printf "\n"
+    printf "\n  %s\n\n" "$STR_TOGGLE_HINT"
 
     local choice=""
-    read -r -p "${STR_CHOICE} (Enter to confirm): " choice
+    read -r -p "${STR_CHOICE}: " choice
     if [[ -z "$choice" ]]; then break; fi
 
-    for token in $choice; do
-      if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#PLUGIN_NAMES[@]}" ]]; then
-        local idx=$((token-1))
-        if [[ "${PLUGIN_SELECTED[$idx]}" == "true" ]]; then
-          PLUGIN_SELECTED[$idx]="false"
-        else
-          PLUGIN_SELECTED[$idx]="true"
-        fi
-      fi
-    done
+    case "$choice" in
+      a|A|all)
+        for i in "${!PLUGIN_SELECTED[@]}"; do PLUGIN_SELECTED[$i]="true"; done
+        ;;
+      n|N|none)
+        for i in "${!PLUGIN_SELECTED[@]}"; do PLUGIN_SELECTED[$i]="false"; done
+        ;;
+      *)
+        for token in $choice; do
+          if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#PLUGIN_NAMES[@]}" ]]; then
+            local idx=$((token-1))
+            if [[ "${PLUGIN_SELECTED[$idx]}" == "true" ]]; then
+              PLUGIN_SELECTED[$idx]="false"
+            else
+              PLUGIN_SELECTED[$idx]="true"
+            fi
+          fi
+        done
+        ;;
+    esac
     printf "\n"
   done
 

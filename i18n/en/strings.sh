@@ -72,6 +72,7 @@ STR_SELECTED="selected"
 STR_CHOICE="Choice"
 STR_DEFAULT="default"
 STR_RECOMMENDED="Recommended"
+STR_TOGGLE_HINT="Numbers=toggle, a=all, n=none, Enter=confirm"
 
 # Deploy
 STR_DEPLOY_START="Deploying Claude Code configuration..."

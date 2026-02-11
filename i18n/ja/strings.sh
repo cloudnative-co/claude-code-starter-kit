@@ -70,6 +70,7 @@ STR_SELECTED="選択済み"
 STR_CHOICE="選択"
 STR_DEFAULT="デフォルト"
 STR_RECOMMENDED="推奨"
+STR_TOGGLE_HINT="番号=切替, a=全選択, n=全解除, Enter=確定"
 
 # Deploy
 STR_DEPLOY_START="Claude Code 設定をデプロイ中..."
