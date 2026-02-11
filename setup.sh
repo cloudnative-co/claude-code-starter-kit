@@ -290,9 +290,9 @@ build_settings
 deploy_hook_scripts
 
 # ---------------------------------------------------------------------------
-# Ghostty terminal setup (macOS only — skip on WSL / MSYS)
+# Ghostty terminal setup (macOS only)
 # ---------------------------------------------------------------------------
-if is_wsl || is_msys; then
+if [[ "$(uname -s)" != "Darwin" ]]; then
   ENABLE_GHOSTTY_SETUP="false"
 fi
 
@@ -749,7 +749,7 @@ fi
 # ---------------------------------------------------------------------------
 printf "\n"
 # Ghostty incomplete message is only relevant on macOS
-if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]] && ! is_wsl && ! is_msys; then
+if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
   section "$STR_FINAL_INCOMPLETE_TITLE"
   warn "$STR_FINAL_INCOMPLETE_GHOSTTY"
   for _item in $GHOSTTY_INCOMPLETE; do
@@ -770,7 +770,7 @@ if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]] && ! is_wsl && ! is_msys; then
 else
   section "$STR_FINAL_TITLE"
   _ghostty_found=false
-  if ! is_wsl && ! is_msys; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
     if [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; then
       _ghostty_found=true
     fi

@@ -411,7 +411,7 @@ _step_profile() {
   printf "  2) %s (%s)\n" "$STR_PROFILE_STANDARD" "$STR_RECOMMENDED"
   # Windows (WSL/MSYS) では Ghostty 非対応のため説明文を切り替え
   local _full_label="$STR_PROFILE_FULL"
-  if is_wsl || is_msys; then _full_label="${STR_PROFILE_FULL_NO_GHOSTTY:-$STR_PROFILE_FULL}"; fi
+  if [[ "$(uname -s)" != "Darwin" ]]; then _full_label="${STR_PROFILE_FULL_NO_GHOSTTY:-$STR_PROFILE_FULL}"; fi
   printf "  3) %s\n" "$_full_label"
   printf "  4) %s\n" "$STR_PROFILE_CUSTOM"
   local choice=""
@@ -469,9 +469,8 @@ _step_editor() {
 }
 
 _step_ghostty() {
-  # Skip on WSL and MSYS/Git Bash — Ghostty not supported on Windows
-  # This MUST come first to override profile presets (e.g. full.conf sets ENABLE_GHOSTTY_SETUP=true)
-  if is_wsl || is_msys; then ENABLE_GHOSTTY_SETUP="false"; return; fi
+  # Ghostty is macOS only — skip on all non-macOS platforms
+  if [[ "$(uname -s)" != "Darwin" ]]; then ENABLE_GHOSTTY_SETUP="false"; return; fi
   # Skip if explicitly set by CLI arg
   if [[ "$_CLI_OVERRIDES" == *"ENABLE_GHOSTTY_SETUP"* ]]; then return; fi
   # Only ask for custom profile; other profiles use their preset value
@@ -625,7 +624,7 @@ _step_confirm() {
   printf "%-20s : %s\n" "$STR_CONFIRM_PROFILE" "$(_profile_label "$PROFILE")"
   printf "%-20s : %s\n" "$STR_CONFIRM_CODEX" "$(_bool_label_enabled "$ENABLE_CODEX_MCP")"
   printf "%-20s : %s\n" "$STR_CONFIRM_EDITOR" "$(_editor_label "$EDITOR_CHOICE")"
-  if ! is_wsl && ! is_msys; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
     printf "%-20s : %s\n" "$STR_CONFIRM_GHOSTTY" "$(_bool_label_enabled "$ENABLE_GHOSTTY_SETUP")"
   fi
 
@@ -703,8 +702,8 @@ _fill_noninteractive_defaults() {
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
 
-  # Force-disable Ghostty on Windows (WSL and MSYS) regardless of profile
-  if is_wsl || is_msys; then
+  # Force-disable Ghostty on non-macOS platforms
+  if [[ "$(uname -s)" != "Darwin" ]]; then
     ENABLE_GHOSTTY_SETUP="false"
   fi
 

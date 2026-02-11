@@ -193,8 +193,8 @@ deploy_ghostty_config() {
 # Main entry point
 # ---------------------------------------------------------------------------
 setup_ghostty() {
-  # Ghostty is macOS only — skip entirely on WSL/MSYS
-  if is_wsl || is_msys; then
+  # Ghostty is macOS only
+  if [[ "$(uname -s)" != "Darwin" ]]; then
     return 0
   fi
 

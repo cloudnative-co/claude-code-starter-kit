@@ -107,7 +107,12 @@ _detect_linux_distro() {
 # WSL: detect Windows Subsystem for Linux and build number
 # ---------------------------------------------------------------------------
 _detect_wsl() {
-  if [[ -f /proc/version ]] && grep -qi "microsoft" /proc/version 2>/dev/null; then
+  # Primary check: /proc/version contains "microsoft" (case-insensitive)
+  # Secondary checks: WSLInterop exists, or WSL_DISTRO_NAME env var is set
+  if { [[ -f /proc/version ]] && grep -qi "microsoft" /proc/version 2>/dev/null; } \
+    || [[ -f /proc/sys/fs/binfmt_misc/WSLInterop ]] \
+    || [[ -n "${WSL_DISTRO_NAME:-}" ]] \
+    || [[ -n "${WSLENV:-}" ]]; then
     IS_WSL=true
 
     # Extract Windows build number for WSL2 compatibility check.
