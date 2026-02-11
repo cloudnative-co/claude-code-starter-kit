@@ -430,14 +430,16 @@ _step_profile() {
 _step_codex() {
   # Skip if explicitly set by CLI arg
   if [[ "$_CLI_OVERRIDES" == *"ENABLE_CODEX_MCP"* ]]; then return; fi
-  # Only ask for custom profile; other profiles use their preset value
-  if [[ "$PROFILE" != "custom" ]]; then return; fi
 
   section "$STR_CODEX_TITLE"
   printf "  1) %s\n" "$STR_CODEX_YES"
   printf "  2) %s\n" "$STR_CODEX_NO"
+  # Default: "yes" for full profile, "no" for others
+  local _default="2"
+  if [[ "${ENABLE_CODEX_MCP:-}" == "true" ]]; then _default="1"; fi
   local choice=""
-  read -r -p "${STR_CHOICE}: " choice
+  read -r -p "${STR_CHOICE} [${_default}]: " choice
+  [[ -z "$choice" ]] && choice="$_default"
   case "$choice" in
     1) ENABLE_CODEX_MCP="true" ;;
     *) ENABLE_CODEX_MCP="false" ;;
