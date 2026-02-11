@@ -383,6 +383,7 @@ if ! is_wsl; then
   info "$STR_FINAL_NEXT"
   info "  $STR_FINAL_STEP1"
   info "  $STR_FINAL_STEP2"
+  info "  $STR_FINAL_STEP3"
 fi
 printf "\n"
 ok "$STR_FINAL_ENJOY"

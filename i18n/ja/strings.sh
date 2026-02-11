@@ -105,8 +105,9 @@ STR_WSL_STEP3="3. 実行: claude"
 # Final message
 STR_FINAL_TITLE="セットアップ完了！"
 STR_FINAL_NEXT="Claude Code を使い始めるには："
-STR_FINAL_STEP1="1. プロジェクトディレクトリに移動"
-STR_FINAL_STEP2="2. 実行: claude"
+STR_FINAL_STEP1="1. ターミナルを再起動（または新しいタブを開く）"
+STR_FINAL_STEP2="2. プロジェクトディレクトリに移動"
+STR_FINAL_STEP3="3. 実行: claude"
 STR_FINAL_ENJOY="Happy coding!"
 
 # Errors

@@ -107,8 +107,9 @@ STR_WSL_STEP3="3. Run: claude"
 # Final message
 STR_FINAL_TITLE="All done!"
 STR_FINAL_NEXT="To start using Claude Code:"
-STR_FINAL_STEP1="1. Open your project directory"
-STR_FINAL_STEP2="2. Run: claude"
+STR_FINAL_STEP1="1. Restart your terminal (or open a new tab)"
+STR_FINAL_STEP2="2. Navigate to your project directory"
+STR_FINAL_STEP3="3. Run: claude"
 STR_FINAL_ENJOY="Happy coding!"
 
 # Errors
