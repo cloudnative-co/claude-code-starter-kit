@@ -6,6 +6,9 @@ set -euo pipefail
 CLAUDE_DIR="$HOME/.claude"
 MANIFEST="$CLAUDE_DIR/.starter-kit-manifest.json"
 
+# Ensure ~/.local/bin is in PATH (jq may have been installed there)
+export PATH="$HOME/.local/bin:$PATH"
+
 # ---------------------------------------------------------------------------
 # Colors
 # ---------------------------------------------------------------------------
@@ -22,19 +25,53 @@ warn()  { printf "${YELLOW}[WARN]${NC} %s\n" "$*" >&2; }
 error() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; }
 
 # ---------------------------------------------------------------------------
+# JSON helpers (jq with grep/sed fallback)
+# ---------------------------------------------------------------------------
+_json_get() {
+  # Usage: _json_get <file> <key>
+  # Returns the string value for a simple top-level key
+  local file="$1" key="$2"
+  if command -v jq &>/dev/null; then
+    jq -r ".$key // \"\"" "$file" 2>/dev/null
+  else
+    grep "\"$key\"" "$file" 2>/dev/null | sed 's/.*: *"\(.*\)".*/\1/' | head -1
+  fi
+}
+
+_json_files() {
+  # Usage: _json_files <file>
+  # Returns one file path per line from the "files" array
+  local file="$1"
+  if command -v jq &>/dev/null; then
+    jq -r '.files[]' "$file" 2>/dev/null
+  else
+    # Extract lines that look like file paths from the JSON files array
+    grep '^ *"/' "$file" 2>/dev/null | sed 's/^ *"//; s/"[, ]*$//'
+  fi
+}
+
+_json_file_count() {
+  # Usage: _json_file_count <file>
+  local file="$1"
+  if command -v jq &>/dev/null; then
+    jq '.files | length' "$file" 2>/dev/null
+  else
+    _json_files "$file" | wc -l | tr -d ' '
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # i18n - detect language from manifest or saved config
 # ---------------------------------------------------------------------------
 _detect_language() {
-  # Try manifest first
-  if [[ -f "$MANIFEST" ]] && command -v jq &>/dev/null; then
+  if [[ -f "$MANIFEST" ]]; then
     local lang
-    lang="$(jq -r '.language // ""' "$MANIFEST" 2>/dev/null)"
+    lang="$(_json_get "$MANIFEST" "language")"
     if [[ -n "$lang" ]]; then
       printf '%s' "$lang"
       return
     fi
   fi
-  # Try saved config
   local conf="$HOME/.claude-starter-kit.conf"
   if [[ -f "$conf" ]]; then
     local lang
@@ -55,7 +92,6 @@ _load_strings() {
       STR_NO_MANIFEST="マニフェストが見つかりません: %s"
       STR_NO_MANIFEST_HINT="スターターキットがデプロイしたファイルを特定できません。"
       STR_NO_MANIFEST_MANUAL="すべての Claude Code 設定を削除するには %s を手動で削除してください"
-      STR_JQ_REQUIRED="アンインストールには jq が必要です。インストールしてから再実行してください。"
       STR_FOUND_MANIFEST="%s のマニフェストが見つかりました（プロファイル: %s）"
       STR_WILL_REMOVE="追跡されている %s 個のファイルを削除します"
       STR_CONFIRM="アンインストールを実行しますか？ [y/N]"
@@ -80,7 +116,6 @@ _load_strings() {
       STR_NO_MANIFEST="No manifest found at %s"
       STR_NO_MANIFEST_HINT="Cannot determine which files were deployed by the starter kit."
       STR_NO_MANIFEST_MANUAL="If you want to remove all Claude Code config, manually delete %s"
-      STR_JQ_REQUIRED="jq is required for uninstall. Install it and try again."
       STR_FOUND_MANIFEST="Found manifest from %s (profile: %s)"
       STR_WILL_REMOVE="Will remove %s tracked files"
       STR_CONFIRM="Continue with uninstall? [y/N]"
@@ -130,14 +165,11 @@ if [[ ! -f "$MANIFEST" ]]; then
   exit 1
 fi
 
-if ! command -v jq &>/dev/null; then
-  error "$STR_JQ_REQUIRED"
-  exit 1
-fi
-
-file_count="$(jq '.files | length' "$MANIFEST")"
-profile="$(jq -r '.profile // "unknown"' "$MANIFEST")"
-timestamp="$(jq -r '.timestamp // "unknown"' "$MANIFEST")"
+file_count="$(_json_file_count "$MANIFEST")"
+profile="$(_json_get "$MANIFEST" "profile")"
+timestamp="$(_json_get "$MANIFEST" "timestamp")"
+[[ -z "$profile" ]] && profile="unknown"
+[[ -z "$timestamp" ]] && timestamp="unknown"
 
 # shellcheck disable=SC2059
 info "$(printf "$STR_FOUND_MANIFEST" "$timestamp" "$profile")"
@@ -161,13 +193,14 @@ removed=0
 skipped=0
 
 while IFS= read -r file; do
+  [[ -z "$file" ]] && continue
   if [[ -f "$file" ]]; then
     rm -f "$file"
     ((removed++))
   else
     ((skipped++))
   fi
-done < <(jq -r '.files[]' "$MANIFEST")
+done < <(_json_files "$MANIFEST")
 
 # Remove manifest itself
 rm -f "$MANIFEST"
