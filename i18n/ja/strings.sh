@@ -150,6 +150,13 @@ STR_CODEX_API_KEY_PROMPT="OpenAI API キーを入力する（sk-... で始まる
 STR_CODEX_API_KEY_SKIP="スキップ（後で設定する）"
 STR_CODEX_API_KEY_HINT="API キーは https://platform.openai.com/api-keys で取得できます"
 STR_CODEX_API_KEY_SAVED="OpenAI API キーを設定しました"
+STR_CODEX_API_KEY_ALREADY="OpenAI API キーは設定済みです"
+STR_CODEX_API_KEY_VERIFYING="API キーを検証中..."
+STR_CODEX_API_KEY_VALID="API キーの検証に成功しました"
+STR_CODEX_API_KEY_INVALID="API キーの検証に失敗しました。キーが正しいか確認してください"
+STR_CODEX_API_KEY_RETRY="再入力しますか？"
+STR_CODEX_API_KEY_RETRY_YES="はい、再入力する"
+STR_CODEX_API_KEY_RETRY_NO="いいえ、後で設定する"
 STR_CODEX_API_KEY_SKIPPED="API キーの設定をスキップしました。後で以下を実行してください："
 STR_CODEX_SETUP_DONE="Codex MCP のセットアップが完了しました"
 

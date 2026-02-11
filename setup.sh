@@ -397,6 +397,84 @@ if is_wsl; then
 fi
 
 # ---------------------------------------------------------------------------
+# Codex MCP helpers
+# ---------------------------------------------------------------------------
+_verify_openai_key() {
+  local key="$1"
+  local http_code
+  http_code="$(curl -s -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $key" \
+    https://api.openai.com/v1/models 2>/dev/null || echo "000")"
+  [[ "$http_code" == "200" ]]
+}
+
+_save_openai_key() {
+  local key="$1"
+  local rc_file="$2"
+  if grep -q 'OPENAI_API_KEY' "$rc_file" 2>/dev/null; then
+    local tmp_rc
+    tmp_rc="$(mktemp)"
+    sed "s|^export OPENAI_API_KEY=.*|export OPENAI_API_KEY=\"$key\"|" "$rc_file" > "$tmp_rc"
+    mv "$tmp_rc" "$rc_file"
+  else
+    printf '\n# OpenAI API Key (added by claude-code-starter-kit)\nexport OPENAI_API_KEY="%s"\n' "$key" >> "$rc_file"
+  fi
+  export OPENAI_API_KEY="$key"
+}
+
+_prompt_openai_key() {
+  local rc_file="$1"
+  while true; do
+    info "$STR_CODEX_API_KEY_HINT"
+    printf "\n"
+    printf "  1) %s\n" "$STR_CODEX_API_KEY_PROMPT"
+    printf "  2) %s\n" "$STR_CODEX_API_KEY_SKIP"
+    local _key_choice=""
+    read -r -p "${STR_CHOICE}: " _key_choice
+
+    case "$_key_choice" in
+      1)
+        printf "\n"
+        local _api_key=""
+        read -r -p "  API Key: " _api_key
+        if [[ -z "$_api_key" ]]; then
+          info "$STR_CODEX_API_KEY_SKIPPED"
+          info "  export OPENAI_API_KEY=\"your-api-key-here\""
+          return
+        fi
+        # Verify the key
+        info "$STR_CODEX_API_KEY_VERIFYING"
+        if _verify_openai_key "$_api_key"; then
+          ok "$STR_CODEX_API_KEY_VALID"
+          _save_openai_key "$_api_key" "$rc_file"
+          ok "$STR_CODEX_API_KEY_SAVED ($rc_file)"
+          return
+        else
+          warn "$STR_CODEX_API_KEY_INVALID"
+          printf "\n"
+          printf "  1) %s\n" "$STR_CODEX_API_KEY_RETRY_YES"
+          printf "  2) %s\n" "$STR_CODEX_API_KEY_RETRY_NO"
+          local _retry=""
+          read -r -p "${STR_CHOICE}: " _retry
+          if [[ "$_retry" != "1" ]]; then
+            info "$STR_CODEX_API_KEY_SKIPPED"
+            info "  export OPENAI_API_KEY=\"your-api-key-here\""
+            return
+          fi
+          printf "\n"
+          # Loop continues for retry
+        fi
+        ;;
+      *)
+        info "$STR_CODEX_API_KEY_SKIPPED"
+        info "  export OPENAI_API_KEY=\"your-api-key-here\""
+        return
+        ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
 # Codex MCP interactive setup
 # ---------------------------------------------------------------------------
 _setup_codex_mcp() {
@@ -429,53 +507,37 @@ _setup_codex_mcp() {
   fi
 
   # Step 2: OpenAI API key
-  printf "\n"
-  info "$STR_CODEX_API_KEY_HINT"
-  printf "\n"
-  printf "  1) %s\n" "$STR_CODEX_API_KEY_PROMPT"
-  printf "  2) %s\n" "$STR_CODEX_API_KEY_SKIP"
-  local _key_choice=""
-  read -r -p "${STR_CHOICE}: " _key_choice
+  # Determine the shell rc file
+  local _rc_file="$HOME/.bashrc"
+  local _login_shell
+  _login_shell="$(basename "${SHELL:-bash}")"
+  if [[ "$_login_shell" == "zsh" ]]; then
+    _rc_file="$HOME/.zshrc"
+  fi
 
-  case "$_key_choice" in
-    1)
-      printf "\n"
-      info "  $STR_CODEX_API_KEY_HINT"
-      printf "\n"
-      local _api_key=""
-      read -r -p "  API Key: " _api_key
-      if [[ -n "$_api_key" ]]; then
-        # Determine the shell rc file
-        local _rc_file="$HOME/.bashrc"
-        local _login_shell
-        _login_shell="$(basename "${SHELL:-bash}")"
-        if [[ "$_login_shell" == "zsh" ]]; then
-          _rc_file="$HOME/.zshrc"
-        fi
+  # Check if API key is already configured (env var or rc file)
+  local _existing_key=""
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    _existing_key="$OPENAI_API_KEY"
+  elif grep -q 'OPENAI_API_KEY' "$_rc_file" 2>/dev/null; then
+    _existing_key="$(grep 'OPENAI_API_KEY' "$_rc_file" | sed 's/.*OPENAI_API_KEY=["]*//;s/["]*$//' | tail -1)"
+  fi
 
-        # Check if already set
-        if grep -q 'OPENAI_API_KEY' "$_rc_file" 2>/dev/null; then
-          # Replace existing
-          local _tmp_rc
-          _tmp_rc="$(mktemp)"
-          sed "s|^export OPENAI_API_KEY=.*|export OPENAI_API_KEY=\"$_api_key\"|" "$_rc_file" > "$_tmp_rc"
-          mv "$_tmp_rc" "$_rc_file"
-        else
-          # Append
-          printf '\n# OpenAI API Key (added by claude-code-starter-kit)\nexport OPENAI_API_KEY="%s"\n' "$_api_key" >> "$_rc_file"
-        fi
-        export OPENAI_API_KEY="$_api_key"
-        ok "$STR_CODEX_API_KEY_SAVED ($_rc_file)"
-      else
-        info "$STR_CODEX_API_KEY_SKIPPED"
-        info "  export OPENAI_API_KEY=\"your-api-key-here\""
-      fi
-      ;;
-    *)
-      info "$STR_CODEX_API_KEY_SKIPPED"
-      info "  export OPENAI_API_KEY=\"your-api-key-here\""
-      ;;
-  esac
+  if [[ -n "$_existing_key" ]]; then
+    printf "\n"
+    ok "$STR_CODEX_API_KEY_ALREADY"
+    # Verify existing key
+    info "$STR_CODEX_API_KEY_VERIFYING"
+    if _verify_openai_key "$_existing_key"; then
+      ok "$STR_CODEX_API_KEY_VALID"
+    else
+      warn "$STR_CODEX_API_KEY_INVALID"
+      _prompt_openai_key "$_rc_file"
+    fi
+  else
+    printf "\n"
+    _prompt_openai_key "$_rc_file"
+  fi
 
   printf "\n"
   ok "$STR_CODEX_SETUP_DONE"
