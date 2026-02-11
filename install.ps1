@@ -198,18 +198,24 @@ set -euo pipefail
 REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
 INSTALL_DIR="$HOME/.claude-starter-kit"
 
-# Install essential tools
-if command -v apt-get &>/dev/null; then
-    echo "[INFO] Installing dependencies..."
-    sudo apt-get update -qq
-    sudo apt-get install -y git curl jq dos2unix 2>/dev/null || true
+# Install only missing tools (skip sudo if everything is present)
+_missing=()
+command -v git &>/dev/null      || _missing+=(git)
+command -v curl &>/dev/null     || _missing+=(curl)
+command -v jq &>/dev/null       || _missing+=(jq)
+command -v dos2unix &>/dev/null || _missing+=(dos2unix)
 
-    # Install Node.js if not present (needed for Codex CLI / npm plugins)
-    if ! command -v node &>/dev/null; then
-        echo "[INFO] Installing Node.js..."
-        curl -fsSL https://deb.nodesource.com/setup_20.x 2>/dev/null | sudo -E bash - 2>/dev/null || true
-        sudo apt-get install -y nodejs 2>/dev/null || true
-    fi
+if [[ ${#_missing[@]} -gt 0 ]] && command -v apt-get &>/dev/null; then
+    echo "[INFO] Installing missing tools: ${_missing[*]}"
+    sudo apt-get update -qq
+    sudo apt-get install -y "${_missing[@]}" 2>/dev/null || true
+fi
+
+# Install Node.js if not present (needed for Codex CLI / npm plugins)
+if ! command -v node &>/dev/null && command -v apt-get &>/dev/null; then
+    echo "[INFO] Installing Node.js..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x 2>/dev/null | sudo -E bash - 2>/dev/null || true
+    sudo apt-get install -y nodejs 2>/dev/null || true
 fi
 
 # Clone or update the repo
