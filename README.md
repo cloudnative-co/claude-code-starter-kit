@@ -1,178 +1,508 @@
+[English README](README.en.md)
+
 # Claude Code Starter Kit
 
-[日本語 README](README.ja.md)
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform: macOS/Linux/WSL](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg)](#installation)
+[![Platform: macOS/Linux/WSL](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg)](#-インストール)
 
-One-command setup of a complete Claude Code development environment with an interactive wizard.
+Claude Code を初めて使う人でも、**ワンコマンドで開発環境を整えられる**セットアップキットです。
+プログラミングやターミナルが初めての方にもわかるように、やさしく説明しています。
 
-## Table of Contents
+---
 
-- [Why This Repo](#why-this-repo)
-- [Features](#features)
-- [Installation](#installation)
-- [Wizard Flow](#wizard-flow)
-- [Profiles](#profiles)
-- [Usage](#usage)
-- [Non-Interactive Mode](#non-interactive-mode)
-- [Directory Structure](#directory-structure)
-- [Customization](#customization)
-- [Uninstall](#uninstall)
-- [License](#license)
+## 目次
 
-## Why This Repo
+- [はじめに](#-はじめに)
+- [必要なもの](#-必要なもの)
+- [このキットでできること](#-このキットでできること)
+- [インストール](#-インストール)
+- [ウィザードの流れ](#-ウィザードの流れ)
+- [プロファイルの選び方](#-プロファイルの選び方)
+- [主な機能](#-主な機能)
+- [セットアップ後にできること](#-セットアップ後にできること)
+- [非対話モード](#-非対話モード自動セットアップ)
+- [カスタマイズ](#-カスタマイズ)
+- [アンインストール](#-アンインストール)
+- [FAQ](#-faq)
+- [トラブルシューティング](#-トラブルシューティング)
+- [ディレクトリ構成](#-ディレクトリ構成)
+- [ライセンス](#-ライセンス)
 
-Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code environment in minutes. It ships opinionated agents, rules, commands, skills, hooks, and plugin recommendations so teams can start coding with shared standards immediately.
+---
 
-## Features
+## 🌟 はじめに
 
-- **3 profiles**: Minimal, Standard (recommended), Full
-- **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
-- **8 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents
-- **14 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, and more
-- **11 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, and more
-- **8 optional hooks**: tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log
-- **10 plugin recommendations**
-- **i18n**: English & Japanese
-- **Codex MCP** sub-agent integration (optional)
-- **Non-interactive mode** for CI/automation
+### Claude Code とは？
 
-## Installation
+**Claude Code** は、Anthropic が提供する **CLI（コマンドラインインターフェース）ツール**です。
+ターミナル（後述）から Claude AI に指示を出して、以下のようなことを手伝ってもらえます：
 
-### One-liner (macOS / Linux / WSL)
+- コードの作成・修正
+- 設計の相談・計画づくり
+- コードのレビュー（間違いがないかチェック）
+- テストの作成・実行
+- バグ（不具合）の調査・修正
+
+つまり、**AI がプログラミングのパートナーになってくれるツール**です。
+
+### ターミナルとは？
+
+**ターミナル**は、パソコンを **文字の命令（コマンド）で操作するアプリ**です。
+普段はマウスでクリックして操作しますが、ターミナルでは「ファイルを開く」「ソフトをインストールする」といった操作を **短い命令文をキーボードで入力して実行**します。
+
+| OS | ターミナルの開き方 |
+|---|---|
+| **macOS** | Spotlight（`Cmd + Space`）で「ターミナル」と入力して起動 |
+| **Windows** | スタートメニューから「PowerShell」を検索して起動 |
+| **Linux** | `Ctrl + Alt + T` でターミナルが開きます |
+
+### このキットは何をしてくれるの？
+
+Claude Code をインストールしただけでは、まっさらな状態です。
+このスターターキットは、**プロの開発者が使うような便利な設定を一括でセットアップ**してくれます。
+
+具体的には：
+- AI エージェント（役割ごとの専門アシスタント）をインストール
+- コーディングルール（お手本となる書き方のガイド）を設定
+- ショートカットコマンド（よく使う操作をワンタッチ化）を追加
+- 安全装置（コードの問題を自動で検出する仕組み）を設定
+
+---
+
+## ✅ 必要なもの
+
+セットアップを始める前に、以下を確認してください。
+
+| 項目 | 条件 |
+|---|---|
+| パソコン | Windows 10以降 / macOS / Linux（64bit） |
+| インターネット | 必須（ツールのダウンロードに使います） |
+| 空き容量 | 1GB 以上 |
+| メモリ | 4GB 以上（8GB あると安心） |
+| 管理者権限 | ソフトのインストールに必要です |
+
+> **補足**: Windows の場合、WSL（Windows Subsystem for Linux）という仕組みを使います。
+> WSL は「Windows の中で Linux を動かす機能」で、これにより Claude Code が動作します。
+
+---
+
+## 🧰 このキットでできること
+
+| できること | 説明 |
+|---|---|
+| ワンコマンドセットアップ | コマンド 1 つで環境構築が完了 |
+| 対話型ウィザード | 質問に答えるだけで最適な設定が選べる |
+| 3 つのプロファイル | 自分に合ったレベルの設定を選択 |
+| 日本語対応 | ウィザードもドキュメントも日本語 OK |
+| Ghostty ターミナル | 高機能ターミナルの自動インストール・設定 |
+| 非対話モード | CI/CD や自動化にも対応 |
+| クリーンアンインストール | 追加したものだけを安全に削除 |
+
+---
+
+## 🚀 インストール
+
+以下の 3 つの方法があります。**方法 1 がもっとも簡単**でおすすめです。
+
+### 方法 1: ワンライナー（macOS / Linux / WSL）
+
+**ステップ 1**: ターミナルを開きます（上の「ターミナルとは？」を参照）
+
+**ステップ 2**: 以下のコマンドをコピーして、ターミナルに貼り付けて `Enter` を押します
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
 ```
 
-### Windows PowerShell (Administrator)
+> このコマンドは「インターネットからセットアップ用スクリプトをダウンロードして実行する」という意味です。
+> `curl` はファイルをダウンロードするコマンド、`bash` はそれを実行するコマンドです。
+
+**ステップ 3**: ウィザード（対話型の質問画面）が始まるので、画面の指示に従って選択していきます
+
+---
+
+### 方法 2: Windows PowerShell（管理者として実行）
+
+**ステップ 1**: スタートメニューで「PowerShell」と検索し、**右クリック → 「管理者として実行」**を選びます
+
+**ステップ 2**: 以下のコマンドをコピーして貼り付け、`Enter` を押します
 
 ```powershell
 irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
 ```
 
-### Manual
+> このコマンドは PowerShell 版のインストールスクリプトをダウンロードして実行します。
+> `irm` はダウンロード、`iex` は実行を意味します。
+
+---
+
+### 方法 3: 手動インストール（中身を確認したい人向け）
 
 ```bash
 git clone https://github.com/cloudnative-co/claude-code-starter-kit.git
+```
+
+> リポジトリ（プロジェクトの保管場所）を自分のパソコンにコピーします。
+
+```bash
 cd claude-code-starter-kit
+```
+
+> ダウンロードしたフォルダの中に移動します。`cd` は「ディレクトリを移動する」コマンドです。
+
+```bash
 ./setup.sh
 ```
 
-## Wizard Flow
+> セットアップウィザードを起動します。`./` は「今いるフォルダの中のファイルを実行する」という意味です。
+
+---
+
+## 🧭 ウィザードの流れ
+
+セットアップを実行すると、以下の順番で質問が表示されます。
+それぞれ **番号を入力して `Enter` を押すだけ** で進められます。
 
 ```
-Language → Profile → Codex MCP → Editor → Hooks → Plugins → Commit Attribution → Confirm & Deploy
+1. 言語選択        → 日本語 or English
+2. プロファイル    → Minimal / Standard / Full / Custom
+3. Codex MCP       → 外部AIツール連携（わからなければ「いいえ」でOK）
+4. エディタ        → VS Code / Cursor / Zed / Neovim / なし
+5. Ghostty         → ターミナルアプリの自動設定（Full/Custom のみ）
+6. フック          → 安全装置の選択
+7. プラグイン      → 追加機能の選択
+8. コミット帰属    → AI との共同作業を記録するか
+9. 確認・デプロイ  → 設定内容を確認して実行
 ```
 
-Each step shows numbered options with descriptions. Recommended choices are marked.
+> **迷ったら？** すべての質問には「おすすめ」のマークが付いています。
+> 何を選べばいいかわからない場合は、**Standard プロファイル**を選べば間違いありません。
 
-## Profiles
+---
 
-| Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Codex MCP |
-|---------|--------|-------|----------|--------|-------|--------|-----------|
-| Minimal | Yes | Yes | - | - | - | - | - |
-| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | - |
-| Full | Yes | Yes | Yes | Yes | All | Yes | Yes |
+## 🎛️ プロファイルの選び方
 
-- **Minimal**: Lightweight start with just agents and rules
-- **Standard**: Best for most teams. Includes commands, skills, core hooks, and memory
-- **Full**: Everything enabled including all hooks and Codex MCP sub-agent delegation
+プロファイルとは「どのくらいの機能を入れるか」を決めるプリセット（お決まりセット）です。
 
-## Usage
+### Minimal（ミニマル）
 
-After setup, start `claude` in your project directory. The installed slash commands and agents are immediately available:
+- **おすすめ**: まずは軽く試してみたい人
+- **含まれるもの**: エージェントとルールだけ
+- **特徴**: 軽量でシンプル
+
+### Standard（スタンダード）⭐ おすすめ
+
+- **おすすめ**: ほとんどの人に最適
+- **含まれるもの**: エージェント、ルール、コマンド、スキル、主要なフック、メモリ
+- **特徴**: バランスの良い定番セット
+
+### Full（フル）
+
+- **おすすめ**: すべての機能を使いたい人
+- **含まれるもの**: 上記すべて + 全フック + Codex MCP + Ghostty セットアップ
+- **特徴**: フル装備
+
+| 機能 | Minimal | Standard | Full |
+|---|:---:|:---:|:---:|
+| エージェント（AI アシスタント） | ✅ | ✅ | ✅ |
+| ルール（コーディング規約） | ✅ | ✅ | ✅ |
+| コマンド（ショートカット） | - | ✅ | ✅ |
+| スキル（専門知識） | - | ✅ | ✅ |
+| フック（安全装置） | - | 主要 | 全部 |
+| メモリ（記憶の永続化） | - | ✅ | ✅ |
+| Codex MCP（外部 AI 連携） | - | - | ✅ |
+| Ghostty（ターミナル設定） | - | - | ✅ |
+
+---
+
+## ✨ 主な機能
+
+### 🤖 エージェント（9種類）
+
+エージェントは、**特定の役割に特化した AI アシスタント**です。
+必要に応じて Claude が自動で使い分けてくれます。
+
+| エージェント | 役割 | いつ使われる？ |
+|---|---|---|
+| **planner** | 計画の立案 | 複雑な機能を実装するとき |
+| **architect** | 設計の相談 | システム構成を決めるとき |
+| **tdd-guide** | テスト駆動開発 | 新機能の開発やバグ修正 |
+| **code-reviewer** | コードレビュー | コードを書いた後の品質チェック |
+| **security-reviewer** | セキュリティ検査 | セキュリティに関わる変更 |
+| **build-error-resolver** | ビルドエラー修正 | ビルド（コンパイル）が失敗したとき |
+| **e2e-runner** | E2E テスト | 画面操作の自動テスト |
+| **refactor-cleaner** | コード整理 | 不要なコードの削除・整理 |
+| **doc-updater** | ドキュメント更新 | README やドキュメントの更新 |
+
+### 💬 スラッシュコマンド（14個）
+
+スラッシュコマンドは、Claude に **ワンタッチで指示を出すショートカット**です。
+Claude Code のチャットで `/` に続けて入力します。
+
+| コマンド | 何をしてくれる？ |
+|---|---|
+| `/plan` | 作業の全体像を整理して計画を立てる |
+| `/tdd` | テストを先に書いてから実装する流れ |
+| `/code-review` | コードの品質をチェック |
+| `/build-fix` | ビルドエラーを自動で修正 |
+| `/e2e` | 画面操作の自動テストを作成・実行 |
+| `/verify` | 最終チェック（テスト、型チェック等） |
+| `/checkpoint` | 現在の作業を区切りとして記録 |
+| `/refactor-clean` | 不要なコードを見つけて整理 |
+| `/update-docs` | ドキュメントを最新の状態に更新 |
+
+### 🪝 フック（安全装置・8個）
+
+フックは **自動で動作する安全装置**です。コードを書いたり保存したりしたときに、自動でチェックが走ります。
+
+| フック | 何をしてくれる？ |
+|---|---|
+| Tmux リマインダー | 長時間コマンドに tmux の使用を提案 |
+| Git Push レビュー | コードを共有する前に確認を促す |
+| Doc ブロッカー | 不要なドキュメントファイルの作成を防止 |
+| Prettier 自動フォーマット | JS/TS ファイルを自動で見た目を整える |
+| Console.log ガード | デバッグ用コードの消し忘れを警告 |
+| メモリ永続化 | セッション間で作業の記憶を保持 |
+| Strategic Compact | 適切なタイミングでコンテキスト整理を提案 |
+| PR 作成ログ | Pull Request の URL を記録 |
+
+### 🖥️ Ghostty ターミナル
+
+**Ghostty** は、高速で美しいターミナルアプリです。
+Full プロファイル、または `--ghostty=true` オプションで有効にすると：
+
+- Ghostty アプリを自動インストール（Homebrew 経由）
+- 日本語対応フォント（HackGen NF）を自動インストール
+- Claude Code に最適化された設定ファイルを自動配置
+  - Quick Terminal（ホットキーで即座にターミナルを開く）
+  - Catppuccin Mocha テーマ
+  - Shift+Enter でのマルチライン入力
+
+> **注意**: 現在、Ghostty の自動インストールは macOS のみ対応しています。
+
+---
+
+## 🎉 セットアップ後にできること
+
+セットアップが完了したら、プロジェクトのフォルダで `claude` と入力するだけで使い始められます。
 
 ```bash
-/plan          # Structured planning
-/tdd           # Test-driven development flow
-/code-review   # Code review mode
-/build-fix     # Fix build errors
-/e2e           # End-to-end testing
-/verify        # Final verification
+claude
 ```
 
-## Non-Interactive Mode
+> Claude Code が起動し、AI アシスタントと対話できるようになります。
 
-For CI, automation, or scripted setups:
+### 使い方の例
+
+**例 1: 新しい機能を計画する**
+```
+/plan ユーザーログイン機能を追加したい
+```
+
+**例 2: テスト駆動で安全に開発する**
+```
+/tdd パスワードの強度チェック関数を作りたい
+```
+
+**例 3: 書いたコードをレビューしてもらう**
+```
+/code-review さっき書いた認証コードを見て
+```
+
+**例 4: ビルドエラーを直してもらう**
+```
+/build-fix ビルドが失敗した。直して
+```
+
+---
+
+## ⚙️ 非対話モード（自動セットアップ）
+
+ウィザードの質問に答えず、コマンドだけでセットアップしたい場合に使います。
+CI/CD（自動デプロイ）やチーム全員の環境を統一したい場合に便利です。
+
+### 基本的な使い方
 
 ```bash
-# Use standard profile with English and VS Code
-./setup.sh --non-interactive --profile=standard --language=en --editor=vscode
+./setup.sh --non-interactive --profile=standard --language=ja --editor=vscode
+```
 
-# Full control over hooks and plugins
+> Standard プロファイル、日本語、VS Code エディタで自動セットアップします。
+
+### Ghostty も一緒にセットアップ
+
+```bash
+./setup.sh --non-interactive --ghostty=true
+```
+
+> Ghostty ターミナルのインストールと設定も含めてセットアップします。
+
+### すべてのオプションを細かく指定
+
+```bash
 ./setup.sh --non-interactive \
   --profile=standard \
-  --language=en \
+  --language=ja \
   --editor=cursor \
   --codex-mcp=false \
   --commit-attribution=false \
+  --ghostty=true \
   --hooks=tmux,git-push,prettier,console,memory,compact,pr-log \
   --plugins=security-guidance,commit-commands,pr-review-toolkit
+```
 
-# Reuse a saved config
+### 保存済み設定を使う
+
+```bash
 ./setup.sh --non-interactive --config=./my-config.conf
 ```
 
-## Directory Structure
+> 以前のセットアップで保存された設定ファイルをそのまま再利用します。
 
-```
-claude-code-starter-kit/
-├── install.sh              # One-liner bootstrap (macOS/Linux/WSL)
-├── install.ps1             # Windows PowerShell bootstrap
-├── setup.sh                # Main setup script (wizard + deploy)
-├── uninstall.sh            # Manifest-based clean uninstall
-├── lib/                    # Shell libraries
-│   ├── colors.sh           # Terminal color helpers
-│   ├── detect.sh           # OS/WSL detection
-│   ├── prerequisites.sh    # Dependency checks
-│   ├── template.sh         # Text template engine
-│   └── json-builder.sh     # JSON builder (jq-based)
-├── wizard/                 # Interactive wizard
-│   ├── wizard.sh           # 8-step wizard logic
-│   └── defaults.conf       # Default values
-├── config/                 # Configuration templates
-│   ├── settings-base.json  # Base settings.json structure
-│   ├── permissions.json    # Tool permissions
-│   └── plugins.json        # Plugin catalog
-├── profiles/               # Profile presets
-│   ├── minimal.conf
-│   ├── standard.conf
-│   └── full.conf
-├── features/               # Optional feature modules
-│   ├── */feature.json      # Feature metadata
-│   └── */hooks.json        # Hook fragments
-├── i18n/                   # Internationalization
-│   ├── en/                 # English templates & strings
-│   └── ja/                 # Japanese templates & strings
-├── agents/                 # Agent definitions (9 files)
-├── rules/                  # Rule files (8 files)
-├── commands/               # Slash commands (14 files)
-├── skills/                 # Skill modules (11 dirs)
-└── memory/                 # Best practice memory (5 files)
-```
+---
 
-## Customization
+## 🔧 カスタマイズ
 
-After installation, you can extend or modify any component:
+セットアップ後、自分好みに設定を追加・変更できます。
 
-- **Add an agent**: Create a new `.md` file in `~/.claude/agents/`
-- **Add a rule**: Create a new `.md` file in `~/.claude/rules/`
-- **Add a command**: Create a new `.md` file in `~/.claude/commands/`
-- **Add a skill**: Create a new directory under `~/.claude/skills/` with a `SKILL.md`
-- **Modify hooks**: Edit `~/.claude/settings.json` hooks section
+| やりたいこと | 方法 |
+|---|---|
+| エージェントを追加 | `~/.claude/agents/` に `.md` ファイルを作成 |
+| ルールを追加 | `~/.claude/rules/` に `.md` ファイルを作成 |
+| コマンドを追加 | `~/.claude/commands/` に `.md` ファイルを作成 |
+| スキルを追加 | `~/.claude/skills/` に `SKILL.md` を含むフォルダを作成 |
+| フックを変更 | `~/.claude/settings.json` の hooks セクションを編集 |
 
-To re-apply the starter kit config (e.g., after updating the repo), run `./setup.sh` again. Your previous selections are remembered in `~/.claude-starter-kit.conf`.
+> **設定のやり直し**: `./setup.sh` をもう一度実行すれば、いつでも再設定できます。
+> 前回の選択は `~/.claude-starter-kit.conf` に自動保存されているので、途中から変更するだけで OK です。
 
-## Uninstall
+---
+
+## 🧹 アンインストール
 
 ```bash
 ./uninstall.sh
 ```
 
-Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manifest.json`) are removed. User-added files are preserved.
+> このキットが追加したファイルだけを安全に削除します。
+> 自分で手動追加したファイルはそのまま残ります。
+> 削除対象は `~/.claude/.starter-kit-manifest.json` で管理されています。
 
-## License
+---
 
-MIT. See [LICENSE](LICENSE).
+## ❓ FAQ
+
+### Q. Claude Code を使うにはアカウントが必要ですか？
+
+はい。Claude Code の利用には Anthropic のアカウントと API キー（または有料プラン）が必要です。
+詳しくは [Anthropic 公式サイト](https://www.anthropic.com/) をご確認ください。
+
+### Q. Git やターミナルが初めてでも大丈夫ですか？
+
+はい、大丈夫です。ウィザードが質問形式でガイドしてくれるので、番号を選ぶだけで進められます。
+Git が入っていない場合も、セットアップスクリプトが自動でインストールを試みます。
+
+### Q. 途中で設定をやり直せますか？
+
+はい。`./setup.sh` をもう一度実行すると再設定できます。
+前回の選択を覚えているので、変えたい部分だけ変更すれば OK です。
+
+### Q. 何かおかしくなったら元に戻せますか？
+
+はい。`./uninstall.sh` でこのキットが追加したものだけを削除できます。
+また、セットアップ時に既存の設定は自動でバックアップされます。
+
+### Q. チーム全員で同じ設定にできますか？
+
+はい。非対話モード（`--non-interactive`）と設定ファイル（`--config=`）を使えば、
+全員が同じコマンド 1 つで同じ環境を構築できます。
+
+### Q. Codex MCP って何ですか？わからないのですが...
+
+Codex MCP は OpenAI の Codex をサブエージェントとして連携する仕組みです。
+**わからない場合は「いいえ」を選んで問題ありません。** 後から追加することもできます。
+
+---
+
+## 🛠️ トラブルシューティング
+
+### 「command not found」と表示される
+
+ツールがインストールされていない可能性があります。
+
+```bash
+# Node.js が入っているか確認するコマンド
+node --version
+
+# Git が入っているか確認するコマンド
+git --version
+```
+
+表示されない場合は、セットアップスクリプトが自動インストールを試みますが、
+うまくいかない場合は以下から手動でインストールしてください：
+- Node.js: https://nodejs.org/
+- Git: https://git-scm.com/
+
+### ウィザードが途中で止まる
+
+- インターネット接続を確認してください
+- ターミナルを閉じてもう一度 `./setup.sh` を実行してみてください
+- `bash -x ./setup.sh` で実行すると、どこで止まっているか詳しく表示されます
+
+### WSL で「permission denied」と表示される
+
+管理者権限が必要な場合があります：
+
+```bash
+# コマンドの前に sudo を付けて実行してみてください
+sudo ./setup.sh
+```
+
+### セットアップ後に `claude` コマンドが見つからない
+
+ターミナルを一度閉じて、新しいターミナルを開いてください。
+パスの設定が反映されるには、ターミナルの再起動が必要です。
+
+---
+
+## 📁 ディレクトリ構成
+
+```
+claude-code-starter-kit/
+├── install.sh              # ワンライナーインストール用スクリプト
+├── install.ps1             # Windows PowerShell インストール用
+├── setup.sh                # メインセットアップ（ウィザード + デプロイ）
+├── uninstall.sh            # アンインストール用スクリプト
+├── lib/                    # 内部で使うシェルライブラリ
+│   ├── colors.sh           # 色付き表示
+│   ├── detect.sh           # OS の自動検出
+│   ├── prerequisites.sh    # 必要ツールの確認・インストール
+│   ├── ghostty.sh          # Ghostty セットアップ
+│   ├── template.sh         # テキスト置換エンジン
+│   └── json-builder.sh     # JSON ファイルの組み立て
+├── wizard/                 # 対話型ウィザード
+│   ├── wizard.sh           # ウィザードのロジック
+│   └── defaults.conf       # デフォルト設定値
+├── config/                 # 設定テンプレート
+├── profiles/               # プロファイル定義
+│   ├── minimal.conf        # Minimal プロファイル
+│   ├── standard.conf       # Standard プロファイル
+│   └── full.conf           # Full プロファイル
+├── features/               # オプション機能
+│   ├── ghostty/            # Ghostty ターミナル設定
+│   └── .../                # 各種フック定義
+├── i18n/                   # 多言語対応
+│   ├── en/                 # 英語
+│   └── ja/                 # 日本語
+├── agents/                 # AI エージェント定義（9種）
+├── rules/                  # コーディングルール（8種）
+├── commands/               # スラッシュコマンド（14個）
+├── skills/                 # スキルモジュール（11個）
+└── memory/                 # ベストプラクティス記憶
+```
+
+---
+
+## 📄 ライセンス
+
+MIT ライセンスです。詳しくは [LICENSE](LICENSE) をご確認ください。
