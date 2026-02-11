@@ -127,7 +127,10 @@ Each step shows numbered options with descriptions. Recommended choices are mark
 
 ## Usage
 
-After setup, start `claude` in your project directory. The installed slash commands and agents are immediately available:
+> **Important: You must restart your terminal after setup.**
+> PATH and shell settings added during setup won't take effect until you open a new terminal window. Close your current terminal and open a new one before running `claude`.
+
+After restarting your terminal, start `claude` in your project directory. The installed slash commands and agents are immediately available:
 
 ```bash
 /plan            # Structured planning

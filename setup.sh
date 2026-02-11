@@ -846,6 +846,9 @@ else
     info "  $STR_FINAL_STEP3"
   fi
   printf "\n"
+  warn "${STR_FINAL_RESTART_WARN:-Important: Restart your terminal for settings to take effect.}"
+  info "${STR_FINAL_RESTART_HINT:-Close this terminal and open a new one before running claude.}"
+  printf "\n"
   ok "$STR_FINAL_ENJOY"
 fi
 printf "\n"

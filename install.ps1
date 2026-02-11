@@ -309,6 +309,10 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
     Write-Host ""
     Write-Host "========================================================" -ForegroundColor Cyan
     Write-Host ""
+    Write-Warn "重要: この PowerShell ウィンドウを閉じて、新しいターミナルを開いてください。"
+    Write-Warn "Important: Close this window and open a new terminal."
+    Write-Warn "セットアップで追加された設定は、ターミナルを再起動するまで反映されません。"
+    Write-Host ""
     Write-Warn "注意: PowerShell から直接 claude を実行することはできません。"
     Write-Warn "Note: You cannot run claude directly from PowerShell."
     Write-Warn "必ず WSL (Ubuntu) 環境内で実行してください。"
