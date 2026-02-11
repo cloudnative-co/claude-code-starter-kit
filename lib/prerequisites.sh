@@ -38,22 +38,24 @@ _ensure_homebrew() {
     return 0
   fi
 
-  # Not installed at all - install it
+  # Not installed at all - try to install it
   info "Homebrew not found. Installing Homebrew..."
-  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-  # Add to PATH for this session
-  if [[ -x /opt/homebrew/bin/brew ]]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-  elif [[ -x /usr/local/bin/brew ]]; then
-    eval "$(/usr/local/bin/brew shellenv)"
+  if NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" 2>&1; then
+    # Add to PATH for this session
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -x /usr/local/bin/brew ]]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
   fi
 
   if command -v brew &>/dev/null; then
     ok "Homebrew installed"
   else
-    error "Homebrew installation completed but 'brew' not found in PATH."
-    return 1
+    # Homebrew install failed (e.g., no admin privileges) - not fatal,
+    # individual checks will use alternative installers (nvm for Node.js)
+    warn "Homebrew could not be installed (admin privileges may be required)."
+    warn "Will use alternative methods for dependencies."
   fi
 }
 
@@ -65,7 +67,12 @@ _ensure_homebrew() {
 _pkg_install() {
   case "$DISTRO_FAMILY" in
     macos)
-      brew install "$@"
+      if command -v brew &>/dev/null; then
+        brew install "$@"
+      else
+        error "Cannot install $*: Homebrew is not available."
+        return 1
+      fi
       ;;
     debian)
       sudo apt-get update -qq && sudo apt-get install -y "$@"
@@ -151,10 +158,28 @@ check_node() {
   fi
 }
 
+_install_node_via_nvm() {
+  info "Installing Node.js via nvm (no admin required)..."
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  mkdir -p "$NVM_DIR"
+  if curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash; then
+    # Load nvm into current session
+    # shellcheck source=/dev/null
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+    nvm install "$NODE_MAJOR"
+  else
+    return 1
+  fi
+}
+
 _install_node() {
   case "$DISTRO_FAMILY" in
     macos)
-      brew install "node@${NODE_MAJOR}"
+      if command -v brew &>/dev/null; then
+        brew install "node@${NODE_MAJOR}"
+      else
+        _install_node_via_nvm
+      fi
       ;;
     debian)
       # NodeSource setup for Debian/Ubuntu
@@ -227,11 +252,8 @@ check_gh() {
 check_prerequisites() {
   section "Checking prerequisites"
 
-  # macOS: ensure Homebrew is available before checking other deps
-  _ensure_homebrew || {
-    error "Homebrew is required on macOS. Please install it manually and re-run."
-    return 1
-  }
+  # macOS: try to ensure Homebrew is available (not fatal if it fails)
+  _ensure_homebrew
 
   local failed=0
 
