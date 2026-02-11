@@ -167,7 +167,28 @@ function Install-ViaWSL {
         Write-Host ""
         Read-Host "Enter を押して Ubuntu セットアップを開始 / Press Enter to open Ubuntu setup"
 
-        Start-Process "ubuntu.exe" -Wait -ErrorAction SilentlyContinue
+        # Try to find Ubuntu launcher (name varies by version)
+        $ubuntuLauncher = $null
+        foreach ($exe in @("ubuntu.exe", "ubuntu2404.exe", "ubuntu2204.exe", "ubuntu2004.exe")) {
+            if (Get-Command $exe -ErrorAction SilentlyContinue) {
+                $ubuntuLauncher = $exe
+                break
+            }
+        }
+
+        if ($ubuntuLauncher) {
+            Start-Process $ubuntuLauncher -Wait -ErrorAction SilentlyContinue
+        } else {
+            # Fallback: launch via wsl directly (runs in current terminal)
+            Write-Info "Ubuntu ランチャー (ubuntu.exe) が見つかりません。WSL 経由で起動します..."
+            Write-Info "Ubuntu launcher not found. Launching via WSL..."
+            Write-Host ""
+            Write-Warn "ユーザー名とパスワードを設定してください。"
+            Write-Warn "設定が終わったら exit と入力して Enter を押してください。"
+            Write-Warn "After creating your username/password, type 'exit' and press Enter."
+            Write-Host ""
+            wsl -d Ubuntu
+        }
 
         Write-Info "Ubuntu の準備を待っています... / Waiting for Ubuntu to become ready..."
         $maxWait = 120
