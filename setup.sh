@@ -604,7 +604,20 @@ _setup_codex_mcp() {
         read -r -p "${STR_CHOICE}: " _e2e_choice
         case "$_e2e_choice" in
           1)
-            _prompt_openai_key "$_rc_file" || true
+            printf "\n"
+            info "$STR_CODEX_API_KEY_HINT"
+            local _retry_key=""
+            read -r -p "  API Key: " _retry_key
+            if [[ -n "$_retry_key" ]]; then
+              info "$STR_CODEX_API_KEY_VERIFYING"
+              if _verify_openai_key "$_retry_key"; then
+                ok "$STR_CODEX_API_KEY_VALID"
+                _save_openai_key "$_retry_key" "$_rc_file"
+                ok "$STR_CODEX_API_KEY_SAVED ($_rc_file)"
+              else
+                warn "$STR_CODEX_API_KEY_INVALID"
+              fi
+            fi
             # Loop continues to re-test
             ;;
           *)
