@@ -11,13 +11,20 @@ function Write-Err($msg) { Write-Host "[ERROR] $msg" -ForegroundColor Red }
 
 # ---------------------------------------------------------------------------
 # Helper: Test if Ubuntu is ready (can execute commands)
+# Temporarily lowers ErrorActionPreference to avoid stderr from wsl.exe
+# being treated as a terminating error under $ErrorActionPreference=Stop.
 # ---------------------------------------------------------------------------
 function Test-UbuntuReady {
+    $savedEAP = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
     try {
         $result = wsl -d Ubuntu -- echo "READY" 2>&1
+        $ErrorActionPreference = $savedEAP
+        if ($null -eq $result) { return $false }
         $cleaned = ($result | Out-String).Trim()
         return $cleaned -match "READY"
     } catch {
+        $ErrorActionPreference = $savedEAP
         return $false
     }
 }
@@ -26,10 +33,15 @@ function Test-UbuntuReady {
 # Helper: Check if WSL command exists and works
 # ---------------------------------------------------------------------------
 function Test-WslInstalled {
+    $savedEAP = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
     try {
         $null = wsl --status 2>&1
-        return ($LASTEXITCODE -eq 0)
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = $savedEAP
+        return ($code -eq 0)
     } catch {
+        $ErrorActionPreference = $savedEAP
         return $false
     }
 }
@@ -159,51 +171,29 @@ function Install-ViaWSL {
         Write-Host ""
         Write-Info "Ubuntu の初期設定が必要です。"
         Write-Info "Ubuntu needs initial user setup."
-        Write-Info "新しいウィンドウが開きます。以下を行ってください："
-        Write-Info "A new Ubuntu window will open. Please:"
-        Write-Info "  1. UNIX ユーザー名を作成 / Create your UNIX username"
-        Write-Info "  2. パスワードを設定 / Set a password"
-        Write-Info "  3. 完了したらウィンドウを閉じる / Close the Ubuntu window when done"
         Write-Host ""
-        Read-Host "Enter を押して Ubuntu セットアップを開始 / Press Enter to open Ubuntu setup"
-
-        # Try to find Ubuntu launcher (name varies by version)
-        $ubuntuLauncher = $null
-        foreach ($exe in @("ubuntu.exe", "ubuntu2404.exe", "ubuntu2204.exe", "ubuntu2004.exe")) {
-            if (Get-Command $exe -ErrorAction SilentlyContinue) {
-                $ubuntuLauncher = $exe
-                break
-            }
-        }
-
-        if ($ubuntuLauncher) {
-            Start-Process $ubuntuLauncher -Wait -ErrorAction SilentlyContinue
-        } else {
-            # Fallback: launch via wsl directly (runs in current terminal)
-            Write-Info "Ubuntu ランチャー (ubuntu.exe) が見つかりません。WSL 経由で起動します..."
-            Write-Info "Ubuntu launcher not found. Launching via WSL..."
-            Write-Host ""
-            Write-Warn "ユーザー名とパスワードを設定してください。"
-            Write-Warn "設定が終わったら exit と入力して Enter を押してください。"
-            Write-Warn "After creating your username/password, type 'exit' and press Enter."
-            Write-Host ""
-            wsl -d Ubuntu
-        }
-
-        Write-Info "Ubuntu の準備を待っています... / Waiting for Ubuntu to become ready..."
-        $maxWait = 120
-        $waited = 0
-        while (-not (Test-UbuntuReady)) {
-            Start-Sleep -Seconds 3
-            $waited += 3
-            if ($waited -ge $maxWait) {
-                Write-Err "Ubuntu did not become ready within ${maxWait} seconds."
-                Write-Err "Please open Ubuntu manually, complete the setup, then run this script again."
-                exit 1
-            }
-            Write-Host "." -NoNewline
-        }
+        Write-Info "この画面で UNIX ユーザー名とパスワードを設定します。"
+        Write-Info "You will create a UNIX username and password here."
         Write-Host ""
+        Read-Host "Enter を押して Ubuntu セットアップを開始 / Press Enter to start Ubuntu setup"
+
+        # Run wsl inline so user setup happens in the current terminal
+        # (no separate window that blocks and confuses users)
+        Write-Host ""
+        Write-Warn "ユーザー名とパスワードを設定してください。"
+        Write-Warn "設定が終わったら exit と入力して Enter を押してください。"
+        Write-Warn "After creating your username/password, type 'exit' and press Enter."
+        Write-Host ""
+        $savedEAP = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
+        wsl -d Ubuntu
+        $ErrorActionPreference = $savedEAP
+
+        # Verify Ubuntu is now ready
+        if (-not (Test-UbuntuReady)) {
+            Write-Warn "Ubuntu の準備確認に失敗しましたが、セットアップを続行します..."
+            Write-Warn "Ubuntu readiness check failed, but continuing setup..."
+        }
     }
 
     Write-Ok "WSL2 with Ubuntu is ready"
