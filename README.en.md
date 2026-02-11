@@ -79,11 +79,11 @@ Each step shows numbered options with descriptions. Recommended choices are mark
 
 ## Profiles
 
-| Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Codex MCP |
-|---------|--------|-------|----------|--------|-------|--------|-----------|
-| Minimal | Yes | Yes | - | - | - | - | - |
-| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | - |
-| Full | Yes | Yes | Yes | Yes | All | Yes | Yes |
+| Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Codex MCP | Ghostty |
+|---------|--------|-------|----------|--------|-------|--------|-----------|---------|
+| Minimal | Yes | Yes | - | - | - | - | - | - |
+| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | Optional | - |
+| Full | Yes | Yes | Yes | Yes | All | Yes | Yes | macOS only |
 
 - **Minimal**: Lightweight start with just agents and rules
 - **Standard**: Best for most teams. Includes commands, skills, core hooks, and memory
@@ -94,12 +94,15 @@ Each step shows numbered options with descriptions. Recommended choices are mark
 After setup, start `claude` in your project directory. The installed slash commands and agents are immediately available:
 
 ```bash
-/plan          # Structured planning
-/tdd           # Test-driven development flow
-/code-review   # Code review mode
-/build-fix     # Fix build errors
-/e2e           # End-to-end testing
-/verify        # Final verification
+/plan            # Structured planning
+/tdd             # Test-driven development flow
+/code-review     # Code review mode
+/build-fix       # Fix build errors
+/e2e             # End-to-end testing
+/verify          # Final verification
+/checkpoint      # Record current work as a checkpoint
+/refactor-clean  # Find and clean up unused code
+/update-docs     # Update documentation to latest state
 ```
 
 ## Non-Interactive Mode

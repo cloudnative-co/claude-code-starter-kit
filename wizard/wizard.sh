@@ -65,7 +65,11 @@ _bool_normalize() {
 _set_bool() {
   local var="$1"
   local val="$2"
-  eval "$var=\"\$(_bool_normalize \"$val\")\""
+  # Validate variable name to prevent injection
+  if [[ ! "$var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    return 1
+  fi
+  printf -v "$var" '%s' "$(_bool_normalize "$val")"
 }
 
 _bool_label_enabled() {
@@ -286,7 +290,7 @@ _apply_hooks_csv() {
   local csv="$1"
   local i
   for i in "${!HOOK_KEYS[@]}"; do
-    eval "${HOOK_KEYS[$i]}=\"false\""
+    printf -v "${HOOK_KEYS[$i]}" '%s' "false"
   done
 
   IFS=',' read -r -a _items <<< "$csv"
@@ -505,8 +509,7 @@ _step_hooks() {
     local i
     for i in "${!HOOK_KEYS[@]}"; do
       local key="${HOOK_KEYS[$i]}"
-      local state=""
-      eval "state=\${$key}"
+      local state="${!key}"
       local mark="[ ]"
       if [[ "$state" == "true" ]]; then mark="[*]"; fi
       printf "  %2d) %s %s\n" "$((i+1))" "$mark" "${HOOK_LABELS[$i]}"
@@ -519,22 +522,21 @@ _step_hooks() {
 
     case "$choice" in
       a|A|all)
-        for i in "${!HOOK_KEYS[@]}"; do eval "${HOOK_KEYS[$i]}=\"true\""; done
+        for i in "${!HOOK_KEYS[@]}"; do printf -v "${HOOK_KEYS[$i]}" '%s' "true"; done
         ;;
       n|N|none)
-        for i in "${!HOOK_KEYS[@]}"; do eval "${HOOK_KEYS[$i]}=\"false\""; done
+        for i in "${!HOOK_KEYS[@]}"; do printf -v "${HOOK_KEYS[$i]}" '%s' "false"; done
         ;;
       *)
         for token in $choice; do
           if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#HOOK_KEYS[@]}" ]]; then
             local idx=$((token-1))
             local key="${HOOK_KEYS[$idx]}"
-            local current=""
-            eval "current=\${$key}"
+            local current="${!key}"
             if [[ "$current" == "true" ]]; then
-              eval "$key=\"false\""
+              printf -v "$key" '%s' "false"
             else
-              eval "$key=\"true\""
+              printf -v "$key" '%s' "true"
             fi
           fi
         done
@@ -633,8 +635,7 @@ _step_confirm() {
   local i
   for i in "${!HOOK_KEYS[@]}"; do
     local key="${HOOK_KEYS[$i]}"
-    local state=""
-    eval "state=\${$key}"
+    local state="${!key}"
     if [[ "$state" == "true" ]]; then
       hook_labels+=("${HOOK_LABELS[$i]}")
     fi
@@ -684,7 +685,7 @@ _fill_noninteractive_defaults() {
   local _saved_overrides=()
   local _var _val
   for _var in $_CLI_OVERRIDES; do
-    eval "_val=\${$_var:-}"
+    _val="${!_var:-}"
     if [[ -n "$_val" ]]; then
       _saved_overrides+=("${_var}=${_val}")
     fi
@@ -693,9 +694,13 @@ _fill_noninteractive_defaults() {
   load_profile_config "$PROFILE"
 
   # Restore CLI-overridden values (CLI takes precedence over profile/config)
-  local _pair
+  local _pair _restore_key _restore_val
   for _pair in "${_saved_overrides[@]+"${_saved_overrides[@]}"}"; do
-    [[ -n "$_pair" ]] && eval "$_pair"
+    if [[ -n "$_pair" ]]; then
+      _restore_key="${_pair%%=*}"
+      _restore_val="${_pair#*=}"
+      printf -v "$_restore_key" '%s' "$_restore_val"
+    fi
   done
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
@@ -734,7 +739,7 @@ run_wizard() {
   local _saved_cli=()
   local _v _vl
   for _v in $_CLI_OVERRIDES; do
-    eval "_vl=\${$_v:-}"
+    _vl="${!_v:-}"
     if [[ -n "$_vl" ]]; then
       _saved_cli+=("${_v}=${_vl}")
     fi
@@ -744,9 +749,13 @@ run_wizard() {
   load_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
 
   # Restore CLI-overridden values (CLI takes precedence over saved config)
-  local _p
+  local _p _rk _rv
   for _p in "${_saved_cli[@]+"${_saved_cli[@]}"}"; do
-    [[ -n "$_p" ]] && eval "$_p"
+    if [[ -n "$_p" ]]; then
+      _rk="${_p%%=*}"
+      _rv="${_p#*=}"
+      printf -v "$_rk" '%s' "$_rv"
+    fi
   done
 
   # Non-interactive mode: fill defaults and return

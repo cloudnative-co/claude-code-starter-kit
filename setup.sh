@@ -449,6 +449,26 @@ fi
 # ---------------------------------------------------------------------------
 # Codex MCP helpers
 # ---------------------------------------------------------------------------
+
+# Portable timeout wrapper (macOS lacks `timeout` from coreutils)
+_run_with_timeout() {
+  local secs="$1"; shift
+  if command -v timeout &>/dev/null; then
+    timeout "$secs" "$@"
+  else
+    # Background the command and kill if it exceeds the limit
+    "$@" &
+    local pid=$!
+    ( sleep "$secs" && kill "$pid" 2>/dev/null ) &
+    local watcher=$!
+    wait "$pid" 2>/dev/null
+    local rc=$?
+    kill "$watcher" 2>/dev/null
+    wait "$watcher" 2>/dev/null 2>&1 || true
+    return "$rc"
+  fi
+}
+
 _verify_openai_key() {
   local key="$1"
   local http_code
@@ -511,7 +531,8 @@ _prompt_openai_key() {
       1)
         printf "\n"
         local _api_key=""
-        read -r -p "  API Key: " _api_key
+        read -rs -p "  API Key: " _api_key
+        printf "\n"
         if [[ -z "$_api_key" ]]; then
           info "$STR_CODEX_API_KEY_SKIPPED"
           info "  export OPENAI_API_KEY=\"your-api-key-here\""
@@ -655,11 +676,11 @@ _setup_codex_mcp() {
   if command -v codex &>/dev/null && [[ -n "${OPENAI_API_KEY:-}" ]]; then
     printf "\n"
     # Check if already logged in
-    if timeout 15 codex login status &>/dev/null 2>&1; then
+    if _run_with_timeout 15 codex login status &>/dev/null 2>&1; then
       ok "$STR_CODEX_LOGIN_ALREADY"
     else
       info "$STR_CODEX_LOGIN_RUNNING"
-      if printf '%s' "$OPENAI_API_KEY" | timeout 30 codex login --with-api-key &>/dev/null; then
+      if printf '%s' "$OPENAI_API_KEY" | _run_with_timeout 30 codex login --with-api-key &>/dev/null; then
         ok "$STR_CODEX_LOGIN_DONE"
       else
         warn "$STR_CODEX_LOGIN_FAILED"
@@ -707,7 +728,8 @@ _setup_codex_mcp() {
             printf "\n"
             info "$STR_CODEX_API_KEY_HINT"
             local _retry_key=""
-            read -r -p "  API Key: " _retry_key
+            read -rs -p "  API Key: " _retry_key
+            printf "\n"
             if [[ -n "$_retry_key" ]]; then
               info "$STR_CODEX_API_KEY_VERIFYING"
               if _verify_openai_key "$_retry_key"; then

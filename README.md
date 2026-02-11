@@ -248,7 +248,7 @@ cd claude-code-starter-kit
 ### Full（フル）
 
 - **おすすめ**: すべての機能を使いたい人
-- **含まれるもの**: 上記すべて + 全フック + Codex MCP + Ghostty セットアップ
+- **含まれるもの**: 上記すべて + 全フック + Codex MCP + Ghostty セットアップ（macOS のみ）
 - **特徴**: フル装備
 
 | 機能 | Minimal | Standard | Full |
@@ -259,8 +259,8 @@ cd claude-code-starter-kit
 | スキル（専門知識） | - | ✅ | ✅ |
 | フック（安全装置） | - | 主要 | 全部 |
 | メモリ（記憶の永続化） | - | ✅ | ✅ |
-| Codex MCP（外部 AI 連携） | - | - | ✅ |
-| Ghostty（ターミナル設定） | - | - | ✅ |
+| Codex MCP（外部 AI 連携） | - | 任意 | ✅ |
+| Ghostty（ターミナル設定） | - | - | macOS のみ |
 
 ---
 
