@@ -570,7 +570,24 @@ _setup_codex_mcp() {
     fi
   fi
 
-  # Step 3: Register MCP server with Claude Code (with API key in env)
+  # Step 3: Log in to Codex CLI with the API key
+  if command -v codex &>/dev/null && [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    printf "\n"
+    # Check if already logged in
+    if codex login status &>/dev/null; then
+      ok "$STR_CODEX_LOGIN_ALREADY"
+    else
+      info "$STR_CODEX_LOGIN_RUNNING"
+      if printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key &>/dev/null; then
+        ok "$STR_CODEX_LOGIN_DONE"
+      else
+        warn "$STR_CODEX_LOGIN_FAILED"
+        info "  printenv OPENAI_API_KEY | codex login --with-api-key"
+      fi
+    fi
+  fi
+
+  # Step 4: Register MCP server with Claude Code (with API key in env)
   if command -v claude &>/dev/null && command -v codex &>/dev/null; then
     printf "\n"
     local _current_key="${OPENAI_API_KEY:-}"
@@ -603,7 +620,7 @@ _setup_codex_mcp() {
     fi
   fi
 
-  # Step 4: End-to-end smoke test (retry loop)
+  # Step 5: End-to-end smoke test (retry loop)
   if command -v codex &>/dev/null; then
     while true; do
       printf "\n"
@@ -630,7 +647,10 @@ _setup_codex_mcp() {
                 ok "$STR_CODEX_API_KEY_VALID"
                 _save_openai_key "$_retry_key" "$_rc_file"
                 ok "$STR_CODEX_API_KEY_SAVED ($_rc_file)"
-                # Re-register MCP with updated key
+                # Re-login and re-register MCP with updated key
+                if command -v codex &>/dev/null; then
+                  printf '%s' "$_retry_key" | codex login --with-api-key &>/dev/null || true
+                fi
                 if command -v claude &>/dev/null; then
                   claude mcp remove codex 2>/dev/null || true
                   claude mcp add codex -e "OPENAI_API_KEY=${_retry_key}" -- codex mcp-server 2>/dev/null || true
@@ -645,7 +665,8 @@ _setup_codex_mcp() {
           *)
             warn "$STR_CODEX_E2E_SKIP_HINT"
             info "  1. export OPENAI_API_KEY=\"your-api-key-here\""
-            info "  2. claude mcp add codex -e OPENAI_API_KEY=sk-... -- codex mcp-server"
+            info "  2. printenv OPENAI_API_KEY | codex login --with-api-key"
+            info "  3. claude mcp add codex -e OPENAI_API_KEY=sk-... -- codex mcp-server"
             break
             ;;
         esac
