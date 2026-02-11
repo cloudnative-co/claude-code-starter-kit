@@ -293,8 +293,12 @@ deploy_hook_scripts
 # Ghostty terminal setup
 # ---------------------------------------------------------------------------
 if is_true "${ENABLE_GHOSTTY_SETUP:-false}"; then
-  section "Setting up Ghostty terminal"
-  setup_ghostty "$PROJECT_DIR/features/ghostty/config.template"
+  if is_msys; then
+    info "Ghostty is not supported on Windows. Skipping."
+  else
+    section "Setting up Ghostty terminal"
+    setup_ghostty "$PROJECT_DIR/features/ghostty/config.template"
+  fi
 fi
 
 write_manifest
