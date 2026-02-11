@@ -141,19 +141,33 @@ exec bash "$INSTALL_DIR/setup.sh" </dev/tty
     Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
 
     Write-Host ""
-    Write-Ok "Setup complete!"
+    Write-Ok "Setup complete! / セットアップ完了！"
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  Next Step / " -ForegroundColor White -NoNewline
-    Write-Host "次のステップ" -ForegroundColor White
+    Write-Host "  Claude Code の始め方" -ForegroundColor White
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Info "Open Git Bash and run 'claude' in your project directory."
-    Write-Info "Git Bash を開いてプロジェクトディレクトリで 'claude' を実行してください。"
+    Write-Host "  1. " -ForegroundColor Green -NoNewline
+    Write-Host "スタートメニューで「Git Bash」と検索して起動"
+    Write-Host "     (Search 'Git Bash' in the Start menu and open it)" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  2. " -ForegroundColor Green -NoNewline
+    Write-Host "作業したいフォルダに移動"
+    Write-Host "     例: " -NoNewline -ForegroundColor DarkGray
+    Write-Host "cd ~/Documents/my-project" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  3. " -ForegroundColor Green -NoNewline
+    Write-Host "以下のコマンドを入力して Enter"
+    Write-Host "     claude" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Warn "注意: この PowerShell ウィンドウでは claude は使えません。"
+    Write-Warn "      必ず Git Bash から実行してください。"
     Write-Host ""
     Write-Host "----------------------------------------" -ForegroundColor DarkGray
-    Write-Info "To uninstall / アンインストール:"
-    Write-Host "  ~/.claude-starter-kit/uninstall.sh" -ForegroundColor Yellow
+    Write-Host "  アンインストール (Git Bash で実行):" -ForegroundColor DarkGray
+    Write-Host "  ~/.claude-starter-kit/uninstall.sh" -ForegroundColor DarkGray
     Write-Host ""
 }
 
