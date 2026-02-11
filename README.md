@@ -96,7 +96,7 @@ Claude Code をインストールしただけでは、まっさらな状態で�
 | 対話型ウィザード | 質問に答えるだけで最適な設定が選べる |
 | 3 つのプロファイル | 自分に合ったレベルの設定を選択 |
 | 日本語対応 | ウィザードもドキュメントも日本語 OK |
-| Ghostty ターミナル | 高機能ターミナルの自動インストール・設定 |
+| Ghostty ターミナル（macOS のみ） | 高機能ターミナルの自動インストール・設定 |
 | 非対話モード | CI/CD や自動化にも対応 |
 | クリーンアンインストール | 追加したものだけを安全に削除 |
 
@@ -217,7 +217,7 @@ cd claude-code-starter-kit
 2. プロファイル    → Minimal / Standard / Full / Custom
 3. Codex MCP       → 外部AIツール連携（わからなければ「いいえ」でOK）
 4. エディタ        → VS Code / Cursor / Zed / Neovim / なし
-5. Ghostty         → ターミナルアプリの自動設定（Full/Custom のみ）
+5. Ghostty         → ターミナルアプリの自動設定（macOS のみ・Full/Custom）
 6. フック          → 安全装置の選択
 7. プラグイン      → 追加機能の選択
 8. コミット帰属    → AI との共同作業を記録するか
@@ -315,9 +315,9 @@ Claude Code のチャットで `/` に続けて入力します。
 | Strategic Compact | 適切なタイミングでコンテキスト整理を提案 |
 | PR 作成ログ | Pull Request の URL を記録 |
 
-### 🖥️ Ghostty ターミナル
+### 🖥️ Ghostty ターミナル（macOS のみ）
 
-**Ghostty** は、高速で美しいターミナルアプリです。
+**Ghostty** は、高速で美しいターミナルアプリです（macOS のみ対応）。
 Full プロファイル、または `--ghostty=true` オプションで有効にすると：
 
 - Ghostty アプリを自動インストール（Homebrew 経由）
@@ -385,13 +385,13 @@ CI/CD（自動デプロイ）やチーム全員の環境を統一したい場合
 
 > Standard プロファイル、日本語、VS Code エディタで自動セットアップします。
 
-### Ghostty も一緒にセットアップ
+### Ghostty も一緒にセットアップ（macOS のみ）
 
 ```bash
 ./setup.sh --non-interactive --ghostty=true
 ```
 
-> Ghostty ターミナルのインストールと設定も含めてセットアップします。
+> Ghostty ターミナルのインストールと設定も含めてセットアップします（macOS のみ）。
 
 ### すべてのオプションを細かく指定
 
@@ -553,7 +553,7 @@ claude-code-starter-kit/
 │   ├── colors.sh           # 色付き表示
 │   ├── detect.sh           # OS の自動検出
 │   ├── prerequisites.sh    # 必要ツールの確認・インストール
-│   ├── ghostty.sh          # Ghostty セットアップ
+│   ├── ghostty.sh          # Ghostty セットアップ（macOS のみ）
 │   ├── template.sh         # テキスト置換エンジン
 │   └── json-builder.sh     # JSON ファイルの組み立て
 ├── wizard/                 # 対話型ウィザード
@@ -565,7 +565,7 @@ claude-code-starter-kit/
 │   ├── standard.conf       # Standard プロファイル
 │   └── full.conf           # Full プロファイル
 ├── features/               # オプション機能
-│   ├── ghostty/            # Ghostty ターミナル設定
+│   ├── ghostty/            # Ghostty ターミナル設定（macOS のみ）
 │   └── .../                # 各種フック定義
 ├── i18n/                   # 多言語対応
 │   ├── en/                 # 英語
