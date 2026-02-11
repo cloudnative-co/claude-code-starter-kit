@@ -763,7 +763,17 @@ _setup_codex_mcp() {
 }
 
 if is_true "${ENABLE_CODEX_MCP:-false}"; then
-  _setup_codex_mcp
+  # Confirm before starting Codex MCP setup (in case saved config had it enabled)
+  printf "\n"
+  info "${STR_CODEX_SETUP_CONFIRM:-Start Codex MCP setup?}"
+  printf "  1) %s\n" "${STR_CODEX_SETUP_CONFIRM_YES:-Yes}"
+  printf "  2) %s\n" "${STR_CODEX_SETUP_CONFIRM_NO:-No, skip}"
+  _codex_confirm=""
+  read -r -p "${STR_CHOICE:-Choice}: " _codex_confirm
+  case "$_codex_confirm" in
+    1) _setup_codex_mcp ;;
+    *) info "${STR_CODEX_SETUP_SKIPPED:-Codex MCP setup skipped}" ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------

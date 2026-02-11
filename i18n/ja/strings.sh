@@ -189,6 +189,10 @@ STR_CODEX_E2E_RETRY="API キーを再入力してもう一度試す"
 STR_CODEX_E2E_SKIP="後で手動で設定する"
 STR_CODEX_E2E_SKIP_HINT="後で以下を実行して Codex MCP を設定してください："
 STR_CODEX_SETUP_DONE="Codex MCP のセットアップが完了しました"
+STR_CODEX_SETUP_CONFIRM="Codex MCP のセットアップを開始しますか？（ChatGPT Plus + OpenAI API キーが必要です）"
+STR_CODEX_SETUP_CONFIRM_YES="はい、セットアップする"
+STR_CODEX_SETUP_CONFIRM_NO="いいえ、スキップする"
+STR_CODEX_SETUP_SKIPPED="Codex MCP のセットアップをスキップしました"
 
 # Errors
 STR_ERR_JQ="jq が必要ですがインストールされていません。"

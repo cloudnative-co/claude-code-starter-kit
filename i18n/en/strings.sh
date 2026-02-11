@@ -191,6 +191,10 @@ STR_CODEX_E2E_RETRY="Re-enter API key and try again"
 STR_CODEX_E2E_SKIP="Configure manually later"
 STR_CODEX_E2E_SKIP_HINT="To set up Codex MCP later, run the following:"
 STR_CODEX_SETUP_DONE="Codex MCP setup complete"
+STR_CODEX_SETUP_CONFIRM="Start Codex MCP setup? (Requires ChatGPT Plus + OpenAI API key)"
+STR_CODEX_SETUP_CONFIRM_YES="Yes, set it up"
+STR_CODEX_SETUP_CONFIRM_NO="No, skip"
+STR_CODEX_SETUP_SKIPPED="Codex MCP setup skipped"
 
 # Errors
 STR_ERR_JQ="jq is required but not installed."

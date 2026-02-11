@@ -784,11 +784,13 @@ run_wizard() {
       fi
       # User chose to edit - fall through to full wizard
     fi
-    # Reset for fresh start
+    # Reset for fresh start (all user choices cleared so wizard asks again)
     LANGUAGE=""
     PROFILE=""
     EDITOR_CHOICE=""
     COMMIT_ATTRIBUTION=""
+    ENABLE_CODEX_MCP=""
+    ENABLE_GHOSTTY_SETUP=""
   fi
 
   # Interactive wizard loop
@@ -809,11 +811,13 @@ run_wizard() {
     _step_confirm
 
     if [[ "$WIZARD_RESULT" == "edit" ]]; then
-      # Reset for re-run
+      # Reset for re-run (all user choices cleared so wizard asks again)
       LANGUAGE=""
       PROFILE=""
       EDITOR_CHOICE=""
       COMMIT_ATTRIBUTION=""
+      ENABLE_CODEX_MCP=""
+      ENABLE_GHOSTTY_SETUP=""
       continue
     fi
     break
