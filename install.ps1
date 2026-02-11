@@ -225,7 +225,7 @@ if [[ "$(id -u)" -eq 0 ]]; then
     if [[ -n "${_normal_user:-}" ]]; then
         echo "[INFO] root で実行中。ユーザー $_normal_user に切り替えます..."
         echo "[INFO] Running as root. Switching to user: $_normal_user"
-        if sudo -H -u "$_normal_user" bash "$0"; then
+        if sudo -i -H -u "$_normal_user" bash "$0"; then
             exit 0
         fi
         echo "[WARN] ユーザー切り替えに失敗。root で続行します。"

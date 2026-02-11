@@ -383,6 +383,10 @@ else
   ok "$STR_CLI_ALREADY"
 fi
 
+# Always ensure ~/.local/bin is in PATH config (even if CLI was found via
+# inherited PATH from another user or transient session)
+_ensure_local_bin_in_path
+
 # ---------------------------------------------------------------------------
 # Install plugins
 # ---------------------------------------------------------------------------
