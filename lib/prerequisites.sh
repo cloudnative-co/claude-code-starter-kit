@@ -39,7 +39,8 @@ _ensure_homebrew() {
   fi
 
   # Not installed at all - try to install it
-  info "Homebrew not found. Installing Homebrew..."
+  info "Homebrew が見つかりません。インストールしています... / Homebrew not found. Installing..."
+  info "パスワードの入力を求められる場合があります / You may be prompted for your password"
   if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
     # Add to PATH for this session
     if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -54,8 +55,9 @@ _ensure_homebrew() {
   else
     # Homebrew install failed (e.g., no admin privileges) - not fatal,
     # individual checks will use alternative installers (nvm for Node.js)
+    warn "Homebrew をインストールできませんでした（管理者権限が必要な場合があります）"
     warn "Homebrew could not be installed (admin privileges may be required)."
-    warn "Will use alternative methods for dependencies."
+    warn "代替手段で依存ツールをインストールします / Will use alternative methods for dependencies."
   fi
 }
 
@@ -278,7 +280,7 @@ check_gh() {
 
 # Run all prerequisite checks. Returns non-zero on critical failure.
 check_prerequisites() {
-  section "Checking prerequisites"
+  section "必要なツールを確認中 / Checking prerequisites"
 
   # macOS: try to ensure Homebrew is available (not fatal if it fails)
   _ensure_homebrew
@@ -294,11 +296,11 @@ check_prerequisites() {
   check_gh
 
   if [[ "$failed" -ne 0 ]]; then
-    error "Some required dependencies could not be installed."
-    error "Please install them manually and re-run the setup."
+    error "一部の必須ツールをインストールできませんでした。手動でインストールして再実行してください。"
+    error "Some required dependencies could not be installed. Please install them manually and re-run."
     return 1
   fi
 
-  ok "All required prerequisites satisfied"
+  ok "必要なツールはすべて揃っています / All prerequisites satisfied"
   return 0
 }
