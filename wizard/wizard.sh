@@ -391,10 +391,8 @@ _step_profile() {
 }
 
 _step_codex() {
-  # Already set by CLI or profile
-  if [[ -n "$ENABLE_CODEX_MCP" && "$PROFILE" != "custom" ]]; then return; fi
-  # Only ask for custom or full profiles
-  if [[ "$PROFILE" != "custom" && "$PROFILE" != "full" ]]; then return; fi
+  # Skip if explicitly set by CLI arg
+  if [[ "$_CLI_OVERRIDES" == *"ENABLE_CODEX_MCP"* ]]; then return; fi
 
   section "$STR_CODEX_TITLE"
   printf "  1) %s\n" "$STR_CODEX_YES"
