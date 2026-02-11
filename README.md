@@ -3,7 +3,7 @@
 # Claude Code Starter Kit
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform: macOS/Linux/Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)](#-インストール)
+[![Platform: macOS/Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-blue.svg)](#-インストール)
 
 Claude Code を初めて使う人でも、**ワンコマンドで開発環境を整えられる** セットアップキットです。
 プログラミングやターミナルが初めての方にもわかるように、やさしく説明しています。
@@ -56,7 +56,6 @@ Claude Code を初めて使う人でも、**ワンコマンドで開発環境を
 |---|---|
 | **macOS** | Spotlight（`Cmd + Space`）で「ターミナル」と入力して起動 |
 | **Windows** | セットアップ時は「PowerShell」、セットアップ後は「**Windows Terminal + WSL**」を使います（[使い方はこちら](#windows-での使い方)） |
-| **Linux** | `Ctrl + Alt + T` でターミナルが開きます |
 
 ### このキットは何をしてくれるの？
 
@@ -77,7 +76,7 @@ Claude Code をインストールしただけでは、まっさらな状態で�
 
 | 項目 | 条件 |
 |---|---|
-| パソコン | Windows 10以降 / macOS / Linux（64bit） |
+| パソコン | macOS / Windows 10 以降（64bit） |
 | インターネット | 必須（ツールのダウンロードに使います） |
 | 空き容量 | 1GB 以上 |
 | メモリ | 4GB 以上（8GB あると安心） |
@@ -85,6 +84,8 @@ Claude Code をインストールしただけでは、まっさらな状態で�
 
 > **補足**: Windows の場合、WSL2（Windows Subsystem for Linux）を使ってセットアップを行います。
 > WSL2 が入っていなくても、セットアップ時に自動でインストールされます（管理者権限が必要です）。
+
+> **Linux について**: このキットは macOS と Windows を対象としています。Linux で利用する場合は、ディストリビューション（Ubuntu, Fedora 等）やデスクトップ環境（GNOME, KDE 等）に応じた調整が必要になる場合があります。方法 1 のワンライナーまたは方法 3 の手動インストールをお試しください。
 
 ---
 
@@ -169,10 +170,10 @@ Claude Code をインストールしただけでは、まっさらな状態で�
 
 ## 🚀 インストール
 
-- **Mac / Linux の方** → 方法 1 をお使いください（もっとも簡単でおすすめ）
+- **Mac の方** → 方法 1 をお使いください（もっとも簡単でおすすめ）
 - **Windows の方** → 方法 2 をお使いください
 
-### 方法 1: ワンライナー（Mac / Linux / WSL）
+### 方法 1: ワンライナー（Mac）
 
 **ステップ 1**: ターミナルを開きます（上の「ターミナルとは？」を参照）
 

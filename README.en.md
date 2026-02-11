@@ -3,7 +3,7 @@
 [日本語 README](README.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform: macOS/Linux/Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)](#installation)
+[![Platform: macOS/Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-blue.svg)](#installation)
 
 One-command setup of a complete Claude Code development environment with an interactive wizard.
 
@@ -57,6 +57,8 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 > **Note**: Prices shown are as of 2025. Check [claude.ai/pricing](https://claude.ai/pricing) for current rates.
 > Using Codex MCP (OpenAI integration) requires a separate ChatGPT Plus subscription ($20+/mo) and OpenAI API usage fees.
 
+> **Linux**: This kit is designed for macOS and Windows. If you want to use it on Linux, adjustments may be needed depending on your distribution (Ubuntu, Fedora, etc.) and desktop environment (GNOME, KDE, etc.). Try the one-liner or manual installation method.
+
 ### For individuals
 
 Subscribe to [Claude Pro or Max](https://claude.ai/pricing). Create an account at [claude.ai](https://claude.ai) and upgrade your plan.
@@ -78,7 +80,7 @@ When you run `claude` for the first time, you'll be asked to choose an authentic
 
 ## Installation
 
-### One-liner (macOS / Linux / WSL)
+### One-liner (macOS)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
