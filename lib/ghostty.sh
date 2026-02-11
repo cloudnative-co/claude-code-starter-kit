@@ -193,6 +193,11 @@ deploy_ghostty_config() {
 # Main entry point
 # ---------------------------------------------------------------------------
 setup_ghostty() {
+  # Ghostty is macOS only — skip entirely on WSL/MSYS
+  if is_wsl || is_msys; then
+    return 0
+  fi
+
   local template_file="${1:-}"
   local incomplete=""
 

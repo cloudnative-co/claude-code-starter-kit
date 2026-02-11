@@ -452,7 +452,7 @@ fi
 _verify_openai_key() {
   local key="$1"
   local http_code
-  http_code="$(curl -s -o /dev/null -w '%{http_code}' \
+  http_code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
     -H "Authorization: Bearer $key" \
     https://api.openai.com/v1/models 2>/dev/null || echo "000")"
   [[ "$http_code" == "200" ]]
@@ -481,10 +481,10 @@ _test_codex_mcp() {
   fi
   # Test /v1/models (basic auth) and /v1/responses (Codex endpoint)
   local _models_code _responses_code
-  _models_code="$(curl -s -o /dev/null -w '%{http_code}' \
+  _models_code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
     -H "Authorization: Bearer $_key" \
     https://api.openai.com/v1/models 2>/dev/null || echo "000")"
-  _responses_code="$(curl -s -o /dev/null -w '%{http_code}' \
+  _responses_code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Authorization: Bearer $_key" \
     -H "Content-Type: application/json" \
@@ -554,8 +554,6 @@ _prompt_openai_key() {
 _setup_codex_mcp() {
   printf "\n"
   section "$STR_CODEX_SETUP_TITLE"
-  warn "$STR_CODEX_SETUP_NOTE"
-  printf "\n"
 
   # On MSYS/Git Bash, ensure npm global bin is in PATH
   if is_msys; then
@@ -565,6 +563,19 @@ _setup_codex_mcp() {
       [[ -n "$_npm_dir" ]] && [[ -d "$_npm_dir" ]] && export PATH="$_npm_dir:$PATH"
     done
   fi
+
+  # Fast path: if everything is already configured, skip all slow checks
+  if command -v codex &>/dev/null \
+    && [[ -n "${OPENAI_API_KEY:-}" ]] \
+    && command -v claude &>/dev/null \
+    && claude mcp list 2>/dev/null | grep -q "codex" 2>/dev/null; then
+    ok "$STR_CODEX_CLI_ALREADY"
+    ok "$STR_CODEX_MCP_ALREADY"
+    return
+  fi
+
+  warn "$STR_CODEX_SETUP_NOTE"
+  printf "\n"
 
   # Step 1: Install Codex CLI
   if command -v codex &>/dev/null; then
@@ -644,11 +655,11 @@ _setup_codex_mcp() {
   if command -v codex &>/dev/null && [[ -n "${OPENAI_API_KEY:-}" ]]; then
     printf "\n"
     # Check if already logged in
-    if codex login status &>/dev/null; then
+    if timeout 15 codex login status &>/dev/null 2>&1; then
       ok "$STR_CODEX_LOGIN_ALREADY"
     else
       info "$STR_CODEX_LOGIN_RUNNING"
-      if printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key &>/dev/null; then
+      if printf '%s' "$OPENAI_API_KEY" | timeout 30 codex login --with-api-key &>/dev/null; then
         ok "$STR_CODEX_LOGIN_DONE"
       else
         warn "$STR_CODEX_LOGIN_FAILED"
