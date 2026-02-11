@@ -574,20 +574,35 @@ _setup_codex_mcp() {
     fi
   fi
 
-  # Step 3: Register MCP server with Claude Code
+  # Step 3: Register MCP server with Claude Code (with API key in env)
   if command -v claude &>/dev/null && command -v codex &>/dev/null; then
     printf "\n"
-    local _mcp_list
-    _mcp_list="$(claude mcp list 2>/dev/null || true)"
-    if echo "$_mcp_list" | grep -q "codex" 2>/dev/null; then
-      ok "$STR_CODEX_MCP_ALREADY"
-    else
+    local _current_key="${OPENAI_API_KEY:-}"
+    # Always (re-)register to ensure the API key is embedded in MCP config
+    if [[ -n "$_current_key" ]]; then
       info "$STR_CODEX_MCP_REGISTERING"
-      if claude mcp add codex -- codex mcp-server 2>/dev/null; then
+      # Remove existing registration first (ignore errors)
+      claude mcp remove codex 2>/dev/null || true
+      if claude mcp add codex -e "OPENAI_API_KEY=${_current_key}" -- codex mcp-server 2>/dev/null; then
         ok "$STR_CODEX_MCP_REGISTERED"
       else
         warn "$STR_CODEX_MCP_REG_FAILED"
-        info "  claude mcp add codex -- codex mcp-server"
+        info "  claude mcp add codex -e OPENAI_API_KEY=sk-... -- codex mcp-server"
+      fi
+    else
+      # No key available — register without env (user must set it themselves)
+      local _mcp_list
+      _mcp_list="$(claude mcp list 2>/dev/null || true)"
+      if echo "$_mcp_list" | grep -q "codex" 2>/dev/null; then
+        ok "$STR_CODEX_MCP_ALREADY"
+      else
+        info "$STR_CODEX_MCP_REGISTERING"
+        if claude mcp add codex -- codex mcp-server 2>/dev/null; then
+          ok "$STR_CODEX_MCP_REGISTERED"
+        else
+          warn "$STR_CODEX_MCP_REG_FAILED"
+          info "  claude mcp add codex -e OPENAI_API_KEY=sk-... -- codex mcp-server"
+        fi
       fi
     fi
   fi
@@ -619,6 +634,12 @@ _setup_codex_mcp() {
                 ok "$STR_CODEX_API_KEY_VALID"
                 _save_openai_key "$_retry_key" "$_rc_file"
                 ok "$STR_CODEX_API_KEY_SAVED ($_rc_file)"
+                # Re-register MCP with updated key
+                if command -v claude &>/dev/null; then
+                  claude mcp remove codex 2>/dev/null || true
+                  claude mcp add codex -e "OPENAI_API_KEY=${_retry_key}" -- codex mcp-server 2>/dev/null || true
+                  ok "$STR_CODEX_MCP_REGISTERED"
+                fi
               else
                 warn "$STR_CODEX_API_KEY_INVALID"
               fi
@@ -628,7 +649,7 @@ _setup_codex_mcp() {
           *)
             warn "$STR_CODEX_E2E_SKIP_HINT"
             info "  1. export OPENAI_API_KEY=\"your-api-key-here\""
-            info "  2. claude mcp add codex -- codex mcp-server"
+            info "  2. claude mcp add codex -e OPENAI_API_KEY=sk-... -- codex mcp-server"
             break
             ;;
         esac
