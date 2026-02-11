@@ -23,6 +23,24 @@ warn()  { printf "${YELLOW}[WARN]${NC} %s\n" "$*" >&2; }
 error() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; }
 
 # ---------------------------------------------------------------------------
+# Safety guard: prevent rm -rf on dangerous paths
+# ---------------------------------------------------------------------------
+_safe_install_dir() {
+  local dir="$1"
+  case "$dir" in
+    /|/bin|/etc|/usr|/var|/tmp|/home|/root)
+      return 1 ;;
+  esac
+  [[ "$dir" == "$HOME" ]] && return 1
+  return 0
+}
+
+if ! _safe_install_dir "$INSTALL_DIR"; then
+  error "Refusing to use INSTALL_DIR='$INSTALL_DIR' (dangerous path)"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
 check_required() {

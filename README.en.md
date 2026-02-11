@@ -307,6 +307,14 @@ cd claude-code-starter-kit
 
 Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manifest.json`) are removed. User-added files are preserved.
 
+## Development
+
+Shell scripts are statically analyzed with [ShellCheck](https://www.shellcheck.net/). It runs automatically via GitHub Actions on PRs. To run locally:
+
+```bash
+shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
+```
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

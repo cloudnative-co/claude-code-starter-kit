@@ -899,6 +899,16 @@ claude-code-starter-kit/
 
 ---
 
+## 🛠 開発者向け
+
+シェルスクリプトの静的解析には [ShellCheck](https://www.shellcheck.net/) を使用しています。PR 作成時に GitHub Actions で自動実行されます。ローカルで実行する場合:
+
+```bash
+shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
+```
+
+---
+
 ## 📄 ライセンス
 
 MIT ライセンスです。詳しくは [LICENSE](LICENSE) をご確認ください。
