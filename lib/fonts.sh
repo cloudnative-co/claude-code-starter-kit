@@ -20,6 +20,7 @@ _install_font_windows() {
   local ps_script
   ps_script='
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 $fontDir = "$env:LOCALAPPDATA\Microsoft\Windows\Fonts"
 if (-not (Test-Path $fontDir)) { New-Item -ItemType Directory -Path $fontDir -Force | Out-Null }
 $tmpDir = Join-Path $env:TEMP "claude-fonts-install"
@@ -47,7 +48,8 @@ try {
 }
 '
 
-  if powershell.exe -NoProfile -Command "$ps_script" 2>/dev/null | grep -q "OK"; then
+  # Timeout after 120s to prevent hanging on slow downloads
+  if timeout 120 powershell.exe -NoProfile -Command "$ps_script" 2>/dev/null | grep -q "OK"; then
     return 0
   else
     return 1
@@ -63,7 +65,8 @@ try {
 _is_font_installed_windows() {
   local pattern="$1"
   local result
-  result="$(powershell.exe -NoProfile -Command '
+  result="$(timeout 15 powershell.exe -NoProfile -Command '
+    $ProgressPreference = "SilentlyContinue"
     $fontDir = "$env:LOCALAPPDATA\Microsoft\Windows\Fonts"
     if ((Test-Path $fontDir) -and (Get-ChildItem -Path $fontDir -Filter "'"$pattern"'" -ErrorAction SilentlyContinue)) {
       Write-Output "YES"
@@ -212,7 +215,7 @@ try {
 '
 
   local result
-  result="$(powershell.exe -NoProfile -Command "$ps_script" 2>/dev/null | tr -d '\r')"
+  result="$(timeout 15 powershell.exe -NoProfile -Command "$ps_script" 2>/dev/null | tr -d '\r')"
 
   case "$result" in
     OK)        return 0 ;;
