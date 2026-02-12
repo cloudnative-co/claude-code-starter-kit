@@ -38,10 +38,23 @@ _ensure_homebrew() {
     return 0
   fi
 
-  # Not installed - not fatal at this stage.
-  # Homebrew will be installed later only if the selected profile requires it
-  # (e.g., Ghostty setup). Individual checks use alternative installers (nvm for Node.js).
-  return 0
+  # Not installed — auto-install Homebrew
+  info "Homebrew not found. Installing..."
+  if NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+    # Add newly installed Homebrew to PATH
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -x /usr/local/bin/brew ]]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
+    if command -v brew &>/dev/null; then
+      ok "Homebrew installed"
+      return 0
+    fi
+  fi
+
+  warn "Homebrew のインストールに失敗しました — フォントの自動インストールが制限されます"
+  return 0  # Not fatal — fonts will fall back to manual download hints
 }
 
 # ---------------------------------------------------------------------------
