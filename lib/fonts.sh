@@ -7,6 +7,33 @@ set -euo pipefail
 FONTS_INCOMPLETE=""
 
 # ---------------------------------------------------------------------------
+# macOS font installation helper (direct download fallback)
+# Downloads a zip, extracts matching files, copies to ~/Library/Fonts/.
+# Args: $1=download_url  $2=zip_filename  $3=file_filter (e.g. "*.ttf")
+# ---------------------------------------------------------------------------
+_install_font_macos() {
+  local font_url="$1"
+  local font_zip_name="$2"
+  local font_filter="$3"
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local zip_path="$tmp_dir/$font_zip_name"
+
+  mkdir -p "$HOME/Library/Fonts"
+
+  if curl -fsSL "$font_url" -o "$zip_path" && unzip -qo "$zip_path" -d "$tmp_dir"; then
+    # shellcheck disable=SC2086
+    find "$tmp_dir" -name "$font_filter" -exec cp {} "$HOME/Library/Fonts/" \;
+    rm -rf "$tmp_dir"
+    return 0
+  fi
+
+  rm -rf "$tmp_dir"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Windows font installation helper (via powershell.exe)
 # Downloads a zip, extracts .ttf files, installs to user-level font directory.
 # Works from both WSL and MSYS/Git Bash.
@@ -84,24 +111,30 @@ install_ibm_plex_mono() {
 
   case "$uname_s" in
     Darwin)
-      if ! command -v brew &>/dev/null; then
-        warn "${STR_FONT_BREW_MISSING:-Homebrew not available}"
-        info "  ${STR_FONT_IBM_MANUAL:-https://fonts.google.com/specimen/IBM+Plex+Mono}"
-        return 1
+      # Already installed via brew?
+      if command -v brew &>/dev/null && brew list --cask font-ibm-plex-mono &>/dev/null 2>&1; then
+        ok "${STR_FONT_IBM_ALREADY:-IBM Plex Mono is already installed}"
+        return 0
       fi
-      if brew list --cask font-ibm-plex-mono &>/dev/null 2>&1; then
+      # Already installed via direct download?
+      if ls "$HOME/Library/Fonts"/IBMPlex*.ttf &>/dev/null 2>&1; then
         ok "${STR_FONT_IBM_ALREADY:-IBM Plex Mono is already installed}"
         return 0
       fi
       info "${STR_FONT_IBM_INSTALLING:-Installing IBM Plex Mono...}"
-      if brew install --cask font-ibm-plex-mono; then
+      # Try brew first, fall back to direct download
+      if command -v brew &>/dev/null && brew install --cask font-ibm-plex-mono 2>/dev/null; then
         ok "${STR_FONT_IBM_INSTALLED:-IBM Plex Mono installed}"
         return 0
-      else
-        warn "${STR_FONT_IBM_FAILED:-Failed to install IBM Plex Mono}"
-        info "  ${STR_FONT_IBM_MANUAL:-https://fonts.google.com/specimen/IBM+Plex+Mono}"
-        return 1
       fi
+      info "  brew failed, downloading directly..."
+      if _install_font_macos "https://fonts.google.com/download?family=IBM+Plex+Mono" "IBMPlexMono.zip" "*.ttf"; then
+        ok "${STR_FONT_IBM_INSTALLED:-IBM Plex Mono installed}"
+        return 0
+      fi
+      warn "${STR_FONT_IBM_FAILED:-Failed to install IBM Plex Mono}"
+      info "  ${STR_FONT_IBM_MANUAL:-https://fonts.google.com/specimen/IBM+Plex+Mono}"
+      return 1
       ;;
     *)
       # WSL or MSYS: install to Windows side via PowerShell
@@ -137,24 +170,31 @@ install_hackgen_nf() {
 
   case "$uname_s" in
     Darwin)
-      if ! command -v brew &>/dev/null; then
-        warn "${STR_FONT_BREW_MISSING:-Homebrew not available}"
-        info "  ${STR_FONT_HACKGEN_MANUAL:-https://github.com/yuru7/HackGen/releases}"
-        return 1
+      # Already installed via brew?
+      if command -v brew &>/dev/null && brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
+        ok "${STR_FONT_HACKGEN_ALREADY:-HackGen NF is already installed}"
+        return 0
       fi
-      if brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
+      # Already installed via direct download?
+      if ls "$HOME/Library/Fonts"/HackGen*NF*.ttf &>/dev/null 2>&1; then
         ok "${STR_FONT_HACKGEN_ALREADY:-HackGen NF is already installed}"
         return 0
       fi
       info "${STR_FONT_HACKGEN_INSTALLING:-Installing HackGen NF...}"
-      if brew install --cask font-hackgen-nerd; then
+      # Try brew first, fall back to direct download
+      if command -v brew &>/dev/null && brew install --cask font-hackgen-nerd 2>/dev/null; then
         ok "${STR_FONT_HACKGEN_INSTALLED:-HackGen NF installed}"
         return 0
-      else
-        warn "${STR_FONT_HACKGEN_FAILED:-Failed to install HackGen NF}"
-        info "  ${STR_FONT_HACKGEN_MANUAL:-https://github.com/yuru7/HackGen/releases}"
-        return 1
       fi
+      info "  brew failed, downloading directly..."
+      local hackgen_url="https://github.com/yuru7/HackGen/releases/download/v2.10.0/HackGen_NF_v2.10.0.zip"
+      if _install_font_macos "$hackgen_url" "HackGen_NF.zip" "*.ttf"; then
+        ok "${STR_FONT_HACKGEN_INSTALLED:-HackGen NF installed}"
+        return 0
+      fi
+      warn "${STR_FONT_HACKGEN_FAILED:-Failed to install HackGen NF}"
+      info "  ${STR_FONT_HACKGEN_MANUAL:-https://github.com/yuru7/HackGen/releases}"
+      return 1
       ;;
     *)
       if ! command -v powershell.exe &>/dev/null; then
