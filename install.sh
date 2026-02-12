@@ -43,10 +43,42 @@ fi
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
+_ensure_xcode_clt() {
+  # On macOS, /usr/bin/git exists as a shim even without Xcode CLT.
+  # "command -v git" succeeds but "git" triggers the CLT install dialog and blocks.
+  # Detect via xcode-select -p (returns non-zero when CLT is missing).
+  xcode-select -p &>/dev/null && return 0
+
+  info "Xcode Command Line Tools not found. Installing..."
+  xcode-select --install 2>/dev/null || true
+
+  info "Waiting for Xcode CLT installation to complete..."
+  info "(Please follow the dialog to install)"
+
+  local elapsed=0
+  local timeout=600  # 10 minutes
+  while ! xcode-select -p &>/dev/null; do
+    sleep 5
+    elapsed=$((elapsed + 5))
+    if [[ $elapsed -ge $timeout ]]; then
+      error "Timed out waiting for Xcode CLT installation."
+      error "Please install manually: xcode-select --install"
+      exit 1
+    fi
+  done
+
+  ok "Xcode Command Line Tools installed"
+}
+
 check_required() {
   local missing=()
-  command -v git &>/dev/null || missing+=("git")
   command -v curl &>/dev/null || missing+=("curl")
+
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    _ensure_xcode_clt
+  elif ! git --version &>/dev/null; then
+    missing+=("git")
+  fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     error "Missing required tools: ${missing[*]}"

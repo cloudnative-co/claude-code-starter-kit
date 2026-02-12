@@ -22,7 +22,7 @@ shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
 bash uninstall.sh
 ```
 
-There are no build steps, tests, or linters configured. All scripts use `set -euo pipefail`.
+All scripts use `set -euo pipefail`. ShellCheck runs automatically on PRs via `.github/workflows/shellcheck.yml`.
 
 ## Architecture
 
@@ -81,6 +81,10 @@ Each feature in `features/*/` has a `hooks.json` containing Claude Code hook def
 - **Windows (WSL/MSYS)**: `_is_font_installed_windows()` checks `%LOCALAPPDATA%\Microsoft\Windows\Fonts` first; if already present, skips download. Otherwise `_install_font_windows()` runs PowerShell to download, extract, and register fonts + HKCU registry.
 
 Windows Terminal font configuration (`_configure_windows_terminal_font()`) runs **independently of font install success** — it checks if HackGen NF font files exist on disk (via `_is_font_installed_windows`) and configures WT regardless of whether fonts were installed in this run or a previous one. This ensures re-runs always apply WT settings even when font downloads are skipped or fail. Creates `.bak` backup before modifying. Returns exit codes: 0=OK, 2=NOT_FOUND (WT not installed), 1=FAILED.
+
+### Bootstrap Safety (`install.sh`)
+
+`install.sh` validates `INSTALL_DIR` via `_safe_install_dir()` before any `rm -rf` operations. Blocks dangerous paths (`/`, `/home`, `/root`, `$HOME`, system dirs) to prevent accidental deletion when `STARTER_KIT_DIR` is overridden.
 
 ### Windows Bootstrap (`install.ps1`)
 
