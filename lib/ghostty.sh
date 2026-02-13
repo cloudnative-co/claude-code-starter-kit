@@ -90,7 +90,14 @@ install_ghostty() {
         return 1
       fi
       info "Installing Ghostty..."
-      if brew install --cask ghostty; then
+      brew install --cask ghostty 2>/dev/null || true
+      # brew may report success without installing if the cask is registered
+      # but the app was deleted. Reinstall to restore the actual .app bundle.
+      if [[ ! -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
+        info "  App not found after install, reinstalling..."
+        brew reinstall --cask ghostty || true
+      fi
+      if [[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
         # Remove macOS quarantine attribute to prevent Gatekeeper block on first launch
         xattr -d com.apple.quarantine /Applications/Ghostty.app 2>/dev/null || true
         ok "Ghostty installed"
