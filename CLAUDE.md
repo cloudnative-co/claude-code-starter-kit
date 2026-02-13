@@ -15,14 +15,17 @@ bash setup.sh
 # Non-interactive setup
 bash setup.sh --non-interactive --profile=standard --language=en --editor=vscode
 
-# Validate shell scripts
+# Validate all shell scripts
 shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
+
+# Validate a single file
+shellcheck lib/ghostty.sh
 
 # Clean uninstall (manifest-based)
 bash uninstall.sh
 ```
 
-All scripts use `set -euo pipefail`. ShellCheck runs automatically on PRs via `.github/workflows/shellcheck.yml`.
+All scripts use `set -euo pipefail`. ShellCheck (severity: warning) runs automatically on PRs via `.github/workflows/shellcheck.yml`. There is no traditional test suite (jest, pytest, etc.) — validation is ShellCheck CI only.
 
 ## Architecture
 
@@ -50,12 +53,12 @@ Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `
 
 Three profiles (`profiles/*.conf`) define feature toggles as `VAR=true/false`:
 - **minimal** — agents + rules only
-- **standard** — adds commands, skills, memory, core hooks, programming fonts
-- **full** — everything including Codex MCP, Ghostty (macOS), and programming fonts
+- **standard** — adds commands, skills, memory, core hooks, Ghostty (macOS), programming fonts
+- **full** — everything including Codex MCP
 
 ### i18n
 
-`load_strings "$LANGUAGE"` sources `i18n/{en,ja}/strings.sh`. All UI text uses `STR_*` variables.
+`load_strings "$LANGUAGE"` sources `i18n/{en,ja}/strings.sh`. All UI text uses `STR_*` variables. Each language also has `i18n/{en,ja}/CLAUDE.md.base` as templates for the user's assembled CLAUDE.md.
 
 ### Template Engine (`lib/template.sh`)
 
@@ -72,15 +75,24 @@ Wizard flow: `_load_plugins()` reads the JSON → `_init_plugins_for_profile()` 
 
 ### Hook Fragment Assembly
 
-Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings()` conditionally merges enabled features' fragments into `settings.json` via jq deep-merge (`*` operator).
+Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings()` conditionally merges enabled features' fragments into `settings.json` via jq deep-merge (`*` operator). Hook bash commands in `hooks.json` are base64-encoded to avoid JSON syntax issues.
 
-### Cross-Platform Font Installation
+### Ghostty Installation (`lib/ghostty.sh`)
 
-`lib/fonts.sh` installs IBM Plex Mono and HackGen NF via platform-specific methods:
-- **macOS**: Homebrew cask (`font-ibm-plex-mono`, `font-hackgen-nerd`)
-- **Windows (WSL/MSYS)**: `_is_font_installed_windows()` checks `%LOCALAPPDATA%\Microsoft\Windows\Fonts` first; if already present, skips download. Otherwise `_install_font_windows()` runs PowerShell to download, extract, and register fonts + HKCU registry.
+macOS only. The install flow handles several edge cases:
 
-Windows Terminal font configuration (`_configure_windows_terminal_font()`) runs **independently of font install success** — it checks if HackGen NF font files exist on disk (via `_is_font_installed_windows`) and configures WT regardless of whether fonts were installed in this run or a previous one. This ensures re-runs always apply WT settings even when font downloads are skipped or fail. Creates `.bak` backup before modifying. Returns exit codes: 0=OK, 2=NOT_FOUND (WT not installed), 1=FAILED.
+1. **Existing install detection**: Checks `[[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]` (actual binary, not just directory or `command -v`). This prevents false positives from leftover directories, broken symlinks, or unrelated CLI tools.
+2. **brew cask stale registry**: After `brew install --cask ghostty`, verifies the binary actually exists. If the cask was registered but the `.app` was deleted, falls back to `brew reinstall --cask ghostty`.
+3. **Gatekeeper quarantine**: Always runs `xattr -d com.apple.quarantine /Applications/Ghostty.app` after install (and on re-runs for existing installs) to prevent the "Apple could not verify" dialog on first launch.
+4. **HackGen NF font**: Tries brew first, falls back to direct download from GitHub Releases to `~/Library/Fonts/`.
+
+### Cross-Platform Font Installation (`lib/fonts.sh`)
+
+Installs IBM Plex Mono and HackGen NF with layered fallbacks:
+- **macOS**: Homebrew cask → direct download (`curl` + `unzip` to `~/Library/Fonts/`)
+- **Windows (WSL/MSYS)**: `_is_font_installed_windows()` checks `%LOCALAPPDATA%\Microsoft\Windows\Fonts`; `_install_font_windows()` runs PowerShell to download, extract, and register fonts + HKCU registry.
+
+Windows Terminal font configuration (`_configure_windows_terminal_font()`) runs **independently of font install success** — it checks if HackGen NF font files exist on disk and configures WT regardless of whether fonts were installed in this run or a previous one. Creates `.bak` backup before modifying. Returns exit codes: 0=OK, 2=NOT_FOUND (WT not installed), 1=FAILED.
 
 ### Bootstrap Safety (`install.sh`)
 
@@ -91,8 +103,6 @@ Windows Terminal font configuration (`_configure_windows_terminal_font()`) runs 
 PowerShell entry point for Windows. Two modes:
 - **WSL mode** (default): Ensures WSL2 + Ubuntu installed → runs bash bootstrap inside WSL → shows Windows Terminal guidance
 - **Git Bash mode** (`--git-bash`): Fallback for no-admin environments → finds/installs Git for Windows → runs setup via Git Bash
-
-Key helpers: `Test-WslInstalled`, `Test-UbuntuReady`, `Find-UbuntuDistro`, `Find-GitBash`, `Test-WindowsTerminal`.
 
 ### Manifest-Based Uninstall
 
@@ -117,7 +127,10 @@ Key helpers: `Test-WslInstalled`, `Test-UbuntuReady`, `Find-UbuntuDistro`, `Find
 - **Variable naming**: `ENABLE_*` (feature toggles), `INSTALL_*` (component flags), `STR_*` (i18n strings), `_*` prefixed functions (private/internal)
 - **Boolean handling**: `_bool_normalize()` accepts true/1/yes/on → "true". Use `is_true()` for checks.
 - **No eval**: All dynamic variable assignment uses `printf -v` and `${!var}` (indirect expansion) to prevent injection.
+- **Ghostty detection**: Use `[[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]` to detect Ghostty. Never use `-d "/Applications/Ghostty.app"` or `command -v ghostty` (both produce false positives).
 - **Platform guards for Ghostty**: Use `[[ "$(uname -s)" == "Darwin" ]]`, not `is_wsl`/`is_msys` (WSL detection can be unreliable).
+- **Font install fallback pattern**: Always try brew first, then fall back to direct download (`curl` + `unzip`) so installs succeed without Homebrew.
+- **Homebrew PATH resolution**: Use `_ghostty_ensure_brew` (not bare `command -v brew`) when brew is needed. It resolves `/opt/homebrew/bin/brew` and `/usr/local/bin/brew` paths that may not be in PATH during pipe execution (`curl | bash`).
 - **Windows interop from WSL/MSYS**: Use `powershell.exe -NoProfile -Command '...'` for Windows-side operations (font install, WT config). Always `tr -d '\r'` on output to strip CRLF.
 - **Codex MCP scope**: Always use `claude mcp add -s user` (user scope, not project scope).
 - **Timeout portability**: Use `_run_with_timeout` wrapper (macOS lacks `timeout`).
