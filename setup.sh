@@ -828,7 +828,7 @@ else
   section "$STR_FINAL_TITLE"
   _ghostty_found=false
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    if [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; then
+    if [[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
       _ghostty_found=true
     fi
   fi

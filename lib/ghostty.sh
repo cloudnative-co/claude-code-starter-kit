@@ -72,11 +72,9 @@ _backup_ghostty_config() {
 # Install Ghostty
 # ---------------------------------------------------------------------------
 install_ghostty() {
-  if [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; then
+  if [[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
     # Remove quarantine attribute if still present (e.g., previous install without this fix)
-    if [[ -d "/Applications/Ghostty.app" ]]; then
-      xattr -d com.apple.quarantine /Applications/Ghostty.app 2>/dev/null || true
-    fi
+    xattr -d com.apple.quarantine /Applications/Ghostty.app 2>/dev/null || true
     ok "$STR_GHOSTTY_ALREADY_INSTALLED"
     return 0
   fi
@@ -135,24 +133,39 @@ install_hackgen_font() {
 
   case "$uname_s" in
     Darwin)
-      if ! _ghostty_ensure_brew; then
-        warn "Homebrew is not available. Cannot install HackGen NF font."
-        info "  Install manually: https://github.com/yuru7/HackGen"
-        return 1
+      # Already installed via brew?
+      if command -v brew &>/dev/null && brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
+        ok "$STR_GHOSTTY_FONT_ALREADY"
+        return 0
       fi
-      if brew list --cask font-hackgen-nerd &>/dev/null; then
+      # Already installed via direct download?
+      # shellcheck disable=SC2086
+      if ls "$HOME/Library/Fonts"/HackGen*NF*.ttf &>/dev/null 2>&1; then
         ok "$STR_GHOSTTY_FONT_ALREADY"
         return 0
       fi
       info "Installing HackGen NF font..."
-      if brew install --cask font-hackgen-nerd; then
+      # Try brew first, fall back to direct download
+      if _ghostty_ensure_brew && brew install --cask font-hackgen-nerd 2>/dev/null; then
         ok "HackGen NF font installed"
         return 0
-      else
-        warn "Failed to install HackGen NF font."
-        info "  Install manually: https://github.com/yuru7/HackGen"
-        return 1
       fi
+      info "  brew failed, downloading directly..."
+      local hackgen_url="https://github.com/yuru7/HackGen/releases/download/v2.10.0/HackGen_NF_v2.10.0.zip"
+      local tmp_dir
+      tmp_dir="$(mktemp -d)"
+      mkdir -p "$HOME/Library/Fonts"
+      if curl -fsSL "$hackgen_url" -o "$tmp_dir/HackGen_NF.zip" \
+         && unzip -qo "$tmp_dir/HackGen_NF.zip" -d "$tmp_dir"; then
+        find "$tmp_dir" -name "*.ttf" -exec cp {} "$HOME/Library/Fonts/" \;
+        rm -rf "$tmp_dir"
+        ok "HackGen NF font installed"
+        return 0
+      fi
+      rm -rf "$tmp_dir"
+      warn "Failed to install HackGen NF font."
+      info "  Install manually: https://github.com/yuru7/HackGen"
+      return 1
       ;;
     MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*)
       warn "Automatic font installation is not supported on Windows."
