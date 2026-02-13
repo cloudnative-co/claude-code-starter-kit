@@ -73,6 +73,10 @@ _backup_ghostty_config() {
 # ---------------------------------------------------------------------------
 install_ghostty() {
   if [[ -d "/Applications/Ghostty.app" ]] || command -v ghostty &>/dev/null; then
+    # Remove quarantine attribute if still present (e.g., previous install without this fix)
+    if [[ -d "/Applications/Ghostty.app" ]]; then
+      xattr -d com.apple.quarantine /Applications/Ghostty.app 2>/dev/null || true
+    fi
     ok "$STR_GHOSTTY_ALREADY_INSTALLED"
     return 0
   fi
@@ -89,6 +93,8 @@ install_ghostty() {
       fi
       info "Installing Ghostty..."
       if brew install --cask ghostty; then
+        # Remove macOS quarantine attribute to prevent Gatekeeper block on first launch
+        xattr -d com.apple.quarantine /Applications/Ghostty.app 2>/dev/null || true
         ok "Ghostty installed"
         return 0
       else
