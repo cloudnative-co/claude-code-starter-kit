@@ -130,6 +130,7 @@ PowerShell entry point for Windows. Two modes:
 - **Ghostty detection**: Use `[[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]` to detect Ghostty. Never use `-d "/Applications/Ghostty.app"` or `command -v ghostty` (both produce false positives).
 - **Platform guards for Ghostty**: Use `[[ "$(uname -s)" == "Darwin" ]]`, not `is_wsl`/`is_msys` (WSL detection can be unreliable).
 - **Font install fallback pattern**: Always try brew first, then fall back to direct download (`curl` + `unzip`) so installs succeed without Homebrew.
+- **Keg-only brew formulas**: `brew install node@XX` etc. are keg-only (not symlinked into PATH). After install, resolve the bin dir via `brew --prefix <formula>`, export it to `PATH` for the current session, and persist it to the user's shell RC file via `_persist_node_path()`. See `lib/prerequisites.sh`.
 - **Homebrew PATH resolution**: Use `_ghostty_ensure_brew` (not bare `command -v brew`) when brew is needed. It resolves `/opt/homebrew/bin/brew` and `/usr/local/bin/brew` paths that may not be in PATH during pipe execution (`curl | bash`).
 - **Windows interop from WSL/MSYS**: Use `powershell.exe -NoProfile -Command '...'` for Windows-side operations (font install, WT config). Always `tr -d '\r'` on output to strip CRLF.
 - **Codex MCP scope**: Always use `claude mcp add -s user` (user scope, not project scope).
