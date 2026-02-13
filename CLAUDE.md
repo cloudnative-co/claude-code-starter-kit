@@ -75,7 +75,17 @@ Wizard flow: `_load_plugins()` reads the JSON → `_init_plugins_for_profile()` 
 
 ### Hook Fragment Assembly
 
-Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings()` conditionally merges enabled features' fragments into `settings.json` via jq deep-merge (`*` operator). Hook bash commands in `hooks.json` are base64-encoded to avoid JSON syntax issues.
+Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings()` conditionally merges enabled features' fragments into `settings.json` via jq deep-merge (`*` operator).
+
+Two hook styles exist:
+- **Inline**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields (e.g., `features/tmux-hooks/hooks.json`)
+- **External scripts**: `hooks.json` references a script path with `__HOME__` token (e.g., `"command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`.
+
+`build_settings_json()` in `lib/json-builder.sh` performs the merge:
+1. Deep-merge `settings-base.json` + `permissions.json` via `jq -s '.[0] * .[1]'`
+2. Iteratively merge each hook fragment via `jq --slurpfile frag "$fragment" '. * $frag[0]'`
+3. `replace_home_path()` substitutes `__HOME__` → actual `$HOME` in all string values
+4. Final `validate_json()` check before writing output
 
 ### Ghostty Installation (`lib/ghostty.sh`)
 
@@ -96,7 +106,7 @@ Windows Terminal font configuration (`_configure_windows_terminal_font()`) runs 
 
 ### Bootstrap Safety (`install.sh`)
 
-`install.sh` validates `INSTALL_DIR` via `_safe_install_dir()` before any `rm -rf` operations. Blocks dangerous paths (`/`, `/home`, `/root`, `$HOME`, system dirs) to prevent accidental deletion when `STARTER_KIT_DIR` is overridden.
+`install.sh` validates `INSTALL_DIR` via `_safe_install_dir()` before any `rm -rf` operations. Blocks dangerous paths (`/`, `/home`, `/root`, `$HOME`, system dirs, `/Applications/*`, `/Library/*`) and requires minimum depth of 3 path components. Both `install.sh` and `install.ps1` (WSL + Git Bash embedded scripts) contain identical copies of `_safe_install_dir()` — keep them in sync when modifying.
 
 ### Windows Bootstrap (`install.ps1`)
 
@@ -119,6 +129,7 @@ PowerShell entry point for Windows. Two modes:
 | `commands/` | `~/.claude/commands/` | `INSTALL_COMMANDS=true` |
 | `skills/` | `~/.claude/skills/` | `INSTALL_SKILLS=true` |
 | `memory/` | `~/.claude/memory/` | `INSTALL_MEMORY=true` |
+| `features/*/scripts/` | `~/.claude/hooks/<feature>/` | feature-specific |
 | assembled CLAUDE.md | `~/.claude/CLAUDE.md` | always |
 | assembled settings.json | `~/.claude/settings.json` | always |
 
@@ -136,6 +147,11 @@ PowerShell entry point for Windows. Two modes:
 - **Codex MCP scope**: Always use `claude mcp add -s user` (user scope, not project scope).
 - **Timeout portability**: Use `_run_with_timeout` wrapper (macOS lacks `timeout`).
 - **Config persistence**: `~/.claude-starter-kit.conf` uses `key="value"` format, parsed by `_safe_source_config()` (allowlisted key=value parser, never sourced as shell code).
+- **Temp file hygiene**: `setup.sh` sets `umask 077` at top, tracks temp files in `_SETUP_TMP_FILES` array, and registers `trap _cleanup_tmp EXIT INT TERM` for automatic cleanup.
+- **Credential safety**: Pass API keys via `curl --config -` (stdin) to avoid exposing in `ps` output. Never use `curl -H "Authorization: Bearer $key"` directly.
+- **Safe config loading**: Never source config files with `. "$file"`. Use `_safe_source_config()` which validates keys against `_CONFIG_ALLOWED_KEYS` allowlist and sanitizes values via `_sanitize_config_value()`.
+- **RC file modification**: When modifying shell RC files (`.bashrc`, `.zshrc`), preserve original permissions with `stat` + `chmod` after `mktemp` + `mv` operations (since `umask 077` would change them to 0600).
+- **sed delimiter choice**: When using `sed` with `|` delimiter (`s|...|...|`), escape `&`, `\`, and `|` in replacement strings — do NOT escape `/`.
 
 ## Adding a New Feature
 
