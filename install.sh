@@ -36,7 +36,7 @@ _safe_install_dir() {
   case "$dir" in
     /|/bin|/bin/*|/sbin|/sbin/*|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/tmp|/tmp/*)
       return 1 ;;
-    /home|/root|/opt|/opt/*|/Applications|/Applications/*|/Library|/Library/*)
+    /home|/root|/opt|/Applications|/Applications/*|/Library|/Library/*)
       return 1 ;;
     /System|/System/*|/dev|/dev/*|/proc|/proc/*)
       return 1 ;;

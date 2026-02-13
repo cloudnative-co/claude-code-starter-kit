@@ -135,7 +135,7 @@ PowerShell entry point for Windows. Two modes:
 - **Windows interop from WSL/MSYS**: Use `powershell.exe -NoProfile -Command '...'` for Windows-side operations (font install, WT config). Always `tr -d '\r'` on output to strip CRLF.
 - **Codex MCP scope**: Always use `claude mcp add -s user` (user scope, not project scope).
 - **Timeout portability**: Use `_run_with_timeout` wrapper (macOS lacks `timeout`).
-- **Config persistence**: `~/.claude-starter-kit.conf` is sourced as shell code (no JSON parsing needed).
+- **Config persistence**: `~/.claude-starter-kit.conf` uses `key="value"` format, parsed by `_safe_source_config()` (allowlisted key=value parser, never sourced as shell code).
 
 ## Adding a New Feature
 

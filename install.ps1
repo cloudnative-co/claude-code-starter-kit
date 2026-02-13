@@ -240,9 +240,14 @@ INSTALL_DIR="$HOME/.claude-starter-kit"
 _safe_install_dir() {
     local dir="${1%/}"
     [[ -z "$dir" ]] && return 1
-    [[ "$dir" == "$HOME" ]] && return 1
+    [[ "$dir" == "$HOME" || "$dir" == "${HOME%/}" ]] && return 1
     case "$dir" in
-        /|/bin*|/sbin*|/etc*|/usr*|/var*|/tmp*|/home|/root|/opt*) return 1 ;;
+        /|/bin|/bin/*|/sbin|/sbin/*|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/tmp|/tmp/*)
+            return 1 ;;
+        /home|/root|/opt|/Applications|/Applications/*|/Library|/Library/*)
+            return 1 ;;
+        /System|/System/*|/dev|/dev/*|/proc|/proc/*)
+            return 1 ;;
     esac
     local depth; depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
     [[ "$depth" -lt 3 ]] && return 1
@@ -409,9 +414,14 @@ INSTALL_DIR="$HOME/.claude-starter-kit"
 _safe_install_dir() {
     local dir="${1%/}"
     [[ -z "$dir" ]] && return 1
-    [[ "$dir" == "$HOME" ]] && return 1
+    [[ "$dir" == "$HOME" || "$dir" == "${HOME%/}" ]] && return 1
     case "$dir" in
-        /|/bin*|/sbin*|/etc*|/usr*|/var*|/tmp*|/home|/root|/opt*) return 1 ;;
+        /|/bin|/bin/*|/sbin|/sbin/*|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/tmp|/tmp/*)
+            return 1 ;;
+        /home|/root|/opt|/Applications|/Applications/*|/Library|/Library/*)
+            return 1 ;;
+        /System|/System/*|/dev|/dev/*|/proc|/proc/*)
+            return 1 ;;
     esac
     local depth; depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
     [[ "$depth" -lt 3 ]] && return 1

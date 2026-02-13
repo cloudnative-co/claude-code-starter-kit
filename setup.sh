@@ -200,7 +200,7 @@ build_settings() {
       local editor_cmd editor_cmd_escaped src tmp
       editor_cmd="$(editor_command "$EDITOR_CHOICE")"
       # Escape sed metacharacters in the replacement string
-      editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&/\|]/\\&/g')"
+      editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&\\|]/\\&/g')"
       src="$PROJECT_DIR/features/git-push-review/hooks.json"
       tmp="$(mktemp)"
       _SETUP_TMP_FILES+=("$tmp")
@@ -507,13 +507,18 @@ _verify_openai_key() {
 _save_openai_key() {
   local key="$1"
   local rc_file="$2"
-  # Remove existing OPENAI_API_KEY line (if any) then append via printf
-  # This avoids sed metacharacter injection from the API key value
-  if grep -q 'OPENAI_API_KEY' "$rc_file" 2>/dev/null; then
-    local tmp_rc
+  # Remove existing OPENAI_API_KEY line (if any) then append via printf.
+  # This avoids sed metacharacter injection from the API key value.
+  # Match both 'export OPENAI_API_KEY=' and bare 'OPENAI_API_KEY='.
+  if grep -q '^\(export \)\{0,1\}OPENAI_API_KEY=' "$rc_file" 2>/dev/null; then
+    local tmp_rc orig_mode
     tmp_rc="$(mktemp)"
-    grep -v '^export OPENAI_API_KEY=' "$rc_file" > "$tmp_rc"
+    _SETUP_TMP_FILES+=("$tmp_rc")
+    # Preserve original file permissions (umask 077 would make the new file 0600)
+    orig_mode="$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null || echo '644')"
+    grep -v '^\(export \)\{0,1\}OPENAI_API_KEY=' "$rc_file" > "$tmp_rc"
     mv "$tmp_rc" "$rc_file"
+    chmod "$orig_mode" "$rc_file"
   fi
   printf '\n# OpenAI API Key (added by claude-code-starter-kit)\nexport OPENAI_API_KEY="%s"\n' "$key" >> "$rc_file"
   export OPENAI_API_KEY="$key"

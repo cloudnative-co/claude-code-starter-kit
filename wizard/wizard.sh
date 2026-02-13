@@ -175,7 +175,7 @@ load_config() {
 # Sanitize a value for safe inclusion in a key=value config file.
 # Strips characters that could be interpreted as shell metacharacters.
 _sanitize_config_value() {
-  printf '%s' "$1" | tr -cd 'a-zA-Z0-9_,./ -'
+  printf '%s' "$1" | tr -cd 'a-zA-Z0-9_,.:@/ -'
 }
 
 save_config() {
