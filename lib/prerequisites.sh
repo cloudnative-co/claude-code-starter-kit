@@ -226,11 +226,33 @@ export NVM_DIR="$HOME/.nvm"
 ZSHRC
 }
 
+_persist_node_path() {
+  local node_bin="$1"
+  local rc_file
+  case "$(basename "${SHELL:-}")" in
+    zsh)  rc_file="$HOME/.zshrc" ;;
+    bash) rc_file="$HOME/.bashrc" ;;
+    *)    rc_file="$HOME/.profile" ;;
+  esac
+  [[ -f "$rc_file" ]] || touch "$rc_file"
+  if ! grep -q "$node_bin" "$rc_file" 2>/dev/null; then
+    printf '\n# Node.js (brew keg-only, added by claude-code-starter-kit)\nexport PATH="%s:$PATH"\n' "$node_bin" >> "$rc_file"
+  fi
+}
+
 _install_node() {
   case "$DISTRO_FAMILY" in
     macos)
       if command -v brew &>/dev/null; then
-        brew install "node@${NODE_MAJOR}"
+        brew install "node@${NODE_MAJOR}" 2>/dev/null || true
+        # node@XX is keg-only (not symlinked into PATH). Add its bin dir
+        # for the current session and persist it in the user's shell rc file.
+        local node_prefix
+        node_prefix="$(brew --prefix "node@${NODE_MAJOR}" 2>/dev/null || true)"
+        if [[ -n "$node_prefix" && -d "$node_prefix/bin" ]]; then
+          export PATH="$node_prefix/bin:$PATH"
+          _persist_node_path "$node_prefix/bin"
+        fi
       else
         _install_node_via_nvm
       fi
