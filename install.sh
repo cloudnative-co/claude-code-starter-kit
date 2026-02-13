@@ -27,11 +27,24 @@ error() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; }
 # ---------------------------------------------------------------------------
 _safe_install_dir() {
   local dir="$1"
+  # Normalize: strip trailing slashes
+  dir="${dir%/}"
+  [[ -z "$dir" ]] && return 1
+  # Block $HOME itself
+  [[ "$dir" == "$HOME" || "$dir" == "${HOME%/}" ]] && return 1
+  # Block system directories and their subtrees
   case "$dir" in
-    /|/bin|/etc|/usr|/var|/tmp|/home|/root)
+    /|/bin|/bin/*|/sbin|/sbin/*|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/tmp|/tmp/*)
+      return 1 ;;
+    /home|/root|/opt|/opt/*|/Applications|/Applications/*|/Library|/Library/*)
+      return 1 ;;
+    /System|/System/*|/dev|/dev/*|/proc|/proc/*)
       return 1 ;;
   esac
-  [[ "$dir" == "$HOME" ]] && return 1
+  # Require at least 3 path components (e.g. /home/user/dir)
+  local depth
+  depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
+  [[ "$depth" -lt 3 ]] && return 1
   return 0
 }
 

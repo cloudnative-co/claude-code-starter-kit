@@ -3,8 +3,8 @@
 # Requires: lib/colors.sh and lib/detect.sh to be sourced first
 set -euo pipefail
 
-# Track incomplete installations for final summary
-GHOSTTY_INCOMPLETE=""
+# Track incomplete installations for final summary (array for safe iteration)
+GHOSTTY_INCOMPLETE=()
 
 # ---------------------------------------------------------------------------
 # Config path detection
@@ -225,14 +225,11 @@ setup_ghostty() {
   fi
 
   local template_file="${1:-}"
-  local incomplete=""
 
-  install_ghostty  || incomplete+="Ghostty "
-  install_hackgen_font || incomplete+="HackGen-NF "
+  install_ghostty       || GHOSTTY_INCOMPLETE+=("Ghostty")
+  install_hackgen_font  || GHOSTTY_INCOMPLETE+=("HackGen-NF")
 
   if [[ -n "$template_file" && -f "$template_file" ]]; then
     deploy_ghostty_config "$template_file"
   fi
-
-  GHOSTTY_INCOMPLETE="$incomplete"
 }

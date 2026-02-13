@@ -4,7 +4,7 @@
 # Requires: lib/colors.sh and lib/detect.sh to be sourced first
 set -euo pipefail
 
-FONTS_INCOMPLETE=""
+FONTS_INCOMPLETE=()
 
 # ---------------------------------------------------------------------------
 # macOS font installation helper (direct download fallback)
@@ -268,12 +268,8 @@ try {
 # Main entry point
 # ---------------------------------------------------------------------------
 setup_fonts() {
-  local incomplete=""
-
-  install_ibm_plex_mono || incomplete+="IBM-Plex-Mono "
-  install_hackgen_nf    || incomplete+="HackGen-NF "
-
-  FONTS_INCOMPLETE="${incomplete% }"
+  install_ibm_plex_mono || FONTS_INCOMPLETE+=("IBM-Plex-Mono")
+  install_hackgen_nf    || FONTS_INCOMPLETE+=("HackGen-NF")
 
   # Configure Windows Terminal font.
   # This runs independently of font install success — if HackGen NF is

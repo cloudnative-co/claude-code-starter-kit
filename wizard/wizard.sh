@@ -36,7 +36,7 @@ WIZARD_NONINTERACTIVE="${WIZARD_NONINTERACTIVE:-false}"
 WIZARD_CONFIG_FILE=""
 
 # Track CLI-overridden variables (restored after load_config/profile)
-_CLI_OVERRIDES=""
+_CLI_OVERRIDES=()
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -119,62 +119,96 @@ _language_label() {
 # ---------------------------------------------------------------------------
 # Defaults, profiles, config persistence
 # ---------------------------------------------------------------------------
+
+# Allowed config variable names (used by _safe_source_config for allowlist validation)
+_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP SELECTED_PLUGINS"
+
+# Safe key=value parser: reads a config file line-by-line and only sets
+# variables whose names appear in the allowlist. This replaces the previous
+# `. "$file"` pattern to prevent arbitrary code execution.
+_safe_source_config() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  local key value
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    # Skip blank lines and comments
+    [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+    # Strip surrounding whitespace and quotes
+    key="$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    value="$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')"
+    # Validate key is alphanumeric/underscore and in allowlist
+    if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && [[ " $_CONFIG_ALLOWED_KEYS " == *" $key "* ]]; then
+      printf -v "$key" '%s' "$value"
+    fi
+  done < "$file"
+}
+
 load_defaults() {
   local dir
   dir="$(_wizard_dir)"
   if [[ -f "$dir/defaults.conf" ]]; then
-    # shellcheck source=/dev/null
-    . "$dir/defaults.conf"
+    _safe_source_config "$dir/defaults.conf"
   fi
 }
 
 load_profile_config() {
   local profile="$1"
+  # Validate profile against allowlist to prevent path traversal
+  case "$profile" in
+    minimal|standard|full|custom) ;;
+    *) return 1 ;;
+  esac
   local dir
   dir="$(_project_dir)"
   if [[ -f "$dir/profiles/${profile}.conf" ]]; then
-    # shellcheck source=/dev/null
-    . "$dir/profiles/${profile}.conf"
+    _safe_source_config "$dir/profiles/${profile}.conf"
   fi
 }
 
 load_config() {
   local file="${1:-$HOME/.claude-starter-kit.conf}"
   if [[ -f "$file" ]]; then
-    # shellcheck source=/dev/null
-    . "$file"
+    _safe_source_config "$file"
   fi
+}
+
+# Sanitize a value for safe inclusion in a key=value config file.
+# Strips characters that could be interpreted as shell metacharacters.
+_sanitize_config_value() {
+  printf '%s' "$1" | tr -cd 'a-zA-Z0-9_,./ -'
 }
 
 save_config() {
   local file="${1:-$HOME/.claude-starter-kit.conf}"
-  cat > "$file" <<EOF
-# Claude Code Starter Kit - Wizard Config
-LANGUAGE="${LANGUAGE}"
-PROFILE="${PROFILE}"
-EDITOR_CHOICE="${EDITOR_CHOICE}"
-COMMIT_ATTRIBUTION="${COMMIT_ATTRIBUTION}"
-
-INSTALL_AGENTS="${INSTALL_AGENTS}"
-INSTALL_RULES="${INSTALL_RULES}"
-INSTALL_COMMANDS="${INSTALL_COMMANDS}"
-INSTALL_SKILLS="${INSTALL_SKILLS}"
-INSTALL_MEMORY="${INSTALL_MEMORY}"
-
-ENABLE_CODEX_MCP="${ENABLE_CODEX_MCP}"
-ENABLE_TMUX_HOOKS="${ENABLE_TMUX_HOOKS}"
-ENABLE_GIT_PUSH_REVIEW="${ENABLE_GIT_PUSH_REVIEW}"
-ENABLE_DOC_BLOCKER="${ENABLE_DOC_BLOCKER}"
-ENABLE_PRETTIER_HOOKS="${ENABLE_PRETTIER_HOOKS}"
-ENABLE_CONSOLE_LOG_GUARD="${ENABLE_CONSOLE_LOG_GUARD}"
-ENABLE_MEMORY_PERSISTENCE="${ENABLE_MEMORY_PERSISTENCE}"
-ENABLE_STRATEGIC_COMPACT="${ENABLE_STRATEGIC_COMPACT}"
-ENABLE_PR_CREATION_LOG="${ENABLE_PR_CREATION_LOG}"
-ENABLE_GHOSTTY_SETUP="${ENABLE_GHOSTTY_SETUP}"
-ENABLE_FONTS_SETUP="${ENABLE_FONTS_SETUP}"
-
-SELECTED_PLUGINS="${SELECTED_PLUGINS}"
-EOF
+  {
+    printf '# Claude Code Starter Kit - Wizard Config\n'
+    printf 'LANGUAGE="%s"\n' "$(_sanitize_config_value "$LANGUAGE")"
+    printf 'PROFILE="%s"\n' "$(_sanitize_config_value "$PROFILE")"
+    printf 'EDITOR_CHOICE="%s"\n' "$(_sanitize_config_value "$EDITOR_CHOICE")"
+    printf 'COMMIT_ATTRIBUTION="%s"\n' "$(_sanitize_config_value "$COMMIT_ATTRIBUTION")"
+    printf '\n'
+    printf 'INSTALL_AGENTS="%s"\n' "$(_sanitize_config_value "$INSTALL_AGENTS")"
+    printf 'INSTALL_RULES="%s"\n' "$(_sanitize_config_value "$INSTALL_RULES")"
+    printf 'INSTALL_COMMANDS="%s"\n' "$(_sanitize_config_value "$INSTALL_COMMANDS")"
+    printf 'INSTALL_SKILLS="%s"\n' "$(_sanitize_config_value "$INSTALL_SKILLS")"
+    printf 'INSTALL_MEMORY="%s"\n' "$(_sanitize_config_value "$INSTALL_MEMORY")"
+    printf '\n'
+    printf 'ENABLE_CODEX_MCP="%s"\n' "$(_sanitize_config_value "$ENABLE_CODEX_MCP")"
+    printf 'ENABLE_TMUX_HOOKS="%s"\n' "$(_sanitize_config_value "$ENABLE_TMUX_HOOKS")"
+    printf 'ENABLE_GIT_PUSH_REVIEW="%s"\n' "$(_sanitize_config_value "$ENABLE_GIT_PUSH_REVIEW")"
+    printf 'ENABLE_DOC_BLOCKER="%s"\n' "$(_sanitize_config_value "$ENABLE_DOC_BLOCKER")"
+    printf 'ENABLE_PRETTIER_HOOKS="%s"\n' "$(_sanitize_config_value "$ENABLE_PRETTIER_HOOKS")"
+    printf 'ENABLE_CONSOLE_LOG_GUARD="%s"\n' "$(_sanitize_config_value "$ENABLE_CONSOLE_LOG_GUARD")"
+    printf 'ENABLE_MEMORY_PERSISTENCE="%s"\n' "$(_sanitize_config_value "$ENABLE_MEMORY_PERSISTENCE")"
+    printf 'ENABLE_STRATEGIC_COMPACT="%s"\n' "$(_sanitize_config_value "$ENABLE_STRATEGIC_COMPACT")"
+    printf 'ENABLE_PR_CREATION_LOG="%s"\n' "$(_sanitize_config_value "$ENABLE_PR_CREATION_LOG")"
+    printf 'ENABLE_GHOSTTY_SETUP="%s"\n' "$(_sanitize_config_value "$ENABLE_GHOSTTY_SETUP")"
+    printf 'ENABLE_FONTS_SETUP="%s"\n' "$(_sanitize_config_value "$ENABLE_FONTS_SETUP")"
+    printf '\n'
+    printf 'SELECTED_PLUGINS="%s"\n' "$(_sanitize_config_value "$SELECTED_PLUGINS")"
+  } > "$file"
+  # Restrict config file permissions (contains user preferences)
+  chmod 600 "$file"
 }
 
 # ---------------------------------------------------------------------------
@@ -322,20 +356,20 @@ parse_cli_args() {
       --non-interactive)
         WIZARD_NONINTERACTIVE="true"
         ;;
-      --language=*)      LANGUAGE="${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} LANGUAGE" ;;
-      --language)        shift; LANGUAGE="${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} LANGUAGE" ;;
-      --profile=*)       PROFILE="${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} PROFILE" ;;
-      --profile)         shift; PROFILE="${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} PROFILE" ;;
-      --editor=*)        EDITOR_CHOICE="${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} EDITOR_CHOICE" ;;
-      --editor)          shift; EDITOR_CHOICE="${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} EDITOR_CHOICE" ;;
-      --codex-mcp=*)     _set_bool ENABLE_CODEX_MCP "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_CODEX_MCP" ;;
-      --codex-mcp)       shift; _set_bool ENABLE_CODEX_MCP "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_CODEX_MCP" ;;
-      --commit-attribution=*) _set_bool COMMIT_ATTRIBUTION "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} COMMIT_ATTRIBUTION" ;;
-      --commit-attribution)   shift; _set_bool COMMIT_ATTRIBUTION "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} COMMIT_ATTRIBUTION" ;;
-      --ghostty=*)     _set_bool ENABLE_GHOSTTY_SETUP "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_GHOSTTY_SETUP" ;;
-      --ghostty)       shift; _set_bool ENABLE_GHOSTTY_SETUP "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_GHOSTTY_SETUP" ;;
-      --fonts=*)       _set_bool ENABLE_FONTS_SETUP "${arg#*=}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_FONTS_SETUP" ;;
-      --fonts)         shift; _set_bool ENABLE_FONTS_SETUP "${1:-}"; _CLI_OVERRIDES="${_CLI_OVERRIDES} ENABLE_FONTS_SETUP" ;;
+      --language=*)      LANGUAGE="${arg#*=}"; _CLI_OVERRIDES+=("LANGUAGE") ;;
+      --language)        shift; LANGUAGE="${1:-}"; _CLI_OVERRIDES+=("LANGUAGE") ;;
+      --profile=*)       PROFILE="${arg#*=}"; _CLI_OVERRIDES+=("PROFILE") ;;
+      --profile)         shift; PROFILE="${1:-}"; _CLI_OVERRIDES+=("PROFILE") ;;
+      --editor=*)        EDITOR_CHOICE="${arg#*=}"; _CLI_OVERRIDES+=("EDITOR_CHOICE") ;;
+      --editor)          shift; EDITOR_CHOICE="${1:-}"; _CLI_OVERRIDES+=("EDITOR_CHOICE") ;;
+      --codex-mcp=*)     _set_bool ENABLE_CODEX_MCP "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_CODEX_MCP") ;;
+      --codex-mcp)       shift; _set_bool ENABLE_CODEX_MCP "${1:-}"; _CLI_OVERRIDES+=("ENABLE_CODEX_MCP") ;;
+      --commit-attribution=*) _set_bool COMMIT_ATTRIBUTION "${arg#*=}"; _CLI_OVERRIDES+=("COMMIT_ATTRIBUTION") ;;
+      --commit-attribution)   shift; _set_bool COMMIT_ATTRIBUTION "${1:-}"; _CLI_OVERRIDES+=("COMMIT_ATTRIBUTION") ;;
+      --ghostty=*)     _set_bool ENABLE_GHOSTTY_SETUP "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_GHOSTTY_SETUP") ;;
+      --ghostty)       shift; _set_bool ENABLE_GHOSTTY_SETUP "${1:-}"; _CLI_OVERRIDES+=("ENABLE_GHOSTTY_SETUP") ;;
+      --fonts=*)       _set_bool ENABLE_FONTS_SETUP "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_FONTS_SETUP") ;;
+      --fonts)         shift; _set_bool ENABLE_FONTS_SETUP "${1:-}"; _CLI_OVERRIDES+=("ENABLE_FONTS_SETUP") ;;
       --hooks=*)
         _apply_hooks_csv "${arg#*=}"
         ;;
@@ -440,7 +474,7 @@ _step_profile() {
 
 _step_codex() {
   # Skip if explicitly set by CLI arg
-  if [[ "$_CLI_OVERRIDES" == *"ENABLE_CODEX_MCP"* ]]; then return; fi
+  local _ov; for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do [[ "$_ov" == "ENABLE_CODEX_MCP" ]] && return; done
 
   section "$STR_CODEX_TITLE"
   printf "  1) %s\n" "$STR_CODEX_YES"
@@ -480,7 +514,7 @@ _step_ghostty() {
   # Ghostty is macOS only — skip on all non-macOS platforms
   if [[ "$(uname -s)" != "Darwin" ]]; then ENABLE_GHOSTTY_SETUP="false"; return; fi
   # Skip if explicitly set by CLI arg
-  if [[ "$_CLI_OVERRIDES" == *"ENABLE_GHOSTTY_SETUP"* ]]; then return; fi
+  local _ov; for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do [[ "$_ov" == "ENABLE_GHOSTTY_SETUP" ]] && return; done
   # Only ask for custom profile; other profiles use their preset value
   if [[ "$PROFILE" != "custom" ]]; then return; fi
 
@@ -498,7 +532,7 @@ _step_ghostty() {
 
 _step_fonts() {
   # Skip if explicitly set by CLI arg
-  if [[ "$_CLI_OVERRIDES" == *"ENABLE_FONTS_SETUP"* ]]; then return; fi
+  local _ov; for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do [[ "$_ov" == "ENABLE_FONTS_SETUP" ]] && return; done
   # Only ask for custom profile; other profiles use their preset value
   if [[ "$PROFILE" != "custom" ]]; then return; fi
 
@@ -550,7 +584,9 @@ _step_hooks() {
         for i in "${!HOOK_KEYS[@]}"; do printf -v "${HOOK_KEYS[$i]}" '%s' "false"; done
         ;;
       *)
-        for token in $choice; do
+        local -a _tokens=()
+        read -r -a _tokens <<< "$choice"
+        for token in "${_tokens[@]}"; do
           if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#HOOK_KEYS[@]}" ]]; then
             local idx=$((token-1))
             local key="${HOOK_KEYS[$idx]}"
@@ -600,7 +636,9 @@ _step_plugins() {
         for i in "${!PLUGIN_SELECTED[@]}"; do PLUGIN_SELECTED[$i]="false"; done
         ;;
       *)
-        for token in $choice; do
+        local -a _tokens=()
+        read -r -a _tokens <<< "$choice"
+        for token in "${_tokens[@]}"; do
           if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#PLUGIN_NAMES[@]}" ]]; then
             local idx=$((token-1))
             if [[ "${PLUGIN_SELECTED[$idx]}" == "true" ]]; then
@@ -707,7 +745,7 @@ _fill_noninteractive_defaults() {
   # (both load_config and load_profile_config unconditionally set ENABLE_* flags)
   local _saved_overrides=()
   local _var _val
-  for _var in $_CLI_OVERRIDES; do
+  for _var in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
     _val="${!_var:-}"
     if [[ -n "$_val" ]]; then
       _saved_overrides+=("${_var}=${_val}")
@@ -762,7 +800,7 @@ run_wizard() {
   # Save CLI-overridden values before loading config file
   local _saved_cli=()
   local _v _vl
-  for _v in $_CLI_OVERRIDES; do
+  for _v in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
     _vl="${!_v:-}"
     if [[ -n "$_vl" ]]; then
       _saved_cli+=("${_v}=${_vl}")

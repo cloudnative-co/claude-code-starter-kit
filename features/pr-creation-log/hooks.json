@@ -5,7 +5,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "#!/bin/bash\ninput=$(cat)\ncmd=$(echo \"$input\" | jq -r '.tool_input.command')\nif echo \"$cmd\" | grep -qE 'gh pr create'; then\n  output=$(echo \"$input\" | jq -r '.tool_output.output // \"\"')\n  pr_url=$(echo \"$output\" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+')\n  if [ -n \"$pr_url\" ]; then\n    echo \"[Hook] PR created: $pr_url\" >&2\n  fi\nfi\necho \"$input\""
+          "command": "#!/bin/bash\ninput=$(cat)\ncmd=$(printf '%s' \"$input\" | jq -r '.tool_input.command')\nif printf '%s' \"$cmd\" | grep -qE 'gh pr create'; then\n  output=$(printf '%s' \"$input\" | jq -r '.tool_output.output // \"\"')\n  pr_url=$(printf '%s' \"$output\" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+')\n  if [ -n \"$pr_url\" ]; then\n    echo \"[Hook] PR created: $pr_url\" >&2\n  fi\nfi\nprintf '%s\\n' \"$input\""
         }
       ]
     }

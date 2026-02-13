@@ -12,3 +12,6 @@ Thumbs.db
 # Generated
 *.bak
 *.tmp
+
+# Machine-specific Claude settings (should not be shared)
+.claude/settings.local.json

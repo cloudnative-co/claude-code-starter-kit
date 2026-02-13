@@ -5,7 +5,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "#!/bin/bash\ninput=$(cat)\nfile_path=$(echo \"$input\" | jq -r '.tool_input.file_path // \"\"')\nif [[ \"$file_path\" =~ \\.(md|txt)$ ]] && [[ ! \"$file_path\" =~ (README|CLAUDE|AGENTS|CONTRIBUTING)\\.md$ ]]; then\n  echo \"[Hook] BLOCKED: Use README.md for documentation\" >&2\n  exit 1\nfi\necho \"$input\""
+          "command": "#!/bin/bash\ninput=$(cat)\nfile_path=$(printf '%s' \"$input\" | jq -r '.tool_input.file_path // \"\"')\nif [[ \"$file_path\" =~ \\.(md|txt)$ ]] && [[ ! \"$file_path\" =~ (README|CLAUDE|AGENTS|CONTRIBUTING)\\.md$ ]]; then\n  echo \"[Hook] BLOCKED: Use README.md for documentation\" >&2\n  exit 1\nfi\nprintf '%s\\n' \"$input\""
         }
       ]
     }

@@ -67,9 +67,9 @@ _detect_macos_arch() {
 # ---------------------------------------------------------------------------
 _detect_linux_distro() {
   if [[ -f /etc/os-release ]]; then
-    # shellcheck source=/dev/null
-    . /etc/os-release
-    DISTRO="${ID:-unknown}"
+    # Parse /etc/os-release safely instead of sourcing as shell code
+    DISTRO="$(grep '^ID=' /etc/os-release 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"')"
+    DISTRO="${DISTRO:-unknown}"
 
     case "$DISTRO" in
       ubuntu|debian|pop|linuxmint|elementary|zorin)

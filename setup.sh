@@ -17,6 +17,18 @@ _script_dir() {
 PROJECT_DIR="$(_script_dir)"
 CLAUDE_DIR="$HOME/.claude"
 
+# Restrict permissions on temporary files (may contain sensitive data like API keys)
+umask 077
+
+# Track temp files for cleanup on exit/interrupt
+_SETUP_TMP_FILES=()
+_cleanup_tmp() {
+  if [[ ${#_SETUP_TMP_FILES[@]} -gt 0 ]]; then
+    rm -f "${_SETUP_TMP_FILES[@]}" 2>/dev/null || true
+  fi
+}
+trap _cleanup_tmp EXIT INT TERM
+
 # ---------------------------------------------------------------------------
 # Source wizard first, parse CLI args
 # ---------------------------------------------------------------------------
@@ -185,12 +197,15 @@ build_settings() {
     if [[ "${EDITOR_CHOICE:-none}" == "none" ]]; then
       warn "Git push review hook skipped (no editor selected)"
     else
-      local editor_cmd src tmp
+      local editor_cmd editor_cmd_escaped src tmp
       editor_cmd="$(editor_command "$EDITOR_CHOICE")"
+      # Escape sed metacharacters in the replacement string
+      editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&/\|]/\\&/g')"
       src="$PROJECT_DIR/features/git-push-review/hooks.json"
       tmp="$(mktemp)"
+      _SETUP_TMP_FILES+=("$tmp")
       if grep -q "__EDITOR_CMD__" "$src" 2>/dev/null; then
-        sed "s|__EDITOR_CMD__|$editor_cmd|g" "$src" > "$tmp"
+        sed "s|__EDITOR_CMD__|$editor_cmd_escaped|g" "$src" > "$tmp"
       else
         cp -a "$src" "$tmp"
       fi
@@ -206,6 +221,7 @@ build_settings() {
   lang_name="$(language_name)"
   local tmp_lang
   tmp_lang="$(mktemp)"
+  _SETUP_TMP_FILES+=("$tmp_lang")
   jq --arg lang "$lang_name" '.language = $lang' "$out" > "$tmp_lang"
   mv "$tmp_lang" "$out"
 
@@ -479,9 +495,11 @@ _run_with_timeout() {
 
 _verify_openai_key() {
   local key="$1"
+  # Pass auth header via --config stdin to avoid exposing the key in ps output
   local http_code
-  http_code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
-    -H "Authorization: Bearer $key" \
+  http_code="$(printf 'header = "Authorization: Bearer %s"\n' "$key" | \
+    curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    --config - \
     https://api.openai.com/v1/models 2>/dev/null || echo "000")"
   [[ "$http_code" == "200" ]]
 }
@@ -489,14 +507,15 @@ _verify_openai_key() {
 _save_openai_key() {
   local key="$1"
   local rc_file="$2"
+  # Remove existing OPENAI_API_KEY line (if any) then append via printf
+  # This avoids sed metacharacter injection from the API key value
   if grep -q 'OPENAI_API_KEY' "$rc_file" 2>/dev/null; then
     local tmp_rc
     tmp_rc="$(mktemp)"
-    sed "s|^export OPENAI_API_KEY=.*|export OPENAI_API_KEY=\"$key\"|" "$rc_file" > "$tmp_rc"
+    grep -v '^export OPENAI_API_KEY=' "$rc_file" > "$tmp_rc"
     mv "$tmp_rc" "$rc_file"
-  else
-    printf '\n# OpenAI API Key (added by claude-code-starter-kit)\nexport OPENAI_API_KEY="%s"\n' "$key" >> "$rc_file"
   fi
+  printf '\n# OpenAI API Key (added by claude-code-starter-kit)\nexport OPENAI_API_KEY="%s"\n' "$key" >> "$rc_file"
   export OPENAI_API_KEY="$key"
 }
 
@@ -508,14 +527,16 @@ _test_codex_mcp() {
     return 1
   fi
   # Test /v1/models (basic auth) and /v1/responses (Codex endpoint)
+  # Pass auth header via --config stdin to avoid exposing the key in ps output
   local _models_code _responses_code
-  _models_code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
-    -H "Authorization: Bearer $_key" \
+  _models_code="$(printf 'header = "Authorization: Bearer %s"\n' "$_key" | \
+    curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    --config - \
     https://api.openai.com/v1/models 2>/dev/null || echo "000")"
-  _responses_code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+  _responses_code="$(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$_key" | \
+    curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    --config - \
     -X POST \
-    -H "Authorization: Bearer $_key" \
-    -H "Content-Type: application/json" \
     -d '{"model":"gpt-4o-mini","input":"test"}' \
     https://api.openai.com/v1/responses 2>/dev/null || echo "000")"
   # 200=success, 400=bad request (but auth works), 401/403=auth failure
@@ -806,10 +827,10 @@ fi
 # ---------------------------------------------------------------------------
 printf "\n"
 # Ghostty incomplete message is only relevant on macOS
-if [[ -n "${GHOSTTY_INCOMPLETE:-}" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "${#GHOSTTY_INCOMPLETE[@]}" -gt 0 ]] && [[ "$(uname -s)" == "Darwin" ]]; then
   section "$STR_FINAL_INCOMPLETE_TITLE"
   warn "$STR_FINAL_INCOMPLETE_GHOSTTY"
-  for _item in $GHOSTTY_INCOMPLETE; do
+  for _item in "${GHOSTTY_INCOMPLETE[@]}"; do
     warn "  - $_item"
   done
   printf "\n"
@@ -871,10 +892,10 @@ else
     info "  $STR_FINAL_STEP3"
   fi
   # Font incomplete warning
-  if [[ -n "${FONTS_INCOMPLETE:-}" ]]; then
+  if [[ "${#FONTS_INCOMPLETE[@]}" -gt 0 ]]; then
     printf "\n"
     warn "$STR_FINAL_INCOMPLETE_FONTS"
-    for _item in $FONTS_INCOMPLETE; do
+    for _item in "${FONTS_INCOMPLETE[@]}"; do
       warn "  - $_item"
     done
   fi

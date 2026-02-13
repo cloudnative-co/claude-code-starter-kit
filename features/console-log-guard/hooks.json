@@ -5,7 +5,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "#!/bin/bash\ninput=$(cat)\nfile_path=$(echo \"$input\" | jq -r '.tool_input.file_path // \"\"')\nif [ -n \"$file_path\" ] && [ -f \"$file_path\" ]; then\n  console_logs=$(grep -n \"console\\\\.log\" \"$file_path\" 2>/dev/null || true)\n  if [ -n \"$console_logs\" ]; then\n    echo \"[Hook] WARNING: console.log found in $file_path\" >&2\n    echo \"$console_logs\" | head -5 >&2\n  fi\nfi\necho \"$input\""
+          "command": "#!/bin/bash\ninput=$(cat)\nfile_path=$(printf '%s' \"$input\" | jq -r '.tool_input.file_path // \"\"')\nif [ -n \"$file_path\" ] && [ -f \"$file_path\" ]; then\n  console_logs=$(grep -n \"console\\\\.log\" \"$file_path\" 2>/dev/null || true)\n  if [ -n \"$console_logs\" ]; then\n    echo \"[Hook] WARNING: console.log found in $file_path\" >&2\n    printf '%s\\n' \"$console_logs\" | head -5 >&2\n  fi\nfi\nprintf '%s\\n' \"$input\""
         }
       ]
     }
@@ -16,7 +16,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "#!/bin/bash\ninput=$(cat)\nif git rev-parse --git-dir > /dev/null 2>&1; then\n  modified_files=$(git diff --name-only HEAD 2>/dev/null | grep -E '\\.(ts|tsx|js|jsx)$' || true)\n  if [ -n \"$modified_files\" ]; then\n    while IFS= read -r file; do\n      if [ -f \"$file\" ] && grep -q \"console\\.log\" \"$file\" 2>/dev/null; then\n        echo \"[Hook] WARNING: console.log in $file\" >&2\n      fi\n    done <<< \"$modified_files\"\n  fi\nfi\necho \"$input\""
+          "command": "#!/bin/bash\ninput=$(cat)\nif git rev-parse --git-dir > /dev/null 2>&1; then\n  modified_files=$(git diff --name-only HEAD 2>/dev/null | grep -E '\\.(ts|tsx|js|jsx)$' || true)\n  if [ -n \"$modified_files\" ]; then\n    while IFS= read -r file; do\n      if [ -f \"$file\" ] && grep -q \"console\\.log\" \"$file\" 2>/dev/null; then\n        echo \"[Hook] WARNING: console.log in $file\" >&2\n      fi\n    done <<< \"$modified_files\"\n  fi\nfi\nprintf '%s\\n' \"$input\""
         }
       ]
     }

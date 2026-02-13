@@ -27,8 +27,10 @@
 # - Transitioning from research/exploration to implementation
 # - Plan has been finalized
 
-# Track tool call count (increment in a temp file)
-COUNTER_FILE="/tmp/claude-tool-count-$$"
+# Track tool call count in a user-private directory (avoid predictable /tmp paths)
+COUNTER_DIR="${XDG_RUNTIME_DIR:-$HOME/.claude/tmp}"
+mkdir -p "$COUNTER_DIR" 2>/dev/null || true
+COUNTER_FILE="$COUNTER_DIR/tool-count-$$"
 THRESHOLD=${COMPACT_THRESHOLD:-50}
 
 # Initialize or increment counter

@@ -236,6 +236,23 @@ fi
 REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
 INSTALL_DIR="$HOME/.claude-starter-kit"
 
+# Safety guard: prevent rm -rf on dangerous paths
+_safe_install_dir() {
+    local dir="${1%/}"
+    [[ -z "$dir" ]] && return 1
+    [[ "$dir" == "$HOME" ]] && return 1
+    case "$dir" in
+        /|/bin*|/sbin*|/etc*|/usr*|/var*|/tmp*|/home|/root|/opt*) return 1 ;;
+    esac
+    local depth; depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
+    [[ "$depth" -lt 3 ]] && return 1
+    return 0
+}
+if ! _safe_install_dir "$INSTALL_DIR"; then
+    echo "[ERROR] Refusing to use INSTALL_DIR='$INSTALL_DIR' (dangerous path)"
+    exit 1
+fi
+
 # Install only missing tools (skip sudo if everything is present)
 _missing=()
 command -v git &>/dev/null      || _missing+=(git)
@@ -387,6 +404,23 @@ set -euo pipefail
 
 REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
 INSTALL_DIR="$HOME/.claude-starter-kit"
+
+# Safety guard: prevent rm -rf on dangerous paths
+_safe_install_dir() {
+    local dir="${1%/}"
+    [[ -z "$dir" ]] && return 1
+    [[ "$dir" == "$HOME" ]] && return 1
+    case "$dir" in
+        /|/bin*|/sbin*|/etc*|/usr*|/var*|/tmp*|/home|/root|/opt*) return 1 ;;
+    esac
+    local depth; depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
+    [[ "$depth" -lt 3 ]] && return 1
+    return 0
+}
+if ! _safe_install_dir "$INSTALL_DIR"; then
+    echo "[ERROR] Refusing to use INSTALL_DIR='$INSTALL_DIR' (dangerous path)"
+    exit 1
+fi
 
 # Clone or update the repo
 if [[ -d "$INSTALL_DIR/.git" ]]; then

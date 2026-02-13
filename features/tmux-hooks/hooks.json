@@ -14,7 +14,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "#!/bin/bash\ninput=$(cat)\nif [ -z \"$TMUX\" ]; then\n  echo '[Hook] Consider running in tmux for session persistence' >&2\nfi\necho \"$input\""
+          "command": "#!/bin/bash\ninput=$(cat)\nif [ -z \"$TMUX\" ]; then\n  echo '[Hook] Consider running in tmux for session persistence' >&2\nfi\nprintf '%s\\n' \"$input\""
         }
       ]
     }
