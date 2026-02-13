@@ -135,7 +135,7 @@ install_hackgen_font() {
 
   case "$uname_s" in
     Darwin)
-      if ! command -v brew &>/dev/null; then
+      if ! _ghostty_ensure_brew; then
         warn "Homebrew is not available. Cannot install HackGen NF font."
         info "  Install manually: https://github.com/yuru7/HackGen"
         return 1
