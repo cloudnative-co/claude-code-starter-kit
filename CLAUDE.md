@@ -69,9 +69,11 @@ Three profiles (`profiles/*.conf`) define feature toggles as `VAR=true/false`:
 
 ### Plugin System
 
-`config/plugins.json` defines available plugins with profile assignments. Each plugin has a `name`, `description`, and `profiles` array (which profiles include it by default).
+`config/plugins.json` defines available plugins with profile assignments and a `marketplaces` mapping. Each plugin has a `name`, `marketplace` (defaults to `claude-plugins-official`), `description`, and `profiles` array. The top-level `marketplaces` object maps marketplace short names to GitHub repos (e.g., `"claude-plugins-official": "anthropics/claude-plugins-official"`).
 
-Wizard flow: `_load_plugins()` reads the JSON → `_init_plugins_for_profile()` pre-selects plugins based on the chosen profile → user can customize in interactive mode → `_compute_selected_plugins()` produces the final `SELECTED_PLUGINS` CSV → `setup.sh` installs via `claude plugin add`.
+**Multi-marketplace support**: When the same plugin name exists in multiple marketplaces (e.g., `pr-review-toolkit` in both `claude-plugins-official` and `claude-code-plugins`), `_plugin_has_collision()` detects the conflict and `_compute_selected_plugins()` produces qualified `name@marketplace` entries in `SELECTED_PLUGINS`. Bare names without collision remain unqualified for backward compatibility. `_apply_plugins_from_csv()` handles both `name@marketplace` (exact match) and bare names (collision → defaults to `claude-plugins-official`).
+
+Wizard flow: `_load_plugins()` reads the JSON (including `PLUGIN_MARKETPLACES[]` parallel array) → `_init_plugins_for_profile()` pre-selects plugins based on the chosen profile → user can customize in interactive mode (colliding names show `[marketplace]` suffix) → `_compute_selected_plugins()` produces the final `SELECTED_PLUGINS` CSV → `setup.sh` parses `name@marketplace`, registers required marketplaces via `claude plugin marketplace add`, and installs via `claude plugin install`.
 
 ### Hook Fragment Assembly
 

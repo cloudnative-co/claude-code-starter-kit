@@ -437,35 +437,56 @@ if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
 
     # Check if any plugins need installing
     _need_install=false
-    for p in "${_plugins[@]}"; do
-      if [[ -n "$p" ]] && ! echo "$_installed_plugins" | grep -q "$p" 2>/dev/null; then
+    for _p in "${_plugins[@]}"; do
+      _p_name="${_p%%@*}"
+      if [[ -n "$_p_name" ]] && ! echo "$_installed_plugins" | grep -q "$_p_name" 2>/dev/null; then
         _need_install=true
         break
       fi
     done
 
     if [[ "$_need_install" == "true" ]]; then
-      # Ensure the official marketplace is registered
-      claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null || true
+      # Register required marketplaces (deduplicated)
+      _registered_mps=""
+      for _p in "${_plugins[@]}"; do
+        [[ -z "$_p" ]] && continue
+        if [[ "$_p" == *"@"* ]]; then
+          _p_mp="${_p#*@}"
+        else
+          _p_mp="claude-plugins-official"
+        fi
+        # Skip if already registered in this run
+        if [[ ",$_registered_mps," == *",$_p_mp,"* ]]; then
+          continue
+        fi
+        # Resolve GitHub repo from plugins.json marketplaces map
+        _mp_repo="$(jq -r --arg mp "$_p_mp" '.marketplaces[$mp] // empty' "$PROJECT_DIR/config/plugins.json")"
+        if [[ -n "$_mp_repo" ]]; then
+          claude plugin marketplace add "$_mp_repo" 2>/dev/null || true
+        fi
+        _registered_mps="${_registered_mps:+${_registered_mps},}${_p_mp}"
+      done
       info "$STR_DEPLOY_PLUGINS_INSTALLING"
     fi
 
-    for p in "${_plugins[@]}"; do
-      if [[ -n "$p" ]]; then
-        if echo "$_installed_plugins" | grep -q "$p" 2>/dev/null; then
-          ok "$STR_DEPLOY_PLUGINS_ALREADY $p"
-        elif claude plugin install "$p" --scope user; then
-          ok "$STR_DEPLOY_PLUGINS_INSTALLED $p"
+    for _p in "${_plugins[@]}"; do
+      _p_name="${_p%%@*}"
+      if [[ -n "$_p_name" ]]; then
+        if echo "$_installed_plugins" | grep -q "$_p_name" 2>/dev/null; then
+          ok "$STR_DEPLOY_PLUGINS_ALREADY $_p_name"
+        elif claude plugin install "$_p_name" --scope user; then
+          ok "$STR_DEPLOY_PLUGINS_INSTALLED $_p_name"
         else
-          warn "$STR_DEPLOY_PLUGINS_FAILED $p"
+          warn "$STR_DEPLOY_PLUGINS_FAILED $_p_name"
         fi
       fi
     done
   else
     warn "$STR_DEPLOY_PLUGINS_SKIP"
     info "$STR_DEPLOY_PLUGINS_HINT"
-    for p in "${_plugins[@]}"; do
-      [[ -n "$p" ]] && printf "  /install %s\n" "$p"
+    for _p in "${_plugins[@]}"; do
+      _p_name="${_p%%@*}"
+      [[ -n "$_p_name" ]] && printf "  /install %s\n" "$_p_name"
     done
   fi
 fi

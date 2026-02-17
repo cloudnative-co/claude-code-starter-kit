@@ -236,6 +236,7 @@ load_strings() {
 PLUGIN_NAMES=()
 PLUGIN_PROFILES=()
 PLUGIN_SELECTED=()
+PLUGIN_MARKETPLACES=()
 
 _load_plugins() {
   local dir
@@ -244,6 +245,7 @@ _load_plugins() {
   PLUGIN_NAMES=()
   PLUGIN_PROFILES=()
   PLUGIN_SELECTED=()
+  PLUGIN_MARKETPLACES=()
 
   if [[ ! -f "$file" ]] || ! command -v jq &>/dev/null; then
     return
@@ -253,13 +255,31 @@ _load_plugins() {
   count="$(jq '.plugins | length' "$file")"
   local i
   for ((i = 0; i < count; i++)); do
-    local name profiles_csv
+    local name profiles_csv marketplace
     name="$(jq -r ".plugins[$i].name" "$file")"
     profiles_csv="$(jq -r ".plugins[$i].profiles | join(\",\")" "$file")"
+    marketplace="$(jq -r '.plugins['"$i"'].marketplace // "claude-plugins-official"' "$file")"
     PLUGIN_NAMES+=("$name")
     PLUGIN_PROFILES+=("$profiles_csv")
     PLUGIN_SELECTED+=("false")
+    PLUGIN_MARKETPLACES+=("$marketplace")
   done
+}
+
+# Bash 3 compatible collision detection (no associative arrays)
+# Returns 0 if the given plugin name exists in multiple marketplaces
+_plugin_has_collision() {
+  local target="$1" i
+  local seen_mp=""
+  for i in "${!PLUGIN_NAMES[@]}"; do
+    if [[ "${PLUGIN_NAMES[$i]}" == "$target" ]]; then
+      if [[ -n "$seen_mp" ]] && [[ "$seen_mp" != "${PLUGIN_MARKETPLACES[$i]}" ]]; then
+        return 0
+      fi
+      seen_mp="${PLUGIN_MARKETPLACES[$i]}"
+    fi
+  done
+  return 1
 }
 
 _init_plugins_for_profile() {
@@ -282,11 +302,26 @@ _apply_plugins_from_csv() {
   done
 
   IFS=',' read -r -a _wanted <<< "$csv"
+  local w _w_name _w_mp
   for i in "${!PLUGIN_NAMES[@]}"; do
-    local w
     for w in "${_wanted[@]}"; do
-      if [[ "$w" == "${PLUGIN_NAMES[$i]}" ]]; then
-        PLUGIN_SELECTED[$i]="true"
+      if [[ "$w" == *"@"* ]]; then
+        # Qualified name: name@marketplace — exact match
+        _w_name="${w%%@*}"
+        _w_mp="${w#*@}"
+        if [[ "$_w_name" == "${PLUGIN_NAMES[$i]}" ]] && [[ "$_w_mp" == "${PLUGIN_MARKETPLACES[$i]}" ]]; then
+          PLUGIN_SELECTED[$i]="true"
+        fi
+      elif _plugin_has_collision "$w"; then
+        # Bare name with collision — match claude-plugins-official (backward compat)
+        if [[ "$w" == "${PLUGIN_NAMES[$i]}" ]] && [[ "${PLUGIN_MARKETPLACES[$i]}" == "claude-plugins-official" ]]; then
+          PLUGIN_SELECTED[$i]="true"
+        fi
+      else
+        # Bare name without collision — simple match
+        if [[ "$w" == "${PLUGIN_NAMES[$i]}" ]]; then
+          PLUGIN_SELECTED[$i]="true"
+        fi
       fi
     done
   done
@@ -294,10 +329,14 @@ _apply_plugins_from_csv() {
 
 _compute_selected_plugins() {
   local out=()
-  local i
+  local i entry
   for i in "${!PLUGIN_NAMES[@]}"; do
     if [[ "${PLUGIN_SELECTED[$i]}" == "true" ]]; then
-      out+=("${PLUGIN_NAMES[$i]}")
+      entry="${PLUGIN_NAMES[$i]}"
+      if _plugin_has_collision "${PLUGIN_NAMES[$i]}"; then
+        entry="${PLUGIN_NAMES[$i]}@${PLUGIN_MARKETPLACES[$i]}"
+      fi
+      out+=("$entry")
     fi
   done
   if [[ "${#out[@]}" -eq 0 ]]; then
@@ -616,11 +655,15 @@ _step_plugins() {
   printf "%s\n\n" "$STR_PLUGINS_NOTE"
 
   while true; do
-    local i
+    local i _display_name
     for i in "${!PLUGIN_NAMES[@]}"; do
       local mark="[ ]"
       if [[ "${PLUGIN_SELECTED[$i]}" == "true" ]]; then mark="[*]"; fi
-      printf "  %2d) %s %s\n" "$((i+1))" "$mark" "${PLUGIN_NAMES[$i]}"
+      _display_name="${PLUGIN_NAMES[$i]}"
+      if _plugin_has_collision "${PLUGIN_NAMES[$i]}"; then
+        _display_name="${PLUGIN_NAMES[$i]} [${PLUGIN_MARKETPLACES[$i]}]"
+      fi
+      printf "  %2d) %s %s\n" "$((i+1))" "$mark" "$_display_name"
     done
     printf "\n  %s\n\n" "$STR_TOGGLE_HINT"
 

@@ -1,7 +1,18 @@
 #!/bin/bash
 # install.sh - One-liner bootstrap for Claude Code Starter Kit
-# Usage: curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
-# Or:    curl -fsSL <url>/install.sh -o /tmp/install.sh && bash /tmp/install.sh
+#
+# Interactive (wizard):
+#   curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
+#
+# Non-interactive (standard profile, all default plugins):
+#   curl -fsSL <url>/install.sh | bash -s -- --non-interactive
+#   NONINTERACTIVE=1 bash -c "$(curl -fsSL <url>/install.sh)"
+#
+# Options (passed through to setup.sh):
+#   --non-interactive       Skip wizard, use standard profile defaults
+#   --profile=<name>        Profile: minimal, standard (default), full
+#   --language=<code>       Language: en (default), ja
+#   --plugins=<csv>         Override plugin selection (name or name@marketplace)
 set -euo pipefail
 
 REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
@@ -134,7 +145,30 @@ clone_or_update
 chmod +x "$INSTALL_DIR/setup.sh"
 chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
 
-info "Starting interactive setup..."
-# When run via 'curl | bash', stdin is the pipe, not the terminal.
-# Redirect stdin from /dev/tty so the interactive wizard can read input.
-exec bash "$INSTALL_DIR/setup.sh" "$@" </dev/tty
+# Support NONINTERACTIVE env var (same convention as Homebrew)
+_setup_args=("$@")
+if [[ -n "${NONINTERACTIVE:-}" ]]; then
+  _has_ni=false
+  for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
+    [[ "$_arg" == "--non-interactive" ]] && _has_ni=true
+  done
+  if [[ "$_has_ni" == "false" ]]; then
+    _setup_args+=("--non-interactive")
+  fi
+fi
+
+# Check if non-interactive mode is requested
+_is_noninteractive=false
+for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
+  [[ "$_arg" == "--non-interactive" ]] && _is_noninteractive=true
+done
+
+if [[ "$_is_noninteractive" == "true" ]]; then
+  info "Starting non-interactive setup (standard profile)..."
+  exec bash "$INSTALL_DIR/setup.sh" "${_setup_args[@]}"
+else
+  info "Starting interactive setup..."
+  # When run via 'curl | bash', stdin is the pipe, not the terminal.
+  # Redirect stdin from /dev/tty so the interactive wizard can read input.
+  exec bash "$INSTALL_DIR/setup.sh" "${_setup_args[@]}" </dev/tty
+fi

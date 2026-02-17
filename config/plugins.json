@@ -1,4 +1,8 @@
 {
+  "marketplaces": {
+    "claude-plugins-official": "anthropics/claude-plugins-official",
+    "claude-code-plugins": "anthropics/claude-code"
+  },
   "plugins": [
     {
       "name": "security-guidance",
@@ -59,6 +63,24 @@
       "marketplace": "claude-plugins-official",
       "description": "Rust language server integration",
       "profiles": ["full"]
+    },
+    {
+      "name": "superpowers",
+      "marketplace": "claude-plugins-official",
+      "description": "Skill system for brainstorming, TDD, debugging, and development workflows",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "pr-review-toolkit",
+      "marketplace": "claude-code-plugins",
+      "description": "Comprehensive PR review with specialized agents (community edition)",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "code-simplifier",
+      "marketplace": "claude-plugins-official",
+      "description": "Code simplification and refactoring assistant",
+      "profiles": ["standard", "full"]
     }
   ]
 }
