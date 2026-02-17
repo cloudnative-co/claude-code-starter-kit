@@ -15,11 +15,21 @@ bash setup.sh
 # Non-interactive setup
 bash setup.sh --non-interactive --profile=standard --language=en --editor=vscode
 
-# Validate all shell scripts
-shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
+# One-liner install (interactive)
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
+
+# One-liner install (non-interactive, standard profile + all default plugins)
+curl -fsSL <url>/install.sh | bash -s -- --non-interactive
+NONINTERACTIVE=1 bash -c "$(curl -fsSL <url>/install.sh)"
+
+# Validate all shell scripts (matches CI severity)
+shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
 
 # Validate a single file
 shellcheck lib/ghostty.sh
+
+# Validate plugins.json
+jq . config/plugins.json
 
 # Clean uninstall (manifest-based)
 bash uninstall.sh
@@ -33,6 +43,8 @@ All scripts use `set -euo pipefail`. ShellCheck (severity: warning) runs automat
 
 ```
 install.sh (macOS/Linux: clone repo + bootstrap)
+  ├── NONINTERACTIVE env or --non-interactive → passes --non-interactive to setup.sh
+  └── otherwise → interactive mode with /dev/tty redirect
 install.ps1 (Windows: WSL2 setup + clone repo via WSL + bootstrap)
   → setup.sh (orchestrator)
       → wizard/wizard.sh (CLI parsing + interactive prompts)
@@ -44,6 +56,7 @@ install.ps1 (Windows: WSL2 setup + clone repo via WSL + bootstrap)
       → lib/ghostty.sh (Ghostty install + config, macOS only, if enabled)
       → lib/fonts.sh (cross-platform font install + Windows Terminal auto-config)
       → write_manifest() — tracks deployed files for uninstall
+      → plugin marketplace registration + install (multi-marketplace)
       → Codex MCP setup (if enabled)
 ```
 
@@ -137,6 +150,7 @@ PowerShell entry point for Windows. Two modes:
 
 ## Key Conventions
 
+- **Bash 3.2 compatibility is mandatory** (macOS default). No associative arrays (`declare -A`), no `readarray`/`mapfile`, no `${var,,}` case conversion. Use indexed arrays with parallel arrays for key-value patterns (e.g., `PLUGIN_NAMES[]` + `PLUGIN_MARKETPLACES[]`).
 - **Variable naming**: `ENABLE_*` (feature toggles), `INSTALL_*` (component flags), `STR_*` (i18n strings), `_*` prefixed functions (private/internal)
 - **Boolean handling**: `_bool_normalize()` accepts true/1/yes/on → "true". Use `is_true()` for checks.
 - **No eval**: All dynamic variable assignment uses `printf -v` and `${!var}` (indirect expansion) to prevent injection.
@@ -154,6 +168,8 @@ PowerShell entry point for Windows. Two modes:
 - **Safe config loading**: Never source config files with `. "$file"`. Use `_safe_source_config()` which validates keys against `_CONFIG_ALLOWED_KEYS` allowlist and sanitizes values via `_sanitize_config_value()`.
 - **RC file modification**: When modifying shell RC files (`.bashrc`, `.zshrc`), preserve original permissions with `stat` + `chmod` after `mktemp` + `mv` operations (since `umask 077` would change them to 0600).
 - **sed delimiter choice**: When using `sed` with `|` delimiter (`s|...|...|`), escape `&`, `\`, and `|` in replacement strings — do NOT escape `/`.
+- **Top-level scope in setup.sh**: The plugin install section (after line ~430) runs in global scope, not inside a function. Use `_` prefixed variables (e.g., `_p`, `_p_name`, `_registered_mps`) instead of `local`.
+- **NONINTERACTIVE env var**: `install.sh` supports `NONINTERACTIVE=1` (Homebrew convention) to auto-add `--non-interactive` flag for setup.sh.
 
 ## Adding a New Feature
 
@@ -162,6 +178,13 @@ PowerShell entry point for Windows. Two modes:
 3. Add wizard step in `wizard/wizard.sh` with `STR_*` strings in both `i18n/en/strings.sh` and `i18n/ja/strings.sh`
 4. Add conditional merge in `build_settings()` in `setup.sh`
 5. If hook scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
+
+## Adding a New Plugin
+
+1. Add entry to `config/plugins.json` under `plugins[]` with `name`, `marketplace`, `description`, `profiles`
+2. If using a new marketplace, add its GitHub repo to `marketplaces` mapping in the same file
+3. Verify JSON: `jq . config/plugins.json`
+4. If the plugin name already exists in another marketplace, `_plugin_has_collision()` will auto-detect and the wizard will show `[marketplace]` suffix; `_compute_selected_plugins()` will produce `name@marketplace` in the CSV
 
 ## Platform Detection
 
