@@ -35,7 +35,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **14 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, and more
 - **11 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, and more
 - **8 optional hooks**: tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log
-- **10 plugin recommendations**
+- **13 plugin recommendations** (multi-marketplace support)
 - **i18n**: English & Japanese
 - **Codex MCP** sub-agent integration (optional, requires ChatGPT Plus + OpenAI API key)
 - **Non-interactive mode** for CI/automation
@@ -84,6 +84,12 @@ When you run `claude` for the first time, you'll be asked to choose an authentic
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
+```
+
+**Non-interactive one-liner** (skips wizard, uses Standard profile defaults):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
 ```
 
 ### Windows PowerShell (uses WSL2)
@@ -213,10 +219,16 @@ You can also **drag and drop image files** into the terminal to send them to Cla
 For CI, automation, or scripted setups:
 
 ```bash
+# One-liner non-interactive install (Standard profile + all default plugins)
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
+
+# Or use NONINTERACTIVE env var (same convention as Homebrew)
+NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh)"
+
 # Use standard profile with English and VS Code
 ./setup.sh --non-interactive --profile=standard --language=en --editor=vscode
 
-# Full control over hooks and plugins
+# Full control over hooks and plugins (use name@marketplace for disambiguation)
 ./setup.sh --non-interactive \
   --profile=standard \
   --language=en \
@@ -224,11 +236,13 @@ For CI, automation, or scripted setups:
   --codex-mcp=false \
   --commit-attribution=false \
   --hooks=tmux,git-push,prettier,console,memory,compact,pr-log \
-  --plugins=security-guidance,commit-commands,pr-review-toolkit
+  --plugins=security-guidance,commit-commands,pr-review-toolkit@claude-plugins-official,pr-review-toolkit@claude-code-plugins
 
 # Reuse a saved config
 ./setup.sh --non-interactive --config=./my-config.conf
 ```
+
+> **Plugin naming**: When the same plugin name exists in multiple marketplaces, use `name@marketplace` format (e.g., `pr-review-toolkit@claude-code-plugins`). Plugins without name conflicts can be specified by name alone.
 
 ## Directory Structure
 

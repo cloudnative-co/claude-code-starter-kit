@@ -226,6 +226,16 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 
 **ステップ 3**: ウィザード（対話型の質問画面）が始まるので、画面の指示に従って選択していきます
 
+#### 質問なしで一括セットアップしたい場合
+
+ウィザードの質問をスキップして、Standard プロファイルの推奨設定で一括インストールできます：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
+```
+
+> Standard プロファイルのエージェント、ルール、コマンド、スキル、フック、プラグインがすべて自動でインストールされます。
+
 ---
 
 ### 方法 2: Windows PowerShell（WSL2 を使用）
@@ -658,6 +668,19 @@ claude -r
 ウィザードの質問に答えず、コマンドだけでセットアップしたい場合に使います。
 CI/CD（自動デプロイ）やチーム全員の環境を統一したい場合に便利です。
 
+### ワンライナーで非対話インストール
+
+```bash
+# 方法 1: --non-interactive フラグ
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
+
+# 方法 2: NONINTERACTIVE 環境変数（Homebrew と同じ規約）
+NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh)"
+```
+
+> Standard プロファイルのデフォルト設定で自動セットアップします。
+> プラグイン（複数マーケットプレイス対応）もすべて自動でインストールされます。
+
 ### 基本的な使い方
 
 ```bash
@@ -685,8 +708,11 @@ CI/CD（自動デプロイ）やチーム全員の環境を統一したい場合
   --commit-attribution=false \
   --ghostty=true \
   --hooks=tmux,git-push,prettier,console,memory,compact,pr-log \
-  --plugins=security-guidance,commit-commands,pr-review-toolkit
+  --plugins=security-guidance,commit-commands,pr-review-toolkit@claude-plugins-official,pr-review-toolkit@claude-code-plugins
 ```
+
+> **プラグインの指定**: 同名のプラグインが複数のマーケットプレイスに存在する場合は `name@marketplace` 形式で指定します。
+> 衝突しないプラグインは従来通り名前だけで指定できます（例: `security-guidance`）。
 
 ### 保存済み設定を使う
 
