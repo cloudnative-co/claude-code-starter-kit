@@ -165,10 +165,10 @@ done
 
 if [[ "$_is_noninteractive" == "true" ]]; then
   info "Starting non-interactive setup (standard profile)..."
-  exec bash "$INSTALL_DIR/setup.sh" "${_setup_args[@]}"
+  exec bash "$INSTALL_DIR/setup.sh" ${_setup_args[@]+"${_setup_args[@]}"}
 else
   info "Starting interactive setup..."
   # When run via 'curl | bash', stdin is the pipe, not the terminal.
   # Redirect stdin from /dev/tty so the interactive wizard can read input.
-  exec bash "$INSTALL_DIR/setup.sh" "${_setup_args[@]}" </dev/tty
+  exec bash "$INSTALL_DIR/setup.sh" ${_setup_args[@]+"${_setup_args[@]}"} </dev/tty
 fi
