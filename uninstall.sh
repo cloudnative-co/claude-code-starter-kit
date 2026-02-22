@@ -113,9 +113,6 @@ _load_strings() {
   case "$lang" in
     ja)
       STR_TITLE="Claude Code Starter Kit - アンインストール"
-      STR_NO_MANIFEST="マニフェストが見つかりません: %s"
-      STR_NO_MANIFEST_HINT="スターターキットがデプロイしたファイルを特定できません。"
-      STR_NO_MANIFEST_MANUAL="すべての Claude Code 設定を削除するには %s を手動で削除してください"
       STR_FOUND_MANIFEST="%s のマニフェストが見つかりました（プロファイル: %s）"
       STR_WILL_REMOVE="追跡されている %s 個のファイルを削除します"
       STR_CONFIRM="アンインストールを実行しますか？ [y/N]"
@@ -137,9 +134,6 @@ _load_strings() {
       ;;
     *)
       STR_TITLE="Claude Code Starter Kit - Uninstall"
-      STR_NO_MANIFEST="No manifest found at %s"
-      STR_NO_MANIFEST_HINT="Cannot determine which files were deployed by the starter kit."
-      STR_NO_MANIFEST_MANUAL="If you want to remove all Claude Code config, manually delete %s"
       STR_FOUND_MANIFEST="Found manifest from %s (profile: %s)"
       STR_WILL_REMOVE="Will remove %s tracked files"
       STR_CONFIRM="Continue with uninstall? [y/N]"
