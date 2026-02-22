@@ -112,7 +112,7 @@ install_ibm_plex_mono() {
   case "$uname_s" in
     Darwin)
       # Already installed via brew?
-      if command -v brew &>/dev/null && brew list --cask font-ibm-plex-mono &>/dev/null 2>&1; then
+      if _brew_is_usable 2>/dev/null && brew list --cask font-ibm-plex-mono &>/dev/null 2>&1; then
         ok "${STR_FONT_IBM_ALREADY:-IBM Plex Mono is already installed}"
         return 0
       fi
@@ -122,8 +122,8 @@ install_ibm_plex_mono() {
         return 0
       fi
       info "${STR_FONT_IBM_INSTALLING:-Installing IBM Plex Mono...}"
-      # Try brew first, fall back to direct download
-      if command -v brew &>/dev/null && brew install --cask font-ibm-plex-mono 2>/dev/null; then
+      # Try brew first (only if usable), fall back to direct download
+      if _brew_is_usable 2>/dev/null && brew install --cask font-ibm-plex-mono 2>/dev/null; then
         ok "${STR_FONT_IBM_INSTALLED:-IBM Plex Mono installed}"
         return 0
       fi
@@ -171,7 +171,7 @@ install_hackgen_nf() {
   case "$uname_s" in
     Darwin)
       # Already installed via brew?
-      if command -v brew &>/dev/null && brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
+      if _brew_is_usable 2>/dev/null && brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
         ok "${STR_FONT_HACKGEN_ALREADY:-HackGen NF is already installed}"
         return 0
       fi
@@ -181,8 +181,8 @@ install_hackgen_nf() {
         return 0
       fi
       info "${STR_FONT_HACKGEN_INSTALLING:-Installing HackGen NF...}"
-      # Try brew first, fall back to direct download
-      if command -v brew &>/dev/null && brew install --cask font-hackgen-nerd 2>/dev/null; then
+      # Try brew first (only if usable), fall back to direct download
+      if _brew_is_usable 2>/dev/null && brew install --cask font-hackgen-nerd 2>/dev/null; then
         ok "${STR_FONT_HACKGEN_INSTALLED:-HackGen NF installed}"
         return 0
       fi

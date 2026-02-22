@@ -27,20 +27,26 @@ _ghostty_config_dir() {
 # Ensure Homebrew is available (find in PATH or standard locations)
 # ---------------------------------------------------------------------------
 _ghostty_ensure_brew() {
-  command -v brew &>/dev/null && return 0
+  # _brew_is_usable is defined in lib/prerequisites.sh (sourced earlier)
+  _brew_is_usable 2>/dev/null && return 0
 
   # Try standard Homebrew paths (may not be in PATH yet)
-  if [[ -x /opt/homebrew/bin/brew ]]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-  elif [[ -x /usr/local/bin/brew ]]; then
-    eval "$(/usr/local/bin/brew shellenv)"
+  if ! command -v brew &>/dev/null; then
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -x /usr/local/bin/brew ]]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
   fi
-  command -v brew &>/dev/null && return 0
+  _brew_is_usable 2>/dev/null && return 0
 
-  # Not installed - try to install (macOS only)
+  # Not installed or not usable (installed by another user) — try to install
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    info "Homebrew not found. Installing Homebrew..."
-    if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+    if command -v brew &>/dev/null; then
+      warn "Homebrew found but not writable by current user"
+    fi
+    info "Installing Homebrew..."
+    if NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
       if [[ -x /opt/homebrew/bin/brew ]]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
       elif [[ -x /usr/local/bin/brew ]]; then
@@ -49,7 +55,7 @@ _ghostty_ensure_brew() {
     fi
   fi
 
-  command -v brew &>/dev/null
+  _brew_is_usable 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -141,7 +147,7 @@ install_hackgen_font() {
   case "$uname_s" in
     Darwin)
       # Already installed via brew?
-      if command -v brew &>/dev/null && brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
+      if _brew_is_usable 2>/dev/null && brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
         ok "$STR_GHOSTTY_FONT_ALREADY"
         return 0
       fi

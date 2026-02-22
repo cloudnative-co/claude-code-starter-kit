@@ -13,33 +13,46 @@ NODE_MAJOR="${NODE_MAJOR:-20}"
 # Homebrew (macOS only)
 # ---------------------------------------------------------------------------
 
-# Ensure Homebrew is installed and in PATH.
+# Check if the current user can write to Homebrew's prefix directory.
+# Returns 1 if brew is not in PATH or the prefix is not writable
+# (e.g., Homebrew installed by another user).
+_brew_is_usable() {
+  command -v brew &>/dev/null || return 1
+  local prefix
+  prefix="$(brew --prefix 2>/dev/null)" || return 1
+  [[ -n "$prefix" && -w "$prefix" ]]
+}
+
+# Ensure Homebrew is installed, in PATH, and writable by the current user.
 # On Apple Silicon, brew lives at /opt/homebrew/bin/brew.
 # On Intel, it lives at /usr/local/bin/brew.
 _ensure_homebrew() {
   [[ "$DISTRO_FAMILY" != "macos" ]] && return 0
 
-  # Already in PATH
+  # Try to find brew in PATH or standard locations
+  if ! command -v brew &>/dev/null; then
+    local brew_bin=""
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      brew_bin="/opt/homebrew/bin/brew"
+    elif [[ -x /usr/local/bin/brew ]]; then
+      brew_bin="/usr/local/bin/brew"
+    fi
+    if [[ -n "$brew_bin" ]]; then
+      info "Adding Homebrew to PATH..."
+      eval "$("$brew_bin" shellenv)"
+    fi
+  fi
+
+  # If brew is found and usable (writable), we're done
+  if _brew_is_usable; then
+    return 0
+  fi
+
+  # Brew not found, or found but not writable (installed by another user)
   if command -v brew &>/dev/null; then
-    return 0
+    warn "Homebrew found but not writable by current user (installed by another user)"
   fi
-
-  # Installed but not in PATH (common on Apple Silicon after fresh install)
-  local brew_bin=""
-  if [[ -x /opt/homebrew/bin/brew ]]; then
-    brew_bin="/opt/homebrew/bin/brew"
-  elif [[ -x /usr/local/bin/brew ]]; then
-    brew_bin="/usr/local/bin/brew"
-  fi
-
-  if [[ -n "$brew_bin" ]]; then
-    info "Adding Homebrew to PATH..."
-    eval "$("$brew_bin" shellenv)"
-    return 0
-  fi
-
-  # Not installed — auto-install Homebrew
-  info "Homebrew not found. Installing..."
+  info "Installing Homebrew for current user..."
   if NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
     # Add newly installed Homebrew to PATH
     if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -47,7 +60,7 @@ _ensure_homebrew() {
     elif [[ -x /usr/local/bin/brew ]]; then
       eval "$(/usr/local/bin/brew shellenv)"
     fi
-    if command -v brew &>/dev/null; then
+    if _brew_is_usable; then
       ok "Homebrew installed"
       return 0
     fi
@@ -65,10 +78,10 @@ _ensure_homebrew() {
 _pkg_install() {
   case "$DISTRO_FAMILY" in
     macos)
-      if command -v brew &>/dev/null; then
+      if _brew_is_usable; then
         brew install "$@"
       else
-        error "Cannot install $*: Homebrew is not available."
+        error "Cannot install $*: Homebrew is not available or not writable."
         return 1
       fi
       ;;
@@ -243,7 +256,7 @@ _persist_node_path() {
 _install_node() {
   case "$DISTRO_FAMILY" in
     macos)
-      if command -v brew &>/dev/null; then
+      if _brew_is_usable; then
         brew install "node@${NODE_MAJOR}" 2>/dev/null || true
         # node@XX is keg-only (not symlinked into PATH). Add its bin dir
         # for the current session and persist it in the user's shell rc file.
@@ -253,7 +266,9 @@ _install_node() {
           export PATH="$node_prefix/bin:$PATH"
           _persist_node_path "$node_prefix/bin"
         fi
-      else
+      fi
+      # Fall back to nvm if brew is not usable or brew install didn't work
+      if ! command -v node &>/dev/null; then
         _install_node_via_nvm
       fi
       ;;
