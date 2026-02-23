@@ -1,0 +1,5 @@
+{
+  "name": "statusline",
+  "description": "Show token usage, context remaining, and version in the Claude Code status line",
+  "type": "settings"
+}

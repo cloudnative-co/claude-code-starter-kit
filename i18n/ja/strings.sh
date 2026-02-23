@@ -45,6 +45,7 @@ STR_FONTS_DESC="IBM Plex Mono と HackGen NF（Nerd Fonts）をインストー�
 STR_FONTS_YES="はい - IBM Plex Mono + HackGen NF をインストール"
 STR_FONTS_NO="いいえ - フォントのインストールをスキップ"
 STR_CONFIRM_FONTS="フォント"
+STR_CONFIRM_STATUSLINE="ステータスライン"
 
 # Font installation messages
 STR_FONTS_SECTION_TITLE="プログラミングフォントのインストール"

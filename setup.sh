@@ -191,6 +191,9 @@ build_settings() {
   if is_true "$ENABLE_PR_CREATION_LOG"; then
     hook_fragments+=("$PROJECT_DIR/features/pr-creation-log/hooks.json")
   fi
+  if is_true "${ENABLE_STATUSLINE:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
+  fi
 
   # Git push review: needs editor command substitution
   if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
@@ -251,6 +254,14 @@ deploy_hook_scripts() {
     cp -a "$PROJECT_DIR/features/strategic-compact/scripts"/. "$dest"/
     chmod +x "$dest"/*.sh
     ok "Installed strategic-compact hooks"
+  fi
+
+  if is_true "${ENABLE_STATUSLINE:-false}"; then
+    local dest="$CLAUDE_DIR/hooks/statusline"
+    mkdir -p "$dest"
+    cp -a "$PROJECT_DIR/features/statusline/scripts"/. "$dest"/
+    chmod +x "$dest"/*.sh
+    ok "Installed statusline script"
   fi
 }
 
