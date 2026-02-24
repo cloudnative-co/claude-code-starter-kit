@@ -34,7 +34,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **8 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents
 - **14 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, and more
 - **11 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, and more
-- **8 optional hooks**: tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log
+- **9 optional hooks**: tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit
 - **13 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp, pr-review-toolkit (community)
 - **i18n**: English & Japanese
 - **Codex MCP** sub-agent integration (optional, requires ChatGPT Plus + OpenAI API key)
@@ -235,7 +235,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --editor=cursor \
   --codex-mcp=false \
   --commit-attribution=false \
-  --hooks=tmux,git-push,prettier,console,memory,compact,pr-log \
+  --hooks=tmux,git-push,prettier,console,memory,compact,pr-log,pre-commit \
   --plugins=security-guidance,commit-commands,pr-review-toolkit@claude-plugins-official,pr-review-toolkit@claude-code-plugins
 
 # Reuse a saved config
