@@ -191,6 +191,9 @@ build_settings() {
   if is_true "$ENABLE_PR_CREATION_LOG"; then
     hook_fragments+=("$PROJECT_DIR/features/pr-creation-log/hooks.json")
   fi
+  if is_true "${ENABLE_PRE_COMPACT_COMMIT:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/pre-compact-commit/hooks.json")
+  fi
   if is_true "${ENABLE_STATUSLINE:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
   fi

@@ -81,6 +81,7 @@ STR_HOOKS_CONSOLE="Console.log ガード - console.log の警告"
 STR_HOOKS_MEMORY="メモリ永続化 - セッション状態の保存/復元"
 STR_HOOKS_COMPACT="戦略的コンパクト - 論理的なタイミングで /compact を提案"
 STR_HOOKS_PR_LOG="PR 作成ログ - PR 作成後に URL をログ"
+STR_HOOKS_PRE_COMMIT="コンパクト前自動コミット - compact 前に変更を自動コミット"
 
 # Step 6: Plugins
 STR_PLUGINS_TITLE="インストールするプラグインを選択してください（番号をスペース区切りで入力）："

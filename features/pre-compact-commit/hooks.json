@@ -1,0 +1,13 @@
+{
+  "PreCompact": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "cd \"$CLAUDE_PROJECT_DIR\" && git add -A && git diff --cached --quiet || git commit -m 'checkpoint: pre-compact auto-commit'"
+        }
+      ]
+    }
+  ]
+}

@@ -92,9 +92,10 @@ Wizard flow: `_load_plugins()` reads the JSON (including `PLUGIN_MARKETPLACES[]`
 
 Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings()` conditionally merges enabled features' fragments into `settings.json` via jq deep-merge (`*` operator).
 
-Two hook styles exist:
-- **Inline**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields (e.g., `features/tmux-hooks/hooks.json`)
-- **External scripts**: `hooks.json` references a script path with `__HOME__` token (e.g., `"command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`.
+Three fragment styles exist:
+- **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields (e.g., `features/tmux-hooks/hooks.json`)
+- **External script hooks**: `hooks.json` references a script path with `__HOME__` token (e.g., `"command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`.
+- **Top-level settings**: `hooks.json` can contain any top-level settings key (not just hooks). The jq deep-merge applies at root level, so `{"statusLine": {...}}` merges correctly (e.g., `features/statusline/hooks.json`).
 
 `build_settings_json()` in `lib/json-builder.sh` performs the merge:
 1. Deep-merge `settings-base.json` + `permissions.json` via `jq -s '.[0] * .[1]'`
@@ -173,11 +174,12 @@ PowerShell entry point for Windows. Two modes:
 
 ## Adding a New Feature
 
-1. Create `features/new-feature/feature.json` (metadata) and `hooks.json` (hook fragments)
+1. Create `features/new-feature/feature.json` (metadata) and `hooks.json` (hook fragments or top-level settings)
 2. Add `ENABLE_NEW_FEATURE=true/false` to each `profiles/*.conf`
-3. Add wizard step in `wizard/wizard.sh` with `STR_*` strings in both `i18n/en/strings.sh` and `i18n/ja/strings.sh`
-4. Add conditional merge in `build_settings()` in `setup.sh`
-5. If hook scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
+3. In `wizard/wizard.sh`: add variable initialization (`ENABLE_NEW_FEATURE="${ENABLE_NEW_FEATURE:-}"`), add to `_CONFIG_ALLOWED_KEYS`, add to `save_config()`, add confirmation display in `_step_confirm`, add default in `_fill_noninteractive_defaults()`
+4. Add `STR_CONFIRM_*` strings in both `i18n/en/strings.sh` and `i18n/ja/strings.sh`
+5. Add conditional merge in `build_settings()` in `setup.sh`
+6. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
 
 ## Adding a New Plugin
 

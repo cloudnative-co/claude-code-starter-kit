@@ -83,6 +83,7 @@ STR_HOOKS_CONSOLE="Console.log Guard - Warn about console.log statements"
 STR_HOOKS_MEMORY="Memory Persistence - Save/restore session state"
 STR_HOOKS_COMPACT="Strategic Compact - Suggest /compact at logical intervals"
 STR_HOOKS_PR_LOG="PR Creation Log - Log PR URL after creation"
+STR_HOOKS_PRE_COMMIT="Pre-compact Auto-commit - Auto-commit before context compaction"
 
 # Step 6: Plugins
 STR_PLUGINS_TITLE="Select plugins to install (enter numbers separated by spaces):"

@@ -104,7 +104,17 @@ build_settings_json() {
       warn "Invalid JSON in hook fragment, skipping: $fragment"
       continue
     fi
-    merged="$(echo "$merged" | jq --slurpfile frag "$fragment" '. * $frag[0]')"
+    merged="$(echo "$merged" | jq --slurpfile frag "$fragment" '
+      def merge_deep(a; b):
+        reduce (b | to_entries[]) as $e (a;
+          if (.[$e.key] | type) == "array" and ($e.value | type) == "array"
+          then .[$e.key] = (.[$e.key] + $e.value)
+          elif (.[$e.key] | type) == "object" and ($e.value | type) == "object"
+          then .[$e.key] = merge_deep(.[$e.key]; $e.value)
+          else .[$e.key] = $e.value
+          end
+        );
+      merge_deep(.; $frag[0])')"
   done
 
   printf '%s\n' "$merged" > "$output_file"

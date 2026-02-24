@@ -1,0 +1,5 @@
+{
+  "name": "pre-compact-commit",
+  "description": "Auto-commit all changes before context compaction to prevent work loss during long sessions",
+  "type": "hooks"
+}
