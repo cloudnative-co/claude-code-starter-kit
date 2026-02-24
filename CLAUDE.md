@@ -90,7 +90,7 @@ Wizard flow: `_load_plugins()` reads the JSON (including `PLUGIN_MARKETPLACES[]`
 
 ### Hook Fragment Assembly
 
-Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings()` conditionally merges enabled features' fragments into `settings.json` via jq deep-merge (`*` operator).
+Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings()` conditionally merges enabled features' fragments into `settings.json` via a custom jq deep-merge that **concatenates arrays** (so multiple features can add entries to the same hook type like `PreCompact`).
 
 Three fragment styles exist:
 - **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields (e.g., `features/tmux-hooks/hooks.json`)
@@ -99,7 +99,7 @@ Three fragment styles exist:
 
 `build_settings_json()` in `lib/json-builder.sh` performs the merge:
 1. Deep-merge `settings-base.json` + `permissions.json` via `jq -s '.[0] * .[1]'`
-2. Iteratively merge each hook fragment via `jq --slurpfile frag "$fragment" '. * $frag[0]'`
+2. Iteratively merge each hook fragment via `merge_deep()` — a recursive jq function that concatenates arrays (e.g., `PreCompact` entries from `memory-persistence` and `pre-compact-commit` coexist) while deep-merging objects and replacing scalars
 3. `replace_home_path()` substitutes `__HOME__` → actual `$HOME` in all string values
 4. Final `validate_json()` check before writing output
 
@@ -178,8 +178,11 @@ PowerShell entry point for Windows. Two modes:
 2. Add `ENABLE_NEW_FEATURE=true/false` to each `profiles/*.conf`
 3. In `wizard/wizard.sh`: add variable initialization (`ENABLE_NEW_FEATURE="${ENABLE_NEW_FEATURE:-}"`), add to `_CONFIG_ALLOWED_KEYS`, add to `save_config()`, add confirmation display in `_step_confirm`, add default in `_fill_noninteractive_defaults()`
 4. Add `STR_CONFIRM_*` strings in both `i18n/en/strings.sh` and `i18n/ja/strings.sh`
-5. Add conditional merge in `build_settings()` in `setup.sh`
-6. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
+5. If the feature is a hook, add to `HOOK_KEYS` array and `_apply_hooks_csv()` case in `wizard/wizard.sh`, and add `STR_HOOKS_*` strings in both i18n files. Add the hook label to `HOOK_LABELS` arrays in both `_step_hooks()` and `_step_confirm()`
+6. Add conditional merge in `build_settings()` in `setup.sh`
+7. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
+
+Multiple features can safely use the same hook type (e.g., `PreCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
 
 ## Adding a New Plugin
 
