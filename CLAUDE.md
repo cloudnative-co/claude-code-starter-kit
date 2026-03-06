@@ -172,6 +172,42 @@ PowerShell entry point for Windows. Two modes:
 - **Top-level scope in setup.sh**: The plugin install section (after line ~430) runs in global scope, not inside a function. Use `_` prefixed variables (e.g., `_p`, `_p_name`, `_registered_mps`) instead of `local`.
 - **NONINTERACTIVE env var**: `install.sh` supports `NONINTERACTIVE=1` (Homebrew convention) to auto-add `--non-interactive` flag for setup.sh.
 
+## Security Hardening
+
+### Permission Design (config/permissions.json)
+
+The permissions file implements a defense-in-depth strategy against prompt injection and credential exfiltration:
+
+**Removed from allowedTools (require user confirmation per invocation):**
+- `python3 *`, `node *` — Arbitrary code execution enables data exfiltration even when `curl` is denied (CVE context: indirect prompt injection via print/console.log in "example code")
+- `curl *`, `wget *` — Direct network exfiltration vectors
+- `cat *`, `head *`, `tail *` — Can bypass `Read(.env)` deny rules; use the Read tool instead
+- `source *`, `env *`, `export *` — Environment variable access/manipulation
+
+**deny list categories:**
+- **Network exfiltration**: curl, wget, nc, ncat, telnet, ssh, scp
+- **System escalation**: sudo, su, osascript, security
+- **Destructive git**: push --force, push -f, reset --hard, clean -f
+- **Credential file access**: `.env*`, `~/.ssh/*`, `~/.aws/*`, `~/.config/gh/*`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`
+- **RC file tampering**: `~/.zshrc`, `~/.bashrc` (Edit/Write denied)
+- **Clipboard exfiltration**: pbcopy, pbpaste
+
+**Top-level settings:**
+- `enableAllProjectMcpServers: false` — Prevents auto-approval of MCP servers from cloned repos (CVE-2025-59536)
+- `disableBypassPermissionsMode: "disable"` — Blocks `--dangerously-skip-permissions`
+
+**Known limitations:**
+- Absolute paths (`/Users/xxx/.ssh/`) or variable expansion (`$(echo ~/.ssh/id_rsa)`) can bypass pattern-based deny rules
+- MCP Tool Poisoning requires source code review, not just permissions
+- Package managers (`npm:*`, `pnpm:*`) remain broadly allowed for development workflow; `npm exec` could theoretically execute arbitrary code
+
+### References
+
+- CVE-2025-59536: Project `.claude/settings.json` MCP server approval bypass
+- CVE-2026-21852: `ANTHROPIC_BASE_URL` rewrite for API key theft
+- CVE-2025-6514: `mcp-remote` RCE vulnerability
+- Qiita: print-based indirect exfiltration via CI/CD logs (no network deny trigger)
+
 ## Adding a New Feature
 
 1. Create `features/new-feature/feature.json` (metadata) and `hooks.json` (hook fragments or top-level settings)
