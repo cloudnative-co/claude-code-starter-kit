@@ -21,6 +21,7 @@ One-command setup of a complete Claude Code development environment with an inte
 - [Directory Structure](#directory-structure)
 - [Customization](#customization)
 - [Uninstall](#uninstall)
+- [Changelog](#changelog)
 - [License](#license)
 
 ## Why This Repo
@@ -328,6 +329,10 @@ Shell scripts are statically analyzed with [ShellCheck](https://www.shellcheck.n
 ```bash
 shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
 ```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.
 
 ## License
 

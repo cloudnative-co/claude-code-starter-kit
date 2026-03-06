@@ -28,6 +28,7 @@ Claude Code を初めて使う人でも、**ワンコマンドで開発環境を
 - [FAQ](#-faq)
 - [トラブルシューティング](#-トラブルシューティング)
 - [ディレクトリ構成](#-ディレクトリ構成)
+- [更新履歴](#-更新履歴)
 - [ライセンス](#-ライセンス)
 
 ---
@@ -979,6 +980,12 @@ claude-code-starter-kit/
 ```bash
 shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
 ```
+
+---
+
+## 📋 更新履歴
+
+詳細な更新履歴は [CHANGELOG.md](CHANGELOG.md) をご覧ください。
 
 ---
 
