@@ -1,4 +1,4 @@
-[English README](README.en.md)
+[English README](README.en.md) | [更新履歴 (CHANGELOG)](CHANGELOG.md)
 
 # Claude Code Starter Kit
 

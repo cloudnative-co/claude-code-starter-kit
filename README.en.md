@@ -1,6 +1,6 @@
 # Claude Code Starter Kit
 
-[日本語 README](README.md)
+[日本語 README](README.md) | [Changelog](CHANGELOG.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform: macOS/Windows](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-blue.svg)](#installation)
