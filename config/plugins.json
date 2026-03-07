@@ -1,7 +1,6 @@
 {
   "marketplaces": {
-    "claude-plugins-official": "anthropics/claude-plugins-official",
-    "claude-code-plugins": "anthropics/claude-code"
+    "claude-plugins-official": "anthropics/claude-plugins-official"
   },
   "plugins": [
     {
@@ -68,12 +67,6 @@
       "name": "superpowers",
       "marketplace": "claude-plugins-official",
       "description": "Skill system for brainstorming, TDD, debugging, and development workflows",
-      "profiles": ["standard", "full"]
-    },
-    {
-      "name": "pr-review-toolkit",
-      "marketplace": "claude-code-plugins",
-      "description": "Comprehensive PR review with specialized agents (community edition)",
       "profiles": ["standard", "full"]
     },
     {
