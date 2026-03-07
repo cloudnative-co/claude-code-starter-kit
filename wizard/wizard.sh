@@ -337,7 +337,8 @@ _compute_selected_plugins() {
   for i in "${!PLUGIN_NAMES[@]}"; do
     if [[ "${PLUGIN_SELECTED[$i]}" == "true" ]]; then
       entry="${PLUGIN_NAMES[$i]}"
-      if _plugin_has_collision "${PLUGIN_NAMES[$i]}"; then
+      if _plugin_has_collision "${PLUGIN_NAMES[$i]}" \
+         || [[ "${PLUGIN_MARKETPLACES[$i]}" != "claude-plugins-official" ]]; then
         entry="${PLUGIN_NAMES[$i]}@${PLUGIN_MARKETPLACES[$i]}"
       fi
       out+=("$entry")

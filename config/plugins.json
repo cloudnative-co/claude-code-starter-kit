@@ -1,8 +1,7 @@
 {
   "marketplaces": {
     "claude-plugins-official": "anthropics/claude-plugins-official",
-    "claude-code-plugins": "anthropics/claude-code",
-    "claude-code-statusline": "loadbalance-sudachi-kun/claude-code-statusline"
+    "claude-code-plugins": "anthropics/claude-code"
   },
   "plugins": [
     {
@@ -82,12 +81,6 @@
       "marketplace": "claude-plugins-official",
       "description": "Code simplification and refactoring assistant",
       "profiles": ["standard", "full"]
-    },
-    {
-      "name": "claude-code-statusline",
-      "marketplace": "claude-code-statusline",
-      "description": "Enhanced status line display for Claude Code",
-      "profiles": ["minimal", "standard", "full"]
     }
   ]
 }
