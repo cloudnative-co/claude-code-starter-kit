@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-03-07
+
+### Changed
+- **ステータスライン刷新**: 簡易スクリプトからリッチ版に置き換え
+  - 3行表示: モデル名・コンテキスト%・diff統計・git branch・トークン数・バージョン情報・5h/7dレートリミットバー
+  - Haiku probe によるレートリミット取得（360秒キャッシュ）
+  - npm registry から最新バージョン取得（1時間キャッシュ）、current/latest 表示・差分時は黄色ハイライト
+  - タイムゾーン自動検出（ハードコード `Asia/Tokyo` を廃止）
+  - `stat` コマンドの macOS/Linux 両対応フォールバック
+
+### Fixed
+- **プラグイン marketplace 登録バグ**: `_compute_selected_plugins()` が非公式 marketplace のプラグインに `@marketplace` 修飾子を付けず、marketplace が登録されない問題を修正
+- **pr-review-toolkit 重複**: `claude-plugins-official` と `claude-code-plugins` の両方に登録されていた重複エントリを解消（official 版に統一）
+
+### Removed
+- `claude-code-statusline` プラグイン（marketplace 構造に非準拠でインストール不可能だった。機能は features/statusline に統合）
+- `claude-code-plugins` marketplace 定義（使用プラグインなし）
+
 ## [0.7.0] - 2026-03-06
 
 ### Added
