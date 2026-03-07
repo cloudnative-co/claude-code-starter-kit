@@ -65,6 +65,25 @@ eval "$(echo "$input" | jq -r '
 
 total_tokens=$(( total_input + total_output ))
 
+# ---------- Latest version (cached 1h) ----------
+LATEST_CACHE="/tmp/claude-latest-version.txt"
+LATEST_TTL=3600
+latest_version=""
+if [ -f "$LATEST_CACHE" ]; then
+  lv_age=$(( $(date +%s) - $(stat -f '%m' "$LATEST_CACHE" 2>/dev/null || stat -c '%Y' "$LATEST_CACHE" 2>/dev/null || echo 0) ))
+  if [ "$lv_age" -lt "$LATEST_TTL" ]; then
+    latest_version=$(cat "$LATEST_CACHE")
+  fi
+fi
+if [ -z "$latest_version" ]; then
+  latest_version=$(curl -s --max-time 3 "https://registry.npmjs.org/@anthropic-ai/claude-code/latest" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true)
+  if [ -n "$latest_version" ]; then
+    printf '%s' "$latest_version" > "$LATEST_CACHE"
+  elif [ -f "$LATEST_CACHE" ]; then
+    latest_version=$(cat "$LATEST_CACHE")
+  fi
+fi
+
 # ---------- Git branch ----------
 git_branch=""
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
@@ -226,7 +245,15 @@ if [ "$total_tokens" -gt 0 ] 2>/dev/null; then
 fi
 
 if [ -n "$cc_version" ] && [ "$cc_version" != "0.0.0" ]; then
-  line1+="${SEP}v${cc_version}"
+  ver_display="current: ${cc_version}"
+  if [ -n "$latest_version" ]; then
+    if [ "$cc_version" = "$latest_version" ]; then
+      ver_display+=" ${DIM}· latest: ${latest_version}${RESET}"
+    else
+      ver_display+=" · ${YELLOW}latest: ${latest_version}${RESET}"
+    fi
+  fi
+  line1+="${SEP}${ver_display}"
 fi
 
 # ---------- Line 2 (5h) ----------
