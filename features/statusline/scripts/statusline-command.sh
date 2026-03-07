@@ -204,17 +204,17 @@ if [ -n "$used_pct" ] && [ "$used_pct" != "null" ] && [ "$used_pct" != "0" ]; th
 fi
 
 # ---------- Line 1 ----------
-SEP="${GRAY} | ${RESET}"
+SEP="${GRAY} │ ${RESET}"
 ctx_color=$(color_for_pct "$ctx_pct_int")
 
-line1="${model_name}${SEP}${ctx_color}${ctx_pct_int}%${RESET}"
+line1="🤖 ${model_name}${SEP}${ctx_color}📊 ${ctx_pct_int}%${RESET}"
 
 if [ -n "$git_stats" ]; then
-  line1+="${SEP}${GREEN}${git_stats}${RESET}"
+  line1+="${SEP}✏️  ${GREEN}${git_stats}${RESET}"
 fi
 
 if [ -n "$git_branch" ]; then
-  line1+="${SEP}${git_branch}"
+  line1+="${SEP}🔀 ${git_branch}"
 fi
 
 # ---------- Line 2 (5h) ----------
@@ -222,10 +222,10 @@ line2=""
 if [ -n "$FIVE_HOUR_PCT" ]; then
   c5=$(color_for_pct "$FIVE_HOUR_PCT")
   bar5=$(progress_bar "$FIVE_HOUR_PCT")
-  line2="${c5}5h  ${bar5}  ${FIVE_HOUR_PCT}%${RESET}"
+  line2="${c5}⏱ 5h  ${bar5}  ${FIVE_HOUR_PCT}%${RESET}"
   [ -n "$five_reset_display" ] && line2+="  ${DIM}${five_reset_display}${RESET}"
 else
-  line2="${GRAY}5h  ▱▱▱▱▱▱▱▱▱▱  --%${RESET}"
+  line2="${GRAY}⏱ 5h  ▱▱▱▱▱▱▱▱▱▱  --%${RESET}"
 fi
 
 # ---------- Line 3 (7d) ----------
@@ -233,10 +233,10 @@ line3=""
 if [ -n "$SEVEN_DAY_PCT" ]; then
   c7=$(color_for_pct "$SEVEN_DAY_PCT")
   bar7=$(progress_bar "$SEVEN_DAY_PCT")
-  line3="${c7}7d  ${bar7}  ${SEVEN_DAY_PCT}%${RESET}"
+  line3="${c7}📅 7d  ${bar7}  ${SEVEN_DAY_PCT}%${RESET}"
   [ -n "$seven_reset_display" ] && line3+="  ${DIM}${seven_reset_display}${RESET}"
 else
-  line3="${GRAY}7d  ▱▱▱▱▱▱▱▱▱▱  --%${RESET}"
+  line3="${GRAY}📅 7d  ▱▱▱▱▱▱▱▱▱▱  --%${RESET}"
 fi
 
 # ---------- Output ----------
