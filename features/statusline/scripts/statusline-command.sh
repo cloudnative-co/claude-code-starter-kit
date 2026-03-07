@@ -58,8 +58,12 @@ eval "$(echo "$input" | jq -r '
   "cwd=" + (.cwd // "" | @sh),
   "lines_added=" + (.cost.total_lines_added // 0 | tostring),
   "lines_removed=" + (.cost.total_lines_removed // 0 | tostring),
-  "cc_version=" + (.version // "0.0.0" | @sh)
+  "cc_version=" + (.version // "0.0.0" | @sh),
+  "total_input=" + (.context_window.current_usage.input_tokens // 0 | tostring),
+  "total_output=" + (.context_window.current_usage.output_tokens // 0 | tostring)
 ' 2>/dev/null)"
+
+total_tokens=$(( total_input + total_output ))
 
 # ---------- Git branch ----------
 git_branch=""
@@ -215,6 +219,14 @@ fi
 
 if [ -n "$git_branch" ]; then
   line1+="${SEP}🔀 ${git_branch}"
+fi
+
+if [ "$total_tokens" -gt 0 ] 2>/dev/null; then
+  line1+="${SEP}${total_tokens} tokens"
+fi
+
+if [ -n "$cc_version" ] && [ "$cc_version" != "0.0.0" ]; then
+  line1+="${SEP}v${cc_version}"
 fi
 
 # ---------- Line 2 (5h) ----------
