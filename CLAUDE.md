@@ -19,8 +19,8 @@ bash setup.sh --non-interactive --profile=standard --language=en --editor=vscode
 curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
 
 # One-liner install (non-interactive, standard profile + all default plugins)
-curl -fsSL <url>/install.sh | bash -s -- --non-interactive
-NONINTERACTIVE=1 bash -c "$(curl -fsSL <url>/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
+NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh)"
 
 # Validate all shell scripts (matches CI severity)
 shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
@@ -178,13 +178,13 @@ PowerShell entry point for Windows. Two modes:
 
 The permissions file implements a defense-in-depth strategy against prompt injection and credential exfiltration:
 
-**Removed from allowedTools (require user confirmation per invocation):**
+**Removed from permissions.allow (require user confirmation per invocation):**
 - `python3 *`, `node *` — Arbitrary code execution enables data exfiltration even when `curl` is denied (CVE context: indirect prompt injection via print/console.log in "example code")
 - `curl *`, `wget *` — Direct network exfiltration vectors
 - `cat *`, `head *`, `tail *` — Can bypass `Read(.env)` deny rules; use the Read tool instead
 - `source *`, `env *`, `export *` — Environment variable access/manipulation
 
-**deny list categories:**
+**permissions.deny categories:**
 - **Network exfiltration**: curl, wget, nc, ncat, telnet, ssh, scp
 - **System escalation**: sudo, su, osascript, security
 - **Destructive git**: push --force, push -f, reset --hard, clean -f

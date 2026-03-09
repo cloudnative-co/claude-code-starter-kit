@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] - 2026-03-10
+
+### Fixed
+- **permissions 構造バグ**: `deny` と `allowedTools` が `permissions` オブジェクトの外にトップレベルで出力されていた問題を修正（[公式スキーマ](https://json.schemastore.org/claude-code-settings.json) 準拠）
+  - `deny` → `permissions.deny` にネスト
+  - `allowedTools` → `permissions.allow` にリネーム＋ネスト
+  - `settings-base.json` から空の `permissions: {}` を削除（マージ時の上書き防止）
+  - Thanks to [@enpipi](https://github.com/enpipi) for reporting!
+
 ## [0.8.0] - 2026-03-07
 
 ### Changed
