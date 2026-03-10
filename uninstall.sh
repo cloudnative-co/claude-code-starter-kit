@@ -248,6 +248,14 @@ if [[ -f "$HOME/.claude-starter-kit.conf" ]]; then
   ok "$STR_REMOVED_CONFIG"
 fi
 
+# Remove auto-update cache file
+rm -f "$CLAUDE_DIR/.starter-kit-update-cache"
+
+# Remove snapshot directory (used by update mechanism)
+if [[ -d "$CLAUDE_DIR/.starter-kit-snapshot" ]]; then
+  rm -rf "$CLAUDE_DIR/.starter-kit-snapshot"
+fi
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
