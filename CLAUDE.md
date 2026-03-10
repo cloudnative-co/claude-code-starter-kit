@@ -33,6 +33,15 @@ jq . config/plugins.json
 
 # Clean uninstall (manifest-based)
 bash uninstall.sh
+
+# Update existing installation (auto-detected when re-running install.sh)
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
+
+# Force update mode explicitly
+bash setup.sh --update
+
+# Force full re-setup (ignores existing installation)
+bash setup.sh
 ```
 
 All scripts use `set -euo pipefail`. ShellCheck (severity: warning) runs automatically on PRs via `.github/workflows/shellcheck.yml`. There is no traditional test suite (jest, pytest, etc.) — validation is ShellCheck CI only.
@@ -56,8 +65,15 @@ install.ps1 (Windows: WSL2 setup + clone repo via WSL + bootstrap)
       → lib/ghostty.sh (Ghostty install + config, macOS only, if enabled)
       → lib/fonts.sh (cross-platform font install + Windows Terminal auto-config)
       → write_manifest() — tracks deployed files for uninstall
+      → _write_snapshot() — saves deployed files for future update comparison
       → plugin marketplace registration + install (multi-marketplace)
       → Codex MCP setup (if enabled)
+
+install.sh (re-run with manifest v2 + snapshot)
+  → setup.sh --update (update mode)
+      → _restore_config_from_manifest() — reads settings from manifest
+      → run_update() — 3-way merge settings.json, selective file updates
+      → write_manifest() — updates manifest v2
 ```
 
 Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
@@ -133,6 +149,28 @@ PowerShell entry point for Windows. Two modes:
 ### Manifest-Based Uninstall
 
 `write_manifest()` records all deployed file paths in `~/.claude/.starter-kit-manifest.json`. `uninstall.sh` reads this manifest and removes only tracked files, preserving user-added content. Uninstall is self-contained (inline platform detection, jq with grep/sed fallback).
+
+### Update Mechanism
+
+When `install.sh` detects an existing installation with manifest v2 + snapshot, it automatically switches to update mode (`setup.sh --update`). This preserves user-customized settings while applying kit updates.
+
+**Three-way comparison:** For each kit-managed file, the system compares:
+- **Snapshot** (what kit deployed last time)
+- **Current** (what's on disk now, possibly user-modified)
+- **New kit** (what the updated kit would deploy)
+
+**Decision matrix:**
+| Snapshot vs Current | Snapshot vs New Kit | Action |
+|---|---|---|
+| Same | Different | Overwrite with new kit |
+| Different | Same | Keep current (no kit changes) |
+| Different | Different | Interactive prompt |
+
+**settings.json merge:** Uses jq-based 3-way merge at the key level. Arrays (permissions, hooks) are merged with deduplication. User-added keys (e.g., `mcpServers`) are preserved. Scalar conflicts prompt the user.
+
+**Non-interactive update:** `--non-interactive` skips all prompts, keeping user-modified files and only updating unchanged ones.
+
+**Snapshot directory:** `~/.claude/.starter-kit-snapshot/` mirrors the structure of `~/.claude/` for kit-managed files only.
 
 ### Deploy Targets
 
