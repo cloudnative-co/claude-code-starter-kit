@@ -146,6 +146,50 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 - **Standard**: Best for most teams. Includes commands, skills, core hooks, and memory
 - **Full**: Everything enabled including all hooks and Codex MCP sub-agent delegation
 
+### Hooks
+
+Hooks are automated safety checks that run automatically when Claude Code executes commands or edits files.
+
+| Hook | Description |
+|---|---|
+| **Safety Net** | Blocks destructive git/filesystem commands (`git reset --hard`, `rm -rf`, `git push --force`, etc.) before execution |
+| **Auto Update** | Checks for starter kit updates on session start and applies them in the background |
+| Tmux Reminder | Suggests tmux for long-running commands |
+| Git Push Review | Pauses before git push for code review |
+| Doc Blocker | Prevents creation of unnecessary .md/.txt files |
+| Prettier Auto-format | Formats JS/TS files after edits |
+| Console.log Guard | Warns about console.log statements left in code |
+| Memory Persistence | Saves/restores session state across sessions |
+| Strategic Compact | Suggests /compact at logical intervals |
+| PR Creation Log | Logs PR URL after creation |
+| Pre-compact Auto-commit | Auto-commits changes before context compaction |
+
+#### Safety Net
+
+[cc-safety-net](https://github.com/kenryu42/claude-code-safety-net) intercepts Bash commands via a PreToolUse hook and blocks destructive operations before they execute.
+
+Blocked commands include:
+- `git reset --hard` — discards uncommitted changes
+- `git checkout -- <file>` — discards file changes
+- `git push --force` — overwrites remote history
+- `rm -rf` — irreversible file/directory deletion
+
+STRICT mode (`SAFETY_NET_STRICT=1`) is enabled by default, causing unparseable commands to be blocked (fail-closed).
+
+> **Enabled by default in Standard / Full profiles.** Requires `npm install -g cc-safety-net`.
+
+#### Auto Update
+
+Automatically checks for new starter kit releases on GitHub at the start of each Claude Code session.
+
+- **24-hour cache**: Only checks once per day (cache-hit exits in < 1ms)
+- **Background execution**: Updates run in the background, so session startup is not blocked
+- **Settings preserved**: 3-way merge keeps your customizations intact
+- **One-liner installs only**: Only works when the kit is installed at `~/.claude-starter-kit/`
+- Changes take effect on the next session
+
+> **Enabled by default in Standard / Full profiles.** Disable with `ENABLE_AUTO_UPDATE=false` in the hooks selection.
+
 ## Usage
 
 > **Important: You must restart your terminal after setup.**
