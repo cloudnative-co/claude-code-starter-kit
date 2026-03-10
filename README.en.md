@@ -23,12 +23,6 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
 ```
 
-**Non-interactive (skip wizard, Standard profile):**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
-```
-
 > Restart your terminal after install, then run `claude`. See [Installation](#installation) for details.
 
 ---

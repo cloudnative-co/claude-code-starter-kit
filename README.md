@@ -24,12 +24,6 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
 ```
 
-**質問なしで一括セットアップ:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
-```
-
 > インストール後はターミナルを再起動して `claude` を実行。詳しくは [インストール](#-インストール) を参照。
 
 ---
