@@ -276,6 +276,9 @@ write_manifest() {
   local ts
   ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+  local kit_version
+  kit_version="$(git -C "$PROJECT_DIR" describe --tags --abbrev=0 2>/dev/null || echo "unknown")"
+
   # Only track files in starter-kit-managed directories (not plugins, sessions, etc.)
   local files_json
   files_json="$({
@@ -287,19 +290,25 @@ write_manifest() {
   } | sort -u | jq -R -s 'split("\n")[:-1]')"
 
   jq -n \
+    --arg version "2" \
     --arg ts "$ts" \
+    --arg kit_version "$kit_version" \
     --arg profile "${PROFILE:-}" \
     --arg language "${LANGUAGE:-}" \
     --arg editor "${EDITOR_CHOICE:-}" \
     --arg plugins "${SELECTED_PLUGINS:-}" \
     --argjson files "$files_json" \
+    --arg snapshot_dir "$CLAUDE_DIR/.starter-kit-snapshot" \
     '{
+      version: $version,
       timestamp: $ts,
+      kit_version: $kit_version,
       profile: $profile,
       language: $language,
       editor: $editor,
       plugins: $plugins,
-      files: $files
+      files: $files,
+      snapshot_dir: $snapshot_dir
     }' > "$manifest"
 }
 
