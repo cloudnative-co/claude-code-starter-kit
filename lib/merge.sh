@@ -73,7 +73,7 @@ _merge_arrays_3way() {
       while [[ "$i" -lt "$removed_count" ]]; do
         local item
         item="$(printf '%s' "$kit_removed" | jq ".[$i]")"
-        printf "\n${YELLOW}[WARN]${NC} The kit removed an array item:\n" >&2
+        warn "The kit removed an array item:"
         printf "  %s\n" "$item" >&2
         printf "  [K]eep (your value) / [R]emove (kit's choice): " >&2
         local reply
@@ -123,7 +123,7 @@ _prompt_scalar_conflict() {
   fi
 
   # Interactive: show conflict and prompt
-  printf "\n${YELLOW}[WARN]${NC} Conflict on key: %s\n" "$key" >&2
+  warn "Conflict on key: $key"
   printf "  Your value : %s\n" "$c_val" >&2
   printf "  Kit's value: %s\n" "$n_val" >&2
   printf "  [K]eep yours / [U]se kit's: " >&2
@@ -211,6 +211,14 @@ _merge_object_3way() {
       chosen="$nv"
     elif [[ "$s_eq_c" == "true" ]]; then
       # User didn't change → use newkit value
+      if [[ "$nv" == "null" ]]; then
+        # Kit removed sub-key → delete it
+        obj_merged="$(jq -n \
+          --argjson obj "$obj_merged" \
+          --arg k "$sub_key" \
+          '$obj | del(.[$k])')"
+        continue
+      fi
       chosen="$nv"
     elif [[ "$s_eq_n" == "true" ]]; then
       # Kit didn't change → keep current value
