@@ -73,7 +73,7 @@ parse_json() {
 # ---------- Parse stdin fields ----------
 model_name=$(parse_json "$input" '.model.display_name // empty' 'Unknown')
 used_pct=$(parse_json "$input" '.context_window.used_percentage // 0' '0')
-remaining_pct=$(parse_json "$input" '.context_window.remaining_percentage // 100' '100')
+# remaining_pct not displayed; omitted to avoid shellcheck SC2034
 ctx_size=$(parse_json "$input" '.context_window.context_window_size // 0' '0')
 cwd=$(parse_json "$input" '.cwd // empty' '')
 lines_added=$(parse_json "$input" '.cost.total_lines_added // 0' '0')
@@ -125,10 +125,8 @@ fi
 # ---------- Separator ----------
 SEP="${GRAY} │ ${RESET}"
 
-# ========== Line 1: Model | Context% | Changes | Branch ==========
-ctx_color=$(color_for_pct "$ctx_pct_int")
-
-line1="🤖 ${model_name}${SEP}${ctx_color}📊 ${ctx_pct_int}%${RESET}"
+# ========== Line 1: Model | Changes | Branch ==========
+line1="🤖 ${model_name}"
 
 if [[ -n "$git_stats" ]]; then
   line1+="${SEP}✏️  ${GREEN}${git_stats}${RESET}"
