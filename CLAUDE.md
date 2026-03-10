@@ -150,6 +150,12 @@ PowerShell entry point for Windows. Two modes:
 
 `write_manifest()` records all deployed file paths in `~/.claude/.starter-kit-manifest.json`. `uninstall.sh` reads this manifest and removes only tracked files, preserving user-added content. Uninstall is self-contained (inline platform detection, jq with grep/sed fallback).
 
+In addition to manifest-tracked files, `uninstall.sh` explicitly removes:
+- `~/.claude/.starter-kit-update-cache` — auto-update timestamp cache
+- `~/.claude/.starter-kit-snapshot/` — update mechanism snapshot directory
+
+When adding features that create files outside `~/.claude/{agents,rules,commands,skills,memory,hooks}/`, add explicit cleanup to `uninstall.sh`'s "Clean saved config" section.
+
 ### Update Mechanism
 
 When `install.sh` detects an existing installation with manifest v2 + snapshot, it automatically switches to update mode (`setup.sh --update`). This preserves user-customized settings while applying kit updates.
@@ -255,8 +261,13 @@ The permissions file implements a defense-in-depth strategy against prompt injec
 5. If the feature is a hook, add to `HOOK_KEYS` array and `_apply_hooks_csv()` case in `wizard/wizard.sh`, and add `STR_HOOKS_*` strings in both i18n files. Add the hook label to `HOOK_LABELS` arrays in both `_step_hooks()` and `_step_confirm()`
 6. Add conditional merge in `build_settings()` in `setup.sh`
 7. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
+8. If the feature creates files outside the standard manifest-tracked directories, add explicit cleanup to `uninstall.sh`
 
 Multiple features can safely use the same hook type (e.g., `PreCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
+
+**Hook ordering matters**: `safety-net` must be the **first** entry in `hook_fragments[]` so its `PreToolUse` entry appears at index 0 (runs before other PreToolUse hooks). When adding new PreToolUse hooks, append after safety-net.
+
+**`build_settings()` and `build_settings_to_file()` are parallel implementations** in `setup.sh`. When adding or reordering hook fragments, update **both** functions identically. `build_settings()` writes to `~/.claude/settings.json` directly; `build_settings_to_file()` writes to a specified path (used by update mechanism for comparison).
 
 ## Adding a New Plugin
 
@@ -264,6 +275,16 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`) — `me
 2. If using a new marketplace, add its GitHub repo to `marketplaces` mapping in the same file
 3. Verify JSON: `jq . config/plugins.json`
 4. If the plugin name already exists in another marketplace, `_plugin_has_collision()` will auto-detect and the wizard will show `[marketplace]` suffix; `_compute_selected_plugins()` will produce `name@marketplace` in the CSV
+
+## Notable Features
+
+### Safety Net (`features/safety-net/`)
+
+PreToolUse hook via [cc-safety-net](https://github.com/kenryu42/claude-code-safety-net). Blocks destructive commands (`git reset --hard`, `rm -rf`, etc.) before execution. Uses `SAFETY_NET_STRICT=1` env (fail-closed for unparseable commands). The `env` key in `hooks.json` is deep-merged into `settings.json` top-level. Requires `npm install -g cc-safety-net` (external dependency, not managed by kit).
+
+### Auto Update (`features/auto-update/`)
+
+SessionStart hook that checks GitHub for new kit versions with 24h file cache (`~/.claude/.starter-kit-update-cache`). Only activates for one-liner installs (`~/.claude-starter-kit/.git` must exist). Updates run in background `( ... ) &` to avoid blocking session startup. Calls `setup.sh --update` for 3-way merge.
 
 ## Platform Detection
 
