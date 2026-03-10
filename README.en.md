@@ -70,17 +70,18 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 | **Pro** | $20/mo | Individuals (starter) | Claude Code access, standard usage |
 | **Max (5x)** | $100/mo | Individuals (heavy use) | 5x Pro usage, ideal for extended coding |
 | **Max (20x)** | $200/mo | Individuals (power user) | 20x Pro usage, for large-scale projects |
-| **Teams** | $30/user/mo | Teams | Shared workspace, admin controls |
-| **Enterprise** | Contact sales | Large orgs | SSO, audit logs, custom contracts |
+| **Teams Standard** | $25/user/mo | Teams | Shared workspace, admin controls, SSO (SAML) |
+| **Teams Premium** | $150/user/mo | Teams (advanced) | All Standard features + higher usage limits |
+| **Enterprise** | Contact sales | Large orgs | Custom contracts, audit logs, advanced security |
 
-> **Note**: Prices shown are as of 2025. Check [claude.ai/pricing](https://claude.ai/pricing) for current rates.
+> **Note**: Prices shown are as of March 2026. Check [claude.com/pricing](https://claude.com/pricing) for current rates.
 > Using Codex MCP (OpenAI integration) requires a separate ChatGPT Plus subscription ($20+/mo) and OpenAI API usage fees.
 
 > **Linux**: This kit is designed for macOS and Windows. If you want to use it on Linux, adjustments may be needed depending on your distribution (Ubuntu, Fedora, etc.) and desktop environment (GNOME, KDE, etc.). Try the one-liner or manual installation method.
 
 ### For individuals
 
-Subscribe to [Claude Pro or Max](https://claude.ai/pricing). Create an account at [claude.ai](https://claude.ai) and upgrade your plan.
+Subscribe to [Claude Pro or Max](https://claude.com/pricing). Create an account at [claude.ai](https://claude.ai) and upgrade your plan.
 
 ### For teams and organizations
 
