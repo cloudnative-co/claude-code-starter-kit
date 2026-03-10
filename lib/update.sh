@@ -174,6 +174,7 @@ run_update() {
     if ! _file_changed "$snapshot_settings" "$current_settings"; then
       # User didn't change settings → safe to overwrite
       cp -a "$new_settings" "$current_settings"
+      updated_files+=("$current_settings")
       ok "$STR_UPDATE_SETTINGS_UPDATED"
     elif ! _file_changed "$snapshot_settings" "$new_settings"; then
       # Kit didn't change → keep current
@@ -182,14 +183,15 @@ run_update() {
       # Both changed → 3-way merge
       info "$STR_UPDATE_SETTINGS_MERGING"
       merge_settings_3way "$snapshot_settings" "$current_settings" "$new_settings" "$current_settings"
+      updated_files+=("$current_settings")
       ok "$STR_UPDATE_SETTINGS_MERGED"
     fi
   else
     # No snapshot → treat as fresh install for settings
     cp -a "$new_settings" "$current_settings"
+    updated_files+=("$current_settings")
     ok "$STR_UPDATE_SETTINGS_UPDATED"
   fi
-  updated_files+=("$current_settings")
 
   # --- Phase 2: CLAUDE.md ---
   info "$STR_UPDATE_CLAUDEMD"
@@ -248,7 +250,7 @@ run_update() {
   # --- Phase 5: Update snapshot for each updated file ---
   info "$STR_UPDATE_SNAPSHOT"
   local file
-  for file in "${updated_files[@]}"; do
+  for file in "${updated_files[@]+"${updated_files[@]}"}"; do
     _update_snapshot_file "$claude_dir" "$file"
   done
   ok "$STR_UPDATE_SNAPSHOT_DONE"
