@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-03-10
+
+### Added
+- **Update メカニズム**: `install.sh` 再実行時にユーザー設定を保持しつつ kit を更新する仕組み
+  - Snapshot 比較方式: デプロイ時のファイルを `~/.claude/.starter-kit-snapshot/` に保存し、次回 update 時に3者比較（snapshot / current / new_kit）
+  - `settings.json` の jq ベース3者マージ: 配列（permissions, hooks）はユーザー追加分を保持しつつ kit 新規エントリを追加。スカラー競合は対話的に解決
+  - ファイル（agents, rules, skills 等）: ユーザー変更を検出し `[A]ppend / [S]kip / [D]iff` の対話 UI で選択
+  - `--non-interactive` 時はユーザー変更ありのファイルをスキップ（安全側）
+  - manifest v2 形式: `version`, `kit_version`, `snapshot_dir` フィールドを追加
+  - `install.sh` が manifest v2 + snapshot を検出すると自動的に update モード（`setup.sh --update`）に切り替え
+  - manifest v1 からの初回実行はフル再セットアップ + snapshot 作成（次回から update 対応）
+- 新規ライブラリ: `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`
+- i18n: `STR_UPDATE_*` 文字列（英語・日本語）
+
 ## [0.8.1] - 2026-03-10
 
 ### Fixed
