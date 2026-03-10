@@ -157,14 +157,46 @@ if [[ -n "${NONINTERACTIVE:-}" ]]; then
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# Auto-detect update mode via manifest
+# ---------------------------------------------------------------------------
+_manifest="$HOME/.claude/.starter-kit-manifest.json"
+_snapshot_dir="$HOME/.claude/.starter-kit-snapshot"
+_update_mode=false
+
+if [[ -f "$_manifest" ]]; then
+  _manifest_version=""
+  if command -v jq &>/dev/null; then
+    _manifest_version="$(jq -r '.version // "1"' "$_manifest" 2>/dev/null || echo "1")"
+  fi
+
+  if [[ "$_manifest_version" == "2" ]] && [[ -d "$_snapshot_dir" ]]; then
+    _update_mode=true
+    info "Existing installation detected (manifest v2). Running update mode."
+    _has_update=false
+    for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
+      [[ "$_arg" == "--update" ]] && _has_update=true
+    done
+    if [[ "$_has_update" == "false" ]]; then
+      _setup_args+=("--update")
+    fi
+  else
+    info "Existing installation detected (manifest v1). Running full setup with snapshot."
+  fi
+fi
+
 # Check if non-interactive mode is requested
 _is_noninteractive=false
 for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
-  [[ "$_arg" == "--non-interactive" ]] && _is_noninteractive=true
+  [[ "$_arg" == "--non-interactive" || "$_arg" == "--update" ]] && _is_noninteractive=true
 done
 
 if [[ "$_is_noninteractive" == "true" ]]; then
-  info "Starting non-interactive setup (standard profile)..."
+  if [[ "$_update_mode" == "true" ]]; then
+    info "Starting update..."
+  else
+    info "Starting non-interactive setup (standard profile)..."
+  fi
   exec bash "$INSTALL_DIR/setup.sh" ${_setup_args[@]+"${_setup_args[@]}"}
 else
   info "Starting interactive setup..."
