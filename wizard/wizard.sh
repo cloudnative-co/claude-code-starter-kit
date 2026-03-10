@@ -35,6 +35,7 @@ SELECTED_PLUGINS="${SELECTED_PLUGINS:-}"
 WIZARD_RESULT="${WIZARD_RESULT:-}"
 
 WIZARD_NONINTERACTIVE="${WIZARD_NONINTERACTIVE:-false}"
+UPDATE_MODE="${UPDATE_MODE:-false}"
 WIZARD_CONFIG_FILE=""
 
 # Track CLI-overridden variables (restored after load_config/profile)
@@ -213,6 +214,27 @@ save_config() {
   } > "$file"
   # Restrict config file permissions (contains user preferences)
   chmod 600 "$file"
+}
+
+# ---------------------------------------------------------------------------
+# Restore configuration from manifest (for update mode)
+# ---------------------------------------------------------------------------
+_restore_config_from_manifest() {
+  local manifest="$HOME/.claude/.starter-kit-manifest.json"
+  [[ -f "$manifest" ]] || return 1
+
+  PROFILE="$(jq -r '.profile // "standard"' "$manifest")"
+  LANGUAGE="$(jq -r '.language // "en"' "$manifest")"
+  EDITOR_CHOICE="$(jq -r '.editor // "none"' "$manifest")"
+  SELECTED_PLUGINS="$(jq -r '.plugins // ""' "$manifest")"
+
+  # Load profile config to get INSTALL_* and ENABLE_* flags
+  load_profile_config "$PROFILE"
+
+  # Load saved wizard config for feature toggles
+  load_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+
+  load_strings "$LANGUAGE"
 }
 
 # ---------------------------------------------------------------------------
@@ -400,6 +422,10 @@ parse_cli_args() {
     arg="$1"
     case "$arg" in
       --non-interactive)
+        WIZARD_NONINTERACTIVE="true"
+        ;;
+      --update)
+        UPDATE_MODE="true"
         WIZARD_NONINTERACTIVE="true"
         ;;
       --language=*)      LANGUAGE="${arg#*=}"; _CLI_OVERRIDES+=("LANGUAGE") ;;
@@ -850,6 +876,13 @@ run_wizard() {
   . "$dir/lib/colors.sh"
   # shellcheck source=/dev/null
   . "$dir/lib/detect.sh"
+
+  # Update mode: restore from manifest, skip wizard
+  if [[ "$UPDATE_MODE" == "true" ]]; then
+    _restore_config_from_manifest
+    WIZARD_RESULT="deploy"
+    return
+  fi
 
   # Save CLI-overridden values before loading config file
   local _saved_cli=()
