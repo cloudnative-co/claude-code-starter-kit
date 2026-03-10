@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   - `allowedTools` → `permissions.allow` にリネーム＋ネスト
   - `settings-base.json` から空の `permissions: {}` を削除（マージ時の上書き防止）
   - Thanks to [@enpipi](https://github.com/enpipi) for reporting!
+- **statusline ToS 準拠**: ステータスラインを Anthropic ToS 準拠版に差し替え
 
 ## [0.8.0] - 2026-03-07
 
