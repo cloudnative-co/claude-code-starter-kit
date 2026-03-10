@@ -51,6 +51,12 @@ parse_cli_args "$@"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/json-builder.sh"
 # shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/snapshot.sh"
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/merge.sh"
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/update.sh"
+# shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/ghostty.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/fonts.sh"
@@ -239,6 +245,92 @@ build_settings() {
   fi
 }
 
+build_settings_to_file() {
+  local out="$1"
+  local base="$PROJECT_DIR/config/settings-base.json"
+  local permissions="$PROJECT_DIR/config/permissions.json"
+
+  local hook_fragments=()
+  local tmp_files=()
+
+  if is_true "$ENABLE_TMUX_HOOKS"; then
+    hook_fragments+=("$PROJECT_DIR/features/tmux-hooks/hooks.json")
+  fi
+  if is_true "$ENABLE_DOC_BLOCKER"; then
+    hook_fragments+=("$PROJECT_DIR/features/doc-blocker/hooks.json")
+  fi
+  if is_true "$ENABLE_PRETTIER_HOOKS"; then
+    hook_fragments+=("$PROJECT_DIR/features/prettier-hooks/hooks.json")
+  fi
+  if is_true "$ENABLE_CONSOLE_LOG_GUARD"; then
+    hook_fragments+=("$PROJECT_DIR/features/console-log-guard/hooks.json")
+  fi
+  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
+    hook_fragments+=("$PROJECT_DIR/features/memory-persistence/hooks.json")
+  fi
+  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
+    hook_fragments+=("$PROJECT_DIR/features/strategic-compact/hooks.json")
+  fi
+  if is_true "$ENABLE_PR_CREATION_LOG"; then
+    hook_fragments+=("$PROJECT_DIR/features/pr-creation-log/hooks.json")
+  fi
+  if is_true "${ENABLE_PRE_COMPACT_COMMIT:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/pre-compact-commit/hooks.json")
+  fi
+  if is_true "${ENABLE_STATUSLINE:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
+  fi
+
+  if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
+    if [[ "${EDITOR_CHOICE:-none}" != "none" ]]; then
+      local editor_cmd editor_cmd_escaped src tmp
+      editor_cmd="$(editor_command "$EDITOR_CHOICE")"
+      editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&\\|]/\\&/g')"
+      src="$PROJECT_DIR/features/git-push-review/hooks.json"
+      tmp="$(mktemp)"
+      _SETUP_TMP_FILES+=("$tmp")
+      if grep -q "__EDITOR_CMD__" "$src" 2>/dev/null; then
+        sed "s|__EDITOR_CMD__|$editor_cmd_escaped|g" "$src" > "$tmp"
+      else
+        cp -a "$src" "$tmp"
+      fi
+      hook_fragments+=("$tmp")
+      tmp_files+=("$tmp")
+    fi
+  fi
+
+  build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
+
+  local lang_name
+  lang_name="$(language_name)"
+  local tmp_lang
+  tmp_lang="$(mktemp)"
+  _SETUP_TMP_FILES+=("$tmp_lang")
+  jq --arg lang "$lang_name" '.language = $lang' "$out" > "$tmp_lang"
+  mv "$tmp_lang" "$out"
+
+  replace_home_path "$out"
+
+  if [[ ${#tmp_files[@]} -gt 0 ]]; then
+    rm -f "${tmp_files[@]}"
+  fi
+}
+
+build_claude_md_to_file() {
+  local out="$1"
+  local lang="${LANGUAGE:-en}"
+  local base="$PROJECT_DIR/i18n/${lang}/CLAUDE.md.base"
+
+  cp -a "$base" "$out"
+
+  if is_true "$ENABLE_CODEX_MCP"; then
+    local partial="$PROJECT_DIR/features/codex-mcp/CLAUDE.md.partial.${lang}"
+    inject_feature "$out" "codex-mcp" "$partial"
+  fi
+
+  remove_unresolved "$out"
+}
+
 # ---------------------------------------------------------------------------
 # Deploy hook scripts
 # ---------------------------------------------------------------------------
@@ -315,20 +407,38 @@ write_manifest() {
 # ---------------------------------------------------------------------------
 # Deploy
 # ---------------------------------------------------------------------------
-section "Deploying Claude Code Starter Kit"
+if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  # Update mode: run update with merge logic
+  run_update "$PROJECT_DIR" "$CLAUDE_DIR"
+else
+  # Fresh install / full re-setup
+  section "Deploying Claude Code Starter Kit"
 
-backup_existing
-ensure_dirs
+  backup_existing
+  ensure_dirs
 
-copy_if_enabled "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents"
-copy_if_enabled "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
-copy_if_enabled "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
-copy_if_enabled "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
-copy_if_enabled "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
+  copy_if_enabled "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents"
+  copy_if_enabled "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
+  copy_if_enabled "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
+  copy_if_enabled "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
+  copy_if_enabled "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
 
-build_claude_md
-build_settings
-deploy_hook_scripts
+  build_claude_md
+  build_settings
+  deploy_hook_scripts
+
+  # Write snapshot for future updates
+  _snapshot_files=()
+  [[ -f "$CLAUDE_DIR/settings.json" ]] && _snapshot_files+=("$CLAUDE_DIR/settings.json")
+  [[ -f "$CLAUDE_DIR/CLAUDE.md" ]] && _snapshot_files+=("$CLAUDE_DIR/CLAUDE.md")
+  while IFS= read -r -d '' _sf; do
+    _snapshot_files+=("$_sf")
+  done < <(find "$CLAUDE_DIR/agents" "$CLAUDE_DIR/rules" "$CLAUDE_DIR/commands" \
+               "$CLAUDE_DIR/skills" "$CLAUDE_DIR/memory" "$CLAUDE_DIR/hooks" \
+               -type f -print0 2>/dev/null)
+  _write_snapshot "$CLAUDE_DIR" "${_snapshot_files[@]+"${_snapshot_files[@]}"}"
+  ok "Created snapshot for future updates"
+fi
 
 # ---------------------------------------------------------------------------
 # Ghostty terminal setup (macOS only)
