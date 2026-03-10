@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-03-11
+
+### Added
+- **Safety Net フック** (`safety-net`): [cc-safety-net](https://github.com/kenryu42/claude-code-safety-net) による破壊的コマンドの実行前ブロック
+  - `git reset --hard`, `git checkout -- <file>`, `git push --force`, `rm -rf` 等の危険なコマンドを PreToolUse フックで自動検出・ブロック
+  - `SAFETY_NET_STRICT=1` を env に設定し、パース不能コマンドも fail-closed（ブロック）にする
+  - PreToolUse 配列の先頭に配置し、他のフックより先に実行
+  - Standard / Full プロファイルでデフォルト有効
+  - 前提条件: `npm install -g cc-safety-net` が別途必要
+- **自動アップデート機能** (`auto-update`): SessionStart フックで GitHub の最新バージョンを自動チェック・適用
+  - 24時間キャッシュで起動遅延を最小化（キャッシュ内は < 1ms で通過）
+  - 新バージョン検出時はバックグラウンドで `git pull` + `setup.sh --update` を実行
+  - 3-way merge によりユーザー設定を保持したまま更新
+  - ワンライナーインストール（`~/.claude-starter-kit/`）の場合のみ動作
+  - Standard / Full プロファイルでデフォルト有効（`ENABLE_AUTO_UPDATE=false` でオプトアウト可能）
+
 ## [0.9.0] - 2026-03-10
 
 ### Added

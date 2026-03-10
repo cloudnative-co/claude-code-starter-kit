@@ -1,0 +1,13 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__HOME__/.claude/hooks/auto-update/auto-update.sh"
+        }
+      ]
+    }
+  ]
+}

@@ -176,6 +176,10 @@ build_settings() {
   local hook_fragments=()
   local tmp_files=()
 
+  # Safety Net must be first in PreToolUse array (runs before other hooks)
+  if is_true "${ENABLE_SAFETY_NET:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/safety-net/hooks.json")
+  fi
   if is_true "$ENABLE_TMUX_HOOKS"; then
     hook_fragments+=("$PROJECT_DIR/features/tmux-hooks/hooks.json")
   fi
@@ -199,6 +203,9 @@ build_settings() {
   fi
   if is_true "${ENABLE_PRE_COMPACT_COMMIT:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/pre-compact-commit/hooks.json")
+  fi
+  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/auto-update/hooks.json")
   fi
   if is_true "${ENABLE_STATUSLINE:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
@@ -253,6 +260,10 @@ build_settings_to_file() {
   local hook_fragments=()
   local tmp_files=()
 
+  # Safety Net must be first in PreToolUse array (runs before other hooks)
+  if is_true "${ENABLE_SAFETY_NET:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/safety-net/hooks.json")
+  fi
   if is_true "$ENABLE_TMUX_HOOKS"; then
     hook_fragments+=("$PROJECT_DIR/features/tmux-hooks/hooks.json")
   fi
@@ -276,6 +287,9 @@ build_settings_to_file() {
   fi
   if is_true "${ENABLE_PRE_COMPACT_COMMIT:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/pre-compact-commit/hooks.json")
+  fi
+  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/auto-update/hooks.json")
   fi
   if is_true "${ENABLE_STATUSLINE:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
@@ -349,6 +363,14 @@ deploy_hook_scripts() {
     cp -a "$PROJECT_DIR/features/strategic-compact/scripts"/. "$dest"/
     chmod +x "$dest"/*.sh
     ok "Installed strategic-compact hooks"
+  fi
+
+  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
+    local dest="$CLAUDE_DIR/hooks/auto-update"
+    mkdir -p "$dest"
+    cp -a "$PROJECT_DIR/features/auto-update/scripts"/. "$dest"/
+    chmod +x "$dest"/*.sh
+    ok "Installed auto-update hook"
   fi
 
   if is_true "${ENABLE_STATUSLINE:-false}"; then

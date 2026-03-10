@@ -1,0 +1,14 @@
+{
+  "name": "safety-net",
+  "displayName": "Safety Net",
+  "description": "Blocks destructive git/filesystem commands via cc-safety-net PreToolUse hook",
+  "category": "hook",
+  "default": true,
+  "profiles": {
+    "minimal": false,
+    "standard": true,
+    "full": true
+  },
+  "dependencies": [],
+  "conflicts": []
+}

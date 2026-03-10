@@ -377,7 +377,7 @@ cd claude-code-starter-kit
 | ルール（コーディング規約） | ✅ | ✅ | ✅ |
 | コマンド（ショートカット） | - | ✅ | ✅ |
 | スキル（専門知識） | - | ✅ | ✅ |
-| フック（安全装置） | - | 主要 | 全部 |
+| フック（安全装置） | - | 主要（11個） | 全部（11個） |
 | メモリ（記憶の永続化） | - | ✅ | ✅ |
 | プラグイン（拡張機能） | - | 10個 | 13個 |
 | フォント（IBM Plex Mono / HackGen NF） | - | ✅ | ✅ |
@@ -422,12 +422,14 @@ Claude Code のチャットで `/` に続けて入力します。
 | `/refactor-clean` | 不要なコードを見つけて整理 |
 | `/update-docs` | ドキュメントを最新の状態に更新 |
 
-### 🪝 フック（安全装置・9個）
+### 🪝 フック（安全装置・11個）
 
 フックは **自動で動作する安全装置** です。コードを書いたり保存したりしたときに、自動でチェックが走ります。
 
 | フック | 何をしてくれる？ |
 |---|---|
+| **Safety Net** | **破壊的な git/ファイルシステムコマンド（`git reset --hard`、`rm -rf` 等）を実行前にブロック** |
+| **自動アップデート** | **セッション開始時にスターターキットの最新版を自動で適用** |
 | Tmux リマインダー | 長時間コマンドに tmux の使用を提案 |
 | Git Push レビュー | コードを共有する前に確認を促す |
 | Doc ブロッカー | 不要なドキュメントファイルの作成を防止 |
@@ -437,6 +439,49 @@ Claude Code のチャットで `/` に続けて入力します。
 | Strategic Compact | 適切なタイミングでコンテキスト整理を提案 |
 | PR 作成ログ | Pull Request の URL を記録 |
 | **コンパクト前自動コミット** | **コンテキスト圧縮の直前に変更を自動コミット** |
+
+#### Safety Net とは？
+
+[cc-safety-net](https://github.com/kenryu42/claude-code-safety-net) は、Claude Code が実行しようとする Bash コマンドを **事前にチェックして、破壊的な操作をブロック** する安全装置です。
+
+ブロックされるコマンドの例：
+- `git reset --hard` — コミットしていない変更が消える
+- `git checkout -- <file>` — ファイルの変更が消える
+- `git push --force` — リモートの履歴が上書きされる
+- `rm -rf` — ファイル/ディレクトリの不可逆削除
+
+```
+Claude Code が Bash コマンドを実行しようとする
+  ↓
+PreToolUse フック（Safety Net）が発火
+  ├── 安全なコマンド → そのまま通過
+  └── 破壊的コマンド → ブロック（実行されない）
+```
+
+STRICT モード（`SAFETY_NET_STRICT=1`）が有効で、パース不能なコマンドも fail-closed（ブロック）になります。
+
+> **Standard / Full プロファイルでデフォルト有効です。** `npm install -g cc-safety-net` が別途必要です。
+
+#### 自動アップデートとは？
+
+Claude Code のセッションを開始するたびに、スターターキットの最新版が GitHub にリリースされていないかを **自動でチェック** します。新しいバージョンが見つかった場合、バックグラウンドで自動更新を実行します。
+
+```
+Claude Code セッション開始
+  ↓
+SessionStart フック発火
+  ├── キャッシュ確認（24時間以内にチェック済み → 何もしない）
+  └── GitHub からバージョン取得
+      ├── 最新版と一致 → 何もしない
+      └── 新バージョンあり → バックグラウンドで pull + setup.sh --update
+```
+
+- **24時間に1回だけ**チェック（毎回のセッション起動は遅くなりません）
+- ユーザー設定は 3-way merge で保持されます（手動カスタマイズが消えることはありません）
+- 更新結果は次回セッションから反映されます
+- ワンライナーインストール（`~/.claude-starter-kit/`）の場合のみ動作します
+
+> **Standard / Full プロファイルでデフォルト有効です。** ウィザードのフック選択で無効にできます。
 
 #### コンパクト前自動コミットとは？
 
@@ -755,7 +800,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --codex-mcp=false \
   --commit-attribution=false \
   --ghostty=true \
-  --hooks=tmux,git-push,prettier,console,memory,compact,pr-log,pre-commit \
+  --hooks=safety-net,auto-update,tmux,git-push,prettier,console,memory,compact,pr-log,pre-commit \
   --plugins=security-guidance,commit-commands,pr-review-toolkit@claude-plugins-official,pr-review-toolkit@claude-code-plugins
 ```
 

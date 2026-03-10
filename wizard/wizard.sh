@@ -27,6 +27,8 @@ ENABLE_MEMORY_PERSISTENCE="${ENABLE_MEMORY_PERSISTENCE:-}"
 ENABLE_STRATEGIC_COMPACT="${ENABLE_STRATEGIC_COMPACT:-}"
 ENABLE_PR_CREATION_LOG="${ENABLE_PR_CREATION_LOG:-}"
 ENABLE_PRE_COMPACT_COMMIT="${ENABLE_PRE_COMPACT_COMMIT:-}"
+ENABLE_SAFETY_NET="${ENABLE_SAFETY_NET:-}"
+ENABLE_AUTO_UPDATE="${ENABLE_AUTO_UPDATE:-}"
 ENABLE_STATUSLINE="${ENABLE_STATUSLINE:-}"
 ENABLE_GHOSTTY_SETUP="${ENABLE_GHOSTTY_SETUP:-}"
 ENABLE_FONTS_SETUP="${ENABLE_FONTS_SETUP:-}"
@@ -124,7 +126,7 @@ _language_label() {
 # ---------------------------------------------------------------------------
 
 # Allowed config variable names (used by _safe_source_config for allowlist validation)
-_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP SELECTED_PLUGINS"
+_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP SELECTED_PLUGINS"
 
 # Safe key=value parser: reads a config file line-by-line and only sets
 # variables whose names appear in the allowlist. This replaces the previous
@@ -206,6 +208,8 @@ save_config() {
     printf 'ENABLE_STRATEGIC_COMPACT="%s"\n' "$(_sanitize_config_value "$ENABLE_STRATEGIC_COMPACT")"
     printf 'ENABLE_PR_CREATION_LOG="%s"\n' "$(_sanitize_config_value "$ENABLE_PR_CREATION_LOG")"
     printf 'ENABLE_PRE_COMPACT_COMMIT="%s"\n' "$(_sanitize_config_value "$ENABLE_PRE_COMPACT_COMMIT")"
+    printf 'ENABLE_SAFETY_NET="%s"\n' "$(_sanitize_config_value "$ENABLE_SAFETY_NET")"
+    printf 'ENABLE_AUTO_UPDATE="%s"\n' "$(_sanitize_config_value "$ENABLE_AUTO_UPDATE")"
     printf 'ENABLE_STATUSLINE="%s"\n' "$(_sanitize_config_value "$ENABLE_STATUSLINE")"
     printf 'ENABLE_GHOSTTY_SETUP="%s"\n' "$(_sanitize_config_value "$ENABLE_GHOSTTY_SETUP")"
     printf 'ENABLE_FONTS_SETUP="%s"\n' "$(_sanitize_config_value "$ENABLE_FONTS_SETUP")"
@@ -378,6 +382,8 @@ _compute_selected_plugins() {
 # Hook management
 # ---------------------------------------------------------------------------
 HOOK_KEYS=(
+  "ENABLE_SAFETY_NET"
+  "ENABLE_AUTO_UPDATE"
   "ENABLE_TMUX_HOOKS"
   "ENABLE_GIT_PUSH_REVIEW"
   "ENABLE_DOC_BLOCKER"
@@ -400,7 +406,9 @@ _apply_hooks_csv() {
   local item
   for item in "${_items[@]}"; do
     case "$item" in
-      tmux)       ENABLE_TMUX_HOOKS="true" ;;
+      safety-net)  ENABLE_SAFETY_NET="true" ;;
+      auto-update) ENABLE_AUTO_UPDATE="true" ;;
+      tmux)        ENABLE_TMUX_HOOKS="true" ;;
       git-push)   ENABLE_GIT_PUSH_REVIEW="true" ;;
       doc-block)  ENABLE_DOC_BLOCKER="true" ;;
       prettier)   ENABLE_PRETTIER_HOOKS="true" ;;
@@ -622,6 +630,8 @@ _step_fonts() {
 
 _step_hooks() {
   local HOOK_LABELS=(
+    "${STR_HOOKS_SAFETY_NET:-Safety Net - Block destructive git/filesystem commands}"
+    "${STR_HOOKS_AUTO_UPDATE:-Auto Update - Automatically update starter kit on session start}"
     "$STR_HOOKS_TMUX"
     "$STR_HOOKS_GIT_PUSH"
     "$STR_HOOKS_DOC_BLOCK"
@@ -748,6 +758,8 @@ _step_commit() {
 
 _step_confirm() {
   local HOOK_LABELS=(
+    "${STR_HOOKS_SAFETY_NET:-Safety Net - Block destructive git/filesystem commands}"
+    "${STR_HOOKS_AUTO_UPDATE:-Auto Update - Automatically update starter kit on session start}"
     "$STR_HOOKS_TMUX"
     "$STR_HOOKS_GIT_PUSH"
     "$STR_HOOKS_DOC_BLOCK"
