@@ -9,6 +9,30 @@ One-command setup of a complete Claude Code development environment with an inte
 
 > **This kit reproduces the exact Claude Code environment used by Shinji Saito, CEO of Cloud Native Inc. and Chief Information Security Advisor to Japan's Ministry of Education, Culture, Sports, Science and Technology (MEXT).**
 
+## Quick Start
+
+**Mac:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
+```
+
+**Windows (run PowerShell as Administrator):**
+
+```powershell
+irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
+```
+
+**Non-interactive (skip wizard, Standard profile):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
+```
+
+> Restart your terminal after install, then run `claude`. See [Installation](#installation) for details.
+
+---
+
 ## Table of Contents
 
 - [Why This Repo](#why-this-repo)

@@ -10,6 +10,28 @@ Claude Code を初めて使う人でも、**ワンコマンドで開発環境を
 
 > **このキットは、株式会社クラウドネイティブ代表取締役社長・文部科学省最高情報セキュリティアドバイザーの齊藤愼仁が普段使っている Claude Code 環境をそのまま再現できる内容になっています。**
 
+## Quick Start
+
+**Mac:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
+```
+
+**Windows（PowerShell を管理者で実行）:**
+
+```powershell
+irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.ps1 | iex
+```
+
+**質問なしで一括セットアップ:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash -s -- --non-interactive
+```
+
+> インストール後はターミナルを再起動して `claude` を実行。詳しくは [インストール](#-インストール) を参照。
+
 ---
 
 ## 目次
