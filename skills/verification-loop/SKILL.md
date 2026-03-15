@@ -1,3 +1,8 @@
+---
+name: verification-loop
+description: Comprehensive verification system for Claude Code sessions. Use after implementation to validate correctness.
+---
+
 # Verification Loop Skill
 
 A comprehensive verification system for Claude Code sessions.
