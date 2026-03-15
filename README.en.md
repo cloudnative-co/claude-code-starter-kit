@@ -50,10 +50,10 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 
 - **3 profiles**: Minimal, Standard (recommended), Full
 - **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
-- **11 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide, daily-practices
-- **19 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /parallel, /handover, /cross-review, and more
-- **16 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, context-management, agent-native-design, sdd-workflow, orchestration-pattern, prompt-patterns, and more
-- **13 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard, doc freshness guard
+- **10 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide
+- **17 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /handover, /update-kit, and more
+- **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
+- **12 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard (Full only)
 - **13 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp, pr-review-toolkit (community)
 - **AGENTS.md**: Universal agent context file (compatible with Claude Code, Codex CLI, Cursor, Copilot, Gemini CLI)
 - **i18n**: English & Japanese
@@ -183,8 +183,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | Strategic Compact | Suggests /compact at logical intervals |
 | PR Creation Log | Logs PR URL after creation |
 | Pre-compact Auto-commit | Auto-commits changes before context compaction |
-| Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds recommended line count |
-| Doc Freshness Guard | Checks documentation staleness and superseded ADR references on commit |
+| Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds recommended line count (Full only) |
 
 #### Safety Net
 
@@ -230,9 +229,8 @@ After restarting your terminal, start `claude` in your project directory. The in
 /refactor-clean  # Find and clean up unused code
 /update-docs     # Update documentation to latest state
 /research        # Deep codebase investigation (RPI workflow)
-/parallel        # Parallel agent execution via Git worktrees
 /handover        # Structured session handover document
-/cross-review    # Cross-model code review (Claude + Codex)
+/update-kit      # Manually update starter kit to latest version
 ```
 
 ### Deployment: Let Claude Code Set Up Your Infrastructure
@@ -347,9 +345,9 @@ claude-code-starter-kit/
 │   ├── en/                 # English templates & strings
 │   └── ja/                 # Japanese templates & strings
 ├── agents/                 # Agent definitions (9 files)
-├── rules/                  # Rule files (11 files)
-├── commands/               # Slash commands (19 files)
-├── skills/                 # Skill modules (16 dirs)
+├── rules/                  # Rule files (10 files)
+├── commands/               # Slash commands (17 files)
+├── skills/                 # Skill modules (12 dirs)
 └── memory/                 # Best practice memory (5 files)
 ```
 

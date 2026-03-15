@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-03-15
+
+### Changed
+- **厳選版 v2 リファクタリング**: 「少なく、鋭く」の原則に基づき、付加価値の低い機能を削除
+- **Strategic Compact フック強化**: FIC（Frequent Intentional Compaction）早期警告を追加。ツールコール数が閾値の60%に達した時点で `/compact` を推奨
+- **Doc Size Guard**: Standard+Full → **Full のみ** に変更（上級者向け機能のため）
+
+### Removed
+- `/parallel` コマンド: Claude Code の `--worktree` でネイティブ対応済み
+- `/cross-review` コマンド: Codex MCP 前提で利用者限定。`/code-review` で十分
+- `sdd-workflow` スキル: 外部フレームワーク依存、スキルとしては中途半端
+- `orchestration-pattern` スキル: 教育的内容は README/ブログで説明すべき
+- `context-management` スキル: Strategic Compact フック強化でカバー
+- `agent-native-design` スキル: 一般論は README で説明すべき
+- `daily-practices` ルール: `anti-patterns` ルールと重複
+- `doc-freshness-guard` フック: 3日警告は多くのプロジェクトでノイズ
+
 ## [0.12.0] - 2026-03-15
 
 ### Added
