@@ -51,7 +51,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **3 profiles**: Minimal, Standard (recommended), Full
 - **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
 - **9 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns
-- **18 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /parallel, /handover, /cross-review, and more
+- **19 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /parallel, /handover, /cross-review, and more
 - **14 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, context-management, agent-native-design, sdd-workflow, and more
 - **13 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard, doc freshness guard
 - **13 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp, pr-review-toolkit (community)
@@ -348,7 +348,7 @@ claude-code-starter-kit/
 │   └── ja/                 # Japanese templates & strings
 ├── agents/                 # Agent definitions (9 files)
 ├── rules/                  # Rule files (9 files)
-├── commands/               # Slash commands (18 files)
+├── commands/               # Slash commands (19 files)
 ├── skills/                 # Skill modules (14 dirs)
 └── memory/                 # Best practice memory (5 files)
 ```
