@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] - 2026-03-15
+
+### Added
+- **Orchestration Pattern スキル** (`orchestration-pattern`): Command → Agent → Skill の3層設計パターンガイド。ワークフロー構築時のリファレンス
+- **Prompt Patterns スキル** (`prompt-patterns`): 実践的プロンプトテクニック集（Discovery, Quality Challenge, Efficiency, Debugging, Session Management パターン）
+- **Permissions Guide ルール** (`permissions-guide`): dangerously-skip-permissions を使わずにセキュリティを保つ permissions 設定のベストプラクティス
+- **Daily Practices ルール** (`daily-practices`): コミット規律、コンテキスト衛生、デバッグアプローチ、Plan Before Execute のガイドライン
+- `/handover` コマンドにセッション命名規約（`/rename` パターン）を追記
+
+### Changed
+- **エージェント frontmatter 強化**:
+  - `planner`, `code-reviewer`, `security-reviewer` に `permissionMode: plan` を追加（レビュー重視）
+  - `planner` に `Bash` ツールを追加（プロジェクト状態確認用）
+  - `security-reviewer` の tools をレビュー専任に最適化（Write/Edit 除去）
+  - `doc-updater` の model を `haiku` に変更（軽量化）
+- **スキル frontmatter 修正**: `eval-harness`, `project-guidelines-example`, `verification-loop` に未設定だった YAML frontmatter を追加
+- スキル: 14個 → 16個
+- ルール: 9種 → 11種
+
 ## [0.11.0] - 2026-03-15
 
 ### Added
