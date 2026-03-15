@@ -51,3 +51,21 @@ Create `HANDOVER.md` in the project root with the following structure:
 - List files in order of importance for context loading
 - After generating, suggest running `/compact` or starting a new session
 - The handover document should be self-contained - readable without any prior context
+
+### Session Naming Convention
+
+After creating the handover document, suggest renaming the session for easy retrieval:
+
+```
+/rename [feature-name: current-status]
+```
+
+Naming patterns:
+- `[auth-refactor: plan-approved]` -- feature + status
+- `[bug-123: investigating]` -- issue number + phase
+- `[sprint-12: day-3-reviews]` -- sprint + day
+
+This enables targeted `/resume` later:
+```
+claude --resume  # shows recent sessions with names
+```
