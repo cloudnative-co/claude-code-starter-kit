@@ -1,0 +1,15 @@
+{
+  "name": "doc-freshness-guard",
+  "displayName": "Doc Freshness Guard",
+  "description": "Checks documentation staleness and superseded ADR references",
+  "category": "hook",
+  "default": false,
+  "profiles": {
+    "minimal": false,
+    "standard": true,
+    "full": true
+  },
+  "dependencies": [],
+  "conflicts": [],
+  "hasScripts": true
+}
