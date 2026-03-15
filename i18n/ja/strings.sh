@@ -85,7 +85,6 @@ STR_HOOKS_COMPACT="戦略的コンパクト - 論理的なタイミングで /co
 STR_HOOKS_PR_LOG="PR 作成ログ - PR 作成後に URL をログ"
 STR_HOOKS_PRE_COMMIT="コンパクト前自動コミット - compact 前に変更を自動コミット"
 STR_HOOKS_DOC_SIZE="ドキュメントサイズガード - CLAUDE.md/AGENTS.md の肥大化を警告"
-STR_HOOKS_DOC_FRESH="ドキュメント鮮度ガード - コミット時にドキュメントの鮮度をチェック"
 
 # Step 6: Plugins
 STR_PLUGINS_TITLE="インストールするプラグインを選択してください（番号をスペース区切りで入力）："

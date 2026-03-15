@@ -213,9 +213,6 @@ build_settings() {
   if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/doc-size-guard/hooks.json")
   fi
-  if is_true "${ENABLE_DOC_FRESHNESS_GUARD:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-freshness-guard/hooks.json")
-  fi
 
   # Git push review: needs editor command substitution
   if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
@@ -303,10 +300,6 @@ build_settings_to_file() {
   if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/doc-size-guard/hooks.json")
   fi
-  if is_true "${ENABLE_DOC_FRESHNESS_GUARD:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-freshness-guard/hooks.json")
-  fi
-
   if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
     if [[ "${EDITOR_CHOICE:-none}" != "none" ]]; then
       local editor_cmd editor_cmd_escaped src tmp
@@ -401,13 +394,6 @@ deploy_hook_scripts() {
     ok "Installed doc-size-guard hook"
   fi
 
-  if is_true "${ENABLE_DOC_FRESHNESS_GUARD:-false}"; then
-    local dest="$CLAUDE_DIR/hooks/doc-freshness-guard"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/doc-freshness-guard/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed doc-freshness-guard hook"
-  fi
 }
 
 # ---------------------------------------------------------------------------

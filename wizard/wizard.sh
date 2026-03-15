@@ -33,7 +33,6 @@ ENABLE_STATUSLINE="${ENABLE_STATUSLINE:-}"
 ENABLE_GHOSTTY_SETUP="${ENABLE_GHOSTTY_SETUP:-}"
 ENABLE_FONTS_SETUP="${ENABLE_FONTS_SETUP:-}"
 ENABLE_DOC_SIZE_GUARD="${ENABLE_DOC_SIZE_GUARD:-}"
-ENABLE_DOC_FRESHNESS_GUARD="${ENABLE_DOC_FRESHNESS_GUARD:-}"
 
 SELECTED_PLUGINS="${SELECTED_PLUGINS:-}"
 WIZARD_RESULT="${WIZARD_RESULT:-}"
@@ -128,7 +127,7 @@ _language_label() {
 # ---------------------------------------------------------------------------
 
 # Allowed config variable names (used by _safe_source_config for allowlist validation)
-_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_DOC_FRESHNESS_GUARD SELECTED_PLUGINS"
+_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD SELECTED_PLUGINS"
 
 # Safe key=value parser: reads a config file line-by-line and only sets
 # variables whose names appear in the allowlist. This replaces the previous
@@ -216,7 +215,6 @@ save_config() {
     printf 'ENABLE_GHOSTTY_SETUP="%s"\n' "$(_sanitize_config_value "$ENABLE_GHOSTTY_SETUP")"
     printf 'ENABLE_FONTS_SETUP="%s"\n' "$(_sanitize_config_value "$ENABLE_FONTS_SETUP")"
     printf 'ENABLE_DOC_SIZE_GUARD="%s"\n' "$(_sanitize_config_value "${ENABLE_DOC_SIZE_GUARD:-false}")"
-    printf 'ENABLE_DOC_FRESHNESS_GUARD="%s"\n' "$(_sanitize_config_value "${ENABLE_DOC_FRESHNESS_GUARD:-false}")"
     printf '\n'
     printf 'SELECTED_PLUGINS="%s"\n' "$(_sanitize_config_value "$SELECTED_PLUGINS")"
   } > "$file"
@@ -398,7 +396,6 @@ HOOK_KEYS=(
   "ENABLE_PR_CREATION_LOG"
   "ENABLE_PRE_COMPACT_COMMIT"
   "ENABLE_DOC_SIZE_GUARD"
-  "ENABLE_DOC_FRESHNESS_GUARD"
 )
 
 _apply_hooks_csv() {
@@ -424,7 +421,6 @@ _apply_hooks_csv() {
       pr-log)     ENABLE_PR_CREATION_LOG="true" ;;
       pre-commit) ENABLE_PRE_COMPACT_COMMIT="true" ;;
       doc-size)   ENABLE_DOC_SIZE_GUARD="true" ;;
-      doc-fresh)  ENABLE_DOC_FRESHNESS_GUARD="true" ;;
     esac
   done
 }
@@ -650,7 +646,6 @@ _step_hooks() {
     "$STR_HOOKS_PR_LOG"
     "${STR_HOOKS_PRE_COMMIT:-Pre-compact auto-commit}"
     "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
-    "${STR_HOOKS_DOC_FRESH:-Doc Freshness Guard - Check documentation staleness on commit}"
   )
 
   section "$STR_HOOKS_TITLE"
@@ -780,7 +775,6 @@ _step_confirm() {
     "$STR_HOOKS_PR_LOG"
     "${STR_HOOKS_PRE_COMMIT:-Pre-compact auto-commit}"
     "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
-    "${STR_HOOKS_DOC_FRESH:-Doc Freshness Guard - Check documentation staleness on commit}"
   )
 
   section "$STR_CONFIRM_TITLE"
