@@ -291,10 +291,6 @@ SessionStart hook that checks GitHub for new kit versions with 24h file cache (`
 
 PostToolUse hook that validates CLAUDE.md/AGENTS.md file size when the Write tool targets these files. External script at `scripts/check-doc-size.sh`. Thresholds: AGENTS.md warns at 60 lines / errors at 100; CLAUDE.md warns at 150 / errors at 300. Also checks for broken path references in backtick-quoted strings.
 
-### Doc Freshness Guard (`features/doc-freshness-guard/`)
-
-PostToolUse hook triggered on `git commit` commands. External script at `scripts/check-doc-freshness.sh`. Scans `docs/` and `docs/adr/` for `last-validated` date patterns and warns/errors when stale (configurable via `DOC_FRESHNESS_WARN_DAYS` / `DOC_FRESHNESS_ERROR_DAYS` env vars, defaults 3/5 days). Also detects references to superseded ADRs. Cross-platform date handling (BSD date on macOS, GNU date on Linux).
-
 ## Platform Detection
 
 `lib/detect.sh` exports: `OS`, `ARCH`, `DISTRO`, `DISTRO_FAMILY`, `IS_WSL`, `WSL_BUILD`, `WIN_BUILD`.
