@@ -1,0 +1,13 @@
+{
+  "PostToolUse": [
+    {
+      "matcher": "tool == \"Write\" && tool_input.file_path matches \"(CLAUDE|AGENTS)\\\\.md$\"",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "__HOME__/.claude/hooks/doc-size-guard/check-doc-size.sh"
+        }
+      ]
+    }
+  ]
+}

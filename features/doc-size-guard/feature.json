@@ -1,0 +1,15 @@
+{
+  "name": "doc-size-guard",
+  "displayName": "Doc Size Guard",
+  "description": "Validates CLAUDE.md/AGENTS.md size and path integrity",
+  "category": "hook",
+  "default": false,
+  "profiles": {
+    "minimal": false,
+    "standard": true,
+    "full": true
+  },
+  "dependencies": [],
+  "conflicts": [],
+  "hasScripts": true
+}

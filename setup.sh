@@ -210,6 +210,12 @@ build_settings() {
   if is_true "${ENABLE_STATUSLINE:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
   fi
+  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/doc-size-guard/hooks.json")
+  fi
+  if is_true "${ENABLE_DOC_FRESHNESS_GUARD:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/doc-freshness-guard/hooks.json")
+  fi
 
   # Git push review: needs editor command substitution
   if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
@@ -293,6 +299,12 @@ build_settings_to_file() {
   fi
   if is_true "${ENABLE_STATUSLINE:-false}"; then
     hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
+  fi
+  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/doc-size-guard/hooks.json")
+  fi
+  if is_true "${ENABLE_DOC_FRESHNESS_GUARD:-false}"; then
+    hook_fragments+=("$PROJECT_DIR/features/doc-freshness-guard/hooks.json")
   fi
 
   if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
@@ -379,6 +391,22 @@ deploy_hook_scripts() {
     cp -a "$PROJECT_DIR/features/statusline/scripts"/. "$dest"/
     chmod +x "$dest"/*.sh
     ok "Installed statusline script"
+  fi
+
+  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
+    local dest="$CLAUDE_DIR/hooks/doc-size-guard"
+    mkdir -p "$dest"
+    cp -a "$PROJECT_DIR/features/doc-size-guard/scripts"/. "$dest"/
+    chmod +x "$dest"/*.sh
+    ok "Installed doc-size-guard hook"
+  fi
+
+  if is_true "${ENABLE_DOC_FRESHNESS_GUARD:-false}"; then
+    local dest="$CLAUDE_DIR/hooks/doc-freshness-guard"
+    mkdir -p "$dest"
+    cp -a "$PROJECT_DIR/features/doc-freshness-guard/scripts"/. "$dest"/
+    chmod +x "$dest"/*.sh
+    ok "Installed doc-freshness-guard hook"
   fi
 }
 
