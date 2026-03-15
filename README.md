@@ -853,7 +853,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 | エージェントを追加 | `~/.claude/agents/` に `.md` ファイルを作成 |
 | ルールを追加 | `~/.claude/rules/` に `.md` ファイルを作成 |
 | コマンドを追加 | `~/.claude/commands/` に `.md` ファイルを作成 |
-| スキルを追加 | `~/.claude/skills/` に `SKILL.md` を含むフォルダを作成 |
+| スキルを追加 | `~/.claude/skills/{name}/` に `SKILL.md` + 必要に応じて `references/`, `scripts/`, `assets/` を作成 |
 | フックを変更 | `~/.claude/settings.json` の hooks セクションを編集 |
 
 > **設定のやり直し**: `./setup.sh` をもう一度実行すれば、いつでも再設定できます。
