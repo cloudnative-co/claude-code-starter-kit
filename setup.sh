@@ -400,6 +400,7 @@ write_manifest() {
          "$CLAUDE_DIR/skills" "$CLAUDE_DIR/memory" "$CLAUDE_DIR/hooks" \
          -type f 2>/dev/null || true
     [[ -f "$CLAUDE_DIR/CLAUDE.md" ]] && echo "$CLAUDE_DIR/CLAUDE.md"
+    [[ -f "$CLAUDE_DIR/AGENTS.md" ]] && echo "$CLAUDE_DIR/AGENTS.md"
     [[ -f "$CLAUDE_DIR/settings.json" ]] && echo "$CLAUDE_DIR/settings.json"
   } | sort -u | jq -R -s 'split("\n")[:-1]')"
 
@@ -446,6 +447,11 @@ else
   copy_if_enabled "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
 
   build_claude_md
+
+  # Deploy AGENTS.md (all profiles)
+  cp -a "$PROJECT_DIR/config/AGENTS.md.template" "$CLAUDE_DIR/AGENTS.md"
+  ok "Installed AGENTS.md"
+
   build_settings
   deploy_hook_scripts
 
@@ -453,6 +459,7 @@ else
   _snapshot_files=()
   [[ -f "$CLAUDE_DIR/settings.json" ]] && _snapshot_files+=("$CLAUDE_DIR/settings.json")
   [[ -f "$CLAUDE_DIR/CLAUDE.md" ]] && _snapshot_files+=("$CLAUDE_DIR/CLAUDE.md")
+  [[ -f "$CLAUDE_DIR/AGENTS.md" ]] && _snapshot_files+=("$CLAUDE_DIR/AGENTS.md")
   while IFS= read -r -d '' _sf; do
     _snapshot_files+=("$_sf")
   done < <(find "$CLAUDE_DIR/agents" "$CLAUDE_DIR/rules" "$CLAUDE_DIR/commands" \
