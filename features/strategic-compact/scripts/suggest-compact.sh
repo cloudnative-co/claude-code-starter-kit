@@ -46,6 +46,15 @@ else
   count=1
 fi
 
+# Read hook input and pass through
+input=$(cat)
+
+# Early FIC warning at ~50% estimated context usage (30 tool calls)
+FIC_THRESHOLD=$((THRESHOLD * 3 / 5))
+if [ "$count" -eq "$FIC_THRESHOLD" ]; then
+  echo "[FIC] Context ~50% used ($count tool calls). Consider /compact at next phase transition." >&2
+fi
+
 # Suggest compact after threshold tool calls
 if [ "$count" -eq "$THRESHOLD" ]; then
   echo "[StrategicCompact] $THRESHOLD tool calls reached - consider /compact if transitioning phases" >&2
@@ -55,3 +64,6 @@ fi
 if [ "$count" -gt "$THRESHOLD" ] && [ $((count % 25)) -eq 0 ]; then
   echo "[StrategicCompact] $count tool calls - good checkpoint for /compact if context is stale" >&2
 fi
+
+# Pass through input
+printf '%s\n' "$input"
