@@ -191,6 +191,7 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 | `memory/` | `~/.claude/memory/` | `INSTALL_MEMORY=true` |
 | `features/*/scripts/` | `~/.claude/hooks/<feature>/` | feature-specific |
 | assembled CLAUDE.md | `~/.claude/CLAUDE.md` | always |
+| `config/AGENTS.md.template` | `~/.claude/AGENTS.md` | always |
 | assembled settings.json | `~/.claude/settings.json` | always |
 
 ## Key Conventions
@@ -285,6 +286,14 @@ PreToolUse hook via [cc-safety-net](https://github.com/kenryu42/claude-code-safe
 ### Auto Update (`features/auto-update/`)
 
 SessionStart hook that checks GitHub for new kit versions with 24h file cache (`~/.claude/.starter-kit-update-cache`). Only activates for one-liner installs (`~/.claude-starter-kit/.git` must exist). Updates run in background `( ... ) &` to avoid blocking session startup. Calls `setup.sh --update` for 3-way merge.
+
+### Doc Size Guard (`features/doc-size-guard/`)
+
+PostToolUse hook that validates CLAUDE.md/AGENTS.md file size when the Write tool targets these files. External script at `scripts/check-doc-size.sh`. Thresholds: AGENTS.md warns at 60 lines / errors at 100; CLAUDE.md warns at 150 / errors at 300. Also checks for broken path references in backtick-quoted strings.
+
+### Doc Freshness Guard (`features/doc-freshness-guard/`)
+
+PostToolUse hook triggered on `git commit` commands. External script at `scripts/check-doc-freshness.sh`. Scans `docs/` and `docs/adr/` for `last-validated` date patterns and warns/errors when stale (configurable via `DOC_FRESHNESS_WARN_DAYS` / `DOC_FRESHNESS_ERROR_DAYS` env vars, defaults 3/5 days). Also detects references to superseded ADRs. Cross-platform date handling (BSD date on macOS, GNU date on Linux).
 
 ## Platform Detection
 
