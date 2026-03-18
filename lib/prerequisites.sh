@@ -53,7 +53,11 @@ _ensure_homebrew() {
     warn "Homebrew found but not writable by current user (installed by another user)"
   fi
   info "Installing Homebrew for current user..."
-  if NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+  local _brew_env=""
+  if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+    _brew_env="NONINTERACTIVE=1"
+  fi
+  if env ${_brew_env} /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
     # Add newly installed Homebrew to PATH
     if [[ -x /opt/homebrew/bin/brew ]]; then
       eval "$(/opt/homebrew/bin/brew shellenv)"
