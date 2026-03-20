@@ -110,7 +110,7 @@ Each feature in `features/*/` has a `hooks.json` containing Claude Code hook def
 
 Three fragment styles exist:
 - **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields (e.g., `features/tmux-hooks/hooks.json`)
-- **External script hooks**: `hooks.json` references a script path with `__HOME__` token (e.g., `"command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`.
+- **External script hooks**: `hooks.json` references a script path with `__HOME__` token (e.g., `"command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`. Both `.sh` and `.py` scripts are supported.
 - **Top-level settings**: `hooks.json` can contain any top-level settings key (not just hooks). The jq deep-merge applies at root level, so `{"statusLine": {...}}` merges correctly (e.g., `features/statusline/hooks.json`).
 
 `build_settings_json()` in `lib/json-builder.sh` performs the merge:
@@ -286,6 +286,10 @@ PreToolUse hook via [cc-safety-net](https://github.com/kenryu42/claude-code-safe
 ### Auto Update (`features/auto-update/`)
 
 SessionStart hook that checks GitHub for new kit versions with 24h file cache (`~/.claude/.starter-kit-update-cache`). Only activates for one-liner installs (`~/.claude-starter-kit/.git` must exist). Updates run in background `( ... ) &` to avoid blocking session startup. Calls `setup.sh --update` for 3-way merge.
+
+### Status Line (`features/statusline/`)
+
+Braille Dots pattern status line implemented in Python. Displays model name, context window usage, 5-hour and 7-day rate limits in a single line using braille characters (`⣀⣄⣤⣦⣶⣷⣿`) with green→red gradient coloring based on usage percentage. The `hooks.json` uses `statusLine` top-level key (not a hook type). Script deployed to `~/.claude/hooks/statusline/statusline-command.py`. Requires `python3` in PATH.
 
 ### Doc Size Guard (`features/doc-size-guard/`)
 
