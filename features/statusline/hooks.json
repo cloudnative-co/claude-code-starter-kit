@@ -1,6 +1,6 @@
 {
   "statusLine": {
     "type": "command",
-    "command": "bash __HOME__/.claude/hooks/statusline/statusline-command.sh"
+    "command": "python3 __HOME__/.claude/hooks/statusline/statusline-command.py"
   }
 }

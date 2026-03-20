@@ -382,7 +382,8 @@ deploy_hook_scripts() {
     local dest="$CLAUDE_DIR/hooks/statusline"
     mkdir -p "$dest"
     cp -a "$PROJECT_DIR/features/statusline/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
+    chmod +x "$dest"/*.py 2>/dev/null || true
+    chmod +x "$dest"/*.sh 2>/dev/null || true
     ok "Installed statusline script"
   fi
 
