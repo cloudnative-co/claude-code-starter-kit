@@ -402,6 +402,10 @@ shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
 
 See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.
 
+## Acknowledgements
+
+- The Braille Dots status line pattern is inspired by [Nyosegawa's article](https://nyosegawa.com/posts/claude-code-statusline-rate-limits/)
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
