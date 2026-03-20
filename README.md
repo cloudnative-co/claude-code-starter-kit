@@ -1059,6 +1059,10 @@ shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
 
 ---
 
+## 🙏 謝辞
+
+- ステータスラインの Braille Dots パターンは [逆瀬川さんの記事](https://nyosegawa.com/posts/claude-code-statusline-rate-limits/) を参考にしました
+
 ## 📄 ライセンス
 
 MIT ライセンスです。詳しくは [LICENSE](LICENSE) をご確認ください。
