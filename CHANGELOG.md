@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] - 2026-03-22
+
+### Added
+- **Anthropic Skills マーケットプレイス** ([anthropics/skills](https://github.com/anthropics/skills)) を追加。Anthropic 公式のスキルクリエイター・スキル集をプラグインとして利用可能に
+  - `document-skills`: ドキュメント作成・編集スキル（DOCX, PDF, PPTX, XLSX 対応）
+  - `example-skills`: クリエイティブ・技術・エンタープライズ向けスキルのサンプル集
+  - いずれも Standard / Full プロファイルでデフォルト有効
+- プラグイン数: 12個 → 14個（v0.8.0 で削除済みだった community 版 pr-review-toolkit の README ゴーストエントリも併せて削除）
+- マーケットプレイス数: 1 → 2（`claude-plugins-official` + `anthropic-agent-skills`）
+
 ## [0.14.0] - 2026-03-20
 
 ### Changed

@@ -1,6 +1,7 @@
 {
   "marketplaces": {
-    "claude-plugins-official": "anthropics/claude-plugins-official"
+    "claude-plugins-official": "anthropics/claude-plugins-official",
+    "anthropic-agent-skills": "anthropics/skills"
   },
   "plugins": [
     {
@@ -73,6 +74,18 @@
       "name": "code-simplifier",
       "marketplace": "claude-plugins-official",
       "description": "Code simplification and refactoring assistant",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "document-skills",
+      "marketplace": "anthropic-agent-skills",
+      "description": "Document creation and editing skills (DOCX, PDF, PPTX, XLSX)",
+      "profiles": ["standard", "full"]
+    },
+    {
+      "name": "example-skills",
+      "marketplace": "anthropic-agent-skills",
+      "description": "Creative, technical, and enterprise skill examples from Anthropic",
       "profiles": ["standard", "full"]
     }
   ]
