@@ -17,6 +17,9 @@ cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --upda
    - If successful: show the previous and new version (`git describe --tags --abbrev=0`)
    - If the kit is already up to date: report "Already on the latest version"
    - If it fails: show the error and suggest manual steps
+3. After a successful update, tell the user how to reload the new configuration:
+   - Always suggest `/compact` to refresh the current session cleanly.
+   - Also mention that some changes may require starting a new Claude Code session or opening a new terminal, especially settings/env changes, hook updates, MCP-related changes, or newly added slash commands.
 
 ### Notes
 
@@ -24,4 +27,4 @@ cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --upda
 - If you cloned the repo elsewhere, `cd` to that directory instead.
 - User-customized settings are preserved via 3-way merge (`setup.sh --update`).
 - Changes take effect in the **current** session (unlike auto-update which applies next session).
-- After updating, suggest the user run `/compact` to load the new configuration cleanly.
+- `/compact` helps reload context, but it is not a full restart. If the update changes settings, hooks, env, MCP configuration, or command discovery, recommend restarting Claude Code as well.

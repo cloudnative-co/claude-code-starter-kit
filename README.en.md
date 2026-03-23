@@ -56,7 +56,6 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
 - **12 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard (Full only)
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
-- **AGENTS.md**: Universal agent context file (compatible with Claude Code, Codex CLI, Cursor, Copilot, Gemini CLI)
 - **i18n**: English & Japanese
 - **Codex MCP** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
 - **Non-interactive mode** for CI/automation
