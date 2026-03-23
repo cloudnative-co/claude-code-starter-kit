@@ -119,9 +119,9 @@ _merge_arrays_3way() {
       while [[ "$i" -lt "$removed_count" ]]; do
         local item
         item="$(printf '%s' "$kit_removed" | jq ".[$i]")"
-        warn "The kit removed an array item:"
+        warn "$STR_MERGE_ARRAY_KIT_REMOVED"
         printf "  %s\n" "$item" >&2
-        printf "  [K]eep (your value) / [R]emove (kit's choice): " >&2
+        printf "  %s " "$STR_MERGE_ARRAY_KEEP_REMOVE" >&2
         local reply
         if read -r reply < /dev/tty 2>/dev/null; then
           true
@@ -172,11 +172,11 @@ _prompt_array_conflict() {
   local saved_pref
   saved_pref="$(_get_merge_pref "$key")"
   if [[ "$saved_pref" == "keep-mine" ]]; then
-    printf '  [remembered] %s → keep yours\n' "$key" >&2
+    printf '  [remembered] %s %s\n' "$key" "$STR_MERGE_REMEMBERED_KEEP" >&2
     printf '%s' "$c_val"
     return
   elif [[ "$saved_pref" == "use-kit" ]]; then
-    printf '  [remembered] %s → use kit'\''s\n' "$key" >&2
+    printf '  [remembered] %s %s\n' "$key" "$STR_MERGE_REMEMBERED_KIT" >&2
     printf '%s' "$n_val"
     return
   fi
@@ -197,10 +197,10 @@ _prompt_array_conflict() {
   c_preview="$(printf '%s' "$c_val" | jq -r '.[0:3][] // empty' 2>/dev/null | head -3)"
   n_preview="$(printf '%s' "$n_val" | jq -r '.[0:3][] // empty' 2>/dev/null | head -3)"
 
-  warn "Array conflict on: $key"
-  printf "  Yours (%s entries): %s ...\n" "$c_count" "$c_preview" >&2
-  printf "  Kit's (%s entries): %s ...\n" "$n_count" "$n_preview" >&2
-  printf "  [K]eep yours / [U]se kit's / [D]iff / [RK] Keep & Remember / [RU] Use kit's & Remember: " >&2
+  warn "$STR_MERGE_ARRAY_CONFLICT $key"
+  printf "  %s (%s %s): %s ...\n" "$STR_MERGE_ARRAY_YOURS" "$c_count" "$STR_MERGE_ARRAY_ENTRIES" "$c_preview" >&2
+  printf "  %s (%s %s): %s ...\n" "$STR_MERGE_ARRAY_KITS" "$n_count" "$STR_MERGE_ARRAY_ENTRIES" "$n_preview" >&2
+  printf "  %s " "$STR_MERGE_ARRAY_PROMPT" >&2
 
   while true; do
     local reply
@@ -212,11 +212,11 @@ _prompt_array_conflict() {
 
     case "$reply" in
       [Dd]*)
-        printf "\n--- Yours ---\n" >&2
+        printf "\n--- %s ---\n" "$STR_MERGE_ARRAY_YOURS" >&2
         printf '%s' "$c_val" | jq -r '.[]' 2>/dev/null >&2
-        printf "\n--- Kit's ---\n" >&2
+        printf "\n--- %s ---\n" "$STR_MERGE_ARRAY_KITS" >&2
         printf '%s' "$n_val" | jq -r '.[]' 2>/dev/null >&2
-        printf "\n  [K]eep yours / [U]se kit's / [RK] Keep & Remember / [RU] Use kit's & Remember: " >&2
+        printf "\n  %s " "$STR_MERGE_ARRAY_REPROMPT" >&2
         continue
         ;;
       rk|RK|Rk)
@@ -259,11 +259,11 @@ _prompt_scalar_conflict() {
   local saved_pref
   saved_pref="$(_get_merge_pref "$key")"
   if [[ "$saved_pref" == "keep-mine" ]]; then
-    printf '  [remembered] %s → keep yours\n' "$key" >&2
+    printf '  [remembered] %s %s\n' "$key" "$STR_MERGE_REMEMBERED_KEEP" >&2
     printf '%s' "$c_val"
     return
   elif [[ "$saved_pref" == "use-kit" ]]; then
-    printf '  [remembered] %s → use kit'\''s\n' "$key" >&2
+    printf '  [remembered] %s %s\n' "$key" "$STR_MERGE_REMEMBERED_KIT" >&2
     printf '%s' "$n_val"
     return
   fi
@@ -275,10 +275,10 @@ _prompt_scalar_conflict() {
   fi
 
   # Interactive: show conflict and prompt with remember options
-  warn "Conflict on key: $key"
-  printf "  Your value : %s\n" "$c_val" >&2
-  printf "  Kit's value: %s\n" "$n_val" >&2
-  printf "  [K]eep yours / [U]se kit's / [RK] Keep & Remember / [RU] Use kit's & Remember: " >&2
+  warn "$STR_MERGE_SCALAR_CONFLICT $key"
+  printf "  %s %s\n" "$STR_MERGE_SCALAR_YOUR_VALUE" "$c_val" >&2
+  printf "  %s %s\n" "$STR_MERGE_SCALAR_KIT_VALUE" "$n_val" >&2
+  printf "  %s " "$STR_MERGE_SCALAR_PROMPT" >&2
 
   local reply
   if read -r reply < /dev/tty 2>/dev/null; then
@@ -393,7 +393,7 @@ _merge_object_3way() {
         chosen="$(_prompt_array_conflict "${parent_key}.${sub_key}" "$sv" "$cv" "$nv")"
       elif [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
         # Shallow conflict at object level: kit wins (no deeper recursion)
-        warn "Conflict on ${parent_key}.${sub_key} (both are objects) — using kit version"
+        warn "$STR_MERGE_SCALAR_CONFLICT ${parent_key}.${sub_key} $STR_MERGE_OBJECT_CONFLICT_KIT_WINS"
         chosen="$nv"
       else
         chosen="$(_prompt_scalar_conflict "${parent_key}.${sub_key}" "$cv" "$nv")"
@@ -457,7 +457,7 @@ merge_settings_3way() {
     fi
   done
 
-  info "Starting 3-way merge:"
+  info "$STR_MERGE_3WAY_STARTING"
   info "  snapshot : $snapshot"
   info "  current  : $current"
   info "  new_kit  : $new_kit"

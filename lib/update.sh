@@ -137,8 +137,8 @@ _update_file() {
     if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
       return 1
     fi
-    info "File deleted by you: ${current#"$HOME"/}"
-    printf "  [R]estore / [S]kip ? " >&2
+    info "$STR_MERGE_FILE_DELETED ${current#"$HOME"/}"
+    printf "  %s " "$STR_MERGE_FILE_RESTORE_PROMPT" >&2
     local choice=""
     if read -r choice < /dev/tty 2>/dev/null; then
       true
@@ -309,7 +309,7 @@ run_update() {
   # Eagerly clear merge prefs if --reset-prefs was passed (even if no conflicts)
   if [[ "${_RESET_MERGE_PREFS:-false}" == "true" ]]; then
     rm -f "${HOME}/.claude/.starter-kit-merge-prefs.json"
-    info "Merge preferences cleared"
+    info "$STR_MERGE_PREFS_CLEARED"
   fi
 
   section "$STR_UPDATE_TITLE"
