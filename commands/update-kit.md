@@ -26,5 +26,6 @@ cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --upda
 - This updates the kit installed at `~/.claude-starter-kit/` (one-liner install).
 - If you cloned the repo elsewhere, `cd` to that directory instead.
 - User-customized settings are preserved via 3-way merge (`setup.sh --update`).
+- On older starter-kit installs that do not yet have a usable snapshot, the first `/update-kit` run will bootstrap a snapshot from the current `~/.claude` state and then continue as a migration update instead of falling back to a full re-setup.
 - Changes take effect in the **current** session (unlike auto-update which applies next session).
 - `/compact` helps reload context, but it is not a full restart. If the update changes settings, hooks, env, MCP configuration, or command discovery, recommend restarting Claude Code as well.
