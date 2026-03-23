@@ -21,6 +21,12 @@ STR_CODEX_TITLE="Do you use OpenAI Codex MCP as a sub-agent?"
 STR_CODEX_YES="Yes - Include Codex MCP delegation rules in CLAUDE.md"
 STR_CODEX_NO="No - Skip (you can add this later)"
 
+# Step 3.5: New /init
+STR_NEW_INIT_TITLE="Enable Claude Code's new interactive /init mode?"
+STR_NEW_INIT_DESC="When enabled, /init can propose initial setup for CLAUDE.md, skills, and hooks. It is enabled by default for Minimal, Standard, and Full profiles."
+STR_NEW_INIT_YES="Yes - Use the interactive /init flow"
+STR_NEW_INIT_NO="No - Keep the previous /init behavior"
+
 # Step 4: Editor
 STR_EDITOR_TITLE="Which editor do you use? (for git push review hook)"
 STR_EDITOR_VSCODE="VS Code"
@@ -102,6 +108,7 @@ STR_COMMIT_NO="Hide Claude Code attribution in commits and PRs"
 STR_CONFIRM_TITLE="Configuration Summary"
 STR_CONFIRM_LANGUAGE="Language"
 STR_CONFIRM_PROFILE="Profile"
+STR_CONFIRM_NEW_INIT="New /init"
 STR_CONFIRM_CODEX="Codex MCP"
 STR_CONFIRM_EDITOR="Editor"
 STR_CONFIRM_HOOKS="Hooks"

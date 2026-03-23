@@ -109,6 +109,14 @@ language_name() {
   esac
 }
 
+_bool_to_string() {
+  if is_true "${1:-false}"; then
+    printf "true"
+  else
+    printf "false"
+  fi
+}
+
 apply_settings_preferences() {
   local file="$1"
   local lang_name tmp_file
@@ -120,12 +128,18 @@ apply_settings_preferences() {
   if is_true "${COMMIT_ATTRIBUTION:-false}"; then
     jq \
       --arg lang "$lang_name" \
-      '.language = $lang | del(.attribution)' \
+      --arg new_init "$(_bool_to_string "${ENABLE_NEW_INIT:-false}")" \
+      '.language = $lang
+      | .env.CLAUDE_CODE_NEW_INIT = $new_init
+      | del(.attribution)' \
       "$file" > "$tmp_file"
   else
     jq \
       --arg lang "$lang_name" \
-      '.language = $lang | .attribution = {commit: "", pr: ""}' \
+      --arg new_init "$(_bool_to_string "${ENABLE_NEW_INIT:-false}")" \
+      '.language = $lang
+      | .env.CLAUDE_CODE_NEW_INIT = $new_init
+      | .attribution = {commit: "", pr: ""}' \
       "$file" > "$tmp_file"
   fi
 
