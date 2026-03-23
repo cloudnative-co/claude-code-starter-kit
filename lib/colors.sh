@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 # lib/colors.sh - Color output helpers for terminal messages
 # Works on macOS and Linux. Falls back to plain text if terminal lacks color support.
 set -euo pipefail

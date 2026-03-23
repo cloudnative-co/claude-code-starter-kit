@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 # 日本語ウィザード文字列
 
 # Banner
@@ -104,7 +105,7 @@ STR_CONFIRM_EDITOR="エディタ"
 STR_CONFIRM_HOOKS="フック"
 STR_CONFIRM_PLUGINS="プラグイン"
 STR_CONFIRM_COMMIT="帰属表示"
-STR_CONFIRM_DEPLOY="~/.claude にデプロイしますか？"
+STR_CONFIRM_DEPLOY="$HOME/.claude にデプロイしますか？"
 STR_CONFIRM_YES="はい、今すぐデプロイ"
 STR_CONFIRM_EDIT="設定を変更（ウィザードを再実行）"
 STR_CONFIRM_SAVE="設定を保存して終了（後でデプロイ）"
