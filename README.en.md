@@ -324,6 +324,10 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--commit-attribution=false` disables Claude Code attribution in both commits and PRs
 > - For full mapping details, see [Wizard Config Mapping](docs/wizard-config-mapping.en.md)
 
+> **Existing users**:
+> - If you already use this starter kit, prefer `/update-kit` or `./setup.sh --update` so the snapshot-based merge path can preserve local changes.
+> - If you already have a `~/.claude` setup but run plain `./setup.sh`, the script now warns before entering the backup-and-reconfigure flow.
+
 ## Directory Structure
 
 ```

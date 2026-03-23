@@ -297,6 +297,30 @@ _restore_config_from_manifest() {
   load_strings "$LANGUAGE"
 }
 
+_capture_cli_overrides() {
+  local _saved=()
+  local _var _val
+  for _var in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
+    _val="${!_var:-}"
+    if [[ -n "$_val" ]]; then
+      _saved+=("${_var}=${_val}")
+    fi
+  done
+
+  printf '%s\n' "${_saved[@]+"${_saved[@]}"}"
+}
+
+_restore_cli_overrides() {
+  local _pair _restore_key _restore_val
+  for _pair in "$@"; do
+    if [[ -n "$_pair" ]]; then
+      _restore_key="${_pair%%=*}"
+      _restore_val="${_pair#*=}"
+      printf -v "$_restore_key" '%s' "$_restore_val"
+    fi
+  done
+}
+
 # ---------------------------------------------------------------------------
 # i18n
 # ---------------------------------------------------------------------------
@@ -933,25 +957,14 @@ _fill_noninteractive_defaults() {
   # Save CLI-overridden values before loading profile/config
   # (both load_config and load_profile_config unconditionally set ENABLE_* flags)
   local _saved_overrides=()
-  local _var _val
-  for _var in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
-    _val="${!_var:-}"
-    if [[ -n "$_val" ]]; then
-      _saved_overrides+=("${_var}=${_val}")
-    fi
-  done
+  while IFS= read -r _override; do
+    [[ -n "$_override" ]] && _saved_overrides+=("$_override")
+  done < <(_capture_cli_overrides)
 
   load_profile_config "$PROFILE"
 
   # Restore CLI-overridden values (CLI takes precedence over profile/config)
-  local _pair _restore_key _restore_val
-  for _pair in "${_saved_overrides[@]+"${_saved_overrides[@]}"}"; do
-    if [[ -n "$_pair" ]]; then
-      _restore_key="${_pair%%=*}"
-      _restore_val="${_pair#*=}"
-      printf -v "$_restore_key" '%s' "$_restore_val"
-    fi
-  done
+  _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
@@ -989,34 +1002,24 @@ run_wizard() {
   . "$dir/lib/detect.sh"
 
   # Update mode: restore from manifest, skip wizard
+  local _saved_cli=()
+  while IFS= read -r _override; do
+    [[ -n "$_override" ]] && _saved_cli+=("$_override")
+  done < <(_capture_cli_overrides)
+
   if [[ "$UPDATE_MODE" == "true" ]]; then
     _restore_config_from_manifest
+    _restore_cli_overrides "${_saved_cli[@]+"${_saved_cli[@]}"}"
     WIZARD_RESULT="deploy"
     return
   fi
 
   # Save CLI-overridden values before loading config file
-  local _saved_cli=()
-  local _v _vl
-  for _v in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
-    _vl="${!_v:-}"
-    if [[ -n "$_vl" ]]; then
-      _saved_cli+=("${_v}=${_vl}")
-    fi
-  done
-
   # Load previous config if available
   load_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
 
   # Restore CLI-overridden values (CLI takes precedence over saved config)
-  local _p _rk _rv
-  for _p in "${_saved_cli[@]+"${_saved_cli[@]}"}"; do
-    if [[ -n "$_p" ]]; then
-      _rk="${_p%%=*}"
-      _rv="${_p#*=}"
-      printf -v "$_rk" '%s' "$_rv"
-    fi
-  done
+  _restore_cli_overrides "${_saved_cli[@]+"${_saved_cli[@]}"}"
 
   # Non-interactive mode: fill defaults and return
   if [[ "$WIZARD_NONINTERACTIVE" == "true" ]]; then
