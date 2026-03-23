@@ -109,6 +109,29 @@ language_name() {
   esac
 }
 
+apply_settings_preferences() {
+  local file="$1"
+  local lang_name tmp_file
+  lang_name="$(language_name)"
+
+  tmp_file="$(mktemp)"
+  _SETUP_TMP_FILES+=("$tmp_file")
+
+  if is_true "${COMMIT_ATTRIBUTION:-false}"; then
+    jq \
+      --arg lang "$lang_name" \
+      '.language = $lang | del(.attribution)' \
+      "$file" > "$tmp_file"
+  else
+    jq \
+      --arg lang "$lang_name" \
+      '.language = $lang | .attribution = {commit: "", pr: ""}' \
+      "$file" > "$tmp_file"
+  fi
+
+  mv "$tmp_file" "$file"
+}
+
 editor_command() {
   case "${1:-none}" in
     vscode) printf "code --diff" ;;
@@ -237,15 +260,7 @@ build_settings() {
   fi
 
   build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
-
-  # Set language name in settings
-  local lang_name
-  lang_name="$(language_name)"
-  local tmp_lang
-  tmp_lang="$(mktemp)"
-  _SETUP_TMP_FILES+=("$tmp_lang")
-  jq --arg lang "$lang_name" '.language = $lang' "$out" > "$tmp_lang"
-  mv "$tmp_lang" "$out"
+  apply_settings_preferences "$out"
 
   replace_home_path "$out"
 
@@ -319,14 +334,7 @@ build_settings_to_file() {
   fi
 
   build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
-
-  local lang_name
-  lang_name="$(language_name)"
-  local tmp_lang
-  tmp_lang="$(mktemp)"
-  _SETUP_TMP_FILES+=("$tmp_lang")
-  jq --arg lang "$lang_name" '.language = $lang' "$out" > "$tmp_lang"
-  mv "$tmp_lang" "$out"
+  apply_settings_preferences "$out"
 
   replace_home_path "$out"
 

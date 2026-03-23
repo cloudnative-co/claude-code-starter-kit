@@ -93,10 +93,10 @@ STR_HOOKS_DOC_SIZE="Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large"
 STR_PLUGINS_TITLE="Select plugins to install (enter numbers separated by spaces):"
 STR_PLUGINS_NOTE="Note: Plugins are installed inside a Claude Code session after setup."
 
-# Step 7: Commit attribution
-STR_COMMIT_TITLE="Commit message attribution:"
-STR_COMMIT_YES="Include 'Co-Authored-By: Claude' in commits"
-STR_COMMIT_NO="No attribution (clean commits)"
+# Step 7: Attribution
+STR_COMMIT_TITLE="Claude Code attribution:"
+STR_COMMIT_YES="Include Claude Code attribution in commits and PRs"
+STR_COMMIT_NO="Hide Claude Code attribution in commits and PRs"
 
 # Step 8: Confirm
 STR_CONFIRM_TITLE="Configuration Summary"
@@ -106,7 +106,7 @@ STR_CONFIRM_CODEX="Codex MCP"
 STR_CONFIRM_EDITOR="Editor"
 STR_CONFIRM_HOOKS="Hooks"
 STR_CONFIRM_PLUGINS="Plugins"
-STR_CONFIRM_COMMIT="Attribution"
+STR_CONFIRM_COMMIT="Claude Code attribution"
 STR_CONFIRM_DEPLOY="Deploy to ~/.claude?"
 STR_CONFIRM_YES="Yes, deploy now"
 STR_CONFIRM_EDIT="Edit settings (re-run wizard)"
