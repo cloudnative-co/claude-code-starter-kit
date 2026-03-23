@@ -220,6 +220,12 @@ while IFS= read -r file; do
   fi
 done < <(_json_files "$MANIFEST")
 
+# Remove legacy AGENTS.md from older releases that deployed it into ~/.claude
+if [[ -f "$CLAUDE_DIR/AGENTS.md" ]]; then
+  rm -f "$CLAUDE_DIR/AGENTS.md"
+  ((removed++))
+fi
+
 # Remove manifest itself
 rm -f "$MANIFEST"
 
