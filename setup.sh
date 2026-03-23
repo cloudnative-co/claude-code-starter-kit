@@ -276,7 +276,7 @@ copy_if_enabled() {
 # Fresh install safety: merge-aware deployment for existing users
 # ---------------------------------------------------------------------------
 
-# _copy_dir_safe <flag> <src> <dest> <dir_label>
+# _copy_dir_safe <flag> <src> <dest>
 #
 # Like copy_if_enabled but checks for existing files in <dest>.
 # Interactive: asks [O]verwrite all / [N]ew files only / [S]kip
@@ -335,15 +335,10 @@ _copy_dir_safe() {
       ok "$label: $STR_FRESH_SKIPPED"
       ;;
     new)
-      # Copy only files that do not exist in dest
-      local src_file
-      while IFS= read -r -d '' src_file; do
-        local basename_file
-        basename_file="$(basename "$src_file")"
-        if [[ ! -f "$dest/$basename_file" ]]; then
-          cp -a "$src_file" "$dest/$basename_file"
-        fi
-      done < <(find "$src" -maxdepth 1 -type f -print0 2>/dev/null)
+      # Copy only entries (files/directories) that do not exist in dest
+      # -a : archive (recursive, preserve attributes)
+      # -n : no-clobber (do not overwrite existing files)
+      cp -an "$src"/. "$dest"/
       ok "$label: $STR_FRESH_NEW_ONLY"
       ;;
   esac
@@ -495,15 +490,9 @@ _deploy_hook_scripts_safe() {
         ok "$_feature_name hooks: $STR_FRESH_SKIPPED"
         ;;
       new)
-        local _sf
-        while IFS= read -r -d '' _sf; do
-          local _bn
-          _bn="$(basename "$_sf")"
-          if [[ ! -f "$_dest/$_bn" ]]; then
-            cp -a "$_sf" "$_dest/$_bn"
-            chmod +x "$_dest/$_bn" 2>/dev/null || true
-          fi
-        done < <(find "$_src" -maxdepth 1 -type f -print0 2>/dev/null)
+        cp -an "$_src"/. "$_dest"/
+        chmod +x "$_dest"/*.sh 2>/dev/null || true
+        chmod +x "$_dest"/*.py 2>/dev/null || true
         ok "$_feature_name hooks: $STR_FRESH_NEW_ONLY"
         ;;
     esac
