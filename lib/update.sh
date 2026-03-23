@@ -158,11 +158,26 @@ _update_file() {
 
   # No user change → safe to overwrite
   # But if snapshot was just bootstrapped from current, we can't tell if user
-  # changed — treat as user-modified to avoid overwriting customizations.
+  # changed — compare current vs newkit directly instead.
   if ! _file_changed "$snapshot" "$current"; then
     if [[ "${_SNAPSHOT_BOOTSTRAPPED:-false}" == "true" ]]; then
-      # Snapshot IS current — skip (treat as user-modified)
-      return 1
+      # Snapshot IS current — check if kit has something different
+      if ! _file_changed "$current" "$newkit"; then
+        # Current already matches new kit — nothing to do
+        return 1
+      fi
+      # Kit has updates — ask user (both changed from their perspective)
+      _prompt_file_action "$current" "$snapshot" "$newkit"
+      case "$_FILE_ACTION" in
+        append)
+          printf "\n# --- Updated by Claude Code Starter Kit ---\n" >> "$current"
+          cat "$newkit" >> "$current"
+          return 0
+          ;;
+        skip|*)
+          return 1
+          ;;
+      esac
     fi
     cp -a "$newkit" "$current"
     return 0
@@ -186,6 +201,86 @@ _update_file() {
       return 1
       ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# _update_hook_feature - Update hook scripts for a single feature
+#
+# Usage: _update_hook_feature <feature_name> <src_dir> <claude_dir> <snapshot_dir> <updated_var> <skipped_var>
+# ---------------------------------------------------------------------------
+_update_hook_feature() {
+  local feature_name="$1"
+  local src_dir="$2"
+  local claude_dir="$3"
+  local snapshot_dir="$4"
+  local updated_var="$5"
+  local skipped_var="$6"
+
+  local dest_dir="${claude_dir}/hooks/${feature_name}"
+  local snap_dir="${snapshot_dir}/hooks/${feature_name}"
+
+  [[ -d "$src_dir" ]] || return 0
+  mkdir -p "$dest_dir"
+
+  local src_file
+  while IFS= read -r -d '' src_file; do
+    local basename_file
+    basename_file="$(basename "$src_file")"
+    local dest_file="${dest_dir}/${basename_file}"
+    local snap_file="${snap_dir}/${basename_file}"
+
+    if _update_file "$dest_file" "$snap_file" "$src_file"; then
+      chmod +x "$dest_file" 2>/dev/null || true
+      eval "${updated_var}+=(\"\$dest_file\")"
+    else
+      eval "${skipped_var}+=(\"hooks/${feature_name}/${basename_file}\")"
+    fi
+  done < <(find "$src_dir" -type f -print0 2>/dev/null)
+}
+
+# ---------------------------------------------------------------------------
+# _update_hook_scripts - Update-aware hook script deployment
+#
+# Deploys hook scripts through _update_file() so user customizations
+# are detected and preserved instead of being silently overwritten.
+#
+# Usage: _update_hook_scripts <claude_dir> <snapshot_dir> <updated_array_name> <skipped_array_name>
+# ---------------------------------------------------------------------------
+_update_hook_scripts() {
+  local claude_dir="$1"
+  local snapshot_dir="$2"
+  local updated_var="$3"
+  local skipped_var="$4"
+
+  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
+    _update_hook_feature "memory-persistence" \
+      "$PROJECT_DIR/features/memory-persistence/scripts" \
+      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
+  fi
+
+  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
+    _update_hook_feature "strategic-compact" \
+      "$PROJECT_DIR/features/strategic-compact/scripts" \
+      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
+  fi
+
+  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
+    _update_hook_feature "auto-update" \
+      "$PROJECT_DIR/features/auto-update/scripts" \
+      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
+  fi
+
+  if is_true "${ENABLE_STATUSLINE:-false}"; then
+    _update_hook_feature "statusline" \
+      "$PROJECT_DIR/features/statusline/scripts" \
+      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
+  fi
+
+  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
+    _update_hook_feature "doc-size-guard" \
+      "$PROJECT_DIR/features/doc-size-guard/scripts" \
+      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -315,8 +410,8 @@ run_update() {
     done < <(find "$src_dir" -type f -print0 2>/dev/null)
   done
 
-  # --- Phase 5: Hook scripts ---
-  deploy_hook_scripts
+  # --- Phase 5: Hook scripts (update-aware) ---
+  _update_hook_scripts "$claude_dir" "$snapshot_dir" updated_files skipped_files
 
   # --- Phase 6: Defer snapshot update to end of script ---
   # Snapshot is written AFTER all post-update steps (plugins, Codex MCP, etc.)
