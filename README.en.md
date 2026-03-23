@@ -33,6 +33,7 @@ irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/mai
 - [Features](#features)
 - [Installation](#installation)
 - [Wizard Flow](#wizard-flow)
+- [Wizard Config Mapping](docs/wizard-config-mapping.en.md)
 - [Profiles](#profiles)
 - [Usage](#usage)
 - [Non-Interactive Mode](#non-interactive-mode)
@@ -137,12 +138,14 @@ cd claude-code-starter-kit
 ## Wizard Flow
 
 ```
-Language → Profile → Codex MCP → Editor → Hooks → Plugins → Commit Attribution → Confirm & Deploy
+Language → Profile → Codex MCP → Editor → Hooks → Plugins → Claude Code Attribution → Confirm & Deploy
 ```
 
 Each step shows numbered options with descriptions. Recommended choices are marked.
 
 > **About the Editor step**: The wizard asks which code editor you use. This is for the git push review hook (opens a diff view in your editor before pushing code). **If you don't have an editor installed or aren't sure, choose "None"** — Claude Code works entirely in the terminal and does not require an editor.
+
+> **Want to know where each choice is applied?** See [Wizard Config Mapping](docs/wizard-config-mapping.en.md). It explains which values are written to `settings.json`, which are used only during setup, and which act as presets.
 
 ### Editor Setup (Optional)
 
@@ -312,6 +315,11 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 ```
 
 > **Plugin naming**: When the same plugin name exists in multiple marketplaces, use `name@marketplace` format (e.g., `pr-review-toolkit@claude-code-plugins`). Plugins without name conflicts can be specified by name alone.
+>
+> **Notes**:
+> - `--profile` selects a preset bundle of lower-level flags rather than a single final runtime key
+> - `--commit-attribution=false` disables Claude Code attribution in both commits and PRs
+> - For full mapping details, see [Wizard Config Mapping](docs/wizard-config-mapping.en.md)
 
 ## Directory Structure
 

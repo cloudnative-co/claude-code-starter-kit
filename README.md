@@ -35,6 +35,7 @@ irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/mai
 - [このキットでできること](#-このキットでできること)
 - [インストール](#-インストール)
 - [ウィザードの流れ](#-ウィザードの流れ)
+- [ウィザード設定と反映先の対応表](docs/wizard-config-mapping.md)
 - [プロファイルの選び方](#-プロファイルの選び方)
 - [主な機能](#-主な機能)
 - [セットアップ後にできること](#-セットアップ後にできること)
@@ -352,7 +353,7 @@ cd claude-code-starter-kit
 5. Ghostty         → ターミナルアプリの自動設定（macOS のみ・Full/Custom）
 6. フック          → 安全装置の選択
 7. プラグイン      → 追加機能の選択
-8. コミット帰属    → AI との共同作業を記録するか
+8. Claude Code 帰属 → コミットとPRの帰属表示を残すか
 9. 確認・デプロイ  → 設定内容を確認して実行
 ```
 
@@ -363,6 +364,8 @@ cd claude-code-starter-kit
 > これは git push レビューフック（コードを共有する前にエディタで差分を確認する機能）のための設定です。
 > **エディタをインストールしていない場合や、わからない場合は「5) なし」を選んでください。** Claude Code の動作には影響しません。
 > エディタの詳細は「[エディタ（コードエディタ）とは？](#エディタコードエディタとは)」をご覧ください。
+
+> **選択肢がどこに反映されるか知りたい場合**: 詳細は [ウィザード設定と反映先の対応表](docs/wizard-config-mapping.md) を参照してください。`PROFILE` のように preset として使われる項目と、`settings.json` に直接書かれる項目を分けて確認できます。
 
 ---
 
@@ -832,6 +835,11 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 
 > **プラグインの指定**: 同名のプラグインが複数のマーケットプレイスに存在する場合は `name@marketplace` 形式で指定します。
 > 衝突しないプラグインは従来通り名前だけで指定できます（例: `security-guidance`）。
+>
+> **補足**:
+> - `--profile` は最終設定の 1 キーではなく、個別フラグの初期値セットを選ぶための指定です
+> - `--commit-attribution=false` はコミットと PR の Claude Code 帰属表示を両方オフにします
+> - 詳細な反映先は [ウィザード設定と反映先の対応表](docs/wizard-config-mapping.md) を参照してください
 
 ### 保存済み設定を使う
 
