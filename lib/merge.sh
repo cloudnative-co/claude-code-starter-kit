@@ -107,7 +107,7 @@ _merge_arrays_3way() {
   removed_count="$(printf '%s' "$kit_removed" | jq 'length')"
 
   if [[ "$removed_count" -gt 0 ]]; then
-    if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+    if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
       # Non-interactive: safe default is to keep user's values
       merged="$(jq -n \
         --argjson m "$merged" \
@@ -181,7 +181,7 @@ _prompt_array_conflict() {
     return
   fi
 
-  if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+  if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
     # Non-interactive: element-level merge preserves both user and kit additions
     printf '  [merge-array] %s (non-interactive)\n' "$key" >&2
     _merge_arrays_3way "$arr_sv" "$c_val" "$n_val"
@@ -268,7 +268,7 @@ _prompt_scalar_conflict() {
     return
   fi
 
-  if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+  if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
     # Non-interactive: safe default is to preserve user's value
     printf '%s' "$c_val"
     return

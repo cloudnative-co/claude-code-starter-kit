@@ -41,6 +41,7 @@ WIZARD_RESULT="${WIZARD_RESULT:-}"
 WIZARD_NONINTERACTIVE="${WIZARD_NONINTERACTIVE:-false}"
 UPDATE_MODE="${UPDATE_MODE:-false}"
 _RESET_MERGE_PREFS="${_RESET_MERGE_PREFS:-false}"
+_MERGE_INTERACTIVE="${_MERGE_INTERACTIVE:-true}"
 WIZARD_CONFIG_FILE=""
 
 # Track CLI-overridden variables (restored after load_config/profile)
@@ -514,6 +515,7 @@ parse_cli_args() {
     case "$arg" in
       --non-interactive)
         WIZARD_NONINTERACTIVE="true"
+        _MERGE_INTERACTIVE="false"
         ;;
       --update)
         UPDATE_MODE="true"

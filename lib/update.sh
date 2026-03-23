@@ -66,7 +66,7 @@ _prompt_file_action() {
   local newkit="$3"
   local display_path="${current#"$HOME"/}"
 
-  if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+  if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
     _FILE_ACTION="skip"
     return
   fi
@@ -134,7 +134,7 @@ _update_file() {
 
   # Current file was deleted by user
   if [[ ! -f "$current" ]]; then
-    if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+    if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
       return 1
     fi
     info "File deleted by you: ${current#"$HOME"/}"
@@ -168,7 +168,7 @@ _update_file() {
       fi
       # Kit has updates — non-interactive: safe to overwrite since we have
       # no real baseline (snapshot==current). Interactive: ask user.
-      if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+      if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
         cp -a "$newkit" "$current"
         return 0
       fi
