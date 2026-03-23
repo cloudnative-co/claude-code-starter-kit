@@ -245,16 +245,23 @@ _restore_config_from_manifest() {
   local manifest="$HOME/.claude/.starter-kit-manifest.json"
   [[ -f "$manifest" ]] || return 1
 
+  local manifest_commit_attribution manifest_new_init
   PROFILE="$(jq -r '.profile // "standard"' "$manifest")"
   LANGUAGE="$(jq -r '.language // "en"' "$manifest")"
   EDITOR_CHOICE="$(jq -r '.editor // "none"' "$manifest")"
   SELECTED_PLUGINS="$(jq -r '.plugins // ""' "$manifest")"
+  manifest_commit_attribution="$(jq -r '.commit_attribution // ""' "$manifest")"
+  manifest_new_init="$(jq -r '.new_init // ""' "$manifest")"
 
   # Load profile config to get INSTALL_* and ENABLE_* flags
   load_profile_config "$PROFILE"
 
   # Load saved wizard config for feature toggles
   load_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+
+  # Use manifest values only as a fallback when saved config is missing the key.
+  [[ -z "${COMMIT_ATTRIBUTION:-}" && -n "$manifest_commit_attribution" ]] && COMMIT_ATTRIBUTION="$manifest_commit_attribution"
+  [[ -z "${ENABLE_NEW_INIT:-}" && -n "$manifest_new_init" ]] && ENABLE_NEW_INIT="$manifest_new_init"
 
   load_strings "$LANGUAGE"
 }

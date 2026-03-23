@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **`/update-kit` 追従漏れ修正**: update モードで `AGENTS.md` も更新対象に含めるよう修正し、`settings.json` だけでなくドキュメントテンプレート変更も既存インストールへ反映されるよう改善
+- **Update 復元の堅牢化**: manifest に `COMMIT_ATTRIBUTION` と `ENABLE_NEW_INIT` を保存し、保存済み wizard config が欠けている環境でも update 時の設定復元が崩れにくいよう修正
+
 ## [0.15.0] - 2026-03-22
 
 ### Added

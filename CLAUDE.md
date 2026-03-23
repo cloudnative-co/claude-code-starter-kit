@@ -176,6 +176,10 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 
 **Non-interactive update:** `--non-interactive` skips all prompts, keeping user-modified files and only updating unchanged ones.
 
+**New feature adoption rule:** When adding a new setting or `ENABLE_*` flag, treat fresh install and update as separate paths. `setup.sh --update` and `/update-kit` must adopt the new feature for existing installs when the key is missing, but must not overwrite an explicit user choice that is already present in saved config or deployed files.
+
+**Update verification rule:** For any new feature, verify all three paths: fresh install, `setup.sh --update` (the same path used by `/update-kit`), and saved config reuse in `wizard/wizard.sh`.
+
 **Snapshot directory:** `~/.claude/.starter-kit-snapshot/` mirrors the structure of `~/.claude/` for kit-managed files only.
 
 ### Deploy Targets
@@ -263,6 +267,12 @@ The permissions file implements a defense-in-depth strategy against prompt injec
 6. Add conditional merge in `build_settings()` in `setup.sh`
 7. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
 8. If the feature creates files outside the standard manifest-tracked directories, add explicit cleanup to `uninstall.sh`
+9. Verify update-path adoption. A new key must be checked in all of these paths:
+   - fresh install
+   - `setup.sh --update` / `/update-kit`
+   - saved config reuse in `wizard/wizard.sh`
+   Missing keys on older installs should receive the intended default for that profile, but existing explicit user choices must win.
+10. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
 
 Multiple features can safely use the same hook type (e.g., `PreCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
 

@@ -444,6 +444,8 @@ write_manifest() {
     --arg profile "${PROFILE:-}" \
     --arg language "${LANGUAGE:-}" \
     --arg editor "${EDITOR_CHOICE:-}" \
+    --arg commit_attribution "${COMMIT_ATTRIBUTION:-}" \
+    --arg new_init "${ENABLE_NEW_INIT:-}" \
     --arg plugins "${SELECTED_PLUGINS:-}" \
     --argjson files "$files_json" \
     --arg snapshot_dir "$CLAUDE_DIR/.starter-kit-snapshot" \
@@ -454,6 +456,8 @@ write_manifest() {
       profile: $profile,
       language: $language,
       editor: $editor,
+      commit_attribution: $commit_attribution,
+      new_init: $new_init,
       plugins: $plugins,
       files: $files,
       snapshot_dir: $snapshot_dir
