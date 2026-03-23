@@ -245,23 +245,54 @@ _restore_config_from_manifest() {
   local manifest="$HOME/.claude/.starter-kit-manifest.json"
   [[ -f "$manifest" ]] || return 1
 
+  local config_file current_settings
   local manifest_commit_attribution manifest_new_init
+  local saved_has_commit_attribution="false" saved_has_new_init="false"
+  local current_commit_attribution="" current_new_init=""
   PROFILE="$(jq -r '.profile // "standard"' "$manifest")"
   LANGUAGE="$(jq -r '.language // "en"' "$manifest")"
   EDITOR_CHOICE="$(jq -r '.editor // "none"' "$manifest")"
   SELECTED_PLUGINS="$(jq -r '.plugins // ""' "$manifest")"
   manifest_commit_attribution="$(jq -r '.commit_attribution // ""' "$manifest")"
   manifest_new_init="$(jq -r '.new_init // ""' "$manifest")"
+  config_file="${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+  current_settings="$HOME/.claude/settings.json"
+
+  if [[ -f "$config_file" ]]; then
+    grep -q '^COMMIT_ATTRIBUTION=' "$config_file" && saved_has_commit_attribution="true"
+    grep -q '^ENABLE_NEW_INIT=' "$config_file" && saved_has_new_init="true"
+  fi
+
+  if [[ -f "$current_settings" ]]; then
+    current_commit_attribution="$(
+      jq -r 'if has("attribution") then "false" else "true" end' "$current_settings" 2>/dev/null || echo ""
+    )"
+    current_new_init="$(jq -r '.env.CLAUDE_CODE_NEW_INIT // ""' "$current_settings" 2>/dev/null || echo "")"
+  fi
 
   # Load profile config to get INSTALL_* and ENABLE_* flags
   load_profile_config "$PROFILE"
 
   # Load saved wizard config for feature toggles
-  load_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+  load_config "$config_file"
 
-  # Use manifest values only as a fallback when saved config is missing the key.
-  [[ -z "${COMMIT_ATTRIBUTION:-}" && -n "$manifest_commit_attribution" ]] && COMMIT_ATTRIBUTION="$manifest_commit_attribution"
-  [[ -z "${ENABLE_NEW_INIT:-}" && -n "$manifest_new_init" ]] && ENABLE_NEW_INIT="$manifest_new_init"
+  # Fallback order for keys introduced after older installs:
+  # saved config > current deployed settings.json > manifest > profile default.
+  if [[ "$saved_has_commit_attribution" != "true" ]]; then
+    if [[ -n "$current_commit_attribution" ]]; then
+      COMMIT_ATTRIBUTION="$current_commit_attribution"
+    elif [[ -n "$manifest_commit_attribution" ]]; then
+      COMMIT_ATTRIBUTION="$manifest_commit_attribution"
+    fi
+  fi
+
+  if [[ "$saved_has_new_init" != "true" ]]; then
+    if [[ -n "$current_new_init" ]]; then
+      ENABLE_NEW_INIT="$current_new_init"
+    elif [[ -n "$manifest_new_init" ]]; then
+      ENABLE_NEW_INIT="$manifest_new_init"
+    fi
+  fi
 
   load_strings "$LANGUAGE"
 }
