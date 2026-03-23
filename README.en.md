@@ -325,8 +325,10 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - For full mapping details, see [Wizard Config Mapping](docs/wizard-config-mapping.en.md)
 
 > **Existing users**:
-> - If you already use this starter kit, prefer `/update-kit` or `./setup.sh --update` so the snapshot-based merge path can preserve local changes.
-> - If you already have a `~/.claude` setup but run plain `./setup.sh`, the script now warns before entering the backup-and-reconfigure flow.
+> - If you already use this starter kit, prefer `/update-kit` or `./setup.sh --update`. Conflicts are resolved interactively with `[RK]/[RU]` remember options. Use `--reset-prefs` to clear saved decisions.
+> - **First-time kit users with existing `~/.claude/settings.json`**: settings.json is merged (not overwritten), and other files are confirmed per-directory.
+> - `--non-interactive` is intended for CI/automation. Interactive mode is recommended for existing users.
+> - A backup is automatically created at `~/.claude.backup.<timestamp>` before every update or first install with existing files.
 
 ## Directory Structure
 

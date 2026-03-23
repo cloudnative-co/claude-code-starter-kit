@@ -186,6 +186,8 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 
 **Snapshot directory:** `~/.claude/.starter-kit-snapshot/` mirrors the structure of `~/.claude/` for kit-managed files only.
 
+**Fresh install with existing files:** When `~/.claude/settings.json` exists but no `.starter-kit-manifest.json` is found, the fresh install path uses `_deploy_fresh_with_existing()` instead of the standard overwrite flow. This calls `_merge_settings_bootstrap()` for settings.json (same merge logic as update mode), and offers per-directory `[O]verwrite all / [N]ew files only / [S]kip` prompts for content directories and hook scripts. Non-interactive mode merges settings.json (adopting kit-only keys, preserving user values) and copies only new files for other directories.
+
 ### Deploy Targets
 
 `setup.sh` deploys content from this repo to `~/.claude/`:
