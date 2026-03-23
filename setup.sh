@@ -182,37 +182,19 @@ collect_managed_target_files() {
     "$CLAUDE_DIR/CLAUDE.md"
   )
 
-  if is_true "${INSTALL_AGENTS:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/agents" "$CLAUDE_DIR/agents"
-  fi
-  if is_true "${INSTALL_RULES:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/rules" "$CLAUDE_DIR/rules"
-  fi
-  if is_true "${INSTALL_COMMANDS:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
-  fi
-  if is_true "${INSTALL_SKILLS:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/skills" "$CLAUDE_DIR/skills"
-  fi
-  if is_true "${INSTALL_MEMORY:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/memory" "$CLAUDE_DIR/memory"
-  fi
-
-  if is_true "${ENABLE_MEMORY_PERSISTENCE:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/features/memory-persistence/scripts" "$CLAUDE_DIR/hooks/memory-persistence"
-  fi
-  if is_true "${ENABLE_STRATEGIC_COMPACT:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/features/strategic-compact/scripts" "$CLAUDE_DIR/hooks/strategic-compact"
-  fi
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/features/auto-update/scripts" "$CLAUDE_DIR/hooks/auto-update"
-  fi
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/features/statusline/scripts" "$CLAUDE_DIR/hooks/statusline"
-  fi
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    _add_managed_tree_targets "$PROJECT_DIR/features/doc-size-guard/scripts" "$CLAUDE_DIR/hooks/doc-size-guard"
-  fi
+  # Enumerate all starter-kit-owned file paths, then keep only paths that
+  # currently exist under ~/.claude. This preserves tracking for leftovers from
+  # previously enabled components without sweeping up arbitrary user files.
+  _add_managed_tree_targets "$PROJECT_DIR/agents" "$CLAUDE_DIR/agents"
+  _add_managed_tree_targets "$PROJECT_DIR/rules" "$CLAUDE_DIR/rules"
+  _add_managed_tree_targets "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
+  _add_managed_tree_targets "$PROJECT_DIR/skills" "$CLAUDE_DIR/skills"
+  _add_managed_tree_targets "$PROJECT_DIR/memory" "$CLAUDE_DIR/memory"
+  _add_managed_tree_targets "$PROJECT_DIR/features/memory-persistence/scripts" "$CLAUDE_DIR/hooks/memory-persistence"
+  _add_managed_tree_targets "$PROJECT_DIR/features/strategic-compact/scripts" "$CLAUDE_DIR/hooks/strategic-compact"
+  _add_managed_tree_targets "$PROJECT_DIR/features/auto-update/scripts" "$CLAUDE_DIR/hooks/auto-update"
+  _add_managed_tree_targets "$PROJECT_DIR/features/statusline/scripts" "$CLAUDE_DIR/hooks/statusline"
+  _add_managed_tree_targets "$PROJECT_DIR/features/doc-size-guard/scripts" "$CLAUDE_DIR/hooks/doc-size-guard"
 }
 
 managed_files_json() {
