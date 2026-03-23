@@ -179,6 +179,20 @@ load_config() {
   fi
 }
 
+fill_missing_profile_defaults() {
+  local profile="$1"
+  case "$profile" in
+    minimal|standard|full|custom) ;;
+    *) return 1 ;;
+  esac
+
+  local saved_enable_new_init="${ENABLE_NEW_INIT:-}"
+  load_profile_config "$profile"
+  if [[ -n "$saved_enable_new_init" ]]; then
+    ENABLE_NEW_INIT="$saved_enable_new_init"
+  fi
+}
+
 # Sanitize a value for safe inclusion in a key=value config file.
 # Strips characters that could be interpreted as shell metacharacters.
 _sanitize_config_value() {
@@ -533,7 +547,23 @@ _step_language() {
 
 _step_profile() {
   if [[ -n "$PROFILE" ]]; then
+    local _saved_overrides=()
+    local _var _val
+    for _var in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
+      _val="${!_var:-}"
+      if [[ -n "$_val" ]]; then
+        _saved_overrides+=("${_var}=${_val}")
+      fi
+    done
     load_profile_config "$PROFILE"
+    local _pair _restore_key _restore_val
+    for _pair in "${_saved_overrides[@]+"${_saved_overrides[@]}"}"; do
+      if [[ -n "$_pair" ]]; then
+        _restore_key="${_pair%%=*}"
+        _restore_val="${_pair#*=}"
+        printf -v "$_restore_key" '%s' "$_restore_val"
+      fi
+    done
     return
   fi
   section "$STR_PROFILE_TITLE"
@@ -969,6 +999,9 @@ run_wizard() {
     local _config_choice=""
     read -r -p "${STR_CHOICE}: " _config_choice
     if [[ "$_config_choice" == "1" ]]; then
+      if [[ -n "$PROFILE" ]]; then
+        fill_missing_profile_defaults "$PROFILE"
+      fi
       # Show confirm with saved settings
       _step_confirm
       if [[ "$WIZARD_RESULT" != "edit" ]]; then
