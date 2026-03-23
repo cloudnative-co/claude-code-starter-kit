@@ -747,6 +747,25 @@ _codex_login_status() {
   printf '%s\n' "$_status"
 }
 
+_smoke_test_openai_key() {
+  local _key="${OPENAI_API_KEY:-}"
+  if [[ -z "$_key" ]]; then
+    return 1
+  fi
+  local _models_code _responses_code
+  _models_code="$(printf 'header = "Authorization: Bearer %s"\n' "$_key" | \
+    curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    --config - \
+    https://api.openai.com/v1/models 2>/dev/null || echo "000")"
+  _responses_code="$(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\n' "$_key" | \
+    curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    --config - \
+    -X POST \
+    -d '{"model":"gpt-4o-mini","input":"test"}' \
+    https://api.openai.com/v1/responses 2>/dev/null || echo "000")"
+  [[ "$_models_code" == "200" ]] && [[ "$_responses_code" != "401" ]] && [[ "$_responses_code" != "403" ]]
+}
+
 _ensure_openai_key_for_codex() {
   local rc_file="$1"
   local _existing_key=""
@@ -771,6 +790,34 @@ _ensure_openai_key_for_codex() {
   fi
 
   _prompt_openai_key "$rc_file"
+}
+
+_confirm_api_key_auth_ready() {
+  while true; do
+    printf "\n"
+    info "$STR_CODEX_API_KEY_SMOKE_TESTING"
+    if _smoke_test_openai_key; then
+      ok "$STR_CODEX_API_KEY_SMOKE_OK"
+      return 0
+    fi
+    warn "$STR_CODEX_API_KEY_SMOKE_FAILED"
+    printf "  1) %s\n" "$STR_CODEX_API_KEY_RETRY_YES"
+    printf "  2) %s\n" "$STR_CODEX_API_KEY_RETRY_NO"
+    local _retry=""
+    read -r -p "${STR_CHOICE}: " _retry
+    if [[ "$_retry" != "1" ]]; then
+      return 1
+    fi
+    if ! _ensure_openai_key_for_codex "$1"; then
+      return 1
+    fi
+    printf "\n"
+    info "$STR_CODEX_LOGIN_RUNNING"
+    if ! printf '%s' "$OPENAI_API_KEY" | _run_with_timeout 30 codex login --with-api-key &>/dev/null; then
+      warn "$STR_CODEX_LOGIN_FAILED"
+      info "  printenv OPENAI_API_KEY | codex login --with-api-key"
+    fi
+  done
 }
 
 _install_codex_cli() {
@@ -856,7 +903,10 @@ _prompt_codex_auth() {
           info "$STR_CODEX_LOGIN_RUNNING"
           if printf '%s' "$OPENAI_API_KEY" | _run_with_timeout 30 codex login --with-api-key &>/dev/null; then
             ok "$STR_CODEX_LOGIN_DONE"
-            return 0
+            if _confirm_api_key_auth_ready "$rc_file"; then
+              return 0
+            fi
+            warn "$STR_CODEX_SETUP_INCOMPLETE"
           fi
           warn "$STR_CODEX_LOGIN_FAILED"
           info "  printenv OPENAI_API_KEY | codex login --with-api-key"
