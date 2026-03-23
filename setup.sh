@@ -217,10 +217,13 @@ write_managed_snapshot() {
   _write_snapshot "$CLAUDE_DIR" "${snapshot_files[@]+"${snapshot_files[@]}"}"
 }
 
+_SNAPSHOT_BOOTSTRAPPED=false
+
 bootstrap_snapshot_from_current() {
   warn "$STR_UPDATE_V1_WARN"
   info "$STR_UPDATE_MIGRATION_BOOTSTRAP"
   write_managed_snapshot
+  _SNAPSHOT_BOOTSTRAPPED=true
 }
 
 warn_existing_claude_reconfigure() {
@@ -547,6 +550,7 @@ write_manifest() {
 # Deploy
 # ---------------------------------------------------------------------------
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  backup_existing
   if ! _snapshot_exists "$CLAUDE_DIR"; then
     bootstrap_snapshot_from_current
   fi
