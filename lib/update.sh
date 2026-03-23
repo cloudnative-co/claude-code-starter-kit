@@ -212,23 +212,7 @@ run_update() {
     info "$STR_UPDATE_CLAUDEMD_SKIPPED"
   fi
 
-  # --- Phase 3: AGENTS.md ---
-  local current_agents_md="${claude_dir}/AGENTS.md"
-  local snapshot_agents_md="${snapshot_dir}/AGENTS.md"
-  local new_agents_md="${project_dir}/config/AGENTS.md.template"
-
-  if [[ -f "$new_agents_md" ]]; then
-    info "Updating AGENTS.md"
-    if _update_file "$current_agents_md" "$snapshot_agents_md" "$new_agents_md"; then
-      updated_files+=("$current_agents_md")
-      ok "AGENTS.md updated"
-    else
-      skipped_files+=("AGENTS.md")
-      info "AGENTS.md skipped"
-    fi
-  fi
-
-  # --- Phase 4: Content directories ---
+  # --- Phase 3: Content directories ---
   local dir
   for dir in agents rules commands skills memory; do
     local src_dir="${project_dir}/${dir}"

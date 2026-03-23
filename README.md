@@ -411,10 +411,6 @@ cd claude-code-starter-kit
 
 ## ✨ 主な機能
 
-### AGENTS.md（全プロファイル）
-
-**AGENTS.md** は、Claude Code に限らず **すべての AI コーディングエージェント**（Codex CLI、Cursor、Copilot、Gemini CLI 等）が読めるユニバーサルなコンテキストファイルです。プロジェクトの構造、コーディング規約、重要なパスなどを記載します。Claude Code 固有の指示は従来通り CLAUDE.md に記載します。
-
 ### 🤖 エージェント（9種類）
 
 エージェントは、**特定の役割に特化した AI アシスタント** です。
