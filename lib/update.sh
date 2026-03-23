@@ -166,7 +166,12 @@ _update_file() {
         # Current already matches new kit — nothing to do
         return 1
       fi
-      # Kit has updates — ask user (both changed from their perspective)
+      # Kit has updates — non-interactive: safe to overwrite since we have
+      # no real baseline (snapshot==current). Interactive: ask user.
+      if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+        cp -a "$newkit" "$current"
+        return 0
+      fi
       _prompt_file_action "$current" "$snapshot" "$newkit"
       case "$_FILE_ACTION" in
         append)
@@ -301,6 +306,12 @@ run_update() {
   local claude_dir="$2"
   local snapshot_dir="${claude_dir}/.starter-kit-snapshot"
 
+  # Eagerly clear merge prefs if --reset-prefs was passed (even if no conflicts)
+  if [[ "${_RESET_MERGE_PREFS:-false}" == "true" ]]; then
+    rm -f "${HOME}/.claude/.starter-kit-merge-prefs.json"
+    info "Merge preferences cleared"
+  fi
+
   section "$STR_UPDATE_TITLE"
 
   local updated_files=()
@@ -319,10 +330,15 @@ run_update() {
 
   if [[ -f "$snapshot_settings" ]] && [[ -f "$current_settings" ]]; then
     if [[ "${_SNAPSHOT_BOOTSTRAPPED:-false}" == "true" ]]; then
-      # Snapshot was just bootstrapped from current — always use 3-way merge
-      # to avoid treating user customizations as "unchanged"
+      # Snapshot was bootstrapped from current — no real baseline.
+      # Use an empty snapshot so every key is treated as "independently added"
+      # by both user and kit, triggering proper conflict resolution.
+      local empty_snapshot
+      empty_snapshot="$(mktemp)"
+      _SETUP_TMP_FILES+=("$empty_snapshot")
+      printf '{}\n' > "$empty_snapshot"
       info "$STR_UPDATE_SETTINGS_MERGING"
-      merge_settings_3way "$snapshot_settings" "$current_settings" "$new_settings" "$current_settings"
+      merge_settings_3way "$empty_snapshot" "$current_settings" "$new_settings" "$current_settings"
       updated_files+=("$current_settings")
       ok "$STR_UPDATE_SETTINGS_MERGED"
     elif ! _file_changed "$snapshot_settings" "$current_settings"; then

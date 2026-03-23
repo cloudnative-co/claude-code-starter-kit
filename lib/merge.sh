@@ -149,37 +149,42 @@ _merge_arrays_3way() {
 }
 
 # ---------------------------------------------------------------------------
-# _prompt_array_conflict - Resolve an array conflict at whole-array level
+# _prompt_array_conflict - Resolve an array conflict
 #
 # Usage: _prompt_array_conflict <key> <snapshot_json> <current_json> <newkit_json>
 # Prints the chosen JSON array to stdout.
 #
-# Checks saved prefs, then prompts user to keep their array or use kit's.
-# Falls back to element-level _merge_arrays_3way if needed.
-# Non-interactive: keeps user's value (safe default).
+# Checks saved prefs, then prompts user to keep their entire array or use
+# the kit's. Only whole-array replacement is performed in interactive mode.
+# Non-interactive: uses element-level _merge_arrays_3way to preserve both
+# user additions and kit additions without prompting.
 # ---------------------------------------------------------------------------
 _prompt_array_conflict() {
   local key="$1"
+  local s_val="$2"
   local c_val="$3"
   local n_val="$4"
+
+  local arr_sv
+  arr_sv="$(jq -n --argjson v "$s_val" 'if $v == null then [] else $v end')"
 
   # Check saved preference
   local saved_pref
   saved_pref="$(_get_merge_pref "$key")"
   if [[ "$saved_pref" == "keep-mine" ]]; then
-    info "  [remembered] $key → keep yours"
+    printf '  [remembered] %s → keep yours\n' "$key" >&2
     printf '%s' "$c_val"
     return
   elif [[ "$saved_pref" == "use-kit" ]]; then
-    info "  [remembered] $key → use kit's"
+    printf '  [remembered] %s → use kit'\''s\n' "$key" >&2
     printf '%s' "$n_val"
     return
   fi
 
   if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
-    # Non-interactive: safe default — keep user's array
-    info "  [keep-user] $key (non-interactive)"
-    printf '%s' "$c_val"
+    # Non-interactive: element-level merge preserves both user and kit additions
+    printf '  [merge-array] %s (non-interactive)\n' "$key" >&2
+    _merge_arrays_3way "$arr_sv" "$c_val" "$n_val"
     return
   fi
 
@@ -254,11 +259,11 @@ _prompt_scalar_conflict() {
   local saved_pref
   saved_pref="$(_get_merge_pref "$key")"
   if [[ "$saved_pref" == "keep-mine" ]]; then
-    info "  [remembered] $key → keep yours"
+    printf '  [remembered] %s → keep yours\n' "$key" >&2
     printf '%s' "$c_val"
     return
   elif [[ "$saved_pref" == "use-kit" ]]; then
-    info "  [remembered] $key → use kit's"
+    printf '  [remembered] %s → use kit'\''s\n' "$key" >&2
     printf '%s' "$n_val"
     return
   fi
