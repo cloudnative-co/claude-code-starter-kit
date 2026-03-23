@@ -4,8 +4,6 @@
 # Compatible: Bash 3.2+ (macOS default) — no associative arrays, no mapfile
 set -euo pipefail
 
-# Global: updated files list for deferred snapshot update
-_UPDATE_UPDATED_FILES=()
 
 # ---------------------------------------------------------------------------
 # _sync_settings_metadata - Sync LANGUAGE (and other vars) from merged settings
@@ -48,6 +46,104 @@ _sync_settings_metadata() {
     # shellcheck disable=SC2034
     ENABLE_NEW_INIT="$new_init_val"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# _merge_settings_bootstrap - Merge settings.json when no real snapshot exists
+#
+# Usage: _merge_settings_bootstrap <current> <new_kit> <output>
+#
+# Strategy: current is the base (user's customizations are preserved).
+# Kit-only keys are adopted. Value conflicts are prompted (interactive)
+# or resolved in favor of current (non-interactive).
+# Objects are recursed one level to adopt new sub-keys.
+# ---------------------------------------------------------------------------
+_merge_settings_bootstrap() {
+  local current="$1"
+  local new_kit="$2"
+  local output="$3"
+
+  local merged
+  merged="$(< "$current")"
+
+  # Collect all keys from both files
+  local all_keys
+  all_keys="$(jq -rn \
+    --slurpfile c "$current" \
+    --slurpfile n "$new_kit" \
+    '(($c[0] | keys) + ($n[0] | keys)) | unique[]')"
+
+  local key
+  while IFS= read -r key; do
+    [[ -z "$key" ]] && continue
+    [[ "$key" == "\$schema" ]] && continue
+
+    local cv nv
+    cv="$(jq -c --arg k "$key" '.[$k] // empty' "$current"  2>/dev/null || printf '')"
+    nv="$(jq -c --arg k "$key" '.[$k] // empty' "$new_kit"  2>/dev/null || printf '')"
+    [[ -z "$cv" ]] && cv="null"
+    [[ -z "$nv" ]] && nv="null"
+
+    if [[ "$cv" == "null" && "$nv" != "null" ]]; then
+      # Kit-only key → adopt
+      info "  [kit-add] $key"
+      merged="$(printf '%s' "$merged" | jq \
+        --arg k "$key" --argjson v "$nv" '.[$k] = $v')"
+
+    elif [[ "$cv" != "null" && "$nv" == "null" ]]; then
+      # User-only key → keep
+      continue
+
+    elif [[ "$cv" == "$nv" ]]; then
+      # Same value → keep
+      continue
+
+    else
+      # Both have the key with different values
+      local cv_type nv_type
+      cv_type="$(jq -n --argjson v "$cv" '$v | type')"
+      nv_type="$(jq -n --argjson v "$nv" '$v | type')"
+
+      if [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
+        # Object: adopt kit-only sub-keys, keep existing sub-keys
+        local sub_merged
+        sub_merged="$(jq -n --argjson c "$cv" --argjson n "$nv" '
+          $c + ($n | to_entries | map(select(.key as $k | $c | has($k) | not)) | from_entries)
+        ')"
+        merged="$(printf '%s' "$merged" | jq \
+          --arg k "$key" --argjson v "$sub_merged" '.[$k] = $v')"
+        info "  [merge-object] $key"
+
+      elif [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
+        # Array: use _prompt_array_conflict (has remember + non-interactive fallback)
+        local chosen
+        chosen="$(_prompt_array_conflict "$key" "[]" "$cv" "$nv")"
+        merged="$(printf '%s' "$merged" | jq \
+          --arg k "$key" --argjson v "$chosen" '.[$k] = $v')"
+
+      else
+        # Scalar: prompt or keep current
+        local chosen
+        chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
+        merged="$(printf '%s' "$merged" | jq \
+          --arg k "$key" --argjson v "$chosen" '.[$k] = $v')"
+      fi
+    fi
+  done <<EOF
+$all_keys
+EOF
+
+  local tmp_out
+  tmp_out="$(mktemp)"
+  printf '%s\n' "$merged" > "$tmp_out"
+
+  if ! jq empty "$tmp_out" 2>/dev/null; then
+    error "Bootstrap merge produced invalid JSON — aborting"
+    rm -f "$tmp_out"
+    return 1
+  fi
+
+  mv "$tmp_out" "$output"
 }
 
 # ---------------------------------------------------------------------------
@@ -161,16 +257,16 @@ _update_file() {
   # changed — compare current vs newkit directly instead.
   if ! _file_changed "$snapshot" "$current"; then
     if [[ "${_SNAPSHOT_BOOTSTRAPPED:-false}" == "true" ]]; then
-      # Snapshot IS current — check if kit has something different
+      # Snapshot IS current — no real baseline exists.
       if ! _file_changed "$current" "$newkit"; then
         # Current already matches new kit — nothing to do
         return 1
       fi
-      # Kit has updates — non-interactive: safe to overwrite since we have
-      # no real baseline (snapshot==current). Interactive: ask user.
+      # Kit differs from current — non-interactive: keep current (protect
+      # user customizations; kit additions come in on subsequent updates
+      # once a real snapshot exists). Interactive: ask user.
       if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
-        cp -a "$newkit" "$current"
-        return 0
+        return 1
       fi
       _prompt_file_action "$current" "$snapshot" "$newkit"
       case "$_FILE_ACTION" in
@@ -331,14 +427,10 @@ run_update() {
   if [[ -f "$snapshot_settings" ]] && [[ -f "$current_settings" ]]; then
     if [[ "${_SNAPSHOT_BOOTSTRAPPED:-false}" == "true" ]]; then
       # Snapshot was bootstrapped from current — no real baseline.
-      # Use an empty snapshot so every key is treated as "independently added"
-      # by both user and kit, triggering proper conflict resolution.
-      local empty_snapshot
-      empty_snapshot="$(mktemp)"
-      _SETUP_TMP_FILES+=("$empty_snapshot")
-      printf '{}\n' > "$empty_snapshot"
+      # Use current-preserving merge: keep all existing keys, adopt new
+      # kit-only keys, prompt on value differences (interactive only).
       info "$STR_UPDATE_SETTINGS_MERGING"
-      merge_settings_3way "$empty_snapshot" "$current_settings" "$new_settings" "$current_settings"
+      _merge_settings_bootstrap "$current_settings" "$new_settings" "$current_settings"
       updated_files+=("$current_settings")
       ok "$STR_UPDATE_SETTINGS_MERGED"
     elif ! _file_changed "$snapshot_settings" "$current_settings"; then
@@ -429,10 +521,17 @@ run_update() {
   # --- Phase 5: Hook scripts (update-aware) ---
   _update_hook_scripts "$claude_dir" "$snapshot_dir" updated_files skipped_files
 
-  # --- Phase 6: Defer snapshot update to end of script ---
-  # Snapshot is written AFTER all post-update steps (plugins, Codex MCP, etc.)
-  # succeed, so a partial failure doesn't cause snapshot==current on retry.
-  _UPDATE_UPDATED_FILES=("${updated_files[@]+"${updated_files[@]}"}")
+  # --- Phase 6: Update snapshot for each updated file ---
+  # Snapshot is updated here (after all file merges complete) so the
+  # snapshot reflects the actual deployed state. This prevents stale
+  # snapshots from accumulating when post-update steps (plugins, Codex
+  # MCP) fail on retry.
+  info "$STR_UPDATE_SNAPSHOT"
+  local file
+  for file in "${updated_files[@]+"${updated_files[@]}"}"; do
+    _update_snapshot_file "$claude_dir" "$file"
+  done
+  ok "$STR_UPDATE_SNAPSHOT_DONE"
 
   # --- Report ---
   if [[ ${#skipped_files[@]} -gt 0 ]]; then

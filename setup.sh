@@ -1274,19 +1274,3 @@ else
   ok "$STR_FINAL_ENJOY"
 fi
 printf "\n"
-
-# ---------------------------------------------------------------------------
-# Finalize snapshot (update mode only)
-# Deferred to end-of-script so a partial failure doesn't leave snapshot
-# aligned with current, which would cause "user didn't change" on retry.
-# ---------------------------------------------------------------------------
-if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
-  if [[ ${#_UPDATE_UPDATED_FILES[@]} -gt 0 ]]; then
-    info "$STR_UPDATE_SNAPSHOT"
-    _file=""
-    for _file in "${_UPDATE_UPDATED_FILES[@]}"; do
-      _update_snapshot_file "$CLAUDE_DIR" "$_file"
-    done
-    ok "$STR_UPDATE_SNAPSHOT_DONE"
-  fi
-fi
