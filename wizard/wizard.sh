@@ -803,8 +803,8 @@ _step_confirm() {
   section "$STR_CONFIRM_TITLE"
   printf "%-20s : %s\n" "$STR_CONFIRM_LANGUAGE" "$(_language_label "$LANGUAGE")"
   printf "%-20s : %s\n" "$STR_CONFIRM_PROFILE" "$(_profile_label "$PROFILE")"
-  printf "%-20s : %s\n" "$STR_CONFIRM_NEW_INIT" "$(_bool_label_enabled "$ENABLE_NEW_INIT")"
   printf "%-20s : %s\n" "$STR_CONFIRM_CODEX" "$(_bool_label_enabled "$ENABLE_CODEX_MCP")"
+  printf "%-20s : %s\n" "$STR_CONFIRM_NEW_INIT" "$(_bool_label_enabled "$ENABLE_NEW_INIT")"
   printf "%-20s : %s\n" "$STR_CONFIRM_EDITOR" "$(_editor_label "$EDITOR_CHOICE")"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     printf "%-20s : %s\n" "$STR_CONFIRM_GHOSTTY" "$(_bool_label_enabled "$ENABLE_GHOSTTY_SETUP")"
@@ -887,7 +887,7 @@ _fill_noninteractive_defaults() {
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
-  [[ -z "$ENABLE_NEW_INIT" ]] && ENABLE_NEW_INIT="false"
+  [[ -z "$ENABLE_NEW_INIT" ]] && ENABLE_NEW_INIT="true"
   [[ -z "${ENABLE_STATUSLINE:-}" ]] && ENABLE_STATUSLINE="true"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
   [[ -z "$ENABLE_FONTS_SETUP" ]] && ENABLE_FONTS_SETUP="false"
@@ -996,8 +996,8 @@ run_wizard() {
     _print_banner "$STR_BANNER" "$STR_BANNER_SUB"
 
     _step_profile
-    _step_new_init
     _step_codex
+    _step_new_init
     _step_editor
     _step_ghostty
     _step_fonts
