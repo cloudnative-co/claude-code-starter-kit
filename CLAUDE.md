@@ -172,9 +172,13 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 | Different | Same | Keep current (no kit changes) |
 | Different | Different | Interactive prompt |
 
-**settings.json merge:** Uses jq-based 3-way merge at the key level. Arrays (permissions, hooks) are merged with deduplication. User-added keys (e.g., `mcpServers`) are preserved. Scalar conflicts prompt the user.
+**settings.json merge:** Uses jq-based 3-way merge at the key level. Scalar conflicts and array conflicts prompt the user at the whole-key/whole-array level with `[K]eep yours / [U]se kit's` options. User-added keys (e.g., `mcpServers`) are preserved.
 
-**Non-interactive update:** `--non-interactive` skips all prompts, keeping user-modified files and only updating unchanged ones.
+**Merge preference persistence:** When resolving a conflict, users can choose `[RK] Keep & Remember` or `[RU] Use kit's & Remember`. Decisions are stored in `~/.claude/.starter-kit-merge-prefs.json` and applied automatically on subsequent updates. Use `setup.sh --update --reset-prefs` to clear saved decisions, or delete `~/.claude/.starter-kit-merge-prefs.json` manually.
+
+**Update backup:** `setup.sh --update` creates a full backup of `~/.claude` to `~/.claude.backup.<timestamp>` before any merge operations.
+
+**Non-interactive update:** `--non-interactive` skips all prompts, keeping user-modified files and only updating unchanged ones. Saved merge preferences are still applied.
 
 **New feature adoption rule:** When adding a new setting or `ENABLE_*` flag, treat fresh install and update as separate paths. `setup.sh --update` and `/update-kit` must adopt the new feature for existing installs when the key is missing, but must not overwrite an explicit user choice that is already present in saved config or deployed files.
 

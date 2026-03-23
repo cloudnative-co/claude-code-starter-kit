@@ -257,6 +257,9 @@ fi
 # Remove auto-update cache file
 rm -f "$CLAUDE_DIR/.starter-kit-update-cache"
 
+# Remove merge preferences (used by update conflict resolution)
+rm -f "$CLAUDE_DIR/.starter-kit-merge-prefs.json"
+
 # Remove snapshot directory (used by update mechanism)
 if [[ -d "$CLAUDE_DIR/.starter-kit-snapshot" ]]; then
   rm -rf "$CLAUDE_DIR/.starter-kit-snapshot"
