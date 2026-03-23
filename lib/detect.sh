@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034
 # lib/detect.sh - OS, architecture, and WSL detection
 # Exports: OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD, WIN_BUILD
 set -euo pipefail
