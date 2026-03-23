@@ -841,6 +841,10 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--new-init=true` は Claude Code の新しい対話型 `/init` を有効にします
 > - `--commit-attribution=false` はコミットと PR の Claude Code 帰属表示を両方オフにします
 > - 詳細な反映先は [ウィザード設定と反映先の対応表](docs/wizard-config-mapping.md) を参照してください
+>
+> **既存ユーザー向け**:
+> - すでにこの starter kit を使っている場合は、ローカル変更を保ちやすい snapshot ベースの更新経路として `/update-kit` または `./setup.sh --update` を優先してください。
+> - 既存の `~/.claude` がある状態で通常の `./setup.sh` を再実行する場合は、backup-and-reconfigure フローに入る前に警告を表示します。
 
 ### 保存済み設定を使う
 
@@ -864,8 +868,8 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 | スキルを追加 | `~/.claude/skills/{name}/` に `SKILL.md` + 必要に応じて `references/`, `scripts/`, `assets/` を作成 |
 | フックを変更 | `~/.claude/settings.json` の hooks セクションを編集 |
 
-> **設定のやり直し**: `./setup.sh` をもう一度実行すれば、いつでも再設定できます。
-> 前回の選択は `~/.claude-starter-kit.conf` に自動保存されているので、途中から変更するだけで OK です。
+> **設定のやり直し**: 既存の starter kit 環境を更新するときは、まず `/update-kit` または `./setup.sh --update` を使うのが安全です。
+> 通常の `./setup.sh` は必要に応じて `~/.claude` をバックアップして再構成するため、既存の手修正が多い環境では warning を確認してから進めてください。
 
 ---
 

@@ -173,15 +173,18 @@ if [[ -f "$_manifest" ]]; then
   if [[ "$_manifest_version" == "2" ]] && [[ -d "$_snapshot_dir" ]]; then
     _update_mode=true
     info "Existing installation detected (manifest v2). Running update mode."
-    _has_update=false
-    for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
-      [[ "$_arg" == "--update" ]] && _has_update=true
-    done
-    if [[ "$_has_update" == "false" ]]; then
-      _setup_args+=("--update")
-    fi
   else
-    info "Existing installation detected (manifest v1). Running full setup with snapshot."
+    _update_mode=true
+    info "Existing starter-kit installation detected without a usable snapshot."
+    info "Bootstrapping a snapshot from the current ~/.claude state, then running migration update."
+  fi
+
+  _has_update=false
+  for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
+    [[ "$_arg" == "--update" ]] && _has_update=true
+  done
+  if [[ "$_has_update" == "false" ]]; then
+    _setup_args+=("--update")
   fi
 fi
 

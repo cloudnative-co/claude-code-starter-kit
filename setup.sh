@@ -162,6 +162,110 @@ backup_existing() {
   fi
 }
 
+_MANAGED_TARGET_FILES=()
+
+_add_managed_tree_targets() {
+  local src_root="$1"
+  local dest_root="$2"
+  [[ -d "$src_root" ]] || return 0
+
+  local src_file rel_path
+  while IFS= read -r -d '' src_file; do
+    rel_path="${src_file#"$src_root"/}"
+    _MANAGED_TARGET_FILES+=("${dest_root}/${rel_path}")
+  done < <(find "$src_root" -type f -print0 2>/dev/null)
+}
+
+collect_managed_target_files() {
+  _MANAGED_TARGET_FILES=(
+    "$CLAUDE_DIR/settings.json"
+    "$CLAUDE_DIR/CLAUDE.md"
+  )
+
+  if is_true "${INSTALL_AGENTS:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/agents" "$CLAUDE_DIR/agents"
+  fi
+  if is_true "${INSTALL_RULES:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/rules" "$CLAUDE_DIR/rules"
+  fi
+  if is_true "${INSTALL_COMMANDS:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
+  fi
+  if is_true "${INSTALL_SKILLS:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/skills" "$CLAUDE_DIR/skills"
+  fi
+  if is_true "${INSTALL_MEMORY:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/memory" "$CLAUDE_DIR/memory"
+  fi
+
+  if is_true "${ENABLE_MEMORY_PERSISTENCE:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/features/memory-persistence/scripts" "$CLAUDE_DIR/hooks/memory-persistence"
+  fi
+  if is_true "${ENABLE_STRATEGIC_COMPACT:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/features/strategic-compact/scripts" "$CLAUDE_DIR/hooks/strategic-compact"
+  fi
+  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/features/auto-update/scripts" "$CLAUDE_DIR/hooks/auto-update"
+  fi
+  if is_true "${ENABLE_STATUSLINE:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/features/statusline/scripts" "$CLAUDE_DIR/hooks/statusline"
+  fi
+  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/features/doc-size-guard/scripts" "$CLAUDE_DIR/hooks/doc-size-guard"
+  fi
+}
+
+managed_files_json() {
+  collect_managed_target_files
+  {
+    local file
+    for file in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
+      [[ -f "$file" ]] && printf '%s\n' "$file"
+    done
+  } | sort -u | jq -R -s 'split("\n")[:-1]'
+}
+
+write_managed_snapshot() {
+  collect_managed_target_files
+  local snapshot_files=()
+  local file
+  for file in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
+    [[ -f "$file" ]] && snapshot_files+=("$file")
+  done
+  _write_snapshot "$CLAUDE_DIR" "${snapshot_files[@]+"${snapshot_files[@]}"}"
+}
+
+bootstrap_snapshot_from_current() {
+  warn "$STR_UPDATE_V1_WARN"
+  info "$STR_UPDATE_MIGRATION_BOOTSTRAP"
+  write_managed_snapshot
+}
+
+warn_existing_claude_reconfigure() {
+  [[ -e "$CLAUDE_DIR" ]] || return 0
+
+  printf "\n"
+  warn "$STR_EXISTING_CLAUDE_WARN"
+  info "$STR_EXISTING_CLAUDE_BACKUP"
+  info "$STR_EXISTING_CLAUDE_REWRITE"
+  info "$STR_EXISTING_CLAUDE_SIDE_EFFECTS"
+
+  if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+    warn "$STR_EXISTING_CLAUDE_NONINTERACTIVE"
+    return 0
+  fi
+
+  local confirm=""
+  read -r -p "$STR_EXISTING_CLAUDE_CONFIRM " confirm
+  case "$confirm" in
+    y|Y|yes|YES) ;;
+    *)
+      info "$STR_EXISTING_CLAUDE_CANCEL"
+      exit 0
+      ;;
+  esac
+}
+
 ensure_dirs() {
   mkdir -p "$CLAUDE_DIR"/{agents,rules,commands,skills,memory,hooks}
 }
@@ -426,15 +530,9 @@ write_manifest() {
   local kit_version
   kit_version="$(git -C "$PROJECT_DIR" describe --tags --abbrev=0 2>/dev/null || echo "unknown")"
 
-  # Only track files in starter-kit-managed directories (not plugins, sessions, etc.)
+  # Only track files that the starter kit itself manages.
   local files_json
-  files_json="$({
-    find "$CLAUDE_DIR/agents" "$CLAUDE_DIR/rules" "$CLAUDE_DIR/commands" \
-         "$CLAUDE_DIR/skills" "$CLAUDE_DIR/memory" "$CLAUDE_DIR/hooks" \
-         -type f 2>/dev/null || true
-    [[ -f "$CLAUDE_DIR/CLAUDE.md" ]] && echo "$CLAUDE_DIR/CLAUDE.md"
-    [[ -f "$CLAUDE_DIR/settings.json" ]] && echo "$CLAUDE_DIR/settings.json"
-  } | sort -u | jq -R -s 'split("\n")[:-1]')"
+  files_json="$(managed_files_json)"
 
   jq -n \
     --arg version "2" \
@@ -467,11 +565,15 @@ write_manifest() {
 # Deploy
 # ---------------------------------------------------------------------------
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  if ! _snapshot_exists "$CLAUDE_DIR"; then
+    bootstrap_snapshot_from_current
+  fi
   # Update mode: run update with merge logic
   run_update "$PROJECT_DIR" "$CLAUDE_DIR"
 else
   # Fresh install / full re-setup
   section "Deploying Claude Code Starter Kit"
+  warn_existing_claude_reconfigure
 
   backup_existing
   ensure_dirs
@@ -488,15 +590,7 @@ else
   deploy_hook_scripts
 
   # Write snapshot for future updates
-  _snapshot_files=()
-  [[ -f "$CLAUDE_DIR/settings.json" ]] && _snapshot_files+=("$CLAUDE_DIR/settings.json")
-  [[ -f "$CLAUDE_DIR/CLAUDE.md" ]] && _snapshot_files+=("$CLAUDE_DIR/CLAUDE.md")
-  while IFS= read -r -d '' _sf; do
-    _snapshot_files+=("$_sf")
-  done < <(find "$CLAUDE_DIR/agents" "$CLAUDE_DIR/rules" "$CLAUDE_DIR/commands" \
-               "$CLAUDE_DIR/skills" "$CLAUDE_DIR/memory" "$CLAUDE_DIR/hooks" \
-               -type f -print0 2>/dev/null)
-  _write_snapshot "$CLAUDE_DIR" "${_snapshot_files[@]+"${_snapshot_files[@]}"}"
+  write_managed_snapshot
   ok "Created snapshot for future updates"
 fi
 
