@@ -109,25 +109,35 @@ language_name() {
   esac
 }
 
+_bool_to_string() {
+  if is_true "${1:-false}"; then
+    printf "true"
+  else
+    printf "false"
+  fi
+}
+
 apply_settings_preferences() {
   local file="$1"
-  local lang_name tmp_file
+  local lang_name tmp_file attribution_enabled
   lang_name="$(language_name)"
+  if is_true "${COMMIT_ATTRIBUTION:-false}"; then
+    attribution_enabled="true"
+  else
+    attribution_enabled="false"
+  fi
 
   tmp_file="$(mktemp)"
   _SETUP_TMP_FILES+=("$tmp_file")
 
-  if is_true "${COMMIT_ATTRIBUTION:-false}"; then
-    jq \
-      --arg lang "$lang_name" \
-      '.language = $lang | del(.attribution)' \
-      "$file" > "$tmp_file"
-  else
-    jq \
-      --arg lang "$lang_name" \
-      '.language = $lang | .attribution = {commit: "", pr: ""}' \
-      "$file" > "$tmp_file"
-  fi
+  jq \
+    --arg lang "$lang_name" \
+    --arg new_init "$(_bool_to_string "${ENABLE_NEW_INIT:-false}")" \
+    --argjson attribution_enabled "$attribution_enabled" \
+    '.language = $lang
+    | .env.CLAUDE_CODE_NEW_INIT = $new_init
+    | if $attribution_enabled then del(.attribution) else .attribution = {commit: "", pr: ""} end' \
+    "$file" > "$tmp_file"
 
   mv "$tmp_file" "$file"
 }

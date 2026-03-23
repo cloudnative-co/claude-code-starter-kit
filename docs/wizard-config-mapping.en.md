@@ -17,6 +17,7 @@ Not every saved value is supposed to appear in `settings.json`. In particular, `
 | Language | `LANGUAGE` / `--language` | UI language and generated language settings | `settings.json`, `CLAUDE.md`, i18n loading | Yes |
 | Profile | `PROFILE` / `--profile` | Preset bundle for other defaults | wizard initialization, manifest | No |
 | Codex MCP | `ENABLE_CODEX_MCP` / `--codex-mcp` | Whether to run Codex CLI auth and Claude MCP registration | Codex MCP setup in `setup.sh` | No |
+| New `/init` | `ENABLE_NEW_INIT` / `--new-init` | Enable Claude Code's interactive `/init` flow | `settings.json` `env.CLAUDE_CODE_NEW_INIT` | Yes |
 | Editor | `EDITOR_CHOICE` / `--editor` | Editor command for the git push review hook | Hook template substitution, manifest | Indirectly |
 | Ghostty | `ENABLE_GHOSTTY_SETUP` / `--ghostty` | Extra Ghostty setup | Ghostty setup flow | No |
 | Hooks | `ENABLE_*` / `--hooks` | Which hooks are enabled | Hook fragments merged into `settings.json` | Yes |
@@ -30,6 +31,7 @@ Not every saved value is supposed to appear in `settings.json`. In particular, `
 |---|---|---|---|
 | `LANGUAGE` | UI and generated file language | `settings.json`, `CLAUDE.md`, i18n | Currently written as `English` or `日本語` |
 | `PROFILE` | Minimal / Standard / Full / Custom preset | Wizard defaults, manifest | Expanded into lower-level flags during setup |
+| `ENABLE_NEW_INIT` | Claude Code's new interactive `/init` mode | `settings.json` `env.CLAUDE_CODE_NEW_INIT` | Defaults to `true` for Minimal, Standard, and Full; Custom asks explicitly |
 | `EDITOR_CHOICE` | Editor command for git push review | `features/git-push-review/hooks.json` | Use `none` if you do not want editor integration |
 | `COMMIT_ATTRIBUTION` | Claude Code attribution on or off | `settings.json` `attribution.commit`, `attribution.pr` | `false` clears both commit and PR attribution |
 | `ENABLE_CODEX_MCP` | Run Codex MCP setup or skip it | Codex CLI auth and `claude mcp add` | A setup action, not a JSON setting |
@@ -80,4 +82,3 @@ That is expected. Plugin selection is consumed by the plugin installation flow a
 ### `ENABLE_CODEX_MCP` does not show up in `settings.json`
 
 That is expected. It controls whether Codex CLI auth and Claude MCP registration are executed, not whether a JSON key is written.
-

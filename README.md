@@ -349,12 +349,13 @@ cd claude-code-starter-kit
 1. 言語選択        → 日本語 or English
 2. プロファイル    → Minimal / Standard / Full / Custom
 3. Codex MCP       → 外部AIツール連携（わからなければ「いいえ」でOK）
-4. エディタ        → VS Code / Cursor / Zed / Neovim / なし
-5. Ghostty         → ターミナルアプリの自動設定（macOS のみ・Full/Custom）
-6. フック          → 安全装置の選択
-7. プラグイン      → 追加機能の選択
-8. Claude Code 帰属 → コミットとPRの帰属表示を残すか
-9. 確認・デプロイ  → 設定内容を確認して実行
+4. 新しい /init    → Claude Code の対話型 /init を使うか（Custom のみ）
+5. エディタ        → VS Code / Cursor / Zed / Neovim / なし
+6. Ghostty         → ターミナルアプリの自動設定（macOS のみ・Full/Custom）
+7. フック          → 安全装置の選択
+8. プラグイン      → 追加機能の選択
+9. Claude Code 帰属 → コミットとPRの帰属表示を残すか
+10. 確認・デプロイ → 設定内容を確認して実行
 ```
 
 > **迷ったら？** すべての質問には「おすすめ」のマークが付いています。
@@ -366,6 +367,8 @@ cd claude-code-starter-kit
 > エディタの詳細は「[エディタ（コードエディタ）とは？](#エディタコードエディタとは)」をご覧ください。
 
 > **選択肢がどこに反映されるか知りたい場合**: 詳細は [ウィザード設定と反映先の対応表](docs/wizard-config-mapping.md) を参照してください。`PROFILE` のように preset として使われる項目と、`settings.json` に直接書かれる項目を分けて確認できます。
+>
+> **新しい /init について**: `Minimal` `Standard` `Full` では Claude Code の新しい対話型 `/init` を既定で有効にします。`Custom` では有効化するかどうかを選べます。
 
 ---
 
@@ -826,6 +829,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --profile=standard \
   --language=ja \
   --editor=cursor \
+  --new-init=true \
   --codex-mcp=false \
   --commit-attribution=false \
   --ghostty=true \
@@ -838,6 +842,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 >
 > **補足**:
 > - `--profile` は最終設定の 1 キーではなく、個別フラグの初期値セットを選ぶための指定です
+> - `--new-init=true` は Claude Code の新しい対話型 `/init` を有効にします
 > - `--commit-attribution=false` はコミットと PR の Claude Code 帰属表示を両方オフにします
 > - 詳細な反映先は [ウィザード設定と反映先の対応表](docs/wizard-config-mapping.md) を参照してください
 

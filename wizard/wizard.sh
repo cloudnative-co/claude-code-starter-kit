@@ -10,6 +10,7 @@ LANGUAGE="${LANGUAGE:-}"
 PROFILE="${PROFILE:-}"
 EDITOR_CHOICE="${EDITOR_CHOICE:-}"
 COMMIT_ATTRIBUTION="${COMMIT_ATTRIBUTION:-}"
+ENABLE_NEW_INIT="${ENABLE_NEW_INIT:-}"
 
 INSTALL_AGENTS="${INSTALL_AGENTS:-}"
 INSTALL_RULES="${INSTALL_RULES:-}"
@@ -127,7 +128,7 @@ _language_label() {
 # ---------------------------------------------------------------------------
 
 # Allowed config variable names (used by _safe_source_config for allowlist validation)
-_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD SELECTED_PLUGINS"
+_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD SELECTED_PLUGINS"
 
 # Safe key=value parser: reads a config file line-by-line and only sets
 # variables whose names appear in the allowlist. This replaces the previous
@@ -192,6 +193,7 @@ save_config() {
     printf 'PROFILE="%s"\n' "$(_sanitize_config_value "$PROFILE")"
     printf 'EDITOR_CHOICE="%s"\n' "$(_sanitize_config_value "$EDITOR_CHOICE")"
     printf 'COMMIT_ATTRIBUTION="%s"\n' "$(_sanitize_config_value "$COMMIT_ATTRIBUTION")"
+    printf 'ENABLE_NEW_INIT="%s"\n' "$(_sanitize_config_value "$ENABLE_NEW_INIT")"
     printf '\n'
     printf 'INSTALL_AGENTS="%s"\n' "$(_sanitize_config_value "$INSTALL_AGENTS")"
     printf 'INSTALL_RULES="%s"\n' "$(_sanitize_config_value "$INSTALL_RULES")"
@@ -446,6 +448,8 @@ parse_cli_args() {
       --profile)         shift; PROFILE="${1:-}"; _CLI_OVERRIDES+=("PROFILE") ;;
       --editor=*)        EDITOR_CHOICE="${arg#*=}"; _CLI_OVERRIDES+=("EDITOR_CHOICE") ;;
       --editor)          shift; EDITOR_CHOICE="${1:-}"; _CLI_OVERRIDES+=("EDITOR_CHOICE") ;;
+      --new-init=*)      _set_bool ENABLE_NEW_INIT "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_NEW_INIT") ;;
+      --new-init)        shift; _set_bool ENABLE_NEW_INIT "${1:-}"; _CLI_OVERRIDES+=("ENABLE_NEW_INIT") ;;
       --codex-mcp=*)     _set_bool ENABLE_CODEX_MCP "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_CODEX_MCP") ;;
       --codex-mcp)       shift; _set_bool ENABLE_CODEX_MCP "${1:-}"; _CLI_OVERRIDES+=("ENABLE_CODEX_MCP") ;;
       --commit-attribution=*) _set_bool COMMIT_ATTRIBUTION "${arg#*=}"; _CLI_OVERRIDES+=("COMMIT_ATTRIBUTION") ;;
@@ -572,6 +576,25 @@ _step_codex() {
   case "$choice" in
     1) ENABLE_CODEX_MCP="true" ;;
     *) ENABLE_CODEX_MCP="false" ;;
+  esac
+}
+
+_step_new_init() {
+  local _ov; for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do [[ "$_ov" == "ENABLE_NEW_INIT" ]] && return; done
+  if [[ "$PROFILE" != "custom" ]]; then return; fi
+
+  section "$STR_NEW_INIT_TITLE"
+  printf "  %s\n\n" "$STR_NEW_INIT_DESC"
+  printf "  1) %s\n" "$STR_NEW_INIT_YES"
+  printf "  2) %s\n" "$STR_NEW_INIT_NO"
+  local _default="2"
+  if [[ "${ENABLE_NEW_INIT:-false}" == "true" ]]; then _default="1"; fi
+  local choice=""
+  read -r -p "${STR_CHOICE} [${_default}]: " choice
+  [[ -z "$choice" ]] && choice="$_default"
+  case "$choice" in
+    1) ENABLE_NEW_INIT="true" ;;
+    *) ENABLE_NEW_INIT="false" ;;
   esac
 }
 
@@ -781,6 +804,7 @@ _step_confirm() {
   printf "%-20s : %s\n" "$STR_CONFIRM_LANGUAGE" "$(_language_label "$LANGUAGE")"
   printf "%-20s : %s\n" "$STR_CONFIRM_PROFILE" "$(_profile_label "$PROFILE")"
   printf "%-20s : %s\n" "$STR_CONFIRM_CODEX" "$(_bool_label_enabled "$ENABLE_CODEX_MCP")"
+  printf "%-20s : %s\n" "$STR_CONFIRM_NEW_INIT" "$(_bool_label_enabled "$ENABLE_NEW_INIT")"
   printf "%-20s : %s\n" "$STR_CONFIRM_EDITOR" "$(_editor_label "$EDITOR_CHOICE")"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     printf "%-20s : %s\n" "$STR_CONFIRM_GHOSTTY" "$(_bool_label_enabled "$ENABLE_GHOSTTY_SETUP")"
@@ -863,6 +887,7 @@ _fill_noninteractive_defaults() {
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
+  [[ -z "$ENABLE_NEW_INIT" ]] && ENABLE_NEW_INIT="true"
   [[ -z "${ENABLE_STATUSLINE:-}" ]] && ENABLE_STATUSLINE="true"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
   [[ -z "$ENABLE_FONTS_SETUP" ]] && ENABLE_FONTS_SETUP="false"
@@ -956,6 +981,7 @@ run_wizard() {
     PROFILE=""
     EDITOR_CHOICE=""
     COMMIT_ATTRIBUTION=""
+    ENABLE_NEW_INIT=""
     ENABLE_CODEX_MCP=""
     ENABLE_GHOSTTY_SETUP=""
     ENABLE_FONTS_SETUP=""
@@ -971,6 +997,7 @@ run_wizard() {
 
     _step_profile
     _step_codex
+    _step_new_init
     _step_editor
     _step_ghostty
     _step_fonts
@@ -985,6 +1012,7 @@ run_wizard() {
       PROFILE=""
       EDITOR_CHOICE=""
       COMMIT_ATTRIBUTION=""
+      ENABLE_NEW_INIT=""
       ENABLE_CODEX_MCP=""
       ENABLE_GHOSTTY_SETUP=""
       ENABLE_FONTS_SETUP=""
