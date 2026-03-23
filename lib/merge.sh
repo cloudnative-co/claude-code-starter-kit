@@ -9,6 +9,52 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# Merge preference persistence ("remember my answer")
+#
+# Stores user decisions in ~/.claude/.starter-kit-merge-prefs.json so
+# recurring conflicts are resolved automatically.
+# ---------------------------------------------------------------------------
+_MERGE_PREFS_FILE="${HOME}/.claude/.starter-kit-merge-prefs.json"
+_MERGE_PREFS_LOADED=false
+_MERGE_PREFS="{}"
+
+_load_merge_prefs() {
+  if [[ "$_MERGE_PREFS_LOADED" == "true" ]]; then
+    return
+  fi
+  if [[ "${_RESET_MERGE_PREFS:-false}" == "true" ]]; then
+    _MERGE_PREFS="{}"
+    rm -f "$_MERGE_PREFS_FILE"
+    _MERGE_PREFS_LOADED=true
+    return
+  fi
+  if [[ -f "$_MERGE_PREFS_FILE" ]] && jq empty "$_MERGE_PREFS_FILE" 2>/dev/null; then
+    _MERGE_PREFS="$(< "$_MERGE_PREFS_FILE")"
+  else
+    _MERGE_PREFS="{}"
+  fi
+  _MERGE_PREFS_LOADED=true
+}
+
+# _get_merge_pref <key> — prints "keep-mine", "use-kit", or empty string
+_get_merge_pref() {
+  local key="$1"
+  _load_merge_prefs
+  local val
+  val="$(printf '%s' "$_MERGE_PREFS" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null || true)"
+  printf '%s' "$val"
+}
+
+# _save_merge_pref <key> <value>  (value: "keep-mine" or "use-kit")
+_save_merge_pref() {
+  local key="$1"
+  local value="$2"
+  _load_merge_prefs
+  _MERGE_PREFS="$(printf '%s' "$_MERGE_PREFS" | jq --arg k "$key" --arg v "$value" '.[$k] = $v')"
+  printf '%s\n' "$_MERGE_PREFS" > "$_MERGE_PREFS_FILE"
+}
+
+# ---------------------------------------------------------------------------
 # _merge_arrays_3way - Merge a JSON array using 3-way logic
 #
 # Usage: _merge_arrays_3way <snapshot_json> <current_json> <newkit_json>
@@ -103,6 +149,94 @@ _merge_arrays_3way() {
 }
 
 # ---------------------------------------------------------------------------
+# _prompt_array_conflict - Resolve an array conflict at whole-array level
+#
+# Usage: _prompt_array_conflict <key> <snapshot_json> <current_json> <newkit_json>
+# Prints the chosen JSON array to stdout.
+#
+# Checks saved prefs, then prompts user to keep their array or use kit's.
+# Falls back to element-level _merge_arrays_3way if needed.
+# Non-interactive: keeps user's value (safe default).
+# ---------------------------------------------------------------------------
+_prompt_array_conflict() {
+  local key="$1"
+  local c_val="$3"
+  local n_val="$4"
+
+  # Check saved preference
+  local saved_pref
+  saved_pref="$(_get_merge_pref "$key")"
+  if [[ "$saved_pref" == "keep-mine" ]]; then
+    info "  [remembered] $key → keep yours"
+    printf '%s' "$c_val"
+    return
+  elif [[ "$saved_pref" == "use-kit" ]]; then
+    info "  [remembered] $key → use kit's"
+    printf '%s' "$n_val"
+    return
+  fi
+
+  if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+    # Non-interactive: safe default — keep user's array
+    info "  [keep-user] $key (non-interactive)"
+    printf '%s' "$c_val"
+    return
+  fi
+
+  # Interactive: show summary and prompt
+  local c_count n_count
+  c_count="$(printf '%s' "$c_val" | jq 'length')"
+  n_count="$(printf '%s' "$n_val" | jq 'length')"
+
+  local c_preview n_preview
+  c_preview="$(printf '%s' "$c_val" | jq -r '.[0:3][] // empty' 2>/dev/null | head -3)"
+  n_preview="$(printf '%s' "$n_val" | jq -r '.[0:3][] // empty' 2>/dev/null | head -3)"
+
+  warn "Array conflict on: $key"
+  printf "  Yours (%s entries): %s ...\n" "$c_count" "$c_preview" >&2
+  printf "  Kit's (%s entries): %s ...\n" "$n_count" "$n_preview" >&2
+  printf "  [K]eep yours / [U]se kit's / [D]iff / [RK] Keep & Remember / [RU] Use kit's & Remember: " >&2
+
+  while true; do
+    local reply
+    if read -r reply < /dev/tty 2>/dev/null; then
+      true
+    else
+      reply="k"
+    fi
+
+    case "$reply" in
+      [Dd]*)
+        printf "\n--- Yours ---\n" >&2
+        printf '%s' "$c_val" | jq -r '.[]' 2>/dev/null >&2
+        printf "\n--- Kit's ---\n" >&2
+        printf '%s' "$n_val" | jq -r '.[]' 2>/dev/null >&2
+        printf "\n  [K]eep yours / [U]se kit's / [RK] Keep & Remember / [RU] Use kit's & Remember: " >&2
+        continue
+        ;;
+      rk|RK|Rk)
+        _save_merge_pref "$key" "keep-mine"
+        printf '%s' "$c_val"
+        return
+        ;;
+      ru|RU|Ru)
+        _save_merge_pref "$key" "use-kit"
+        printf '%s' "$n_val"
+        return
+        ;;
+      [Uu]*)
+        printf '%s' "$n_val"
+        return
+        ;;
+      *)
+        printf '%s' "$c_val"
+        return
+        ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
 # _prompt_scalar_conflict - Resolve a scalar conflict between user and kit
 #
 # Usage: _prompt_scalar_conflict <key> <current_val> <newkit_val>
@@ -116,17 +250,30 @@ _prompt_scalar_conflict() {
   local c_val="$2"
   local n_val="$3"
 
+  # Check saved preference first
+  local saved_pref
+  saved_pref="$(_get_merge_pref "$key")"
+  if [[ "$saved_pref" == "keep-mine" ]]; then
+    info "  [remembered] $key → keep yours"
+    printf '%s' "$c_val"
+    return
+  elif [[ "$saved_pref" == "use-kit" ]]; then
+    info "  [remembered] $key → use kit's"
+    printf '%s' "$n_val"
+    return
+  fi
+
   if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
     # Non-interactive: safe default is to preserve user's value
     printf '%s' "$c_val"
     return
   fi
 
-  # Interactive: show conflict and prompt
+  # Interactive: show conflict and prompt with remember options
   warn "Conflict on key: $key"
   printf "  Your value : %s\n" "$c_val" >&2
   printf "  Kit's value: %s\n" "$n_val" >&2
-  printf "  [K]eep yours / [U]se kit's: " >&2
+  printf "  [K]eep yours / [U]se kit's / [RK] Keep & Remember / [RU] Use kit's & Remember: " >&2
 
   local reply
   if read -r reply < /dev/tty 2>/dev/null; then
@@ -136,6 +283,14 @@ _prompt_scalar_conflict() {
   fi
 
   case "$reply" in
+    rk|RK|Rk)
+      _save_merge_pref "$key" "keep-mine"
+      printf '%s' "$c_val"
+      ;;
+    ru|RU|Ru)
+      _save_merge_pref "$key" "use-kit"
+      printf '%s' "$n_val"
+      ;;
     [Uu]*)
       printf '%s' "$n_val"
       ;;
@@ -230,9 +385,7 @@ _merge_object_3way() {
       nv_type="$(jq -n --argjson v "$nv" '$v | type')"
 
       if [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
-        local arr_sv arr_sv_or_empty
-        arr_sv_or_empty="$(jq -n --argjson v "$sv" 'if $v == null then [] else $v end')"
-        chosen="$(_merge_arrays_3way "$arr_sv_or_empty" "$cv" "$nv")"
+        chosen="$(_prompt_array_conflict "${parent_key}.${sub_key}" "$sv" "$cv" "$nv")"
       elif [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
         # Shallow conflict at object level: kit wins (no deeper recursion)
         warn "Conflict on ${parent_key}.${sub_key} (both are objects) — using kit version"
@@ -390,10 +543,7 @@ merge_settings_3way() {
       nv_type="$(jq -n --argjson v "$nv" '$v | type')"
 
       if [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
-        info "  [merge-array] $key"
-        local arr_sv
-        arr_sv="$(jq -n --argjson v "$sv" 'if $v == null then [] else $v end')"
-        chosen="$(_merge_arrays_3way "$arr_sv" "$cv" "$nv")"
+        chosen="$(_prompt_array_conflict "$key" "$sv" "$cv" "$nv")"
 
       elif [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
         info "  [merge-object] $key"

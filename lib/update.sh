@@ -4,6 +4,52 @@
 # Compatible: Bash 3.2+ (macOS default) — no associative arrays, no mapfile
 set -euo pipefail
 
+# Global: updated files list for deferred snapshot update
+_UPDATE_UPDATED_FILES=()
+
+# ---------------------------------------------------------------------------
+# _sync_settings_metadata - Sync LANGUAGE (and other vars) from merged settings
+#
+# After 3-way merge, the merged settings.json is the ground truth.
+# Read back key values so write_manifest() and save_config() record the
+# actual deployed state, not the stale manifest/variable values.
+# ---------------------------------------------------------------------------
+# shellcheck disable=SC2034  # variables used by setup.sh (write_manifest, save_config)
+_sync_settings_metadata() {
+  local settings_file="$1"
+  [[ -f "$settings_file" ]] || return 0
+
+  local lang_value
+  lang_value="$(jq -r '.language // empty' "$settings_file" 2>/dev/null || true)"
+
+  case "$lang_value" in
+    "日本語"|ja) LANGUAGE="ja" ;;
+    English|en)  LANGUAGE="en" ;;
+    "") ;;  # no language key, keep current
+    *)  ;;  # unknown value, keep current
+  esac
+
+  # Sync COMMIT_ATTRIBUTION from merged settings (used by setup.sh write_manifest)
+  local has_attribution _commit_attr
+  has_attribution="$(jq -r 'if has("attribution") then "has" else "none" end' "$settings_file" 2>/dev/null || true)"
+  case "$has_attribution" in
+    none) _commit_attr="true"  ;;  # no attribution key = enabled
+    has)  _commit_attr="false" ;;  # attribution key present = disabled
+    *)    _commit_attr="" ;;
+  esac
+  if [[ -n "$_commit_attr" ]]; then
+    COMMIT_ATTRIBUTION="$_commit_attr"  # used by setup.sh write_manifest/save_config
+  fi
+
+  # Sync ENABLE_NEW_INIT from merged settings (used by setup.sh)
+  local new_init_val
+  new_init_val="$(jq -r '.env.CLAUDE_CODE_NEW_INIT // empty' "$settings_file" 2>/dev/null || true)"
+  if [[ -n "$new_init_val" ]]; then
+    # shellcheck disable=SC2034
+    ENABLE_NEW_INIT="$new_init_val"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # _prompt_file_action - Ask user what to do with a changed file
 #
@@ -111,7 +157,13 @@ _update_file() {
   fi
 
   # No user change → safe to overwrite
+  # But if snapshot was just bootstrapped from current, we can't tell if user
+  # changed — treat as user-modified to avoid overwriting customizations.
   if ! _file_changed "$snapshot" "$current"; then
+    if [[ "${_SNAPSHOT_BOOTSTRAPPED:-false}" == "true" ]]; then
+      # Snapshot IS current — skip (treat as user-modified)
+      return 1
+    fi
     cp -a "$newkit" "$current"
     return 0
   fi
@@ -171,7 +223,14 @@ run_update() {
   local snapshot_settings="${snapshot_dir}/settings.json"
 
   if [[ -f "$snapshot_settings" ]] && [[ -f "$current_settings" ]]; then
-    if ! _file_changed "$snapshot_settings" "$current_settings"; then
+    if [[ "${_SNAPSHOT_BOOTSTRAPPED:-false}" == "true" ]]; then
+      # Snapshot was just bootstrapped from current — always use 3-way merge
+      # to avoid treating user customizations as "unchanged"
+      info "$STR_UPDATE_SETTINGS_MERGING"
+      merge_settings_3way "$snapshot_settings" "$current_settings" "$new_settings" "$current_settings"
+      updated_files+=("$current_settings")
+      ok "$STR_UPDATE_SETTINGS_MERGED"
+    elif ! _file_changed "$snapshot_settings" "$current_settings"; then
       # User didn't change settings → safe to overwrite
       cp -a "$new_settings" "$current_settings"
       updated_files+=("$current_settings")
@@ -192,6 +251,10 @@ run_update() {
     updated_files+=("$current_settings")
     ok "$STR_UPDATE_SETTINGS_UPDATED"
   fi
+
+  # Sync metadata variables from merged/deployed settings.json so that
+  # write_manifest() and save_config() record the actual deployed values.
+  _sync_settings_metadata "$current_settings"
 
   # --- Phase 2: CLAUDE.md ---
   info "$STR_UPDATE_CLAUDEMD"
@@ -255,13 +318,10 @@ run_update() {
   # --- Phase 5: Hook scripts ---
   deploy_hook_scripts
 
-  # --- Phase 6: Update snapshot for each updated file ---
-  info "$STR_UPDATE_SNAPSHOT"
-  local file
-  for file in "${updated_files[@]+"${updated_files[@]}"}"; do
-    _update_snapshot_file "$claude_dir" "$file"
-  done
-  ok "$STR_UPDATE_SNAPSHOT_DONE"
+  # --- Phase 6: Defer snapshot update to end of script ---
+  # Snapshot is written AFTER all post-update steps (plugins, Codex MCP, etc.)
+  # succeed, so a partial failure doesn't cause snapshot==current on retry.
+  _UPDATE_UPDATED_FILES=("${updated_files[@]+"${updated_files[@]}"}")
 
   # --- Report ---
   if [[ ${#skipped_files[@]} -gt 0 ]]; then

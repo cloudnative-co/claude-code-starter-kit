@@ -217,10 +217,13 @@ write_managed_snapshot() {
   _write_snapshot "$CLAUDE_DIR" "${snapshot_files[@]+"${snapshot_files[@]}"}"
 }
 
+_SNAPSHOT_BOOTSTRAPPED=false
+
 bootstrap_snapshot_from_current() {
   warn "$STR_UPDATE_V1_WARN"
   info "$STR_UPDATE_MIGRATION_BOOTSTRAP"
   write_managed_snapshot
+  _SNAPSHOT_BOOTSTRAPPED=true
 }
 
 warn_existing_claude_reconfigure() {
@@ -547,6 +550,7 @@ write_manifest() {
 # Deploy
 # ---------------------------------------------------------------------------
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  backup_existing
   if ! _snapshot_exists "$CLAUDE_DIR"; then
     bootstrap_snapshot_from_current
   fi
@@ -1270,3 +1274,19 @@ else
   ok "$STR_FINAL_ENJOY"
 fi
 printf "\n"
+
+# ---------------------------------------------------------------------------
+# Finalize snapshot (update mode only)
+# Deferred to end-of-script so a partial failure doesn't leave snapshot
+# aligned with current, which would cause "user didn't change" on retry.
+# ---------------------------------------------------------------------------
+if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  if [[ ${#_UPDATE_UPDATED_FILES[@]} -gt 0 ]]; then
+    info "$STR_UPDATE_SNAPSHOT"
+    _file=""
+    for _file in "${_UPDATE_UPDATED_FILES[@]}"; do
+      _update_snapshot_file "$CLAUDE_DIR" "$_file"
+    done
+    ok "$STR_UPDATE_SNAPSHOT_DONE"
+  fi
+fi
