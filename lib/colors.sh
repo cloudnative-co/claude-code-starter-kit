@@ -64,7 +64,7 @@ section() {
 # ---------------------------------------------------------------------------
 _register_tmp() {
   # Guard: only append if the tracking array exists (sourced from setup.sh)
-  if declare -p _SETUP_TMP_FILES &>/dev/null 2>&1; then
+  if declare -p _SETUP_TMP_FILES &>/dev/null; then
     _SETUP_TMP_FILES+=("$1")
   fi
 }

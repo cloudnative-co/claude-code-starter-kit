@@ -893,7 +893,7 @@ write_manifest() {
   ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
   local kit_version
-  kit_version="$(git -C "$PROJECT_DIR" describe --tags --always --abbrev=0 2>/dev/null || echo "unknown")"
+  kit_version="$(git -C "$PROJECT_DIR" describe --tags --always 2>/dev/null || echo "unknown")"
 
   local kit_commit
   kit_commit="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -1320,8 +1320,9 @@ _run_with_timeout() {
     local pid=$!
     ( sleep "$secs" && kill "$pid" 2>/dev/null ) &
     local watcher=$!
-    wait "$pid" 2>/dev/null
-    local rc=$?
+    # Capture exit code safely under set -e (bare wait would abort on non-zero)
+    local rc=0
+    wait "$pid" 2>/dev/null || rc=$?
     # Kill the watcher subshell and its sleep child to avoid orphan processes
     kill "$watcher" 2>/dev/null || true
     wait "$watcher" 2>/dev/null || true
@@ -1351,7 +1352,7 @@ _save_openai_key() {
     tmp_rc="$(mktemp)"
     _SETUP_TMP_FILES+=("$tmp_rc")
     # Preserve original file permissions (umask 077 would make the new file 0600)
-    orig_mode="$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null || { warn "Could not detect permissions for $rc_file, defaulting to 644"; echo '644'; })"
+    orig_mode="$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null || { warn "Could not detect permissions for $rc_file, defaulting to 600"; echo '600'; })"
     grep -v '^\(export \)\{0,1\}OPENAI_API_KEY=' "$rc_file" > "$tmp_rc"
     mv "$tmp_rc" "$rc_file"
     chmod "$orig_mode" "$rc_file"
