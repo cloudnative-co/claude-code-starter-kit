@@ -242,5 +242,8 @@ snapshot_dir_checksum() {
   if ! command -v sha256sum &>/dev/null; then
     hash_cmd="shasum -a 256"
   fi
-  find "$dir" -type f -print0 2>/dev/null | sort -z | xargs -0 $hash_cmd 2>/dev/null | $hash_cmd | cut -d' ' -f1
+  # Use newline-delimited sort (sort -z is GNU-only, not available on macOS BSD sort)
+  find "$dir" -type f 2>/dev/null | sort | while IFS= read -r f; do
+    $hash_cmd "$f" 2>/dev/null
+  done | $hash_cmd | cut -d' ' -f1
 }

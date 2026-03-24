@@ -67,7 +67,7 @@ test_fresh_install_existing() {
 # --- 3. update-no-changes ---
 test_update_no_changes() {
   setup_test_env
-  run_setup --profile=minimal >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1 || { fail "update-no-changes (setup failed)"; teardown_test_env; return; }
   # Capture settings before update
   local before_settings
   before_settings="$(cat "$CLAUDE_DIR/settings.json")"
@@ -236,15 +236,16 @@ test_dry_run_no_mutation() {
   setup_test_env
   run_setup --profile=minimal >/dev/null 2>&1
   # Take checksum before dry-run
-  local before after
+  local before after rc_dr=0
   before="$(snapshot_dir_checksum "$CLAUDE_DIR")"
-  run_setup_update --dry-run >/dev/null 2>&1 || true
+  run_setup_update --dry-run >/dev/null 2>&1 || rc_dr=$?
   after="$(snapshot_dir_checksum "$CLAUDE_DIR")"
 
-  if [[ "$before" == "$after" ]]; then
+  # Dry-run should succeed AND not modify any files
+  if [[ $rc_dr -eq 0 ]] && [[ "$before" == "$after" ]]; then
     pass "dry-run-no-mutation"
   else
-    fail "dry-run-no-mutation (files changed)"
+    fail "dry-run-no-mutation (rc=$rc_dr, changed=$([[ "$before" != "$after" ]] && echo yes || echo no))"
   fi
 
   teardown_test_env
@@ -411,16 +412,17 @@ test_update_from_v020_customized() {
 test_update_from_no_manifest() {
   setup_test_env
   install_fixture "no-manifest"
-  # Without manifest, --update should still bootstrap and create manifest
+  # Without manifest, --update bootstraps snapshot then runs update.
+  # The update may not fully succeed (no manifest = no file tracking),
+  # but the key invariant is: existing user files are not destroyed.
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
 
-  # Even if update has issues, at minimum the run should complete
-  # and either produce a manifest or the files should be intact
+  # Verify user data survives (the fixture's settings.json should still exist)
   if assert_file_exists "$CLAUDE_DIR/settings.json"; then
     pass "update-from-no-manifest"
   else
-    fail "update-from-no-manifest"
+    fail "update-from-no-manifest (settings.json lost, rc=$rc)"
   fi
 
   teardown_test_env
@@ -432,14 +434,14 @@ test_update_noninteractive_safe() {
   install_fixture "v020"
   # Save original CLAUDE.md content
   local original_user_content
-  original_user_content="$(grep -A100 'END STARTER-KIT-MANAGED' "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null | tail -n +2 || true)"
+  original_user_content="$(awk '/END STARTER-KIT-MANAGED/ {found=1; next} found {print}' "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null || true)"
 
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
 
   # Verify no data loss: user section should be preserved
   local updated_user_content
-  updated_user_content="$(grep -A100 'END STARTER-KIT-MANAGED' "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null | tail -n +2 || true)"
+  updated_user_content="$(awk '/END STARTER-KIT-MANAGED/ {found=1; next} found {print}' "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null || true)"
 
   if [[ $rc -eq 0 ]] && [[ "$original_user_content" == "$updated_user_content" ]]; then
     pass "update-noninteractive-safe"
