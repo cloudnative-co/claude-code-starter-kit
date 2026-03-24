@@ -7,8 +7,16 @@ Manually update the Claude Code Starter Kit to the latest version.
 Run the following command to update the starter kit:
 
 ```bash
-cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --update
+cd ~/.claude-starter-kit && git status --porcelain && git fetch --tags && git pull && bash setup.sh --update
 ```
+
+### Pre-flight Checks
+
+Before running the update:
+1. **Check for local changes**: `git -C ~/.claude-starter-kit status --porcelain`
+   - If output is non-empty, stash or discard changes first: `cd ~/.claude-starter-kit && git stash`
+2. **Verify the kit repo exists**: `ls ~/.claude-starter-kit/.git`
+   - If not found, the kit was not installed via the one-liner. Re-install with: `curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash`
 
 ### Steps
 
@@ -21,6 +29,14 @@ cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --upda
 4. After a successful update, tell the user how to reload the new configuration:
    - Always suggest `/compact` to refresh the current session cleanly.
    - Also mention that some changes may require starting a new Claude Code session or opening a new terminal, especially settings/env changes, hook updates, MCP-related changes, or newly added slash commands.
+
+### Recovery
+
+If an update goes wrong:
+- A backup is automatically created at `~/.claude.backup.<timestamp>` before each update
+- The latest backup path is saved in `~/.claude/.starter-kit-last-backup`
+- To restore: `mv ~/.claude ~/.claude.broken && cp -a $(cat ~/.claude/.starter-kit-last-backup) ~/.claude`
+- To reset saved merge decisions: `bash setup.sh --update --reset-prefs`
 
 ### Notes
 

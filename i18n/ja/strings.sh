@@ -269,6 +269,12 @@ STR_UPDATE_SKIPPED_TITLE="スキップしたファイル（ユーザーが変更
 STR_UPDATE_COMPLETE="更新完了"
 STR_UPDATE_V1_WARN="使える starter-kit snapshot が見つかりませんでした。現在の ~/.claude 状態から移行アップデートを起動します。"
 STR_UPDATE_MIGRATION_BOOTSTRAP="現在の ~/.claude 状態から最初のスナップショットを作成し、より安全な update path に移行します。"
+# メジャーアップグレード + スキップ通知
+STR_MAJOR_UPGRADE_WARN="メジャーバージョンのアップグレードを検出しました"
+STR_MAJOR_UPGRADE_BACKUP="更新前にバックアップが作成されます。必要に応じて復元できます。"
+STR_MAJOR_UPGRADE_RESTORE="バックアップから復元: mv ~/.claude ~/.claude.broken && cp -a <backup_path> ~/.claude"
+STR_UPDATE_SKIPPED_HINT="スキップされたファイルにはあなたの変更が保持されています。次回の update で受け入れるかリセットすると kit 更新が適用されます。"
+STR_UPDATE_SKIPPED_RESTORE="kit デフォルトに戻すには、上記のバックアップを使用するか: setup.sh --update --reset-prefs"
 # マージ競合プロンプト
 STR_MERGE_SCALAR_CONFLICT="キーが競合しています:"
 STR_MERGE_SCALAR_YOUR_VALUE="あなたの値 :"

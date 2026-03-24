@@ -271,6 +271,12 @@ STR_UPDATE_SKIPPED_TITLE="Skipped files (user-modified):"
 STR_UPDATE_COMPLETE="Update complete"
 STR_UPDATE_V1_WARN="No usable starter-kit snapshot was found. Bootstrapping a migration update from the current ~/.claude state."
 STR_UPDATE_MIGRATION_BOOTSTRAP="A first snapshot will be created from the current ~/.claude state so the safer update path can be used."
+# Major upgrade + skip notifications
+STR_MAJOR_UPGRADE_WARN="Major version upgrade detected"
+STR_MAJOR_UPGRADE_BACKUP="A backup will be created before updating. You can restore if needed."
+STR_MAJOR_UPGRADE_RESTORE="To restore from backup: mv ~/.claude ~/.claude.broken && cp -a <backup_path> ~/.claude"
+STR_UPDATE_SKIPPED_HINT="Skipped files retain your changes. Kit updates for those files will apply on next update after you accept or reset."
+STR_UPDATE_SKIPPED_RESTORE="To restore kit defaults, use the backup shown above or run: setup.sh --update --reset-prefs"
 # Merge conflict prompts
 STR_MERGE_SCALAR_CONFLICT="Conflict on key:"
 STR_MERGE_SCALAR_YOUR_VALUE="Your value :"

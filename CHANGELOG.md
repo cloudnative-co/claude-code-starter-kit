@@ -33,6 +33,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 - **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
 
+## [0.21.0] - 2026-03-24
+
+### Added
+- **メジャーアップグレード検出**: `_check_major_upgrade()` でバージョンジャンプを検出し、復旧案内を表示
+- **Dirty check（全更新経路）**: `install.sh`, `install.ps1`（WSL + Git Bash）, `auto-update.sh`, `/update-kit` コマンドで、kit リポジトリにローカル変更がある場合は更新をブロックし `git stash` を案内
+- **Recovery UX**: 更新失敗時にバックアップパスと復元コマンドを表示。`auto-update.sh` は `.starter-kit-last-backup` からパスを読み取り
+- **Skip 通知**: update でスキップされたファイルがある場合、次回の対処方法を案内
+
+### Changed
+- **auto-update.sh**: `2>/dev/null` を除去し stderr を出力（recovery 情報を表示するため）。`--non-interactive` フラグを明示
+- **/update-kit コマンド**: Pre-flight checks セクションと Recovery セクションを追加
+
 ## [0.20.4] - 2026-03-24
 
 ### Fixed
