@@ -12,12 +12,13 @@ cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --upda
 
 ### Steps
 
-1. Run the update command above.
-2. Report the result to the user:
+1. **Before running the update**, the setup script automatically checks for user customizations. If kit-managed files have been modified by the user (snapshot differs from current), a dry-run preview is offered. If no customizations are detected, the update proceeds directly without asking.
+2. Run the update command above.
+3. Report the result to the user:
    - If successful: show the previous and new version (`git describe --tags --abbrev=0`)
    - If the kit is already up to date: report "Already on the latest version"
    - If it fails: show the error and suggest manual steps
-3. After a successful update, tell the user how to reload the new configuration:
+4. After a successful update, tell the user how to reload the new configuration:
    - Always suggest `/compact` to refresh the current session cleanly.
    - Also mention that some changes may require starting a new Claude Code session or opening a new terminal, especially settings/env changes, hook updates, MCP-related changes, or newly added slash commands.
 

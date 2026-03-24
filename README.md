@@ -847,7 +847,11 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - **starter kit 未使用だが `~/.claude/settings.json` がある場合**: 初回実行時に settings.json をマージ（上書きではなく）し、他のファイルはディレクトリ単位で確認します。
 > - `--non-interactive` は CI/自動デプロイ向けです。既存ユーザーには対話モードを推奨します。
 > - update 実行前には `~/.claude.backup.<タイムスタンプ>` に自動バックアップが作成されます。
-> - `--dry-run` を付けると、デプロイせずに影響範囲をプレビューできます: `bash setup.sh --dry-run` / `bash setup.sh --update --dry-run`。対話モードでは軽量な前提ツール（git, jq, curl）の導入確認が行われることがあります。`--non-interactive --dry-run` では何も導入せず終了します。
+>
+> **ドライラン（事前プレビュー）**:
+> - `/update-kit-dry-run` または `bash setup.sh --update --dry-run` で、update が何をするか事前に確認できます。ファイルの作成・変更・削除・スキップの一覧、settings.json の diff、外部操作（plugins 等）を `[WOULD RUN]` として表示します。
+> - 対話モードでの install / update 時、既存の設定とバッティングする可能性がある場合は「ドライランしますか？」と自動的に確認されます。既存設定がない新規インストールでは確認されません。
+> - `--non-interactive --dry-run` では前提ツールの導入もせず終了します。
 
 ### 保存済み設定を使う
 

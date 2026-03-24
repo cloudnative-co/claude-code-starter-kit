@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 - **`--dry-run` フラグ**: `setup.sh --dry-run` で install/update の影響範囲を事前プレビュー。デプロイせずにサマリ + settings.json diff を表示。軽量な前提ツール（git, jq, curl）は対話確認付きで導入可、`--non-interactive` では導入せず終了
+- **`/update-kit-dry-run` コマンド**: Claude Code 内から update のドライランを直接実行
+- **デプロイ前の dry-run 提案**: 既存設定とのバッティングがある場合のみ、デプロイ前に「プレビューしますか？」と確認。結果を見てから続行/中止を選択可能。クリーンインストールでは表示されない
 - **外部操作の事前表示**: dry-run 時に Ghostty / fonts / plugins / Codex MCP 等の外部操作を `[WOULD RUN]` としてログ
 - **初回インストール時の既存設定保護**: starter kit 未使用だが `~/.claude/settings.json` がある環境では、settings.json を上書きせずマージ。CLAUDE.md やコンテンツディレクトリはディレクトリ単位で上書き/新規のみ/スキップを選択可能
 - **Non-interactive fallback**: 非対話モードでは settings.json のみ merge（kit 追加分を採用）、他のファイルは新規のみコピーし既存を保持
