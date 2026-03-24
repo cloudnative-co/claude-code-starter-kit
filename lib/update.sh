@@ -656,15 +656,17 @@ run_update() {
     mkdir -p "$dest_dir"
 
     while IFS= read -r -d '' src_file; do
-      local basename_file
-      basename_file="$(basename "$src_file")"
-      local dest_file="${dest_dir}/${basename_file}"
-      local snap_file="${snap_dir}/${basename_file}"
+      local rel_file="${src_file#"$src_dir"/}"
+      local dest_file="${dest_dir}/${rel_file}"
+      local snap_file="${snap_dir}/${rel_file}"
+
+      # Ensure parent directory exists for nested files (e.g. skills/subdir/file.md)
+      mkdir -p "$(dirname "$dest_file")"
 
       if _update_file "$dest_file" "$snap_file" "$src_file"; then
         updated_files+=("$dest_file")
       else
-        skipped_files+=("${dir}/${basename_file}")
+        skipped_files+=("${dir}/${rel_file}")
       fi
     done < <(find "$src_dir" -type f -print0 2>/dev/null)
   done
