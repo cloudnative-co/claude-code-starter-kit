@@ -212,40 +212,33 @@ _sanitize_config_value() {
   printf '%s' "$1" | tr -cd 'a-zA-Z0-9_,.:@/ -'
 }
 
+# Keys to save in config file, in order. Empty string = blank line separator.
+_CONFIG_SAVE_KEYS=(
+  LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT
+  ""
+  INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY
+  ""
+  ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER
+  ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE
+  ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT
+  ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP
+  ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD
+  ""
+  SELECTED_PLUGINS
+)
+
 save_config() {
   local file="${1:-$HOME/.claude-starter-kit.conf}"
   {
     printf '# Claude Code Starter Kit - Wizard Config\n'
-    printf 'LANGUAGE="%s"\n' "$(_sanitize_config_value "$LANGUAGE")"
-    printf 'PROFILE="%s"\n' "$(_sanitize_config_value "$PROFILE")"
-    printf 'EDITOR_CHOICE="%s"\n' "$(_sanitize_config_value "$EDITOR_CHOICE")"
-    printf 'COMMIT_ATTRIBUTION="%s"\n' "$(_sanitize_config_value "$COMMIT_ATTRIBUTION")"
-    printf 'ENABLE_NEW_INIT="%s"\n' "$(_sanitize_config_value "$ENABLE_NEW_INIT")"
-    printf '\n'
-    printf 'INSTALL_AGENTS="%s"\n' "$(_sanitize_config_value "$INSTALL_AGENTS")"
-    printf 'INSTALL_RULES="%s"\n' "$(_sanitize_config_value "$INSTALL_RULES")"
-    printf 'INSTALL_COMMANDS="%s"\n' "$(_sanitize_config_value "$INSTALL_COMMANDS")"
-    printf 'INSTALL_SKILLS="%s"\n' "$(_sanitize_config_value "$INSTALL_SKILLS")"
-    printf 'INSTALL_MEMORY="%s"\n' "$(_sanitize_config_value "$INSTALL_MEMORY")"
-    printf '\n'
-    printf 'ENABLE_CODEX_MCP="%s"\n' "$(_sanitize_config_value "$ENABLE_CODEX_MCP")"
-    printf 'ENABLE_TMUX_HOOKS="%s"\n' "$(_sanitize_config_value "$ENABLE_TMUX_HOOKS")"
-    printf 'ENABLE_GIT_PUSH_REVIEW="%s"\n' "$(_sanitize_config_value "$ENABLE_GIT_PUSH_REVIEW")"
-    printf 'ENABLE_DOC_BLOCKER="%s"\n' "$(_sanitize_config_value "$ENABLE_DOC_BLOCKER")"
-    printf 'ENABLE_PRETTIER_HOOKS="%s"\n' "$(_sanitize_config_value "$ENABLE_PRETTIER_HOOKS")"
-    printf 'ENABLE_CONSOLE_LOG_GUARD="%s"\n' "$(_sanitize_config_value "$ENABLE_CONSOLE_LOG_GUARD")"
-    printf 'ENABLE_MEMORY_PERSISTENCE="%s"\n' "$(_sanitize_config_value "$ENABLE_MEMORY_PERSISTENCE")"
-    printf 'ENABLE_STRATEGIC_COMPACT="%s"\n' "$(_sanitize_config_value "$ENABLE_STRATEGIC_COMPACT")"
-    printf 'ENABLE_PR_CREATION_LOG="%s"\n' "$(_sanitize_config_value "$ENABLE_PR_CREATION_LOG")"
-    printf 'ENABLE_PRE_COMPACT_COMMIT="%s"\n' "$(_sanitize_config_value "$ENABLE_PRE_COMPACT_COMMIT")"
-    printf 'ENABLE_SAFETY_NET="%s"\n' "$(_sanitize_config_value "$ENABLE_SAFETY_NET")"
-    printf 'ENABLE_AUTO_UPDATE="%s"\n' "$(_sanitize_config_value "$ENABLE_AUTO_UPDATE")"
-    printf 'ENABLE_STATUSLINE="%s"\n' "$(_sanitize_config_value "$ENABLE_STATUSLINE")"
-    printf 'ENABLE_GHOSTTY_SETUP="%s"\n' "$(_sanitize_config_value "$ENABLE_GHOSTTY_SETUP")"
-    printf 'ENABLE_FONTS_SETUP="%s"\n' "$(_sanitize_config_value "$ENABLE_FONTS_SETUP")"
-    printf 'ENABLE_DOC_SIZE_GUARD="%s"\n' "$(_sanitize_config_value "${ENABLE_DOC_SIZE_GUARD:-false}")"
-    printf '\n'
-    printf 'SELECTED_PLUGINS="%s"\n' "$(_sanitize_config_value "$SELECTED_PLUGINS")"
+    local _key
+    for _key in "${_CONFIG_SAVE_KEYS[@]}"; do
+      if [[ -z "$_key" ]]; then
+        printf '\n'
+      else
+        printf '%s="%s"\n' "$_key" "$(_sanitize_config_value "${!_key:-}")"
+      fi
+    done
   } > "$file"
   # Restrict config file permissions (contains user preferences)
   chmod 600 "$file"
@@ -489,6 +482,28 @@ HOOK_KEYS=(
   "ENABLE_DOC_SIZE_GUARD"
 )
 
+# Shared labels for HOOK_KEYS — used by _step_hooks() and _step_confirm().
+# Initialized lazily by _init_hook_labels() because STR_* vars are set after
+# load_strings(), which runs later than this file is sourced.
+HOOK_LABELS=()
+_init_hook_labels() {
+  [[ ${#HOOK_LABELS[@]} -gt 0 ]] && return
+  HOOK_LABELS=(
+    "${STR_HOOKS_SAFETY_NET:-Safety Net - Block destructive git/filesystem commands}"
+    "${STR_HOOKS_AUTO_UPDATE:-Auto Update - Automatically update starter kit on session start}"
+    "$STR_HOOKS_TMUX"
+    "$STR_HOOKS_GIT_PUSH"
+    "$STR_HOOKS_DOC_BLOCK"
+    "$STR_HOOKS_PRETTIER"
+    "$STR_HOOKS_CONSOLE"
+    "$STR_HOOKS_MEMORY"
+    "$STR_HOOKS_COMPACT"
+    "$STR_HOOKS_PR_LOG"
+    "${STR_HOOKS_PRE_COMMIT:-Pre-compact auto-commit}"
+    "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
+  )
+}
+
 _apply_hooks_csv() {
   local csv="$1"
   local i
@@ -672,6 +687,22 @@ _step_profile() {
   fi
 }
 
+# _prompt_yes_no <var_name> <default>
+#
+# Reads a 1/2 choice and sets the named variable to "true" or "false".
+# <default> is "1" (yes) or "2" (no).
+_prompt_yes_no() {
+  local _var="$1"
+  local _default="${2:-2}"
+  local choice=""
+  read -r -p "${STR_CHOICE} [${_default}]: " choice
+  [[ -z "$choice" ]] && choice="$_default"
+  case "$choice" in
+    1) printf -v "$_var" '%s' "true" ;;
+    *) printf -v "$_var" '%s' "false" ;;
+  esac
+}
+
 _step_codex() {
   # Skip if explicitly set by CLI arg
   local _ov; for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do [[ "$_ov" == "ENABLE_CODEX_MCP" ]] && return; done
@@ -679,16 +710,9 @@ _step_codex() {
   section "$STR_CODEX_TITLE"
   printf "  1) %s\n" "$STR_CODEX_YES"
   printf "  2) %s\n" "$STR_CODEX_NO"
-  # Default: "yes" for full profile, "no" for others
   local _default="2"
   if [[ "${ENABLE_CODEX_MCP:-}" == "true" ]]; then _default="1"; fi
-  local choice=""
-  read -r -p "${STR_CHOICE} [${_default}]: " choice
-  [[ -z "$choice" ]] && choice="$_default"
-  case "$choice" in
-    1) ENABLE_CODEX_MCP="true" ;;
-    *) ENABLE_CODEX_MCP="false" ;;
-  esac
+  _prompt_yes_no ENABLE_CODEX_MCP "$_default"
 }
 
 _step_new_init() {
@@ -701,13 +725,7 @@ _step_new_init() {
   printf "  2) %s\n" "$STR_NEW_INIT_NO"
   local _default="2"
   if [[ "${ENABLE_NEW_INIT:-false}" == "true" ]]; then _default="1"; fi
-  local choice=""
-  read -r -p "${STR_CHOICE} [${_default}]: " choice
-  [[ -z "$choice" ]] && choice="$_default"
-  case "$choice" in
-    1) ENABLE_NEW_INIT="true" ;;
-    *) ENABLE_NEW_INIT="false" ;;
-  esac
+  _prompt_yes_no ENABLE_NEW_INIT "$_default"
 }
 
 _step_editor() {
@@ -741,12 +759,7 @@ _step_ghostty() {
   printf "  %s\n\n" "$STR_GHOSTTY_DESC"
   printf "  1) %s\n" "$STR_GHOSTTY_YES"
   printf "  2) %s\n" "$STR_GHOSTTY_NO"
-  local choice=""
-  read -r -p "${STR_CHOICE}: " choice
-  case "$choice" in
-    1) ENABLE_GHOSTTY_SETUP="true" ;;
-    *) ENABLE_GHOSTTY_SETUP="false" ;;
-  esac
+  _prompt_yes_no ENABLE_GHOSTTY_SETUP "2"
 }
 
 _step_fonts() {
@@ -759,29 +772,11 @@ _step_fonts() {
   printf "  %s\n\n" "$STR_FONTS_DESC"
   printf "  1) %s\n" "$STR_FONTS_YES"
   printf "  2) %s\n" "$STR_FONTS_NO"
-  local choice=""
-  read -r -p "${STR_CHOICE}: " choice
-  case "$choice" in
-    1) ENABLE_FONTS_SETUP="true" ;;
-    *) ENABLE_FONTS_SETUP="false" ;;
-  esac
+  _prompt_yes_no ENABLE_FONTS_SETUP "2"
 }
 
 _step_hooks() {
-  local HOOK_LABELS=(
-    "${STR_HOOKS_SAFETY_NET:-Safety Net - Block destructive git/filesystem commands}"
-    "${STR_HOOKS_AUTO_UPDATE:-Auto Update - Automatically update starter kit on session start}"
-    "$STR_HOOKS_TMUX"
-    "$STR_HOOKS_GIT_PUSH"
-    "$STR_HOOKS_DOC_BLOCK"
-    "$STR_HOOKS_PRETTIER"
-    "$STR_HOOKS_CONSOLE"
-    "$STR_HOOKS_MEMORY"
-    "$STR_HOOKS_COMPACT"
-    "$STR_HOOKS_PR_LOG"
-    "${STR_HOOKS_PRE_COMMIT:-Pre-compact auto-commit}"
-    "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
-  )
+  _init_hook_labels
 
   section "$STR_HOOKS_TITLE"
   while true; do
@@ -897,20 +892,7 @@ _step_commit() {
 }
 
 _step_confirm() {
-  local HOOK_LABELS=(
-    "${STR_HOOKS_SAFETY_NET:-Safety Net - Block destructive git/filesystem commands}"
-    "${STR_HOOKS_AUTO_UPDATE:-Auto Update - Automatically update starter kit on session start}"
-    "$STR_HOOKS_TMUX"
-    "$STR_HOOKS_GIT_PUSH"
-    "$STR_HOOKS_DOC_BLOCK"
-    "$STR_HOOKS_PRETTIER"
-    "$STR_HOOKS_CONSOLE"
-    "$STR_HOOKS_MEMORY"
-    "$STR_HOOKS_COMPACT"
-    "$STR_HOOKS_PR_LOG"
-    "${STR_HOOKS_PRE_COMMIT:-Pre-compact auto-commit}"
-    "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
-  )
+  _init_hook_labels
 
   section "$STR_CONFIRM_TITLE"
   printf "%-20s : %s\n" "$STR_CONFIRM_LANGUAGE" "$(_language_label "$LANGUAGE")"

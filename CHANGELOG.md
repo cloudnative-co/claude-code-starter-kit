@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.32.1] - 2026-03-25
+
+### Changed
+- **wizard.sh リファクタリング**: `HOOK_LABELS` 二重定義を `_init_hook_labels()` に統一、`save_config()` をキー配列ループ化、`_prompt_yes_no()` 抽出で yes/no ステップを簡素化 (1117→1099 行)
+
 ## [0.32.0] - 2026-03-25
 
 ### Changed
