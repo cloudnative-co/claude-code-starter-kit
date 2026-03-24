@@ -1,7 +1,7 @@
 #!/bin/bash
 # lib/template.sh - Text template engine for CLAUDE.md and similar plain-text files
 # NOT for JSON files - use lib/json-builder.sh for JSON.
-# Requires: lib/colors.sh to be sourced first
+# Requires: lib/colors.sh and lib/prerequisites.sh (_sed/_awk wrappers) to be sourced first
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ remove_unresolved() {
       ;;
     replace|*)
       # Replace markers with empty strings, keep lines
-      sed 's/{{[^}]*}}//g' "$file" > "$tmp_file"
+      _sed 's/{{[^}]*}}//g' "$file" > "$tmp_file"
       ;;
   esac
 
@@ -152,7 +152,13 @@ _extract_kit_section() {
     warn "Multiple STARTER-KIT-MANAGED marker pairs found in $file — using first pair only"
   fi
 
-  sed -n "/$_KIT_MARKER_BEGIN/,/$_KIT_MARKER_END/p" "$file"
+  # All awk marker comparisons strip trailing \r for CRLF tolerance
+  _awk -v begin="$_KIT_MARKER_BEGIN" -v end="$_KIT_MARKER_END" '
+    { sub(/\r$/, "") }
+    $0 == begin { found = 1 }
+    found { print }
+    $0 == end && found { exit }
+  ' "$file"
 }
 
 # _extract_user_section <file>
@@ -164,12 +170,17 @@ _extract_user_section() {
     cat "$file"
     return
   fi
-  sed -n "/$_KIT_MARKER_END/,\$p" "$file" | tail -n +2
+  _awk -v marker="$_KIT_MARKER_END" '
+    { sub(/\r$/, "") }
+    found { print; next }
+    $0 == marker { found = 1 }
+  ' "$file"
 }
 
 # _replace_kit_section <file> <new_kit_content_file>
 # Replaces everything between (and including) the markers with new content.
 # Preserves everything outside the markers (user section).
+# Uses awk for reliable marker-based splitting with CRLF tolerance.
 _replace_kit_section() {
   local file="$1"
   local new_kit_file="$2"
@@ -177,14 +188,22 @@ _replace_kit_section() {
   local tmp_out
   tmp_out="$(mktemp)"
 
-  # Print lines before the BEGIN marker
-  sed -n "1,/$_KIT_MARKER_BEGIN/{ /$_KIT_MARKER_BEGIN/!p; }" "$file" > "$tmp_out"
+  # Phase 1: lines before BEGIN marker
+  _awk -v marker="$_KIT_MARKER_BEGIN" '
+    { sub(/\r$/, "") }
+    $0 == marker { exit }
+    { print }
+  ' "$file" > "$tmp_out"
 
-  # Append new kit content
+  # Phase 2: new kit content
   cat "$new_kit_file" >> "$tmp_out"
 
-  # Append lines after the END marker (user section)
-  sed -n "/$_KIT_MARKER_END/,\${ /$_KIT_MARKER_END/!p; }" "$file" >> "$tmp_out"
+  # Phase 3: lines after END marker (user section)
+  _awk -v marker="$_KIT_MARKER_END" '
+    { sub(/\r$/, "") }
+    found { print; next }
+    $0 == marker { found = 1 }
+  ' "$file" >> "$tmp_out"
 
   mv "$tmp_out" "$file"
 }

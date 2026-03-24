@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **既存 CLAUDE.md のマイグレーション**: マーカーのない既存 CLAUDE.md は、対話モードで既存全体をユーザーセクションに移行し kit セクションを追加。非対話モードではスキップ
 
 ### Fixed
+- **CLAUDE.md マーカー二重挿入バグを修正**: `_replace_kit_section` の sed ロジックが macOS/GNU sed の range 挙動差でマーカーを重複挿入する問題を awk ベースに書き直して修正
+- **GNU sed / GNU awk を prerequisite に追加**: macOS の BSD sed/awk との互換性問題を根本解決。既に GNU 版がインストール済みなら導入をスキップ。`_sed()` / `_awk()` ラッパーで CLAUDE.md section 処理と関連箇所を統一。Linux/WSL でも gawk 等が不足時は自動導入を試行
 - **settings.json の snapshot にユーザーカスタマイズが混入する問題を修正**: snapshot に merge 結果ではなく kit 生成版を保存するように変更。次回 update で「ユーザー未変更」と誤判定され permissions 等が kit デフォルトに上書きされる問題を解消
 - **Codex MCP セットアップが update 時に毎回確認される問題を修正**: 既にセットアップ済み（CLI + 認証 + MCP 登録）の場合は確認をスキップ。非対話モードでも不要な対話が発生しなくなった
 - **settings.json の language に表示名がセットされる問題を修正**: `"日本語"` → `"ja"` に変更。不要な conflict を解消
