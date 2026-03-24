@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.20.4] - 2026-03-24
+
+### Fixed
+- **一時ファイルの追跡漏れを修正**: `lib/template.sh`, `lib/fonts.sh`, `lib/json-builder.sh` の `mktemp` で作成した一時ファイルが `_cleanup_tmp` トラップに登録されていなかった問題を修正。`_register_tmp()` ヘルパーを追加し全箇所で一貫して追跡
+- **`_dryrun_claudemd_diff()` のマーカーなしガード**: CLAUDE.md にマーカーがない場合に `_extract_kit_section` が失敗して差分表示がスキップされる問題を修正
+- **`_run_with_timeout()` のゾンビプロセス**: watcher サブシェルの kill/wait でエラーを適切に抑制し、orphan プロセスを防止
+- **`_save_openai_key()` の stat フォールバック**: パーミッション取得失敗時に警告を表示してデフォルト 644 を使用
+- **`write_manifest()` の kit_version 精度向上**: `git describe --tags --always --abbrev=0` でタグなしリポジトリでもハッシュを記録。`kit_commit` フィールドを追加
+- **バックアップパスの永続化**: `backup_existing()` で `_BACKUP_TIMESTAMP` をグローバル化し、`~/.claude/.starter-kit-last-backup` にパスを保存。bootstrap マイグレーション時にバックアップパスを表示
+- **`build_settings_json()` の echo → printf**: JSON パイプラインで `echo` のバックスラッシュ解釈による破損を防止
+
 ### Added
 - **CLAUDE.md ユーザーセクション分離**: kit 管理セクションとユーザーセクションを HTML コメントマーカーで分離。ユーザーは `# User Settings` 以下に自由にカスタム指示を追加可能。update 時は kit セクションのみ更新され、ユーザーセクションは保持される
 - **既存 CLAUDE.md のマイグレーション**: マーカーのない既存 CLAUDE.md は、対話モードで既存全体をユーザーセクションに移行し kit セクションを追加。非対話モードではスキップ

@@ -197,15 +197,16 @@ _dryrun_claudemd_diff() {
   sim_kit="$(mktemp)"
   _SETUP_TMP_FILES+=("$real_kit" "$sim_kit")
 
-  if _has_kit_markers "$real_md"; then
-    _extract_kit_section "$real_md" > "$real_kit"
+  local kit_content
+  if kit_content="$(_extract_kit_section "$real_md")"; then
+    printf '%s\n' "$kit_content" > "$real_kit"
   else
     # No markers — compare full file
     cp "$real_md" "$real_kit"
   fi
 
-  if _has_kit_markers "$sim_md"; then
-    _extract_kit_section "$sim_md" > "$sim_kit"
+  if kit_content="$(_extract_kit_section "$sim_md")"; then
+    printf '%s\n' "$kit_content" > "$sim_kit"
   else
     cp "$sim_md" "$sim_kit"
   fi

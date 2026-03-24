@@ -47,6 +47,7 @@ replace_home_path() {
 
   local tmp_file
   tmp_file="$(mktemp)"
+  _register_tmp "$tmp_file"
 
   jq --arg home "$home_escaped" '
     walk(
@@ -104,7 +105,7 @@ build_settings_json() {
       warn "Invalid JSON in hook fragment, skipping: $fragment"
       continue
     fi
-    merged="$(echo "$merged" | jq --slurpfile frag "$fragment" '
+    merged="$(printf '%s' "$merged" | jq --slurpfile frag "$fragment" '
       def merge_deep(a; b):
         reduce (b | to_entries[]) as $e (a;
           if (.[$e.key] | type) == "array" and ($e.value | type) == "array"

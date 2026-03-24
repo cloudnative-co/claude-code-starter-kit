@@ -109,6 +109,7 @@ remove_unresolved() {
 
   local tmp_file
   tmp_file="$(mktemp)"
+  _register_tmp "$tmp_file"
 
   case "$mode" in
     delete)
@@ -187,6 +188,7 @@ _replace_kit_section() {
 
   local tmp_out
   tmp_out="$(mktemp)"
+  _register_tmp "$tmp_out"
 
   # Phase 1: lines before BEGIN marker
   _awk -v marker="$_KIT_MARKER_BEGIN" '
