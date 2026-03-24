@@ -904,8 +904,21 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
   if is_true "${ENABLE_FONTS_SETUP:-false}"; then
     _dryrun_log "EXTERNAL" "Fonts" "IBM Plex Mono + HackGen NF"
   fi
-  if [[ ! -x "$HOME/.local/bin/claude" ]] && ! command -v claude &>/dev/null; then
-    _dryrun_log "EXTERNAL" "Claude CLI" "curl -fsSL https://claude.ai/install.sh | bash"
+  # Match the real install logic: WSL always installs local Linux binary
+  _dr_need_cli=false
+  if [[ -x "$HOME/.local/bin/claude" ]]; then
+    _dr_need_cli=false
+  elif is_wsl; then
+    _dr_need_cli=true
+  elif ! command -v claude &>/dev/null; then
+    _dr_need_cli=true
+  fi
+  if $_dr_need_cli; then
+    _dr_cli_cmd="curl -fsSL https://claude.ai/install.sh | bash"
+    if is_msys; then
+      _dr_cli_cmd='powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"'
+    fi
+    _dryrun_log "EXTERNAL" "Claude CLI" "$_dr_cli_cmd"
   fi
   if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
     IFS=',' read -r -a _dr_plugins <<< "$SELECTED_PLUGINS"

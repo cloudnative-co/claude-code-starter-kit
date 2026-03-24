@@ -210,8 +210,8 @@ _dryrun_collect_deletions() {
   local real_dir="$1"
   local manifest="${real_dir}/.starter-kit-manifest.json"
 
-  # Also check known legacy files that the update path explicitly removes
-  if [[ -f "${real_dir}/AGENTS.md" ]]; then
+  # Legacy AGENTS.md removal only happens in update mode
+  if [[ "${UPDATE_MODE:-false}" == "true" ]] && [[ -f "${real_dir}/AGENTS.md" ]]; then
     _dryrun_log "DELETE" "\$HOME/.claude/AGENTS.md" "legacy file removed during update"
   fi
 
