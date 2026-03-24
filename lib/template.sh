@@ -209,3 +209,14 @@ _replace_kit_section() {
 
   mv "$tmp_out" "$file"
 }
+
+# ---------------------------------------------------------------------------
+# _user_section_heading - Returns the user section heading for current language
+# Used by CLAUDE.md section separation logic in setup.sh and update.sh.
+# ---------------------------------------------------------------------------
+_user_section_heading() {
+  case "${LANGUAGE:-en}" in
+    ja) printf '# ユーザー設定' ;;
+    *)  printf '# User Settings' ;;
+  esac
+}

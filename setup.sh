@@ -434,13 +434,7 @@ _copy_dir_safe() {
   esac
 }
 
-# _user_section_heading — returns the user section heading for current language
-_user_section_heading() {
-  case "${LANGUAGE:-en}" in
-    ja) printf '# ユーザー設定' ;;
-    *)  printf '# User Settings' ;;
-  esac
-}
+# _user_section_heading is now in lib/template.sh (moved in v0.22.2)
 
 # _build_claude_md_safe
 #

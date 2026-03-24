@@ -137,62 +137,7 @@ install_ghostty() {
   esac
 }
 
-# ---------------------------------------------------------------------------
-# Install HackGen NF font
-# ---------------------------------------------------------------------------
-install_hackgen_font() {
-  local uname_s
-  uname_s="$(uname -s)"
-
-  case "$uname_s" in
-    Darwin)
-      # Already installed via brew?
-      if _brew_is_usable 2>/dev/null && brew list --cask font-hackgen-nerd &>/dev/null 2>&1; then
-        ok "$STR_GHOSTTY_FONT_ALREADY"
-        return 0
-      fi
-      # Already installed via direct download?
-      # shellcheck disable=SC2086
-      if ls "$HOME/Library/Fonts"/HackGen*NF*.ttf &>/dev/null 2>&1; then
-        ok "$STR_GHOSTTY_FONT_ALREADY"
-        return 0
-      fi
-      info "Installing HackGen NF font..."
-      # Try brew first, fall back to direct download
-      if _ghostty_ensure_brew && brew install --cask font-hackgen-nerd 2>/dev/null; then
-        ok "HackGen NF font installed"
-        return 0
-      fi
-      info "  brew failed, downloading directly..."
-      local hackgen_url="https://github.com/yuru7/HackGen/releases/download/v2.10.0/HackGen_NF_v2.10.0.zip"
-      local tmp_dir
-      tmp_dir="$(mktemp -d)"
-      mkdir -p "$HOME/Library/Fonts"
-      if curl -fsSL "$hackgen_url" -o "$tmp_dir/HackGen_NF.zip" \
-         && unzip -qo "$tmp_dir/HackGen_NF.zip" -d "$tmp_dir"; then
-        find "$tmp_dir" -name "*.ttf" -exec cp {} "$HOME/Library/Fonts/" \;
-        rm -rf "$tmp_dir"
-        ok "HackGen NF font installed"
-        return 0
-      fi
-      rm -rf "$tmp_dir"
-      warn "Failed to install HackGen NF font."
-      info "  Install manually: https://github.com/yuru7/HackGen"
-      return 1
-      ;;
-    MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*)
-      warn "Automatic font installation is not supported on Windows."
-      info "  Download HackGen NF: https://github.com/yuru7/HackGen/releases"
-      info "  Double-click the .ttf files to install."
-      return 1
-      ;;
-    *)
-      warn "Cannot install HackGen NF font on this platform."
-      info "  Install manually: https://github.com/yuru7/HackGen"
-      return 1
-      ;;
-  esac
-}
+# install_hackgen_font removed in v0.22.2 — now uses install_hackgen_nf from lib/fonts.sh
 
 # ---------------------------------------------------------------------------
 # Deploy Ghostty config
@@ -233,7 +178,7 @@ setup_ghostty() {
   local template_file="${1:-}"
 
   install_ghostty       || GHOSTTY_INCOMPLETE+=("Ghostty")
-  install_hackgen_font  || GHOSTTY_INCOMPLETE+=("HackGen-NF")
+  install_hackgen_nf    || GHOSTTY_INCOMPLETE+=("HackGen-NF")
 
   if [[ -n "$template_file" && -f "$template_file" ]]; then
     deploy_ghostty_config "$template_file"
