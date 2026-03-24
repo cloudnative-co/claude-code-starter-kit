@@ -91,20 +91,31 @@ test_update_no_changes() {
 test_update_kit_changed() {
   setup_test_env
   run_setup --profile=minimal >/dev/null 2>&1
-  # Simulate kit change: modify the snapshot to differ from current
-  # (This makes it look like user didn't change, but kit did → overwrite)
+  # Add a marker to current settings.json that the kit would NOT produce
+  jq '.old_version_marker = true' "$CLAUDE_DIR/settings.json" > "$CLAUDE_DIR/settings.json.tmp" \
+    && mv "$CLAUDE_DIR/settings.json.tmp" "$CLAUDE_DIR/settings.json"
+  # Keep snapshot as-is (matches original kit output), so:
+  #   snapshot == original kit != current (user changed) -- but we want "kit changed" scenario
+  # Actually: simulate "user didn't change, kit did" by keeping current == snapshot,
+  # then modifying snapshot to look like old kit
   local snapshot_settings="$CLAUDE_DIR/.starter-kit-snapshot/settings.json"
-  if [[ -f "$snapshot_settings" ]]; then
-    jq '.test_old_kit = true' "$snapshot_settings" > "$snapshot_settings.tmp" && mv "$snapshot_settings.tmp" "$snapshot_settings"
-  fi
+  # Restore current to match snapshot (user didn't change)
+  cp "$snapshot_settings" "$CLAUDE_DIR/settings.json"
+  # Now modify snapshot to look different (old kit version)
+  jq '.old_kit_marker = true' "$snapshot_settings" > "$snapshot_settings.tmp" \
+    && mv "$snapshot_settings.tmp" "$snapshot_settings"
+  # State: snapshot(old kit) != current(original kit) == new kit → overwrite path
+  local before_settings
+  before_settings="$(cat "$CLAUDE_DIR/settings.json")"
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
 
-  # After update, settings.json should NOT contain test_old_kit (it was only in snapshot)
-  # and the current file should be the new kit version
+  # After update with kit change, settings.json should be updated (new kit version)
+  # The snapshot should also be updated to match new kit
   if [[ $rc -eq 0 ]] \
     && assert_file_exists "$CLAUDE_DIR/settings.json" \
-    && ! jq -e '.test_old_kit' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    && assert_file_exists "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" \
+    && ! jq -e '.old_kit_marker' "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" >/dev/null 2>&1; then
     pass "update-kit-changed"
   else
     fail "update-kit-changed"
@@ -310,10 +321,11 @@ test_settings_array_merge() {
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
 
-  # User's mcpServers should be preserved through merge
+  # User's mcpServers should be preserved through merge (key + content)
   if [[ $rc -eq 0 ]] \
     && assert_file_exists "$CLAUDE_DIR/settings.json" \
-    && assert_json_has_key "$CLAUDE_DIR/settings.json" '.mcpServers["my-custom-server"]'; then
+    && assert_json_field "$CLAUDE_DIR/settings.json" '.mcpServers["my-custom-server"].command' "node" \
+    && assert_json_field "$CLAUDE_DIR/settings.json" '.mcpServers["my-custom-server"].args[0]' "server.js"; then
     pass "settings-array-merge"
   else
     fail "settings-array-merge"
