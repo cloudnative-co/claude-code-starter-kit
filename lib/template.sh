@@ -1,7 +1,7 @@
 #!/bin/bash
 # lib/template.sh - Text template engine for CLAUDE.md and similar plain-text files
 # NOT for JSON files - use lib/json-builder.sh for JSON.
-# Requires: lib/colors.sh to be sourced first
+# Requires: lib/colors.sh and lib/prerequisites.sh (_sed/_awk wrappers) to be sourced first
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,9 @@ _extract_kit_section() {
     warn "Multiple STARTER-KIT-MANAGED marker pairs found in $file — using first pair only"
   fi
 
+  # All awk marker comparisons strip trailing \r for CRLF tolerance
   _awk -v begin="$_KIT_MARKER_BEGIN" -v end="$_KIT_MARKER_END" '
+    { sub(/\r$/, "") }
     $0 == begin { found = 1 }
     found { print }
     $0 == end && found { exit }
@@ -169,6 +171,7 @@ _extract_user_section() {
     return
   fi
   _awk -v marker="$_KIT_MARKER_END" '
+    { sub(/\r$/, "") }
     found { print; next }
     $0 == marker { found = 1 }
   ' "$file"
@@ -177,7 +180,7 @@ _extract_user_section() {
 # _replace_kit_section <file> <new_kit_content_file>
 # Replaces everything between (and including) the markers with new content.
 # Preserves everything outside the markers (user section).
-# Requires GNU sed (_sed wrapper) for reliable 0-address support.
+# Uses awk for reliable marker-based splitting with CRLF tolerance.
 _replace_kit_section() {
   local file="$1"
   local new_kit_file="$2"
@@ -185,9 +188,9 @@ _replace_kit_section() {
   local tmp_out
   tmp_out="$(mktemp)"
 
-  # Use awk for reliable marker-based splitting (portable, no sed quirks)
   # Phase 1: lines before BEGIN marker
   _awk -v marker="$_KIT_MARKER_BEGIN" '
+    { sub(/\r$/, "") }
     $0 == marker { exit }
     { print }
   ' "$file" > "$tmp_out"
@@ -197,6 +200,7 @@ _replace_kit_section() {
 
   # Phase 3: lines after END marker (user section)
   _awk -v marker="$_KIT_MARKER_END" '
+    { sub(/\r$/, "") }
     found { print; next }
     $0 == marker { found = 1 }
   ' "$file" >> "$tmp_out"

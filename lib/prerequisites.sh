@@ -208,16 +208,24 @@ check_gnu_sed() {
     ok "GNU sed ($_GNU_SED)"
     return 0
   fi
-  if [[ "$DISTRO_FAMILY" == "macos" ]]; then
-    info "Installing GNU sed..."
-    _pkg_install gnu-sed
-    if _detect_gnu_sed; then
-      ok "GNU sed installed ($_GNU_SED)"
-      return 0
-    fi
+  # Try to install: macOS via gnu-sed, Linux distros typically have GNU sed
+  case "$DISTRO_FAMILY" in
+    macos)  info "Installing GNU sed..."; _pkg_install gnu-sed ;;
+    debian) info "Installing GNU sed..."; _pkg_install sed ;;
+    rhel)   info "Installing GNU sed..."; _pkg_install sed ;;
+    alpine) info "Installing GNU sed..."; _pkg_install sed ;;
+  esac
+  if _detect_gnu_sed; then
+    ok "GNU sed installed ($_GNU_SED)"
+    return 0
   fi
-  # On Linux, sed is already GNU — should not reach here
-  warn "GNU sed not found"
+  warn "GNU sed not found. Install manually:"
+  case "$DISTRO_FAMILY" in
+    macos)  info "  brew install gnu-sed" ;;
+    debian) info "  sudo apt-get install sed" ;;
+    alpine) info "  sudo apk add sed" ;;
+    *)      info "  Install GNU sed for your platform" ;;
+  esac
   return 1
 }
 
@@ -226,15 +234,24 @@ check_gnu_awk() {
     ok "GNU awk ($_GNU_AWK)"
     return 0
   fi
-  if [[ "$DISTRO_FAMILY" == "macos" ]]; then
-    info "Installing GNU awk..."
-    _pkg_install gawk
-    if _detect_gnu_awk; then
-      ok "GNU awk installed ($_GNU_AWK)"
-      return 0
-    fi
+  # Try to install: gawk on all platforms
+  case "$DISTRO_FAMILY" in
+    macos)  info "Installing GNU awk..."; _pkg_install gawk ;;
+    debian) info "Installing GNU awk..."; _pkg_install gawk ;;
+    rhel)   info "Installing GNU awk..."; _pkg_install gawk ;;
+    alpine) info "Installing GNU awk..."; _pkg_install gawk ;;
+  esac
+  if _detect_gnu_awk; then
+    ok "GNU awk installed ($_GNU_AWK)"
+    return 0
   fi
-  warn "GNU awk not found"
+  warn "GNU awk not found. Install manually:"
+  case "$DISTRO_FAMILY" in
+    macos)  info "  brew install gawk" ;;
+    debian) info "  sudo apt-get install gawk" ;;
+    alpine) info "  sudo apk add gawk" ;;
+    *)      info "  Install GNU awk (gawk) for your platform" ;;
+  esac
   return 1
 }
 
