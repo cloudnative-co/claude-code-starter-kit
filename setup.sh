@@ -641,7 +641,11 @@ build_settings_file() {
   # Registry-driven hook fragment collection
   local name flag
   for name in "${_FEATURE_ORDER[@]}"; do
-    flag="${_FEATURE_FLAGS[$name]}"
+    flag="${_FEATURE_FLAGS[$name]:-}"
+    if [[ -z "$flag" ]]; then
+      error "FATAL: _FEATURE_FLAGS[$name] is empty — registry inconsistency"
+      return 1
+    fi
     is_true "${!flag:-false}" || continue
     local hooks_json="$PROJECT_DIR/features/$name/hooks.json"
     [[ -f "$hooks_json" ]] && hook_fragments+=("$hooks_json")

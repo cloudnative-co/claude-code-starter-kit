@@ -340,7 +340,11 @@ test_settings_array_merge() {
 
 # --- 15. safety-net-first ---
 test_safety_net_first() {
-  # Source features.sh and verify safety-net is first in _FEATURE_ORDER
+  # Guard: features.sh requires Bash 4+ (declare -A)
+  if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    skip "safety-net-first" "Bash 4+ required for declare -A"
+    return
+  fi
   # shellcheck source=/dev/null
   source "$PROJECT_DIR/lib/features.sh"
 
@@ -353,7 +357,10 @@ test_safety_net_first() {
 
 # --- 16. registry-consistency ---
 test_registry_consistency() {
-  # Source features.sh and verify all _FEATURE_ORDER entries exist in _FEATURE_FLAGS
+  if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    skip "registry-consistency" "Bash 4+ required for declare -A"
+    return
+  fi
   # shellcheck source=/dev/null
   source "$PROJECT_DIR/lib/features.sh"
 
