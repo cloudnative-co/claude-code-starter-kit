@@ -147,6 +147,122 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# _update_claude_md - Section-aware CLAUDE.md update
+#
+# Usage: _update_claude_md <current> <snapshot_kit_section> <new_kit_file>
+#
+# Compares only the kit-managed section (between markers).
+# User section is always preserved untouched.
+# Returns 0 if file was updated, 1 if skipped.
+# ---------------------------------------------------------------------------
+_update_claude_md() {
+  local current="$1"
+  local snapshot_kit="$2"
+  local new_kit_file="$3"
+
+  # Build new kit content and extract its kit section
+  local new_kit_section
+  new_kit_section="$(mktemp)"
+  _SETUP_TMP_FILES+=("$new_kit_section")
+  _extract_kit_section "$new_kit_file" > "$new_kit_section"
+
+  # Case 1: current does not exist → write full new file
+  if [[ ! -f "$current" ]]; then
+    cp -a "$new_kit_file" "$current"
+    return 0
+  fi
+
+  # Case 2: current has no markers → migration
+  if ! _has_kit_markers "$current"; then
+    warn "$STR_CLAUDEMD_MIGRATION"
+    if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
+      warn "$STR_CLAUDEMD_MIGRATION_SKIP"
+      return 1
+    fi
+    printf "  %s " "$STR_CLAUDEMD_MIGRATION_PROMPT" >&2
+    local reply=""
+    if read -r reply < /dev/tty 2>/dev/null; then true; else reply="s"; fi
+    case "$reply" in
+      [Mm]*)
+        local kit_section existing_content user_heading
+        kit_section="$(< "$new_kit_section")"
+        existing_content="$(< "$current")"
+        user_heading="$(_user_section_heading)"
+        {
+          printf '%s\n' "$kit_section"
+          printf '\n%s\n\n' "$user_heading"
+          printf '%s\n' "$existing_content"
+        } > "$current"
+        return 0
+        ;;
+      *) return 1 ;;
+    esac
+  fi
+
+  # Case 3: current has markers → section-aware 3-way compare
+  local current_kit_section
+  current_kit_section="$(mktemp)"
+  _SETUP_TMP_FILES+=("$current_kit_section")
+  _extract_kit_section "$current" > "$current_kit_section"
+
+  if [[ ! -f "$snapshot_kit" ]]; then
+    # No snapshot → treat as first update, replace kit section
+    _replace_kit_section "$current" "$new_kit_section"
+    return 0
+  fi
+
+  # Compare kit sections only
+  if ! _file_changed "$snapshot_kit" "$current_kit_section"; then
+    # User did not edit kit section → safe to replace
+    _replace_kit_section "$current" "$new_kit_section"
+    info "$STR_CLAUDEMD_USER_PRESERVED"
+    return 0
+  fi
+
+  if ! _file_changed "$snapshot_kit" "$new_kit_section"; then
+    # Kit has no changes → keep current
+    return 1
+  fi
+
+  # Both changed → conflict on kit section
+  if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
+    # Non-interactive: keep current (non-destructive)
+    return 1
+  fi
+
+  warn "$STR_CLAUDEMD_KIT_CONFLICT"
+  while true; do
+    printf "  %s " "$STR_CLAUDEMD_KIT_CONFLICT_PROMPT" >&2
+    local choice=""
+    if read -r choice < /dev/tty 2>/dev/null; then true; else choice="k"; fi
+    case "$choice" in
+      [Uu]*)
+        _replace_kit_section "$current" "$new_kit_section"
+        info "$STR_CLAUDEMD_USER_PRESERVED"
+        return 0
+        ;;
+      [Kk]*)
+        return 1
+        ;;
+      [Dd]*)
+        diff -u "$current_kit_section" "$new_kit_section" 2>/dev/null >&2 || true
+        printf "\n" >&2
+        continue
+        ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+# _user_section_heading — returns the user section heading for current language
+_user_section_heading() {
+  case "${LANGUAGE:-en}" in
+    ja) printf '# ユーザー設定' ;;
+    *)  printf '# User Settings' ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # _prompt_file_action - Ask user what to do with a changed file
 #
 # Usage: _prompt_file_action <current_path> <snapshot_path> <newkit_path>
@@ -460,7 +576,7 @@ run_update() {
   # write_manifest() and save_config() record the actual deployed values.
   _sync_settings_metadata "$current_settings"
 
-  # --- Phase 2: CLAUDE.md ---
+  # --- Phase 2: CLAUDE.md (section-aware) ---
   info "$STR_UPDATE_CLAUDEMD"
 
   local new_claude_md
@@ -471,12 +587,12 @@ run_update() {
   local current_claude_md="${claude_dir}/CLAUDE.md"
   local snapshot_claude_md="${snapshot_dir}/CLAUDE.md"
 
-  if _update_file "$current_claude_md" "$snapshot_claude_md" "$new_claude_md"; then
+  if _update_claude_md "$current_claude_md" "$snapshot_claude_md" "$new_claude_md"; then
     updated_files+=("$current_claude_md")
-    ok "$STR_UPDATE_CLAUDEMD_UPDATED"
+    ok "$STR_CLAUDEMD_KIT_UPDATED"
   else
     skipped_files+=("CLAUDE.md")
-    info "$STR_UPDATE_CLAUDEMD_SKIPPED"
+    info "$STR_CLAUDEMD_KIT_UNCHANGED"
   fi
 
   # Older releases deployed AGENTS.md into ~/.claude. The starter kit no
@@ -530,7 +646,12 @@ run_update() {
   info "$STR_UPDATE_SNAPSHOT"
   local file
   for file in "${updated_files[@]+"${updated_files[@]}"}"; do
-    _update_snapshot_file "$claude_dir" "$file"
+    if [[ "$(basename "$file")" == "CLAUDE.md" ]]; then
+      # CLAUDE.md: snapshot kit section only
+      _snapshot_claude_md "$claude_dir" "$file"
+    else
+      _update_snapshot_file "$claude_dir" "$file"
+    fi
   done
   ok "$STR_UPDATE_SNAPSHOT_DONE"
 

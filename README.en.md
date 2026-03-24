@@ -324,6 +324,11 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--commit-attribution=false` disables Claude Code attribution in both commits and PRs
 > - For full mapping details, see [Wizard Config Mapping](docs/wizard-config-mapping.en.md)
 
+> **Customizing CLAUDE.md**:
+> - `~/.claude/CLAUDE.md` is split into a kit-managed section (`<!-- BEGIN STARTER-KIT-MANAGED -->` ... `<!-- END STARTER-KIT-MANAGED -->`) and a user section (`# User Settings`)
+> - Add your custom instructions in the user section. Updates only touch the kit section; your content is preserved
+> - If your existing CLAUDE.md has no markers, an interactive migration is offered on first update
+>
 > **Existing users**:
 > - If you already use this starter kit, prefer `/update-kit` or `./setup.sh --update`. Conflicts are resolved interactively with `[RK]/[RU]` remember options. Use `--reset-prefs` to clear saved decisions.
 > - **First-time kit users with existing `~/.claude/settings.json`**: settings.json is merged (not overwritten), and other files are confirmed per-directory.

@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ## [Unreleased]
 
 ### Added
+- **CLAUDE.md ユーザーセクション分離**: kit 管理セクションとユーザーセクションを HTML コメントマーカーで分離。ユーザーは `# User Settings` 以下に自由にカスタム指示を追加可能。update 時は kit セクションのみ更新され、ユーザーセクションは保持される
+- **既存 CLAUDE.md のマイグレーション**: マーカーのない既存 CLAUDE.md は、対話モードで既存全体をユーザーセクションに移行し kit セクションを追加。非対話モードではスキップ
+
+### Changed
+- **Uninstall 時の CLAUDE.md 保護**: uninstall は CLAUDE.md を完全削除せず、kit マーカーセクションのみ除去。ユーザーセクションに内容がある場合はファイルを残す
+- **Snapshot 粒度**: CLAUDE.md の snapshot は kit セクションのみ保存。ユーザーセクションの編集が false conflict を起こさなくなった
 - **`--dry-run` フラグ**: `setup.sh --dry-run` で install/update の影響範囲を事前プレビュー。デプロイせずにサマリ + settings.json diff を表示。軽量な前提ツール（git, jq, curl）は対話確認付きで導入可、`--non-interactive` では導入せず終了
 - **`/update-kit-dry-run` コマンド**: Claude Code 内から update のドライランを直接実行
 - **デプロイ前の dry-run 提案**: 既存設定とのバッティングがある場合のみ、デプロイ前に「プレビューしますか？」と確認。結果を見てから続行/中止を選択可能。クリーンインストールでは表示されない

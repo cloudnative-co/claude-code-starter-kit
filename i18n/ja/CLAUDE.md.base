@@ -1,3 +1,4 @@
+<!-- BEGIN STARTER-KIT-MANAGED -->
 # グローバル設定
 
 ## 基本方針
@@ -5,3 +6,8 @@
 - 長いセッションでは `/clear` を活用してコンテキストをリフレッシュする
 
 {{FEATURE:codex-mcp}}
+<!-- END STARTER-KIT-MANAGED -->
+
+# ユーザー設定
+
+<!-- 以下にカスタム指示を自由に追加してください -->

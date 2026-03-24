@@ -254,6 +254,11 @@ write_managed_snapshot() {
     [[ -f "$file" ]] && snapshot_files+=("$file")
   done
   _write_snapshot "$CLAUDE_DIR" "${snapshot_files[@]+"${snapshot_files[@]}"}"
+
+  # CLAUDE.md: replace full-file snapshot with kit-section-only snapshot
+  if [[ -f "$CLAUDE_DIR/CLAUDE.md" ]]; then
+    _snapshot_claude_md "$CLAUDE_DIR" "$CLAUDE_DIR/CLAUDE.md"
+  fi
 }
 
 _SNAPSHOT_BOOTSTRAPPED=false
@@ -385,11 +390,20 @@ _copy_dir_safe() {
   esac
 }
 
+# _user_section_heading — returns the user section heading for current language
+_user_section_heading() {
+  case "${LANGUAGE:-en}" in
+    ja) printf '# ユーザー設定' ;;
+    *)  printf '# User Settings' ;;
+  esac
+}
+
 # _build_claude_md_safe
 #
-# Checks for existing CLAUDE.md before building.
-# Interactive: asks [O]verwrite / [S]kip / [D]iff
-# Non-interactive: skip (preserve user's file)
+# Section-aware CLAUDE.md deployment for fresh install with existing file.
+# - No existing file → build normally (kit + user skeleton)
+# - Existing with markers → replace kit section only
+# - Existing without markers (migration) → wrap existing as user section
 _build_claude_md_safe() {
   local target="$CLAUDE_DIR/CLAUDE.md"
 
@@ -398,35 +412,71 @@ _build_claude_md_safe() {
     return
   fi
 
-  # Generate to temp for comparison
+  # Generate new kit version to temp
   local new_claude_md
   new_claude_md="$(mktemp)"
   _SETUP_TMP_FILES+=("$new_claude_md")
   build_claude_md_to_file "$new_claude_md"
 
-  if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
-    _FRESH_SKIPPED_FILES+=("$target")
-    ok "CLAUDE.md: $STR_FRESH_SKIPPED"
+  if _has_kit_markers "$target"; then
+    # Existing file has markers → replace kit section, preserve user section
+    local new_kit_section
+    new_kit_section="$(mktemp)"
+    _SETUP_TMP_FILES+=("$new_kit_section")
+    _extract_kit_section "$new_claude_md" > "$new_kit_section"
+    _replace_kit_section "$target" "$new_kit_section"
+    ok "$STR_CLAUDEMD_KIT_UPDATED"
+    info "$STR_CLAUDEMD_USER_PRESERVED"
     return
   fi
 
-  warn "$STR_FRESH_FILE_EXISTS CLAUDE.md"
+  # No markers — migration: existing content becomes user section
+  warn "$STR_CLAUDEMD_MIGRATION"
+
+  if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
+    # Non-interactive: skip (structural change requires consent)
+    _FRESH_SKIPPED_FILES+=("$target")
+    warn "$STR_CLAUDEMD_MIGRATION_SKIP"
+    return
+  fi
+
+  # Interactive: show what will happen, ask for consent
   while true; do
-    printf "  %s " "$STR_FRESH_OVERWRITE_PROMPT" >&2
+    printf "  %s " "$STR_CLAUDEMD_MIGRATION_PROMPT" >&2
     local reply=""
-    if read -r reply < /dev/tty 2>/dev/null; then
-      true
-    else
-      reply="s"
-    fi
+    if read -r reply < /dev/tty 2>/dev/null; then true; else reply="s"; fi
     case "$reply" in
-      [Oo]*)
-        cp -a "$new_claude_md" "$target"
-        ok "CLAUDE.md overwritten"
+      [Mm]*)
+        # Extract kit section from new build, prepend to existing content
+        local kit_section existing_content
+        kit_section="$(_extract_kit_section "$new_claude_md")"
+        existing_content="$(< "$target")"
+        local user_heading
+        user_heading="$(_user_section_heading)"
+        {
+          printf '%s\n' "$kit_section"
+          printf '\n%s\n\n' "$user_heading"
+          printf '%s\n' "$existing_content"
+        } > "$target"
+        ok "$STR_CLAUDEMD_KIT_UPDATED"
+        info "$STR_CLAUDEMD_USER_PRESERVED"
         return
         ;;
       [Dd]*)
-        diff -u "$target" "$new_claude_md" 2>/dev/null >&2 || true
+        # Show what the merged result would look like
+        local preview
+        preview="$(mktemp)"
+        _SETUP_TMP_FILES+=("$preview")
+        local kit_section_p existing_content_p user_heading_p
+        kit_section_p="$(_extract_kit_section "$new_claude_md")"
+        existing_content_p="$(< "$target")"
+        user_heading_p="$(_user_section_heading)"
+        {
+          printf '%s\n' "$kit_section_p"
+          printf '\n%s\n\n' "$user_heading_p"
+          printf '%s\n' "$existing_content_p"
+        } > "$preview"
+        diff -u "$target" "$preview" 2>/dev/null >&2 || true
         printf "\n" >&2
         continue
         ;;
