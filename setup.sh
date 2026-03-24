@@ -81,9 +81,10 @@ check_bash4 || {
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 2: Bash 4+ required from this point (template, json, merge, etc.)
-# Future: lib/features.sh with declare -A will be sourced here (PR-8+9)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/features.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/template.sh"
 # shellcheck source=/dev/null
@@ -692,60 +693,45 @@ build_claude_md() {
 # ---------------------------------------------------------------------------
 # Build settings.json
 # ---------------------------------------------------------------------------
-build_settings() {
+# ---------------------------------------------------------------------------
+# build_settings_file - Registry-based settings.json builder (unified)
+#
+# Usage: build_settings_file <output_path>
+#
+# Uses _FEATURE_ORDER and _FEATURE_FLAGS from lib/features.sh to iterate
+# enabled features. Special case: git-push-review (editor substitution).
+# Assertion: safety-net must be _FEATURE_ORDER[0].
+# ---------------------------------------------------------------------------
+build_settings_file() {
+  local out="$1"
   local base="$PROJECT_DIR/config/settings-base.json"
   local permissions="$PROJECT_DIR/config/permissions.json"
-  local out="$CLAUDE_DIR/settings.json"
 
   local hook_fragments=()
   local tmp_files=()
 
-  # Safety Net must be first in PreToolUse array (runs before other hooks)
-  if is_true "${ENABLE_SAFETY_NET:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/safety-net/hooks.json")
-  fi
-  if is_true "$ENABLE_TMUX_HOOKS"; then
-    hook_fragments+=("$PROJECT_DIR/features/tmux-hooks/hooks.json")
-  fi
-  if is_true "$ENABLE_DOC_BLOCKER"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-blocker/hooks.json")
-  fi
-  if is_true "$ENABLE_PRETTIER_HOOKS"; then
-    hook_fragments+=("$PROJECT_DIR/features/prettier-hooks/hooks.json")
-  fi
-  if is_true "$ENABLE_CONSOLE_LOG_GUARD"; then
-    hook_fragments+=("$PROJECT_DIR/features/console-log-guard/hooks.json")
-  fi
-  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
-    hook_fragments+=("$PROJECT_DIR/features/memory-persistence/hooks.json")
-  fi
-  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
-    hook_fragments+=("$PROJECT_DIR/features/strategic-compact/hooks.json")
-  fi
-  if is_true "$ENABLE_PR_CREATION_LOG"; then
-    hook_fragments+=("$PROJECT_DIR/features/pr-creation-log/hooks.json")
-  fi
-  if is_true "${ENABLE_PRE_COMPACT_COMMIT:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/pre-compact-commit/hooks.json")
-  fi
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/auto-update/hooks.json")
-  fi
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
-  fi
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-size-guard/hooks.json")
+  # Assertion: safety-net must be first in _FEATURE_ORDER
+  if [[ "${_FEATURE_ORDER[0]}" != "safety-net" ]]; then
+    error "FATAL: safety-net must be first in _FEATURE_ORDER (got: ${_FEATURE_ORDER[0]:-empty})"
+    return 1
   fi
 
-  # Git push review: needs editor command substitution
-  if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
+  # Registry-driven hook fragment collection
+  local name flag
+  for name in "${_FEATURE_ORDER[@]}"; do
+    flag="${_FEATURE_FLAGS[$name]}"
+    is_true "${!flag:-false}" || continue
+    local hooks_json="$PROJECT_DIR/features/$name/hooks.json"
+    [[ -f "$hooks_json" ]] && hook_fragments+=("$hooks_json")
+  done
+
+  # Special case: git-push-review (needs editor command substitution)
+  if is_true "${ENABLE_GIT_PUSH_REVIEW:-false}"; then
     if [[ "${EDITOR_CHOICE:-none}" == "none" ]]; then
       warn "Git push review hook skipped (no editor selected)"
     else
       local editor_cmd editor_cmd_escaped src tmp
       editor_cmd="$(editor_command "$EDITOR_CHOICE")"
-      # Escape sed metacharacters in the replacement string
       editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&\\|]/\\&/g')"
       src="$PROJECT_DIR/features/git-push-review/hooks.json"
       tmp="$(mktemp)"
@@ -762,7 +748,6 @@ build_settings() {
 
   build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
   apply_settings_preferences "$out"
-
   replace_home_path "$out"
 
   # Clean up temp files
@@ -771,77 +756,12 @@ build_settings() {
   fi
 }
 
+# Legacy wrappers for backward compatibility during transition
+build_settings() {
+  build_settings_file "$CLAUDE_DIR/settings.json"
+}
 build_settings_to_file() {
-  local out="$1"
-  local base="$PROJECT_DIR/config/settings-base.json"
-  local permissions="$PROJECT_DIR/config/permissions.json"
-
-  local hook_fragments=()
-  local tmp_files=()
-
-  # Safety Net must be first in PreToolUse array (runs before other hooks)
-  if is_true "${ENABLE_SAFETY_NET:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/safety-net/hooks.json")
-  fi
-  if is_true "$ENABLE_TMUX_HOOKS"; then
-    hook_fragments+=("$PROJECT_DIR/features/tmux-hooks/hooks.json")
-  fi
-  if is_true "$ENABLE_DOC_BLOCKER"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-blocker/hooks.json")
-  fi
-  if is_true "$ENABLE_PRETTIER_HOOKS"; then
-    hook_fragments+=("$PROJECT_DIR/features/prettier-hooks/hooks.json")
-  fi
-  if is_true "$ENABLE_CONSOLE_LOG_GUARD"; then
-    hook_fragments+=("$PROJECT_DIR/features/console-log-guard/hooks.json")
-  fi
-  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
-    hook_fragments+=("$PROJECT_DIR/features/memory-persistence/hooks.json")
-  fi
-  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
-    hook_fragments+=("$PROJECT_DIR/features/strategic-compact/hooks.json")
-  fi
-  if is_true "$ENABLE_PR_CREATION_LOG"; then
-    hook_fragments+=("$PROJECT_DIR/features/pr-creation-log/hooks.json")
-  fi
-  if is_true "${ENABLE_PRE_COMPACT_COMMIT:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/pre-compact-commit/hooks.json")
-  fi
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/auto-update/hooks.json")
-  fi
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
-  fi
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-size-guard/hooks.json")
-  fi
-  if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
-    if [[ "${EDITOR_CHOICE:-none}" != "none" ]]; then
-      local editor_cmd editor_cmd_escaped src tmp
-      editor_cmd="$(editor_command "$EDITOR_CHOICE")"
-      editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&\\|]/\\&/g')"
-      src="$PROJECT_DIR/features/git-push-review/hooks.json"
-      tmp="$(mktemp)"
-      _SETUP_TMP_FILES+=("$tmp")
-      if grep -q "__EDITOR_CMD__" "$src" 2>/dev/null; then
-        sed "s|__EDITOR_CMD__|$editor_cmd_escaped|g" "$src" > "$tmp"
-      else
-        cp -a "$src" "$tmp"
-      fi
-      hook_fragments+=("$tmp")
-      tmp_files+=("$tmp")
-    fi
-  fi
-
-  build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
-  apply_settings_preferences "$out"
-
-  replace_home_path "$out"
-
-  if [[ ${#tmp_files[@]} -gt 0 ]]; then
-    rm -f "${tmp_files[@]}"
-  fi
+  build_settings_file "$1"
 }
 
 build_claude_md_to_file() {
@@ -862,48 +782,36 @@ build_claude_md_to_file() {
 # ---------------------------------------------------------------------------
 # Deploy hook scripts
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# deploy_hook_scripts - Registry-based hook script deployment
+#
+# Uses _FEATURE_ORDER + _FEATURE_HAS_SCRIPTS from lib/features.sh.
+# ---------------------------------------------------------------------------
 deploy_hook_scripts() {
-  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
-    local dest="$CLAUDE_DIR/hooks/memory-persistence"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/memory-persistence/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed memory-persistence hooks"
-  fi
+  local name flag
+  for name in "${_FEATURE_ORDER[@]}"; do
+    # Skip features without deploy scripts
+    [[ "${_FEATURE_HAS_SCRIPTS[$name]+set}" ]] || continue
 
-  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
-    local dest="$CLAUDE_DIR/hooks/strategic-compact"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/strategic-compact/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed strategic-compact hooks"
-  fi
+    flag="${_FEATURE_FLAGS[$name]}"
+    is_true "${!flag:-false}" || continue
 
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    local dest="$CLAUDE_DIR/hooks/auto-update"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/auto-update/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed auto-update hook"
-  fi
+    local src="$PROJECT_DIR/features/$name/scripts"
+    [[ -d "$src" ]] || continue
 
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    local dest="$CLAUDE_DIR/hooks/statusline"
+    local dest="$CLAUDE_DIR/hooks/$name"
     mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/statusline/scripts"/. "$dest"/
-    chmod +x "$dest"/*.py 2>/dev/null || true
-    chmod +x "$dest"/*.sh 2>/dev/null || true
-    ok "Installed statusline script"
-  fi
+    cp -a "$src"/. "$dest"/
+    _make_hooks_executable "$dest"
+    ok "Installed $name hooks"
+  done
+}
 
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    local dest="$CLAUDE_DIR/hooks/doc-size-guard"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/doc-size-guard/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed doc-size-guard hook"
-  fi
-
+# Make all script files in a directory executable
+_make_hooks_executable() {
+  local dir="$1"
+  chmod +x "$dir"/*.sh 2>/dev/null || true
+  chmod +x "$dir"/*.py 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------

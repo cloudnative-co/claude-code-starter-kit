@@ -33,6 +33,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 - **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
 
+## [0.23.0] - 2026-03-24
+
+### Changed
+- **Feature registry 導入**: `lib/features.sh` に `declare -A _FEATURE_FLAGS`, `_FEATURE_HAS_SCRIPTS`, `_FEATURE_ORDER` を定義。12 個の `is_true` ハードコードチェックを registry ループに置換
+- **`build_settings_file()` 統合**: `build_settings()` + `build_settings_to_file()` の ~140行重複を `build_settings_file()` に統合。safety-net 先頭アサーション付き
+- **`deploy_hook_scripts()` 統合**: 5 個の `is_true` 分岐を `_FEATURE_HAS_SCRIPTS` registry ループに置換。`_make_hooks_executable()` 抽出
+- **テスト有効化**: `safety-net-first` + `registry-consistency` テストをスタブから実テストに更新
+
 ## [0.22.3] - 2026-03-24
 
 ### Added
