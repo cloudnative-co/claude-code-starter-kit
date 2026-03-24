@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.32.0] - 2026-03-25
+
+### Changed
+- **setup.sh 分解**: ビルド・デプロイ関数群 (~700 行) を `lib/deploy.sh` に抽出。setup.sh はオーケストレーション専用 (585 行) に
+- **レガシーラッパー削除**: `build_settings()` / `build_settings_to_file()` を削除し、`build_settings_file()` に統一
+- **CLAUDE.md**: sourcing 順序・Architecture セクション・Adding a New Feature セクションを実態に合わせて更新
+
 ## [0.31.0] - 2026-03-25
 
 ### Added

@@ -524,7 +524,7 @@ run_update() {
   local new_settings
   new_settings="$(mktemp)"
   _SETUP_TMP_FILES+=("$new_settings")
-  build_settings_to_file "$new_settings"
+  build_settings_file "$new_settings"
 
   local current_settings="${claude_dir}/settings.json"
   local snapshot_settings="${snapshot_dir}/settings.json"

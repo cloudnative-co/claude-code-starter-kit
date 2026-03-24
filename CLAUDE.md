@@ -63,8 +63,9 @@ install.ps1 (Windows: WSL2 setup + clone repo via WSL + bootstrap)
       → wizard/wizard.sh (CLI parsing + interactive prompts)
       → lib/detect.sh (OS/WSL/MSYS detection)
       → lib/prerequisites.sh (dependency checks)
-      → build_claude_md() — template engine assembles ~/.claude/CLAUDE.md
-      → build_settings() — jq merges base JSON + permissions + hook fragments → settings.json
+      → lib/deploy.sh (build + deploy functions)
+        → build_claude_md() — template engine assembles ~/.claude/CLAUDE.md
+        → build_settings_file() — jq merges base JSON + permissions + hook fragments → settings.json
       → deploy files to ~/.claude/{agents,rules,commands,skills,memory}/
       → lib/ghostty.sh (Ghostty install + config, macOS only, if enabled)
       → lib/fonts.sh (cross-platform font install + Windows Terminal auto-config)
@@ -80,7 +81,7 @@ install.sh (re-run with manifest v2 + snapshot)
       → write_manifest() — updates manifest v2
 ```
 
-Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
+Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/features.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
 
 ### Profile System
 
@@ -110,7 +111,7 @@ Wizard flow: `_load_plugins()` reads the JSON (including `PLUGIN_MARKETPLACES[]`
 
 ### Hook Fragment Assembly
 
-Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings()` conditionally merges enabled features' fragments into `settings.json` via a custom jq deep-merge that **concatenates arrays** (so multiple features can add entries to the same hook type like `PreCompact`).
+Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions. `build_settings_file()` (in `lib/deploy.sh`) conditionally merges enabled features' fragments into `settings.json` via a custom jq deep-merge that **concatenates arrays** (so multiple features can add entries to the same hook type like `PreCompact`).
 
 Three fragment styles exist:
 - **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields (e.g., `features/tmux-hooks/hooks.json`)
@@ -296,7 +297,7 @@ The permissions file implements a defense-in-depth strategy against prompt injec
 3. In `wizard/wizard.sh`: add variable initialization (`ENABLE_NEW_FEATURE="${ENABLE_NEW_FEATURE:-}"`), add to `_CONFIG_ALLOWED_KEYS`, add to `save_config()`, add confirmation display in `_step_confirm`, add default in `_fill_noninteractive_defaults()`
 4. Add `STR_CONFIRM_*` strings in both `i18n/en/strings.sh` and `i18n/ja/strings.sh`
 5. If the feature is a hook, add to `HOOK_KEYS` array and `_apply_hooks_csv()` case in `wizard/wizard.sh`, and add `STR_HOOKS_*` strings in both i18n files. Add the hook label to `HOOK_LABELS` arrays in both `_step_hooks()` and `_step_confirm()`
-6. Add conditional merge in `build_settings()` in `setup.sh`
+6. Features are auto-collected by `build_settings_file()` in `lib/deploy.sh` via `_FEATURE_ORDER` / `_FEATURE_FLAGS` registry — no manual merge code needed
 7. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
 8. If the feature creates files outside the standard manifest-tracked directories, add explicit cleanup to `uninstall.sh`
 9. Verify update-path adoption. A new key must be checked in all of these paths:
@@ -310,7 +311,7 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`) — `me
 
 **Hook ordering matters**: `safety-net` must be the **first** entry in `hook_fragments[]` so its `PreToolUse` entry appears at index 0 (runs before other PreToolUse hooks). When adding new PreToolUse hooks, append after safety-net.
 
-**`build_settings()` and `build_settings_to_file()` are parallel implementations** in `setup.sh`. When adding or reordering hook fragments, update **both** functions identically. `build_settings()` writes to `~/.claude/settings.json` directly; `build_settings_to_file()` writes to a specified path (used by update mechanism for comparison).
+**`build_settings_file()`** in `lib/deploy.sh` is the single unified settings.json builder. It accepts an output path parameter and is called by both fresh install and update paths.
 
 ## Adding a New Plugin
 
