@@ -420,15 +420,19 @@ if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
     # Get list of already installed plugins
     _installed_plugins="$(claude plugin list 2>/dev/null || true)"
 
-    # Check if any plugins need installing
+    # Check if any plugins need installing (update mode always proceeds)
     _need_install=false
-    for _p in "${_plugins[@]}"; do
-      _p_name="${_p%%@*}"
-      if [[ -n "$_p_name" ]] && ! echo "$_installed_plugins" | grep -q "$_p_name" 2>/dev/null; then
-        _need_install=true
-        break
-      fi
-    done
+    if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+      _need_install=true
+    else
+      for _p in "${_plugins[@]}"; do
+        _p_name="${_p%%@*}"
+        if [[ -n "$_p_name" ]] && ! echo "$_installed_plugins" | grep -q "$_p_name" 2>/dev/null; then
+          _need_install=true
+          break
+        fi
+      done
+    fi
 
     if [[ "$_need_install" == "true" ]]; then
       # Register required marketplaces (deduplicated)
@@ -457,7 +461,14 @@ if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
     for _p in "${_plugins[@]}"; do
       _p_name="${_p%%@*}"
       if [[ -n "$_p_name" ]]; then
-        if echo "$_installed_plugins" | grep -q "$_p_name" 2>/dev/null; then
+        if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+          # Update mode: always re-install to pick up latest versions
+          if claude plugin install "$_p_name" --scope user 2>/dev/null; then
+            ok "${STR_DEPLOY_PLUGINS_UPDATED:-Updated} $_p_name"
+          else
+            warn "$STR_DEPLOY_PLUGINS_FAILED $_p_name"
+          fi
+        elif echo "$_installed_plugins" | grep -q "$_p_name" 2>/dev/null; then
           ok "$STR_DEPLOY_PLUGINS_ALREADY $_p_name"
         elif claude plugin install "$_p_name" --scope user; then
           ok "$STR_DEPLOY_PLUGINS_INSTALLED $_p_name"

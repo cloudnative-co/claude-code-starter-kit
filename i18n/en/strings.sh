@@ -138,6 +138,7 @@ STR_DEPLOY_PLUGINS_HINT="To install plugins, run 'claude' and use:"
 STR_DEPLOY_PLUGINS_INSTALLING="Installing plugins..."
 STR_DEPLOY_PLUGINS_INSTALLED="Plugin:"
 STR_DEPLOY_PLUGINS_ALREADY="Already installed:"
+STR_DEPLOY_PLUGINS_UPDATED="Updated plugin:"
 STR_DEPLOY_PLUGINS_FAILED="Failed to install plugin:"
 STR_DEPLOY_PLUGINS_SKIP="Skipping plugin install (Claude Code CLI not available)"
 
