@@ -1,8 +1,8 @@
 #!/bin/bash
 # lib/codex-setup.sh - Codex MCP setup (CLI install, auth, MCP registration)
-# Requires: lib/colors.sh, lib/detect.sh to be sourced first
+# Requires: lib/colors.sh, lib/detect.sh, wizard/wizard.sh (is_true) to be sourced first
 # Uses globals: ENABLE_CODEX_MCP, WIZARD_NONINTERACTIVE, _SETUP_TMP_FILES,
-#               STR_CODEX_*, STR_CHOICE
+#               STR_CODEX_*, STR_CHOICE, is_true()
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
