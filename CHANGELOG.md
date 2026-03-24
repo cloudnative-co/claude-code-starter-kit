@@ -33,6 +33,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 - **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
 
+## [0.24.0] - 2026-03-24
+
+### Changed
+- **PATH 共通化**: `_add_to_path_now_and_persist()` を prerequisites.sh に追加。即時 `export PATH` + RC ファイル永続化を一関数に統合。setup.sh の 5 箇所の inline PATH export を置換
+- **`_get_shell_rc_file()` を prerequisites.sh に一元化**: codex-setup.sh の重複定義を削除
+- **`_ensure_local_bin_in_path()` 削除**: `_add_to_path_now_and_persist()` に置換
+
 ## [0.23.0] - 2026-03-24
 
 ### Changed

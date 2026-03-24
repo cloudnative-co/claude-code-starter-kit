@@ -1048,33 +1048,7 @@ save_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
 section "Setup Complete"
 ok "Deployed to $CLAUDE_DIR"
 
-# ---------------------------------------------------------------------------
-# Helper: Ensure ~/.local/bin is in shell RC file for PATH persistence
-# ---------------------------------------------------------------------------
-_ensure_local_bin_in_path() {
-  local local_bin="$HOME/.local/bin"
-  local rc_file=""
-
-  # Determine the correct shell RC file
-  if is_msys; then
-    # Git Bash sources .bash_profile, not .bashrc
-    rc_file="$HOME/.bash_profile"
-  else
-    case "${SHELL:-/bin/bash}" in
-      */zsh)  rc_file="$HOME/.zshrc" ;;
-      */bash) rc_file="$HOME/.bashrc" ;;
-      *)      rc_file="$HOME/.profile" ;;
-    esac
-  fi
-
-  # Create RC file if it doesn't exist
-  [[ -f "$rc_file" ]] || touch "$rc_file"
-
-  # Add PATH entry if not already present
-  if ! grep -q "$local_bin" "$rc_file" 2>/dev/null; then
-    printf '\n# Claude Code CLI\nexport PATH="%s:$PATH"\n' "$local_bin" >> "$rc_file"
-  fi
-}
+# _ensure_local_bin_in_path is now _add_to_path_now_and_persist in lib/prerequisites.sh
 
 # ---------------------------------------------------------------------------
 # Install Claude Code CLI if not present
@@ -1104,7 +1078,7 @@ if $_need_cli_install; then
         "$HOME/.local/bin"; do
         [[ -n "$_win_dir" ]] && export PATH="$_win_dir:$PATH"
       done
-      _ensure_local_bin_in_path
+      _add_to_path_now_and_persist "$HOME/.local/bin"
       if command -v claude &>/dev/null; then
         ok "$STR_CLI_INSTALLED"
       else
@@ -1117,9 +1091,7 @@ if $_need_cli_install; then
   else
     # Unix (macOS/Linux/WSL): use bash installer
     if curl -fsSL https://claude.ai/install.sh | bash; then
-      export PATH="$HOME/.local/bin:$PATH"
-      # Ensure ~/.local/bin is in shell RC for next login
-      _ensure_local_bin_in_path
+      _add_to_path_now_and_persist "$HOME/.local/bin"
       if command -v claude &>/dev/null; then
         ok "$STR_CLI_INSTALLED"
       else
@@ -1136,7 +1108,7 @@ fi
 
 # Always ensure ~/.local/bin is in PATH config (even if CLI was found via
 # inherited PATH from another user or transient session)
-_ensure_local_bin_in_path
+_add_to_path_now_and_persist "$HOME/.local/bin"
 
 # ---------------------------------------------------------------------------
 # Install plugins
@@ -1219,8 +1191,7 @@ if [[ ! -x "$HOME/.local/bin/claude" ]] && ! command -v claude &>/dev/null; then
   printf "\n"
   warn "Claude CLI not found after setup. Running installer..."
   if curl -fsSL https://claude.ai/install.sh | bash; then
-    export PATH="$HOME/.local/bin:$PATH"
-    _ensure_local_bin_in_path
+    _add_to_path_now_and_persist "$HOME/.local/bin"
     ok "$STR_CLI_INSTALLED"
   else
     warn "$STR_CLI_INSTALL_FAILED"
