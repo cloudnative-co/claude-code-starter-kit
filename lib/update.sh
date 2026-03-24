@@ -184,53 +184,44 @@ _update_claude_md() {
       | grep -v '^<!-- .*custom instructions' \
       > "$old_kit_output" || true
 
-    # Extract lines in current that are NOT in old kit output (= user additions)
-    local user_diff_lines
-    user_diff_lines="$(mktemp)"
-    _SETUP_TMP_FILES+=("$user_diff_lines")
-    # diff: lines only in current (user-added), ignoring blank lines
-    diff --old-line-format='' --new-line-format='%L' --unchanged-line-format='' \
-      "$old_kit_output" "$current" > "$user_diff_lines" 2>/dev/null || true
-    # Remove blank-only diff lines
-    local user_additions
-    user_additions="$(sed '/^[[:space:]]*$/d' "$user_diff_lines")"
+    # Compare ignoring blank lines: exact match = no user edits
+    local current_trimmed old_kit_trimmed
+    current_trimmed="$(sed '/^[[:space:]]*$/d' "$current")"
+    old_kit_trimmed="$(sed '/^[[:space:]]*$/d' "$old_kit_output")"
 
-    if [[ -z "$user_additions" ]]; then
-      # No user additions → safe to replace with new template
+    if [[ "$current_trimmed" == "$old_kit_trimmed" ]]; then
+      # Unmodified old kit output → safe to auto-upgrade
       cp -a "$new_kit_file" "$current"
       info "CLAUDE.md upgraded to section-aware format"
       return 0
     fi
 
-    # User additions found → offer to move them to user section
+    # Differences found (additions, deletions, or edits) → user customization
     if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
       warn "$STR_CLAUDEMD_MIGRATION_SKIP"
       return 1
     fi
 
     warn "$STR_CLAUDEMD_MIGRATION"
-    info "Detected additions not in kit template:"
-    printf '%s\n' "$user_additions" | head -20 >&2
-    local _diff_line_count
-    _diff_line_count="$(printf '%s\n' "$user_additions" | wc -l | tr -d ' ')"
-    if [[ "$_diff_line_count" -gt 20 ]]; then
-      info "  ... (${_diff_line_count} lines total)"
-    fi
+    info "Differences from kit template:"
+    diff -u "$old_kit_output" "$current" 2>/dev/null >&2 || true
     printf "\n" >&2
     printf "  %s " "$STR_CLAUDEMD_MIGRATION_PROMPT" >&2
     local reply=""
     if read -r reply < /dev/tty 2>/dev/null; then true; else reply="s"; fi
     case "$reply" in
       [Mm]*)
-        local kit_section user_heading
+        # Keep the entire current content as user section
+        local kit_section existing_content user_heading
         kit_section="$(< "$new_kit_section")"
+        existing_content="$(< "$current")"
         user_heading="$(_user_section_heading)"
         {
           printf '%s\n' "$kit_section"
           printf '\n%s\n\n' "$user_heading"
-          printf '%s\n' "$user_additions"
+          printf '%s\n' "$existing_content"
         } > "$current"
-        info "CLAUDE.md upgraded — your additions moved to user section"
+        info "CLAUDE.md upgraded — your content preserved in user section"
         return 0
         ;;
       *) return 1 ;;

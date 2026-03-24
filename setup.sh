@@ -439,7 +439,7 @@ _build_claude_md_safe() {
     return
   fi
 
-  # No markers — detect old kit-generated file and extract user additions
+  # No markers — detect old kit-generated file
   local old_kit_output
   old_kit_output="$(mktemp)"
   _SETUP_TMP_FILES+=("$old_kit_output")
@@ -449,21 +449,18 @@ _build_claude_md_safe() {
     | grep -v '^<!-- .*custom instructions' \
     > "$old_kit_output" || true
 
-  local user_diff_lines
-  user_diff_lines="$(mktemp)"
-  _SETUP_TMP_FILES+=("$user_diff_lines")
-  diff --old-line-format='' --new-line-format='%L' --unchanged-line-format='' \
-    "$old_kit_output" "$target" > "$user_diff_lines" 2>/dev/null || true
-  local user_additions
-  user_additions="$(sed '/^[[:space:]]*$/d' "$user_diff_lines")"
+  # Compare ignoring blank lines: exact match = no user edits
+  local current_trimmed old_kit_trimmed
+  current_trimmed="$(sed '/^[[:space:]]*$/d' "$target")"
+  old_kit_trimmed="$(sed '/^[[:space:]]*$/d' "$old_kit_output")"
 
-  if [[ -z "$user_additions" ]]; then
+  if [[ "$current_trimmed" == "$old_kit_trimmed" ]]; then
     cp -a "$new_claude_md" "$target"
     ok "CLAUDE.md upgraded to section-aware format"
     return
   fi
 
-  # User additions found
+  # Differences found (additions, deletions, or edits) → user customization
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
     _FRESH_SKIPPED_FILES+=("$target")
     warn "$STR_CLAUDEMD_MIGRATION_SKIP"
@@ -471,13 +468,8 @@ _build_claude_md_safe() {
   fi
 
   warn "$STR_CLAUDEMD_MIGRATION"
-  info "Detected additions not in kit template:"
-  printf '%s\n' "$user_additions" | head -20 >&2
-  local _diff_line_count
-  _diff_line_count="$(printf '%s\n' "$user_additions" | wc -l | tr -d ' ')"
-  if [[ "$_diff_line_count" -gt 20 ]]; then
-    info "  ... (${_diff_line_count} lines total)"
-  fi
+  info "Differences from kit template:"
+  diff -u "$old_kit_output" "$target" 2>/dev/null >&2 || true
   printf "\n" >&2
 
   while true; do
@@ -486,15 +478,17 @@ _build_claude_md_safe() {
     if read -r reply < /dev/tty 2>/dev/null; then true; else reply="s"; fi
     case "$reply" in
       [Mm]*)
-        local kit_section user_heading
+        # Keep the entire current content as user section
+        local kit_section existing_content user_heading
         kit_section="$(_extract_kit_section "$new_claude_md")"
+        existing_content="$(< "$target")"
         user_heading="$(_user_section_heading)"
         {
           printf '%s\n' "$kit_section"
           printf '\n%s\n\n' "$user_heading"
-          printf '%s\n' "$user_additions"
+          printf '%s\n' "$existing_content"
         } > "$target"
-        ok "CLAUDE.md upgraded — your additions moved to user section"
+        ok "CLAUDE.md upgraded — your content preserved in user section"
         return
         ;;
       [Dd]*)
@@ -502,13 +496,14 @@ _build_claude_md_safe() {
         local preview
         preview="$(mktemp)"
         _SETUP_TMP_FILES+=("$preview")
-        local kit_section_p user_heading_p
+        local kit_section_p existing_content_p user_heading_p
         kit_section_p="$(_extract_kit_section "$new_claude_md")"
+        existing_content_p="$(< "$target")"
         user_heading_p="$(_user_section_heading)"
         {
           printf '%s\n' "$kit_section_p"
           printf '\n%s\n\n' "$user_heading_p"
-          printf '%s\n' "$user_additions"
+          printf '%s\n' "$existing_content_p"
         } > "$preview"
         diff -u "$target" "$preview" 2>/dev/null >&2 || true
         printf "\n" >&2
