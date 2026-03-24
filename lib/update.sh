@@ -704,14 +704,28 @@ run_update() {
   _update_hook_scripts "$claude_dir" "$snapshot_dir" updated_files skipped_files
 
   # --- Phase 6: Update snapshot for each updated file ---
-  # Dry-run: snapshot is a temporary artifact, no need to show progress
+  # CRITICAL: For settings.json, snapshot must store the NEW KIT version
+  # (not the merge result). This ensures the next update's 3-way comparison
+  # correctly detects user modifications against the kit baseline.
+  # If we stored the merge result, next update would see snapshot==current
+  # and conclude "user didn't change anything" — silently overwriting.
   if [[ "$_dr" != "true" ]]; then
     info "$STR_UPDATE_SNAPSHOT"
   fi
   local file
   for file in "${updated_files[@]+"${updated_files[@]}"}"; do
-    if [[ "$(basename "$file")" == "CLAUDE.md" ]]; then
+    local _basename
+    _basename="$(basename "$file")"
+    if [[ "$_basename" == "CLAUDE.md" ]]; then
       _snapshot_claude_md "$claude_dir" "$file"
+    elif [[ "$_basename" == "settings.json" ]]; then
+      # Snapshot the kit-generated version, not the merge result
+      local _snap_dest="${snapshot_dir}/settings.json"
+      mkdir -p "$snapshot_dir"
+      cp "$new_settings" "$_snap_dest"
+      if [[ "$_dr" != "true" ]]; then
+        info "Snapshot updated: settings.json (kit baseline)"
+      fi
     else
       _update_snapshot_file "$claude_dir" "$file"
     fi

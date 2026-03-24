@@ -1689,17 +1689,33 @@ _setup_codex_mcp() {
 }
 
 if is_true "${ENABLE_CODEX_MCP:-false}"; then
-  # Confirm before starting Codex MCP setup (in case saved config had it enabled)
-  printf "\n"
-  info "${STR_CODEX_SETUP_CONFIRM:-Start Codex MCP setup?}"
-  printf "  1) %s\n" "${STR_CODEX_SETUP_CONFIRM_YES:-Yes}"
-  printf "  2) %s\n" "${STR_CODEX_SETUP_CONFIRM_NO:-No, skip}"
-  _codex_confirm=""
-  read -r -p "${STR_CHOICE:-Choice}: " _codex_confirm
-  case "$_codex_confirm" in
-    1) _setup_codex_mcp ;;
-    *) info "${STR_CODEX_SETUP_SKIPPED:-Codex MCP setup skipped}" ;;
-  esac
+  # Skip if already fully configured (codex CLI + login + MCP registered)
+  _codex_already_done=false
+  if command -v codex &>/dev/null \
+    && _codex_login_status >/dev/null 2>&1 \
+    && command -v claude &>/dev/null \
+    && claude mcp list -s user 2>/dev/null | grep -q "codex" 2>/dev/null; then
+    _codex_already_done=true
+  fi
+
+  if [[ "$_codex_already_done" == "true" ]]; then
+    ok "${STR_CODEX_MCP_ALREADY:-Codex MCP already configured}"
+  elif [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+    # Non-interactive: skip setup prompts
+    info "${STR_CODEX_SETUP_SKIPPED:-Codex MCP setup skipped (non-interactive)}"
+  else
+    # Interactive + not yet configured: ask user
+    printf "\n"
+    info "${STR_CODEX_SETUP_CONFIRM:-Start Codex MCP setup?}"
+    printf "  1) %s\n" "${STR_CODEX_SETUP_CONFIRM_YES:-Yes}"
+    printf "  2) %s\n" "${STR_CODEX_SETUP_CONFIRM_NO:-No, skip}"
+    _codex_confirm=""
+    read -r -p "${STR_CHOICE:-Choice}: " _codex_confirm
+    case "$_codex_confirm" in
+      1) _setup_codex_mcp ;;
+      *) info "${STR_CODEX_SETUP_SKIPPED:-Codex MCP setup skipped}" ;;
+    esac
+  fi
 fi
 
 # ---------------------------------------------------------------------------

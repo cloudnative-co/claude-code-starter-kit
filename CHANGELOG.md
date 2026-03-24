@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **CLAUDE.md ユーザーセクション分離**: kit 管理セクションとユーザーセクションを HTML コメントマーカーで分離。ユーザーは `# User Settings` 以下に自由にカスタム指示を追加可能。update 時は kit セクションのみ更新され、ユーザーセクションは保持される
 - **既存 CLAUDE.md のマイグレーション**: マーカーのない既存 CLAUDE.md は、対話モードで既存全体をユーザーセクションに移行し kit セクションを追加。非対話モードではスキップ
 
+### Fixed
+- **settings.json の snapshot にユーザーカスタマイズが混入する問題を修正**: snapshot に merge 結果ではなく kit 生成版を保存するように変更。次回 update で「ユーザー未変更」と誤判定され permissions 等が kit デフォルトに上書きされる問題を解消
+- **Codex MCP セットアップが update 時に毎回確認される問題を修正**: 既にセットアップ済み（CLI + 認証 + MCP 登録）の場合は確認をスキップ。非対話モードでも不要な対話が発生しなくなった
+- **settings.json の language に表示名がセットされる問題を修正**: `"日本語"` → `"ja"` に変更。不要な conflict を解消
+- **update のスキップファイル表示でサブディレクトリパスが欠落する問題を修正**
+- **dry-run 時のメッセージを予告形に差し替え**: 完了形（〜しました）→ 予告形（〜されます）
+- **旧 kit 生成 CLAUDE.md のマイグレーション判定改善**: 削除・編集も検出するよう完全一致判定に変更
+
 ### Changed
 - **Uninstall 時の CLAUDE.md 保護**: uninstall は CLAUDE.md を完全削除せず、kit マーカーセクションのみ除去。ユーザーセクションに内容がある場合はファイルを残す
 - **Snapshot 粒度**: CLAUDE.md の snapshot は kit セクションのみ保存。ユーザーセクションの編集が false conflict を起こさなくなった
