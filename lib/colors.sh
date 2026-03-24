@@ -53,3 +53,18 @@ error() {
 section() {
   printf "\n${BOLD}── %s ──${NC}\n\n" "$*"
 }
+
+# ---------------------------------------------------------------------------
+# _register_tmp - Register a temporary file/dir for cleanup on exit
+#
+# Usage: _register_tmp <path>
+#
+# Appends to _SETUP_TMP_FILES[] which is cleaned up by _cleanup_tmp() trap.
+# Safe to call even if _SETUP_TMP_FILES is not yet declared (no-op in that case).
+# ---------------------------------------------------------------------------
+_register_tmp() {
+  # Guard: only append if the tracking array exists (sourced from setup.sh)
+  if declare -p _SETUP_TMP_FILES &>/dev/null; then
+    _SETUP_TMP_FILES+=("$1")
+  fi
+}

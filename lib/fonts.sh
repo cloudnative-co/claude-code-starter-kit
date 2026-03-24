@@ -18,6 +18,7 @@ _install_font_macos() {
 
   local tmp_dir
   tmp_dir="$(mktemp -d)"
+  _register_tmp "$tmp_dir"
   local zip_path="$tmp_dir/$font_zip_name"
 
   mkdir -p "$HOME/Library/Fonts"

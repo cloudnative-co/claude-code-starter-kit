@@ -582,6 +582,9 @@ run_update() {
       # Use current-preserving merge: keep all existing keys, adopt new
       # kit-only keys, prompt on value differences (interactive only).
       info "$STR_UPDATE_SETTINGS_MERGING"
+      if [[ -n "${_BACKUP_TIMESTAMP:-}" ]]; then
+        info "Restore from backup if needed: ~/.claude.backup.${_BACKUP_TIMESTAMP}"
+      fi
       _merge_settings_bootstrap "$current_settings" "$new_settings" "$current_settings"
       updated_files+=("$current_settings")
       if [[ "$_dr" == "true" ]]; then

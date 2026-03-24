@@ -281,6 +281,9 @@ if [[ -d "$CLAUDE_DIR/.starter-kit-snapshot" ]]; then
   rm -rf "$CLAUDE_DIR/.starter-kit-snapshot"
 fi
 
+# Remove backup path marker (written by backup_existing)
+rm -f "$CLAUDE_DIR/.starter-kit-last-backup"
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

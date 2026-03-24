@@ -168,16 +168,20 @@ editor_command() {
   esac
 }
 
+_BACKUP_TIMESTAMP=""
+
 backup_existing() {
   # Dry-run: no real backup needed (sim dir protects the real filesystem)
   [[ "${DRY_RUN:-false}" == "true" ]] && return 0
 
   if [[ -e "$CLAUDE_DIR" ]]; then
-    local ts backup
-    ts="$(date +%Y%m%d%H%M%S)"
-    backup="$HOME/.claude.backup.${ts}"
+    _BACKUP_TIMESTAMP="$(date +%Y%m%d%H%M%S)"
+    local backup="$HOME/.claude.backup.${_BACKUP_TIMESTAMP}"
     cp -a "$CLAUDE_DIR" "$backup"
     ok "Backed up existing ~/.claude to $backup"
+
+    # Persist backup path for cross-process recovery (e.g., auto-update.sh)
+    printf '%s\n' "$backup" > "$CLAUDE_DIR/.starter-kit-last-backup"
   fi
 }
 
@@ -277,6 +281,9 @@ bootstrap_snapshot_from_current() {
   info "$STR_UPDATE_MIGRATION_BOOTSTRAP"
   write_managed_snapshot
   _SNAPSHOT_BOOTSTRAPPED=true
+  if [[ -n "${_BACKUP_TIMESTAMP:-}" ]]; then
+    info "Backup available at: ~/.claude.backup.${_BACKUP_TIMESTAMP}"
+  fi
 }
 
 warn_existing_claude_reconfigure() {
@@ -886,7 +893,10 @@ write_manifest() {
   ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
   local kit_version
-  kit_version="$(git -C "$PROJECT_DIR" describe --tags --abbrev=0 2>/dev/null || echo "unknown")"
+  kit_version="$(git -C "$PROJECT_DIR" describe --tags --always 2>/dev/null || echo "unknown")"
+
+  local kit_commit
+  kit_commit="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
 
   # Only track files that the starter kit itself manages.
   local files_json
@@ -896,6 +906,7 @@ write_manifest() {
     --arg version "2" \
     --arg ts "$ts" \
     --arg kit_version "$kit_version" \
+    --arg kit_commit "$kit_commit" \
     --arg profile "${PROFILE:-}" \
     --arg language "${LANGUAGE:-}" \
     --arg editor "${EDITOR_CHOICE:-}" \
@@ -908,6 +919,7 @@ write_manifest() {
       version: $version,
       timestamp: $ts,
       kit_version: $kit_version,
+      kit_commit: $kit_commit,
       profile: $profile,
       language: $language,
       editor: $editor,
@@ -1308,10 +1320,12 @@ _run_with_timeout() {
     local pid=$!
     ( sleep "$secs" && kill "$pid" 2>/dev/null ) &
     local watcher=$!
-    wait "$pid" 2>/dev/null
-    local rc=$?
-    kill "$watcher" 2>/dev/null
-    wait "$watcher" 2>/dev/null 2>&1 || true
+    # Capture exit code safely under set -e (bare wait would abort on non-zero)
+    local rc=0
+    wait "$pid" 2>/dev/null || rc=$?
+    # Kill the watcher subshell and its sleep child to avoid orphan processes
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
     return "$rc"
   fi
 }
@@ -1338,7 +1352,7 @@ _save_openai_key() {
     tmp_rc="$(mktemp)"
     _SETUP_TMP_FILES+=("$tmp_rc")
     # Preserve original file permissions (umask 077 would make the new file 0600)
-    orig_mode="$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null || echo '644')"
+    orig_mode="$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null || { warn "Could not detect permissions for $rc_file, defaulting to 600"; echo '600'; })"
     grep -v '^\(export \)\{0,1\}OPENAI_API_KEY=' "$rc_file" > "$tmp_rc"
     mv "$tmp_rc" "$rc_file"
     chmod "$orig_mode" "$rc_file"
