@@ -55,7 +55,7 @@ fi
       if [[ -f "$_backup_path_file" ]]; then
         _backup_path="$(cat "$_backup_path_file")"
         echo "[Starter Kit] Backup at: $_backup_path" >&2
-        echo "[Starter Kit] To restore: mv ~/.claude ~/.claude.broken && cp -a \"$_backup_path\" ~/.claude" >&2
+        echo "[Starter Kit] To restore: BACKUP=\"$_backup_path\" && mv ~/.claude ~/.claude.broken && cp -a \"\$BACKUP\" ~/.claude" >&2
       else
         echo "[Starter Kit] Check ~/.claude.backup.* for backups" >&2
       fi

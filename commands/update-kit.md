@@ -35,7 +35,7 @@ Before running the update:
 If an update goes wrong:
 - A backup is automatically created at `~/.claude.backup.<timestamp>` before each update
 - The latest backup path is saved in `~/.claude/.starter-kit-last-backup`
-- To restore: `mv ~/.claude ~/.claude.broken && cp -a "$(cat ~/.claude/.starter-kit-last-backup)" ~/.claude`
+- To restore: `BACKUP=$(cat ~/.claude/.starter-kit-last-backup) && mv ~/.claude ~/.claude.broken && cp -a "$BACKUP" ~/.claude`
 - To reset saved merge decisions: `bash setup.sh --update --reset-prefs`
 
 ### Notes

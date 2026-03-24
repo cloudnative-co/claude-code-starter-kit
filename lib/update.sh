@@ -8,8 +8,8 @@ set -euo pipefail
 # _check_major_upgrade - Detect major version jumps and warn the user
 #
 # Compares the manifest's kit_version with the current kit version.
-# On major version bumps, displays recovery instructions and offers to skip.
-# Non-interactive mode: logs the warning but continues (non-destructive).
+# On major version bumps, displays recovery instructions.
+# Does not block — warns only. The backup is created by backup_existing() before this runs.
 # ---------------------------------------------------------------------------
 _check_major_upgrade() {
   local claude_dir="$1"
@@ -42,7 +42,7 @@ _check_major_upgrade() {
   if [[ -f "$backup_file" ]]; then
     local backup_path
     backup_path="$(cat "$backup_file")"
-    info "To restore: mv ~/.claude ~/.claude.broken && cp -a \"$backup_path\" ~/.claude"
+    info "To restore: BACKUP=\"$backup_path\" && mv ~/.claude ~/.claude.broken && cp -a \"\$BACKUP\" ~/.claude"
   fi
 }
 
