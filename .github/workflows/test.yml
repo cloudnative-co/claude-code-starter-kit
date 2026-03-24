@@ -1,4 +1,4 @@
-name: Scenario Tests
+name: Tests
 
 on:
   push:
@@ -10,17 +10,61 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install prerequisites
+      # ── Linux prerequisites ──
+      - name: Install prerequisites (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq gawk
 
+      # ── macOS prerequisites ──
+      - name: Cache Homebrew downloads
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: brew-${{ runner.os }}-
+
+      - name: Install prerequisites (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash gnu-sed gawk jq
+
+      # ── Tests ──
       - name: Run unit tests
-        run: bash tests/run-unit-tests.sh
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            "$(brew --prefix)/bin/bash" tests/run-unit-tests.sh
+          else
+            bash tests/run-unit-tests.sh
+          fi
 
       - name: Run scenario tests
-        run: bash tests/run-scenarios.sh
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            "$(brew --prefix)/bin/bash" tests/run-scenarios.sh
+          else
+            bash tests/run-scenarios.sh
+          fi
+
+      # ── macOS-specific: Bash 3.2 re-exec test ──
+      - name: Verify Bash 3.2 re-exec to Bash 4+
+        if: runner.os == 'macOS'
+        run: |
+          # Run setup.sh with system Bash 3.2 — it should re-exec to brew Bash 4+
+          /bin/bash setup.sh --non-interactive --dry-run 2>&1 | tee /tmp/reexec-output.txt
+          # Verify it didn't fail with "Bash 4+ is required"
+          if grep -q "Bash 4+ is required" /tmp/reexec-output.txt; then
+            echo "FAIL: Bash 4+ re-exec did not trigger"
+            exit 1
+          fi
+          echo "PASS: Bash 3.2 re-exec works correctly"

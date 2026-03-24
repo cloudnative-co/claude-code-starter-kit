@@ -290,6 +290,14 @@ The permissions file implements a defense-in-depth strategy against prompt injec
 - CVE-2025-6514: `mcp-remote` RCE vulnerability
 - Qiita: print-based indirect exfiltration via CI/CD logs (no network deny trigger)
 
+## Versioning
+
+- **patch (x.y.Z)**: バグ修正、ドキュメント修正、テスト追加、内部リファクタ（ユーザーの動作が変わらない）
+- **minor (x.Y.0)**: 新機能追加、既存機能の動作変更、新 profile 項目、新 hook/command/skill 追加
+- **major (X.0.0)**: 破壊的変更（設定フォーマット変更、既存 config の非互換、migration 必須）
+- PR の CHANGELOG エントリに `## [x.y.z] - YYYY-MM-DD` を書く。タグはマージ後に切る。
+- 複数の変更を含む PR はもっとも影響の大きい変更に合わせる。
+
 ## Adding a New Feature
 
 1. Create `features/new-feature/feature.json` (metadata) and `hooks.json` (hook fragments or top-level settings)
