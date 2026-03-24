@@ -109,10 +109,19 @@ is_true() {
   esac
 }
 
+# language_name - returns display name for UI messages
 language_name() {
   case "${LANGUAGE:-en}" in
     ja) printf "日本語" ;;
     *)  printf "English" ;;
+  esac
+}
+
+# language_code - returns the code Claude Code expects in settings.json
+language_code() {
+  case "${LANGUAGE:-en}" in
+    ja) printf "ja" ;;
+    *)  printf "en" ;;
   esac
 }
 
@@ -127,7 +136,7 @@ _bool_to_string() {
 apply_settings_preferences() {
   local file="$1"
   local lang_name tmp_file attribution_enabled
-  lang_name="$(language_name)"
+  lang_name="$(language_code)"
   if is_true "${COMMIT_ATTRIBUTION:-false}"; then
     attribution_enabled="true"
   else
