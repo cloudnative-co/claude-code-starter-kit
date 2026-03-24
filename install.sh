@@ -116,6 +116,13 @@ check_required() {
 # ---------------------------------------------------------------------------
 clone_or_update() {
   if [[ -d "$INSTALL_DIR/.git" ]]; then
+    # Dirty check: abort if local changes exist (prevent git pull conflicts)
+    if [[ -n "$(git -C "$INSTALL_DIR" status --porcelain 2>/dev/null)" ]]; then
+      error "Local changes detected in $INSTALL_DIR"
+      info "  Run: cd $INSTALL_DIR && git stash -u"
+      info "  Then re-run this installer."
+      exit 1
+    fi
     info "Updating existing installation..."
     git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
       warn "Could not fast-forward. Re-cloning..."

@@ -4,6 +4,47 @@
 # Compatible: Bash 3.2+ (macOS default) — no associative arrays, no mapfile
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# _check_major_upgrade - Detect major version jumps and warn the user
+#
+# Compares the manifest's kit_version with the current kit version.
+# On major version bumps, displays recovery instructions.
+# Does not block — warns only. The backup is created by backup_existing() before this runs.
+# ---------------------------------------------------------------------------
+_check_major_upgrade() {
+  local claude_dir="$1"
+  local manifest="${claude_dir}/.starter-kit-manifest.json"
+
+  [[ -f "$manifest" ]] || return 0
+
+  local old_ver
+  old_ver="$(jq -r '.kit_version // empty' "$manifest" 2>/dev/null || true)"
+  [[ -n "$old_ver" ]] || return 0
+
+  local new_ver
+  new_ver="$(git -C "$PROJECT_DIR" describe --tags --always 2>/dev/null || echo "unknown")"
+
+  # Extract major version numbers (strip leading 'v')
+  local old_major new_major
+  old_major="${old_ver#v}"; old_major="${old_major%%.*}"
+  new_major="${new_ver#v}"; new_major="${new_major%%.*}"
+
+  # Only warn on parseable numeric majors that differ
+  [[ "$old_major" =~ ^[0-9]+$ ]] || return 0
+  [[ "$new_major" =~ ^[0-9]+$ ]] || return 0
+  [[ "$old_major" -ne "$new_major" ]] || return 0
+
+  warn "${STR_MAJOR_UPGRADE_WARN:-Major version upgrade detected}: $old_ver → $new_ver"
+  info "${STR_MAJOR_UPGRADE_BACKUP:-A backup will be created before updating.}"
+
+  # Show recovery instructions with actual backup path
+  local backup_file="${claude_dir}/.starter-kit-last-backup"
+  if [[ -f "$backup_file" ]]; then
+    local backup_path
+    backup_path="$(cat "$backup_file")"
+    info "To restore: BACKUP=\"$backup_path\" && mv ~/.claude ~/.claude.broken && cp -a \"\$BACKUP\" ~/.claude"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # _sync_settings_metadata - Sync LANGUAGE (and other vars) from merged settings
@@ -547,6 +588,9 @@ run_update() {
   local claude_dir="$2"
   local snapshot_dir="${claude_dir}/.starter-kit-snapshot"
 
+  # Check for major version jumps and show recovery info
+  _check_major_upgrade "$claude_dir"
+
   # Eagerly clear merge prefs if --reset-prefs was passed (even if no conflicts)
   if [[ "${_RESET_MERGE_PREFS:-false}" == "true" ]]; then
     _merge_prefs_file
@@ -750,5 +794,16 @@ run_update() {
 
     printf "\n"
     ok "$STR_UPDATE_COMPLETE (${#updated_files[@]} updated, ${#skipped_files[@]} skipped)"
+
+    # Show skip notification with recovery info when files were skipped
+    if [[ ${#skipped_files[@]} -gt 0 ]]; then
+      info "${STR_UPDATE_SKIPPED_HINT:-Skipped files retain your changes. Kit updates for those files will apply on next update after you accept or reset.}"
+      local backup_file="${claude_dir}/.starter-kit-last-backup"
+      if [[ -f "$backup_file" ]]; then
+        local _skip_backup
+        _skip_backup="$(cat "$backup_file")"
+        info "To restore kit defaults: cp -a \"$_skip_backup\" ~/.claude"
+      fi
+    fi
   fi
 }

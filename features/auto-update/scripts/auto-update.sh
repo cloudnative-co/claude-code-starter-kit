@@ -34,15 +34,31 @@ remote_ver="$(git -C "$KIT_DIR" describe --tags --abbrev=0 origin/main 2>/dev/nu
 
 [[ "$local_ver" == "$remote_ver" ]] && exit 0
 
+# Dirty check: abort if local changes exist (prevent git pull conflicts)
+if [[ -n "$(git -C "$KIT_DIR" status --porcelain 2>/dev/null)" ]]; then
+  echo "[Starter Kit] Local changes in $KIT_DIR. Run: cd $KIT_DIR && git stash -u" >&2
+  exit 0
+fi
+
 # Run update in background so it doesn't block session startup
 (
   echo "[Starter Kit] Updating ${local_ver} → ${remote_ver}..." >&2
   cd "$KIT_DIR"
   if git pull --quiet 2>/dev/null; then
-    if bash setup.sh --update 2>/dev/null; then
+    # Do not suppress stderr — setup.sh outputs recovery info there
+    if bash setup.sh --update --non-interactive; then
       echo "[Starter Kit] Updated to ${remote_ver}. Changes take effect next session." >&2
     else
-      echo "[Starter Kit] Update failed. Run manually: ~/.claude-starter-kit/setup.sh --update" >&2
+      echo "[Starter Kit] Update failed." >&2
+      # Read backup path from file (setup.sh writes this during backup_existing)
+      _backup_path_file="$HOME/.claude/.starter-kit-last-backup"
+      if [[ -f "$_backup_path_file" ]]; then
+        _backup_path="$(cat "$_backup_path_file")"
+        echo "[Starter Kit] Backup at: $_backup_path" >&2
+        echo "[Starter Kit] To restore: BACKUP=\"$_backup_path\" && mv ~/.claude ~/.claude.broken && cp -a \"\$BACKUP\" ~/.claude" >&2
+      else
+        echo "[Starter Kit] Check ~/.claude.backup.* for backups" >&2
+      fi
     fi
   else
     echo "[Starter Kit] git pull failed. Run manually: cd ~/.claude-starter-kit && git pull && ./setup.sh --update" >&2
