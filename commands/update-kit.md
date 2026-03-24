@@ -14,7 +14,7 @@ cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --upda
 
 Before running the update:
 1. **Check for local changes**: `git -C ~/.claude-starter-kit status --porcelain`
-   - If output is non-empty, stash or discard changes first: `cd ~/.claude-starter-kit && git stash`
+   - If output is non-empty, stash or discard changes first: `cd ~/.claude-starter-kit && git stash -u`
 2. **Verify the kit repo exists**: `ls ~/.claude-starter-kit/.git`
    - If not found, the kit was not installed via the one-liner. Re-install with: `curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash`
 
