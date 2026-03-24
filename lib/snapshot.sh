@@ -2,7 +2,7 @@
 # lib/snapshot.sh - Snapshot management for Claude Code Starter Kit update mechanism
 # Saves and compares kit-deployed files to detect user modifications before updates.
 #
-# Requires: lib/colors.sh
+# Requires: lib/colors.sh, lib/template.sh
 # Uses globals: CLAUDE_DIR
 # Exports: _write_snapshot(), _snapshot_exists(), _file_changed(),
 #          _snapshot_claude_md(), _repair_snapshot_markers(), _update_snapshot_file()
@@ -129,8 +129,11 @@ _repair_snapshot_markers() {
   begin_count="$(grep -cF "$_KIT_MARKER_BEGIN" "$file" 2>/dev/null)" || begin_count=0
   if [[ "$begin_count" -gt 1 ]]; then
     warn "snapshot: CLAUDE.md snapshot has $begin_count marker pairs — repairing"
-    _extract_kit_section "$file" > "${file}.tmp"
-    mv "${file}.tmp" "$file"
+    local tmp
+    tmp="$(mktemp "$(dirname "$file")"/.claude_snapshot.XXXXXX)"
+    _register_tmp "$tmp"
+    _extract_kit_section "$file" > "$tmp"
+    mv "$tmp" "$file"
   fi
 }
 
