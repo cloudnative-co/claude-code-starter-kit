@@ -122,7 +122,11 @@ _dryrun_show_results() {
   _dryrun_settings_diff "$real_dir"
 
   printf "\n"
-  ok "${STR_DRYRUN_NO_CHANGES:-No files were modified. This was a dry run.}"
+  if [[ -n "$creates" || -n "$modifies" || -n "$deletes" || -n "$externals" ]]; then
+    ok "${STR_DRYRUN_WOULD_CHANGE:-The above changes would be applied. This was a dry run — nothing was modified.}"
+  else
+    ok "${STR_DRYRUN_NO_CHANGES:-No changes detected. This was a dry run.}"
+  fi
 }
 
 # ---------------------------------------------------------------------------

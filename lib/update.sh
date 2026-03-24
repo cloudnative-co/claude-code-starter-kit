@@ -404,7 +404,8 @@ run_update() {
 
   # Eagerly clear merge prefs if --reset-prefs was passed (even if no conflicts)
   if [[ "${_RESET_MERGE_PREFS:-false}" == "true" ]]; then
-    rm -f "${HOME}/.claude/.starter-kit-merge-prefs.json"
+    _merge_prefs_file
+    rm -f "$_MERGE_PREFS_FILE"
     info "$STR_MERGE_PREFS_CLEARED"
   fi
 

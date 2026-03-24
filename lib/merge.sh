@@ -14,11 +14,21 @@ set -euo pipefail
 # Stores user decisions in ~/.claude/.starter-kit-merge-prefs.json so
 # recurring conflicts are resolved automatically.
 # ---------------------------------------------------------------------------
-_MERGE_PREFS_FILE="${HOME}/.claude/.starter-kit-merge-prefs.json"
+# Resolved at first use via _merge_prefs_file() so CLAUDE_DIR redirect
+# (e.g. dry-run sim dir) is respected.
+_MERGE_PREFS_FILE=""
 _MERGE_PREFS_LOADED=false
 _MERGE_PREFS="{}"
 
+# Lazily resolve the merge prefs path so CLAUDE_DIR redirect is respected.
+_merge_prefs_file() {
+  if [[ -z "$_MERGE_PREFS_FILE" ]]; then
+    _MERGE_PREFS_FILE="${CLAUDE_DIR:=${HOME}/.claude}/.starter-kit-merge-prefs.json"
+  fi
+}
+
 _load_merge_prefs() {
+  _merge_prefs_file
   if [[ "$_MERGE_PREFS_LOADED" == "true" ]]; then
     return
   fi
@@ -49,6 +59,7 @@ _get_merge_pref() {
 _save_merge_pref() {
   local key="$1"
   local value="$2"
+  _merge_prefs_file
   _load_merge_prefs
   _MERGE_PREFS="$(printf '%s' "$_MERGE_PREFS" | jq --arg k "$key" --arg v "$value" '.[$k] = $v')"
   printf '%s\n' "$_MERGE_PREFS" > "$_MERGE_PREFS_FILE"
