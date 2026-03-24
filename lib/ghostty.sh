@@ -28,7 +28,7 @@ _ghostty_config_dir() {
   esac
 }
 
-# _ensure_homebrew removed in v0.30.0 — use _ensure_homebrew from prerequisites.sh
+# _ghostty_ensure_brew removed in v0.30.0 — use _ensure_homebrew from prerequisites.sh
 
 # ---------------------------------------------------------------------------
 # Backup existing config
