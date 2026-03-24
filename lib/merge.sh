@@ -597,3 +597,101 @@ EOF
   mv "$tmp_out" "$output"
   ok "3-way merge complete: $output"
 }
+
+# ---------------------------------------------------------------------------
+# _merge_settings_bootstrap - Merge settings.json when no real snapshot exists
+#
+# Usage: _merge_settings_bootstrap <current> <new_kit> <output>
+#
+# Strategy: current is the base (user's customizations are preserved).
+# Kit-only keys are adopted. Value conflicts are prompted (interactive)
+# or resolved in favor of current (non-interactive).
+# Objects are recursed one level to adopt new sub-keys.
+# ---------------------------------------------------------------------------
+_merge_settings_bootstrap() {
+  local current="$1"
+  local new_kit="$2"
+  local output="$3"
+
+  local merged
+  merged="$(< "$current")"
+
+  # Collect all keys from both files
+  local all_keys
+  all_keys="$(jq -rn \
+    --slurpfile c "$current" \
+    --slurpfile n "$new_kit" \
+    '(($c[0] | keys) + ($n[0] | keys)) | unique[]')"
+
+  local key
+  while IFS= read -r key; do
+    [[ -z "$key" ]] && continue
+    [[ "$key" == "\$schema" ]] && continue
+
+    local cv nv
+    cv="$(jq -c --arg k "$key" '.[$k] // empty' "$current"  2>/dev/null || printf '')"
+    nv="$(jq -c --arg k "$key" '.[$k] // empty' "$new_kit"  2>/dev/null || printf '')"
+    [[ -z "$cv" ]] && cv="null"
+    [[ -z "$nv" ]] && nv="null"
+
+    if [[ "$cv" == "null" && "$nv" != "null" ]]; then
+      # Kit-only key → adopt
+      info "  [kit-add] $key"
+      merged="$(printf '%s' "$merged" | jq \
+        --arg k "$key" --argjson v "$nv" '.[$k] = $v')"
+
+    elif [[ "$cv" != "null" && "$nv" == "null" ]]; then
+      # User-only key → keep
+      continue
+
+    elif [[ "$cv" == "$nv" ]]; then
+      # Same value → keep
+      continue
+
+    else
+      # Both have the key with different values
+      local cv_type nv_type
+      cv_type="$(jq -n --argjson v "$cv" '$v | type')"
+      nv_type="$(jq -n --argjson v "$nv" '$v | type')"
+
+      if [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
+        # Object: adopt kit-only sub-keys, keep existing sub-keys
+        local sub_merged
+        sub_merged="$(jq -n --argjson c "$cv" --argjson n "$nv" '
+          $c + ($n | to_entries | map(select(.key as $k | $c | has($k) | not)) | from_entries)
+        ')"
+        merged="$(printf '%s' "$merged" | jq \
+          --arg k "$key" --argjson v "$sub_merged" '.[$k] = $v')"
+        info "  [merge-object] $key"
+
+      elif [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
+        # Array: use _prompt_array_conflict (has remember + non-interactive fallback)
+        local chosen
+        chosen="$(_prompt_array_conflict "$key" "[]" "$cv" "$nv")"
+        merged="$(printf '%s' "$merged" | jq \
+          --arg k "$key" --argjson v "$chosen" '.[$k] = $v')"
+
+      else
+        # Scalar: prompt or keep current
+        local chosen
+        chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
+        merged="$(printf '%s' "$merged" | jq \
+          --arg k "$key" --argjson v "$chosen" '.[$k] = $v')"
+      fi
+    fi
+  done <<EOF
+$all_keys
+EOF
+
+  local tmp_out
+  tmp_out="$(mktemp)"
+  printf '%s\n' "$merged" > "$tmp_out"
+
+  if ! jq empty "$tmp_out" 2>/dev/null; then
+    error "Bootstrap merge produced invalid JSON — aborting"
+    rm -f "$tmp_out"
+    return 1
+  fi
+
+  mv "$tmp_out" "$output"
+}

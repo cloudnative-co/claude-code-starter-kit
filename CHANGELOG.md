@@ -33,6 +33,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 - **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
 
+## [0.22.2] - 2026-03-24
+
+### Changed
+- **`_merge_settings_bootstrap()` を merge.sh に移動**: update.sh → merge.sh。関連するマージロジックを一箇所に集約
+- **`_user_section_heading()` を template.sh に一元化**: setup.sh と update.sh の重複定義を削除し template.sh に統合
+- **ghostty.sh の HackGen 重複関数を削除**: `install_hackgen_font()` を削除し、fonts.sh の `install_hackgen_nf()` を使用
+
 ## [0.22.1] - 2026-03-24
 
 ### Changed
