@@ -667,6 +667,50 @@ test_bash4_noninteractive_unavailable() {
   fi
 }
 
+# --- 29. snapshot-double-marker-repair ---
+test_snapshot_double_marker_repair() {
+  setup_test_env
+  run_setup --profile=minimal >/dev/null 2>&1
+
+  local snapshot_claude="$CLAUDE_DIR/.starter-kit-snapshot/CLAUDE.md"
+  if [[ ! -f "$snapshot_claude" ]]; then
+    fail "snapshot-double-marker-repair (no snapshot created)"
+    teardown_test_env
+    return
+  fi
+
+  # Corrupt the snapshot by appending a second copy (simulates pre-v0.30.0 bug)
+  local original
+  original="$(cat "$snapshot_claude")"
+  {
+    printf '%s\n' "$original"
+    printf '%s\n' "$original"
+  } > "$snapshot_claude"
+
+  local marker_count
+  marker_count="$(grep -cF '<!-- BEGIN STARTER-KIT-MANAGED -->' "$snapshot_claude")" || marker_count=0
+  if [[ "$marker_count" -lt 2 ]]; then
+    fail "snapshot-double-marker-repair (corruption setup failed)"
+    teardown_test_env
+    return
+  fi
+
+  # Run update — should auto-repair the snapshot before comparison
+  local rc=0
+  run_setup_update >/dev/null 2>&1 || rc=$?
+
+  # Verify snapshot was repaired to exactly 1 marker pair
+  local after_count
+  after_count="$(grep -cF '<!-- BEGIN STARTER-KIT-MANAGED -->' "$snapshot_claude")" || after_count=0
+  if [[ "$after_count" -eq 1 ]]; then
+    pass "snapshot-double-marker-repair"
+  else
+    fail "snapshot-double-marker-repair (expected 1 marker, got $after_count)"
+  fi
+
+  teardown_test_env
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Run all tests
 # ═══════════════════════════════════════════════════════════════════════════
@@ -699,5 +743,6 @@ test_snapshot_format_v019_to_latest
 test_snapshot_format_v020_compat
 test_update_partial_failure_recovery
 test_bash4_noninteractive_unavailable
+test_snapshot_double_marker_repair
 
 print_summary
