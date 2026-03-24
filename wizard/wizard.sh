@@ -42,6 +42,7 @@ WIZARD_NONINTERACTIVE="${WIZARD_NONINTERACTIVE:-false}"
 UPDATE_MODE="${UPDATE_MODE:-false}"
 _RESET_MERGE_PREFS="${_RESET_MERGE_PREFS:-false}"
 _MERGE_INTERACTIVE="${_MERGE_INTERACTIVE:-true}"
+DRY_RUN="${DRY_RUN:-false}"
 WIZARD_CONFIG_FILE=""
 
 # Track CLI-overridden variables (restored after load_config/profile)
@@ -523,6 +524,9 @@ parse_cli_args() {
         ;;
       --reset-prefs)
         _RESET_MERGE_PREFS="true"
+        ;;
+      --dry-run)
+        DRY_RUN="true"
         ;;
       --language=*)      LANGUAGE="${arg#*=}"; _CLI_OVERRIDES+=("LANGUAGE") ;;
       --language)        shift; LANGUAGE="${1:-}"; _CLI_OVERRIDES+=("LANGUAGE") ;;
