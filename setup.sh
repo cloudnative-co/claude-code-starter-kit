@@ -176,6 +176,22 @@ _add_managed_tree_targets() {
   done < <(find "$src_root" -type f -print0 2>/dev/null)
 }
 
+# Files preserved (skipped) during fresh install with existing user data.
+# These must NOT appear in manifest or snapshot — they are user-owned.
+_FRESH_SKIPPED_FILES=()
+
+_is_fresh_skipped() {
+  local path="$1"
+  local skipped
+  for skipped in "${_FRESH_SKIPPED_FILES[@]+"${_FRESH_SKIPPED_FILES[@]}"}"; do
+    # Match exact file or prefix (for directory-level skips)
+    if [[ "$path" == "$skipped" ]] || [[ "$path" == "$skipped"/* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 collect_managed_target_files() {
   _MANAGED_TARGET_FILES=(
     "$CLAUDE_DIR/settings.json"
@@ -195,6 +211,19 @@ collect_managed_target_files() {
   _add_managed_tree_targets "$PROJECT_DIR/features/auto-update/scripts" "$CLAUDE_DIR/hooks/auto-update"
   _add_managed_tree_targets "$PROJECT_DIR/features/statusline/scripts" "$CLAUDE_DIR/hooks/statusline"
   _add_managed_tree_targets "$PROJECT_DIR/features/doc-size-guard/scripts" "$CLAUDE_DIR/hooks/doc-size-guard"
+
+  # Filter out files that the user chose to preserve during fresh install.
+  # These are user-owned and must not be tracked as kit-managed.
+  if [[ ${#_FRESH_SKIPPED_FILES[@]} -gt 0 ]]; then
+    local filtered=()
+    local f
+    for f in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
+      if ! _is_fresh_skipped "$f"; then
+        filtered+=("$f")
+      fi
+    done
+    _MANAGED_TARGET_FILES=("${filtered[@]+"${filtered[@]}"}")
+  fi
 }
 
 managed_files_json() {
@@ -332,6 +361,7 @@ _copy_dir_safe() {
       ok "Installed $label (overwrite)"
       ;;
     skip)
+      _FRESH_SKIPPED_FILES+=("$dest")
       ok "$label: $STR_FRESH_SKIPPED"
       ;;
     new)
@@ -364,6 +394,7 @@ _build_claude_md_safe() {
   build_claude_md_to_file "$new_claude_md"
 
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
+    _FRESH_SKIPPED_FILES+=("$target")
     ok "CLAUDE.md: $STR_FRESH_SKIPPED"
     return
   fi
@@ -389,6 +420,7 @@ _build_claude_md_safe() {
         continue
         ;;
       *)
+        _FRESH_SKIPPED_FILES+=("$target")
         ok "CLAUDE.md: $STR_FRESH_SKIPPED"
         return
         ;;
@@ -487,6 +519,7 @@ _deploy_hook_scripts_safe() {
         ok "Installed $_feature_name hooks (overwrite)"
         ;;
       skip)
+        _FRESH_SKIPPED_FILES+=("$_dest")
         ok "$_feature_name hooks: $STR_FRESH_SKIPPED"
         ;;
       new)
