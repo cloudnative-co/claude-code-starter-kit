@@ -329,6 +329,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - **First-time kit users with existing `~/.claude/settings.json`**: settings.json is merged (not overwritten), and other files are confirmed per-directory.
 > - `--non-interactive` is intended for CI/automation. Interactive mode is recommended for existing users.
 > - A backup is automatically created at `~/.claude.backup.<timestamp>` before every update or first install with existing files.
+> - Use `--dry-run` to preview what would change without modifying any files: `bash setup.sh --dry-run` / `bash setup.sh --update --dry-run`
 
 ## Directory Structure
 

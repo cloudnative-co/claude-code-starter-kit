@@ -57,6 +57,8 @@ parse_cli_args "$@"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/update.sh"
 # shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/dryrun.sh"
+# shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/ghostty.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/fonts.sh"
@@ -153,6 +155,9 @@ editor_command() {
 }
 
 backup_existing() {
+  # Dry-run: no real backup needed (sim dir protects the real filesystem)
+  [[ "${DRY_RUN:-false}" == "true" ]] && return 0
+
   if [[ -e "$CLAUDE_DIR" ]]; then
     local ts backup
     ts="$(date +%Y%m%d%H%M%S)"
@@ -257,6 +262,7 @@ bootstrap_snapshot_from_current() {
 
 warn_existing_claude_reconfigure() {
   [[ -e "$CLAUDE_DIR" ]] || return 0
+  [[ "${DRY_RUN:-false}" == "true" ]] && return 0
 
   printf "\n"
   warn "$STR_EXISTING_CLAUDE_WARN"
@@ -830,6 +836,17 @@ write_manifest() {
 }
 
 # ---------------------------------------------------------------------------
+# Dry-run: redirect CLAUDE_DIR to simulation directory
+# ---------------------------------------------------------------------------
+_ORIG_CLAUDE_DIR=""
+if [[ "${DRY_RUN:-false}" == "true" ]]; then
+  _ORIG_CLAUDE_DIR="$CLAUDE_DIR"
+  _dryrun_init "$CLAUDE_DIR"
+  CLAUDE_DIR="$_DRYRUN_DIR"
+  _MERGE_INTERACTIVE="false"  # dry-run is always non-interactive
+fi
+
+# ---------------------------------------------------------------------------
 # Deploy
 # ---------------------------------------------------------------------------
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
@@ -867,6 +884,42 @@ else
   # Write snapshot for future updates
   write_managed_snapshot
   ok "Created snapshot for future updates"
+fi
+
+# ---------------------------------------------------------------------------
+# Dry-run: collect file changes, log external operations, show results, exit
+# ---------------------------------------------------------------------------
+if [[ "${DRY_RUN:-false}" == "true" ]]; then
+  _dryrun_collect_file_changes "$_ORIG_CLAUDE_DIR"
+
+  # Log external operations that would happen
+  if [[ "$(uname -s)" == "Darwin" ]] && is_true "${ENABLE_GHOSTTY_SETUP:-false}"; then
+    _dryrun_log "EXTERNAL" "Ghostty" "brew install --cask ghostty"
+  fi
+  if is_true "${ENABLE_FONTS_SETUP:-false}"; then
+    _dryrun_log "EXTERNAL" "Fonts" "IBM Plex Mono + HackGen NF"
+  fi
+  if [[ ! -x "$HOME/.local/bin/claude" ]] && ! command -v claude &>/dev/null; then
+    _dryrun_log "EXTERNAL" "Claude CLI" "curl -fsSL https://claude.ai/install.sh | bash"
+  fi
+  if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
+    IFS=',' read -r -a _dr_plugins <<< "$SELECTED_PLUGINS"
+    for _dr_p in "${_dr_plugins[@]}"; do
+      _dr_name="${_dr_p%%@*}"
+      [[ -n "$_dr_name" ]] && _dryrun_log "EXTERNAL" "Plugin" "claude plugin install $_dr_name"
+    done
+  fi
+  if is_true "${ENABLE_CODEX_MCP:-false}"; then
+    _dryrun_log "EXTERNAL" "Codex MCP" "claude mcp add -s user codex -- codex mcp-server"
+  fi
+
+  # Log skipped files from fresh install safety
+  for _sk in "${_FRESH_SKIPPED_FILES[@]+"${_FRESH_SKIPPED_FILES[@]}"}"; do
+    _dryrun_log "SKIP" "\$HOME/.claude/${_sk#"$CLAUDE_DIR"/}" "user file preserved"
+  done
+
+  _dryrun_show_results "$_ORIG_CLAUDE_DIR"
+  exit 0
 fi
 
 # ---------------------------------------------------------------------------

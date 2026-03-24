@@ -847,6 +847,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - **starter kit 未使用だが `~/.claude/settings.json` がある場合**: 初回実行時に settings.json をマージ（上書きではなく）し、他のファイルはディレクトリ単位で確認します。
 > - `--non-interactive` は CI/自動デプロイ向けです。既存ユーザーには対話モードを推奨します。
 > - update 実行前には `~/.claude.backup.<タイムスタンプ>` に自動バックアップが作成されます。
+> - `--dry-run` を付けると、実際にファイルを変更せずに影響範囲をプレビューできます: `bash setup.sh --dry-run` / `bash setup.sh --update --dry-run`
 
 ### 保存済み設定を使う
 

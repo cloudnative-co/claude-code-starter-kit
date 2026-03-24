@@ -15,6 +15,10 @@ bash setup.sh
 # Non-interactive setup
 bash setup.sh --non-interactive --profile=standard --language=en --editor=vscode
 
+# Dry-run (preview changes without modifying files)
+bash setup.sh --dry-run
+bash setup.sh --update --dry-run
+
 # One-liner install (interactive)
 curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh | bash
 
@@ -76,7 +80,7 @@ install.sh (re-run with manifest v2 + snapshot)
       → write_manifest() — updates manifest v2
 ```
 
-Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
+Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
 
 ### Profile System
 
@@ -188,6 +192,14 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 
 **Fresh install with existing files:** When `~/.claude/settings.json` exists but no `.starter-kit-manifest.json` is found, the fresh install path uses `_deploy_fresh_with_existing()` instead of the standard overwrite flow. This calls `_merge_settings_bootstrap()` for settings.json (same merge logic as update mode), and offers per-directory `[O]verwrite all / [N]ew files only / [S]kip` prompts for content directories and hook scripts. Non-interactive mode merges settings.json (adopting kit-only keys, preserving user values) and copies only new files for other directories.
 
+**Dry-run mode:** `--dry-run` previews what install/update would change without modifying any files. Implementation in `lib/dryrun.sh`:
+- `_dryrun_init()` copies real `~/.claude` into a temp sim dir, then `CLAUDE_DIR` is redirected so the normal flow executes against it
+- `_MERGE_INTERACTIVE=false` ensures no prompts are shown
+- Sim dir snapshot/manifest are temporary artifacts — discarded after report generation
+- Diff/summary comparison basis is always "real `~/.claude` (current) vs sim dir (simulated)"
+- External side effects (Ghostty, fonts, shell RC, plugins, Codex MCP, Claude CLI) are individually guarded and logged as `[WOULD RUN]` entries via `_dryrun_log()`
+- After the deploy flow completes in sim dir, `_dryrun_collect_file_changes()` walks the sim dir to find CREATE/MODIFY entries, then `_dryrun_show_results()` displays the grouped summary + settings.json unified diff
+
 ### Deploy Targets
 
 `setup.sh` deploys content from this repo to `~/.claude/`:
@@ -226,6 +238,7 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 - **sed delimiter choice**: When using `sed` with `|` delimiter (`s|...|...|`), escape `&`, `\`, and `|` in replacement strings — do NOT escape `/`.
 - **Top-level scope in setup.sh**: The plugin install section (after line ~430) runs in global scope, not inside a function. Use `_` prefixed variables (e.g., `_p`, `_p_name`, `_registered_mps`) instead of `local`.
 - **NONINTERACTIVE env var**: `install.sh` supports `NONINTERACTIVE=1` (Homebrew convention) to auto-add `--non-interactive` flag for setup.sh.
+- **DRY_RUN variable**: `--dry-run` sets `DRY_RUN="true"`. In dry-run mode, `CLAUDE_DIR` is redirected to a temp sim dir so the normal deploy/update flow runs without touching real files. External operations (Ghostty, fonts, shell RC, plugins, Codex MCP, Claude CLI) are individually guarded and logged as `[WOULD RUN]`. Sim dir snapshot/manifest are temporary artifacts discarded after the summary report. The comparison basis is always "real `~/.claude` vs sim dir result".
 
 ## Security Hardening
 
