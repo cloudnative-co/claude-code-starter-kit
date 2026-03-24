@@ -176,6 +176,22 @@ _add_managed_tree_targets() {
   done < <(find "$src_root" -type f -print0 2>/dev/null)
 }
 
+# Files preserved (skipped) during fresh install with existing user data.
+# These must NOT appear in manifest or snapshot — they are user-owned.
+_FRESH_SKIPPED_FILES=()
+
+_is_fresh_skipped() {
+  local path="$1"
+  local skipped
+  for skipped in "${_FRESH_SKIPPED_FILES[@]+"${_FRESH_SKIPPED_FILES[@]}"}"; do
+    # Match exact file or prefix (for directory-level skips)
+    if [[ "$path" == "$skipped" ]] || [[ "$path" == "$skipped"/* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 collect_managed_target_files() {
   _MANAGED_TARGET_FILES=(
     "$CLAUDE_DIR/settings.json"
@@ -195,6 +211,19 @@ collect_managed_target_files() {
   _add_managed_tree_targets "$PROJECT_DIR/features/auto-update/scripts" "$CLAUDE_DIR/hooks/auto-update"
   _add_managed_tree_targets "$PROJECT_DIR/features/statusline/scripts" "$CLAUDE_DIR/hooks/statusline"
   _add_managed_tree_targets "$PROJECT_DIR/features/doc-size-guard/scripts" "$CLAUDE_DIR/hooks/doc-size-guard"
+
+  # Filter out files that the user chose to preserve during fresh install.
+  # These are user-owned and must not be tracked as kit-managed.
+  if [[ ${#_FRESH_SKIPPED_FILES[@]} -gt 0 ]]; then
+    local filtered=()
+    local f
+    for f in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
+      if ! _is_fresh_skipped "$f"; then
+        filtered+=("$f")
+      fi
+    done
+    _MANAGED_TARGET_FILES=("${filtered[@]+"${filtered[@]}"}")
+  fi
 }
 
 managed_files_json() {
@@ -232,7 +261,11 @@ warn_existing_claude_reconfigure() {
   printf "\n"
   warn "$STR_EXISTING_CLAUDE_WARN"
   info "$STR_EXISTING_CLAUDE_BACKUP"
-  info "$STR_EXISTING_CLAUDE_REWRITE"
+  if [[ -f "$CLAUDE_DIR/settings.json" ]] && [[ ! -f "$CLAUDE_DIR/.starter-kit-manifest.json" ]]; then
+    info "$STR_EXISTING_CLAUDE_MERGE_NOTE"
+  else
+    info "$STR_EXISTING_CLAUDE_REWRITE"
+  fi
   info "$STR_EXISTING_CLAUDE_SIDE_EFFECTS"
 
   if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
@@ -266,6 +299,256 @@ copy_if_enabled() {
   else
     info "Skipped $(basename "$dest")"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Fresh install safety: merge-aware deployment for existing users
+# ---------------------------------------------------------------------------
+
+# _copy_dir_safe <flag> <src> <dest>
+#
+# Like copy_if_enabled but checks for existing files in <dest>.
+# Interactive: asks [O]verwrite all / [N]ew files only / [S]kip
+# Non-interactive: new files only (safe default)
+_copy_dir_safe() {
+  local flag="$1"
+  local src="$2"
+  local dest="$3"
+  local label
+  label="$(basename "$dest")"
+
+  if ! is_true "$flag"; then
+    info "Skipped $label"
+    return
+  fi
+
+  mkdir -p "$dest"
+
+  # Check if dest has any existing files
+  local has_existing=false
+  if [[ -d "$dest" ]] && [[ -n "$(ls -A "$dest" 2>/dev/null)" ]]; then
+    has_existing=true
+  fi
+
+  if [[ "$has_existing" == "false" ]]; then
+    cp -a "$src"/. "$dest"/
+    ok "Installed $label"
+    return
+  fi
+
+  # Existing files found — decide what to do
+  local action="new"  # default for non-interactive
+
+  if [[ "${_MERGE_INTERACTIVE:-true}" == "true" ]]; then
+    warn "$STR_FRESH_DIR_EXISTS $label/"
+    printf "  %s " "$STR_FRESH_DIR_PROMPT" >&2
+    local reply=""
+    if read -r reply < /dev/tty 2>/dev/null; then
+      true
+    else
+      reply="n"
+    fi
+    case "$reply" in
+      [Oo]*) action="overwrite" ;;
+      [Ss]*) action="skip" ;;
+      *)     action="new" ;;
+    esac
+  fi
+
+  case "$action" in
+    overwrite)
+      cp -a "$src"/. "$dest"/
+      ok "Installed $label (overwrite)"
+      ;;
+    skip)
+      _FRESH_SKIPPED_FILES+=("$dest")
+      ok "$label: $STR_FRESH_SKIPPED"
+      ;;
+    new)
+      # Copy only entries (files/directories) that do not exist in dest
+      # -a : archive (recursive, preserve attributes)
+      # -n : no-clobber (do not overwrite existing files)
+      cp -an "$src"/. "$dest"/
+      ok "$label: $STR_FRESH_NEW_ONLY"
+      ;;
+  esac
+}
+
+# _build_claude_md_safe
+#
+# Checks for existing CLAUDE.md before building.
+# Interactive: asks [O]verwrite / [S]kip / [D]iff
+# Non-interactive: skip (preserve user's file)
+_build_claude_md_safe() {
+  local target="$CLAUDE_DIR/CLAUDE.md"
+
+  if [[ ! -f "$target" ]]; then
+    build_claude_md
+    return
+  fi
+
+  # Generate to temp for comparison
+  local new_claude_md
+  new_claude_md="$(mktemp)"
+  _SETUP_TMP_FILES+=("$new_claude_md")
+  build_claude_md_to_file "$new_claude_md"
+
+  if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
+    _FRESH_SKIPPED_FILES+=("$target")
+    ok "CLAUDE.md: $STR_FRESH_SKIPPED"
+    return
+  fi
+
+  warn "$STR_FRESH_FILE_EXISTS CLAUDE.md"
+  while true; do
+    printf "  %s " "$STR_FRESH_OVERWRITE_PROMPT" >&2
+    local reply=""
+    if read -r reply < /dev/tty 2>/dev/null; then
+      true
+    else
+      reply="s"
+    fi
+    case "$reply" in
+      [Oo]*)
+        cp -a "$new_claude_md" "$target"
+        ok "CLAUDE.md overwritten"
+        return
+        ;;
+      [Dd]*)
+        diff -u "$target" "$new_claude_md" 2>/dev/null >&2 || true
+        printf "\n" >&2
+        continue
+        ;;
+      *)
+        _FRESH_SKIPPED_FILES+=("$target")
+        ok "CLAUDE.md: $STR_FRESH_SKIPPED"
+        return
+        ;;
+    esac
+  done
+}
+
+# _build_settings_safe
+#
+# Merges existing settings.json with kit-generated settings using
+# _merge_settings_bootstrap(). If no existing file, builds normally.
+_build_settings_safe() {
+  local target="$CLAUDE_DIR/settings.json"
+
+  if [[ ! -f "$target" ]]; then
+    build_settings
+    return
+  fi
+
+  # Generate kit settings to temp file
+  local new_settings
+  new_settings="$(mktemp)"
+  _SETUP_TMP_FILES+=("$new_settings")
+  build_settings_to_file "$new_settings"
+
+  info "$STR_FRESH_MERGE_SETTINGS"
+  _merge_settings_bootstrap "$target" "$new_settings" "$target"
+  ok "$STR_FRESH_MERGE_SETTINGS_DONE"
+}
+
+# _deploy_hook_scripts_safe
+#
+# Like deploy_hook_scripts but checks for existing hook dirs.
+# Reuses _copy_dir_safe logic per feature.
+_deploy_hook_scripts_safe() {
+  local _features=(
+    "ENABLE_MEMORY_PERSISTENCE:memory-persistence"
+    "ENABLE_STRATEGIC_COMPACT:strategic-compact"
+    "ENABLE_AUTO_UPDATE:auto-update"
+    "ENABLE_STATUSLINE:statusline"
+    "ENABLE_DOC_SIZE_GUARD:doc-size-guard"
+  )
+  local _entry _flag_var _feature_name _flag_val _src _dest
+
+  for _entry in "${_features[@]}"; do
+    _flag_var="${_entry%%:*}"
+    _feature_name="${_entry#*:}"
+    _flag_val="${!_flag_var:-false}"
+
+    if ! is_true "$_flag_val"; then
+      continue
+    fi
+
+    _src="$PROJECT_DIR/features/$_feature_name/scripts"
+    _dest="$CLAUDE_DIR/hooks/$_feature_name"
+    [[ -d "$_src" ]] || continue
+
+    mkdir -p "$_dest"
+
+    local has_existing=false
+    if [[ -n "$(ls -A "$_dest" 2>/dev/null)" ]]; then
+      has_existing=true
+    fi
+
+    if [[ "$has_existing" == "false" ]]; then
+      cp -a "$_src"/. "$_dest"/
+      chmod +x "$_dest"/*.sh 2>/dev/null || true
+      chmod +x "$_dest"/*.py 2>/dev/null || true
+      ok "Installed $_feature_name hooks"
+      continue
+    fi
+
+    # Existing hooks — new files only (non-interactive default)
+    local action="new"
+    if [[ "${_MERGE_INTERACTIVE:-true}" == "true" ]]; then
+      warn "$STR_FRESH_DIR_EXISTS hooks/$_feature_name/"
+      printf "  %s " "$STR_FRESH_DIR_PROMPT" >&2
+      local reply=""
+      if read -r reply < /dev/tty 2>/dev/null; then
+        true
+      else
+        reply="n"
+      fi
+      case "$reply" in
+        [Oo]*) action="overwrite" ;;
+        [Ss]*) action="skip" ;;
+        *)     action="new" ;;
+      esac
+    fi
+
+    case "$action" in
+      overwrite)
+        cp -a "$_src"/. "$_dest"/
+        chmod +x "$_dest"/*.sh 2>/dev/null || true
+        chmod +x "$_dest"/*.py 2>/dev/null || true
+        ok "Installed $_feature_name hooks (overwrite)"
+        ;;
+      skip)
+        _FRESH_SKIPPED_FILES+=("$_dest")
+        ok "$_feature_name hooks: $STR_FRESH_SKIPPED"
+        ;;
+      new)
+        cp -an "$_src"/. "$_dest"/
+        chmod +x "$_dest"/*.sh 2>/dev/null || true
+        chmod +x "$_dest"/*.py 2>/dev/null || true
+        ok "$_feature_name hooks: $STR_FRESH_NEW_ONLY"
+        ;;
+    esac
+  done
+}
+
+# _deploy_fresh_with_existing
+#
+# Merge-aware deployment for users with existing ~/.claude files
+# but no starter-kit manifest (first-time kit users).
+_deploy_fresh_with_existing() {
+  info "$STR_EXISTING_CLAUDE_MERGE_NOTE"
+  printf "\n"
+
+  _copy_dir_safe "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents"
+  _copy_dir_safe "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
+  _copy_dir_safe "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
+  _copy_dir_safe "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
+  _copy_dir_safe "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
+
+  _build_claude_md_safe
+  _build_settings_safe
+  _deploy_hook_scripts_safe
 }
 
 # ---------------------------------------------------------------------------
@@ -564,16 +847,22 @@ else
   backup_existing
   ensure_dirs
 
-  copy_if_enabled "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents"
-  copy_if_enabled "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
-  copy_if_enabled "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
-  copy_if_enabled "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
-  copy_if_enabled "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
+  if [[ -f "$CLAUDE_DIR/settings.json" ]] && [[ ! -f "$CLAUDE_DIR/.starter-kit-manifest.json" ]]; then
+    # Existing Claude Code user without starter-kit: merge-aware deploy
+    _deploy_fresh_with_existing
+  else
+    # Clean slate: original behavior
+    copy_if_enabled "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents"
+    copy_if_enabled "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
+    copy_if_enabled "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
+    copy_if_enabled "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
+    copy_if_enabled "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
 
-  build_claude_md
+    build_claude_md
 
-  build_settings
-  deploy_hook_scripts
+    build_settings
+    deploy_hook_scripts
+  fi
 
   # Write snapshot for future updates
   write_managed_snapshot

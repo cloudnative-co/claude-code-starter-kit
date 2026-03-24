@@ -292,6 +292,17 @@ STR_MERGE_FILE_DELETED="File deleted by you:"
 STR_MERGE_FILE_RESTORE_PROMPT="[R]estore / [S]kip ?"
 STR_MERGE_3WAY_STARTING="Starting 3-way merge:"
 
+# Fresh install safety prompts
+STR_FRESH_MERGE_SETTINGS="Merging your existing settings.json with kit defaults..."
+STR_FRESH_MERGE_SETTINGS_DONE="Settings merged (your keys preserved, kit additions adopted)"
+STR_FRESH_FILE_EXISTS="Existing file detected:"
+STR_FRESH_DIR_EXISTS="Existing directory detected:"
+STR_FRESH_OVERWRITE_PROMPT="[O]verwrite / [S]kip / [D]iff ?"
+STR_FRESH_DIR_PROMPT="[O]verwrite all / [N]ew files only / [S]kip ?"
+STR_FRESH_SKIPPED="Skipped (user file preserved)"
+STR_FRESH_NEW_ONLY="Copying new files only (existing preserved)"
+STR_EXISTING_CLAUDE_MERGE_NOTE="Your existing settings will be merged (not overwritten). Other files will be checked individually."
+
 STR_EXISTING_CLAUDE_WARN="Existing Claude Code configuration detected outside starter-kit update mode."
 STR_EXISTING_CLAUDE_BACKUP="This run will create a full backup of ~/.claude before changing starter-kit managed files."
 STR_EXISTING_CLAUDE_REWRITE="It will then regenerate starter-kit managed files such as CLAUDE.md and settings.json."

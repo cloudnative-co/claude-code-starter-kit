@@ -843,8 +843,10 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - 詳細な反映先は [ウィザード設定と反映先の対応表](docs/wizard-config-mapping.md) を参照してください
 >
 > **既存ユーザー向け**:
-> - すでにこの starter kit を使っている場合は、ローカル変更を保ちやすい snapshot ベースの更新経路として `/update-kit` または `./setup.sh --update` を優先してください。
-> - 既存の `~/.claude` がある状態で通常の `./setup.sh` を再実行する場合は、backup-and-reconfigure フローに入る前に警告を表示します。
+> - すでにこの starter kit を使っている場合は、`/update-kit` または `./setup.sh --update` を優先してください。設定の競合時は対話的に確認し、判定を記憶する `[RK]/[RU]` オプションもあります。`--reset-prefs` で記憶をクリアできます。
+> - **starter kit 未使用だが `~/.claude/settings.json` がある場合**: 初回実行時に settings.json をマージ（上書きではなく）し、他のファイルはディレクトリ単位で確認します。
+> - `--non-interactive` は CI/自動デプロイ向けです。既存ユーザーには対話モードを推奨します。
+> - update 実行前には `~/.claude.backup.<タイムスタンプ>` に自動バックアップが作成されます。
 
 ### 保存済み設定を使う
 
@@ -868,8 +870,8 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 | スキルを追加 | `~/.claude/skills/{name}/` に `SKILL.md` + 必要に応じて `references/`, `scripts/`, `assets/` を作成 |
 | フックを変更 | `~/.claude/settings.json` の hooks セクションを編集 |
 
-> **設定のやり直し**: 既存の starter kit 環境を更新するときは、まず `/update-kit` または `./setup.sh --update` を使うのが安全です。
-> 通常の `./setup.sh` は必要に応じて `~/.claude` をバックアップして再構成するため、既存の手修正が多い環境では warning を確認してから進めてください。
+> **設定のやり直し**: 既存の starter kit 環境を更新するときは、`/update-kit` または `./setup.sh --update` が安全です。競合があれば対話的に確認し、判定を記憶できます。
+> starter kit を初めて使う場合でも、既存の `settings.json` があればマージされ、他のファイルもディレクトリ単位で上書き/新規のみ/スキップを選べます。
 
 ---
 

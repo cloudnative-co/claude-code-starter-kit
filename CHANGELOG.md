@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+- **初回インストール時の既存設定保護**: starter kit 未使用だが `~/.claude/settings.json` がある環境では、settings.json を上書きせずマージ。CLAUDE.md やコンテンツディレクトリはディレクトリ単位で上書き/新規のみ/スキップを選択可能
+- **Non-interactive fallback**: 非対話モードでは settings.json のみ merge（kit 追加分を採用）、他のファイルは新規のみコピーし既存を保持
+
+### Changed
+- **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
+
 ## [0.18.0] - 2026-03-24
 
 ### Fixed

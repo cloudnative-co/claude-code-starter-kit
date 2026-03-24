@@ -290,6 +290,17 @@ STR_MERGE_FILE_DELETED="あなたが削除したファイル:"
 STR_MERGE_FILE_RESTORE_PROMPT="[R] 復元 / [S] スキップ ?"
 STR_MERGE_3WAY_STARTING="3-way マージを開始:"
 
+# Fresh install 安全性プロンプト
+STR_FRESH_MERGE_SETTINGS="既存の settings.json と kit デフォルトをマージしています..."
+STR_FRESH_MERGE_SETTINGS_DONE="設定をマージしました（既存キーを保持、kit 追加分を採用）"
+STR_FRESH_FILE_EXISTS="既存ファイルを検出:"
+STR_FRESH_DIR_EXISTS="既存ディレクトリを検出:"
+STR_FRESH_OVERWRITE_PROMPT="[O] 上書き / [S] スキップ / [D] 差分表示 ?"
+STR_FRESH_DIR_PROMPT="[O] 全上書き / [N] 新規のみ / [S] スキップ ?"
+STR_FRESH_SKIPPED="スキップ（ユーザーファイルを保持）"
+STR_FRESH_NEW_ONLY="新規ファイルのみコピー（既存を保持）"
+STR_EXISTING_CLAUDE_MERGE_NOTE="既存の設定はマージされます（上書きではありません）。他のファイルは個別に確認します。"
+
 STR_EXISTING_CLAUDE_WARN="starter kit の更新モードではない既存の Claude Code 設定を検出しました。"
 STR_EXISTING_CLAUDE_BACKUP="この実行では、starter kit 管理ファイルを変更する前に ~/.claude 全体をバックアップします。"
 STR_EXISTING_CLAUDE_REWRITE="その後、CLAUDE.md や settings.json など starter kit 管理ファイルを再生成します。"
