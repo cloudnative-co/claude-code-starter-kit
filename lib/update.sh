@@ -525,7 +525,13 @@ run_update() {
     info "$STR_MERGE_PREFS_CLEARED"
   fi
 
-  section "$STR_UPDATE_TITLE"
+  local _dr="${DRY_RUN:-false}"
+
+  if [[ "$_dr" == "true" ]]; then
+    section "Dry Run: Simulating update"
+  else
+    section "$STR_UPDATE_TITLE"
+  fi
 
   local updated_files=()
   local skipped_files=()
@@ -549,27 +555,47 @@ run_update() {
       info "$STR_UPDATE_SETTINGS_MERGING"
       _merge_settings_bootstrap "$current_settings" "$new_settings" "$current_settings"
       updated_files+=("$current_settings")
-      ok "$STR_UPDATE_SETTINGS_MERGED"
+      if [[ "$_dr" == "true" ]]; then
+        info "settings.json will be merged (bootstrap)"
+      else
+        ok "$STR_UPDATE_SETTINGS_MERGED"
+      fi
     elif ! _file_changed "$snapshot_settings" "$current_settings"; then
       # User didn't change settings → safe to overwrite
       cp -a "$new_settings" "$current_settings"
       updated_files+=("$current_settings")
-      ok "$STR_UPDATE_SETTINGS_UPDATED"
+      if [[ "$_dr" == "true" ]]; then
+        info "settings.json will be updated"
+      else
+        ok "$STR_UPDATE_SETTINGS_UPDATED"
+      fi
     elif ! _file_changed "$snapshot_settings" "$new_settings"; then
       # Kit didn't change → keep current
-      ok "$STR_UPDATE_SETTINGS_UNCHANGED"
+      if [[ "$_dr" == "true" ]]; then
+        info "settings.json — no kit changes"
+      else
+        ok "$STR_UPDATE_SETTINGS_UNCHANGED"
+      fi
     else
       # Both changed → 3-way merge
       info "$STR_UPDATE_SETTINGS_MERGING"
       merge_settings_3way "$snapshot_settings" "$current_settings" "$new_settings" "$current_settings"
       updated_files+=("$current_settings")
-      ok "$STR_UPDATE_SETTINGS_MERGED"
+      if [[ "$_dr" == "true" ]]; then
+        info "settings.json will be merged (3-way)"
+      else
+        ok "$STR_UPDATE_SETTINGS_MERGED"
+      fi
     fi
   else
     # No snapshot → treat as fresh install for settings
     cp -a "$new_settings" "$current_settings"
     updated_files+=("$current_settings")
-    ok "$STR_UPDATE_SETTINGS_UPDATED"
+    if [[ "$_dr" == "true" ]]; then
+      info "settings.json will be created"
+    else
+      ok "$STR_UPDATE_SETTINGS_UPDATED"
+    fi
   fi
 
   # Sync metadata variables from merged/deployed settings.json so that
@@ -589,10 +615,18 @@ run_update() {
 
   if _update_claude_md "$current_claude_md" "$snapshot_claude_md" "$new_claude_md"; then
     updated_files+=("$current_claude_md")
-    ok "$STR_CLAUDEMD_KIT_UPDATED"
+    if [[ "$_dr" == "true" ]]; then
+      info "CLAUDE.md kit section will be updated"
+    else
+      ok "$STR_CLAUDEMD_KIT_UPDATED"
+    fi
   else
     skipped_files+=("CLAUDE.md")
-    info "$STR_CLAUDEMD_KIT_UNCHANGED"
+    if [[ "$_dr" == "true" ]]; then
+      info "CLAUDE.md — no kit section changes"
+    else
+      info "$STR_CLAUDEMD_KIT_UNCHANGED"
+    fi
   fi
 
   # Older releases deployed AGENTS.md into ~/.claude. The starter kit no
@@ -639,32 +673,34 @@ run_update() {
   _update_hook_scripts "$claude_dir" "$snapshot_dir" updated_files skipped_files
 
   # --- Phase 6: Update snapshot for each updated file ---
-  # Snapshot is updated here (after all file merges complete) so the
-  # snapshot reflects the actual deployed state. This prevents stale
-  # snapshots from accumulating when post-update steps (plugins, Codex
-  # MCP) fail on retry.
-  info "$STR_UPDATE_SNAPSHOT"
+  # Dry-run: snapshot is a temporary artifact, no need to show progress
+  if [[ "$_dr" != "true" ]]; then
+    info "$STR_UPDATE_SNAPSHOT"
+  fi
   local file
   for file in "${updated_files[@]+"${updated_files[@]}"}"; do
     if [[ "$(basename "$file")" == "CLAUDE.md" ]]; then
-      # CLAUDE.md: snapshot kit section only
       _snapshot_claude_md "$claude_dir" "$file"
     else
       _update_snapshot_file "$claude_dir" "$file"
     fi
   done
-  ok "$STR_UPDATE_SNAPSHOT_DONE"
-
-  # --- Report ---
-  if [[ ${#skipped_files[@]} -gt 0 ]]; then
-    printf "\n"
-    info "$STR_UPDATE_SKIPPED_TITLE"
-    local f
-    for f in "${skipped_files[@]}"; do
-      info "  - $f"
-    done
+  if [[ "$_dr" != "true" ]]; then
+    ok "$STR_UPDATE_SNAPSHOT_DONE"
   fi
 
-  printf "\n"
-  ok "$STR_UPDATE_COMPLETE (${#updated_files[@]} updated, ${#skipped_files[@]} skipped)"
+  # --- Report ---
+  if [[ "$_dr" != "true" ]]; then
+    if [[ ${#skipped_files[@]} -gt 0 ]]; then
+      printf "\n"
+      info "$STR_UPDATE_SKIPPED_TITLE"
+      local f
+      for f in "${skipped_files[@]}"; do
+        info "  - $f"
+      done
+    fi
+
+    printf "\n"
+    ok "$STR_UPDATE_COMPLETE (${#updated_files[@]} updated, ${#skipped_files[@]} skipped)"
+  fi
 }

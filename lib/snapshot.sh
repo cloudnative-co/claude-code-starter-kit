@@ -98,7 +98,9 @@ _update_snapshot_file() {
 
   if [[ -f "$file_path" ]]; then
     cp "$file_path" "$dest"
-    info "Snapshot updated: ${rel_path}"
+    if [[ "${DRY_RUN:-false}" != "true" ]]; then
+      info "Snapshot updated: ${rel_path}"
+    fi
   else
     warn "snapshot: file not found, cannot update: $file_path"
     return 1
