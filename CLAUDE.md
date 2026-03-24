@@ -192,7 +192,7 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 
 **Fresh install with existing files:** When `~/.claude/settings.json` exists but no `.starter-kit-manifest.json` is found, the fresh install path uses `_deploy_fresh_with_existing()` instead of the standard overwrite flow. This calls `_merge_settings_bootstrap()` for settings.json (same merge logic as update mode), and offers per-directory `[O]verwrite all / [N]ew files only / [S]kip` prompts for content directories and hook scripts. Non-interactive mode merges settings.json (adopting kit-only keys, preserving user values) and copies only new files for other directories.
 
-**Dry-run mode:** `--dry-run` previews what install/update would change without modifying any files. Implementation in `lib/dryrun.sh`:
+**Dry-run mode:** `--dry-run` previews what install/update would change without deploying any files. Light prerequisites (git, jq, curl) may be installed with user consent in interactive mode; `--non-interactive --dry-run` installs nothing. Heavy tools (Homebrew, Node, etc.) are never installed during dry-run. Implementation in `lib/dryrun.sh`:
 - `_dryrun_init()` copies real `~/.claude` into a temp sim dir, then `CLAUDE_DIR` is redirected so the normal flow executes against it
 - `_MERGE_INTERACTIVE=false` ensures no prompts are shown
 - Sim dir snapshot/manifest are temporary artifacts — discarded after report generation
@@ -238,7 +238,7 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 - **sed delimiter choice**: When using `sed` with `|` delimiter (`s|...|...|`), escape `&`, `\`, and `|` in replacement strings — do NOT escape `/`.
 - **Top-level scope in setup.sh**: The plugin install section (after line ~430) runs in global scope, not inside a function. Use `_` prefixed variables (e.g., `_p`, `_p_name`, `_registered_mps`) instead of `local`.
 - **NONINTERACTIVE env var**: `install.sh` supports `NONINTERACTIVE=1` (Homebrew convention) to auto-add `--non-interactive` flag for setup.sh.
-- **DRY_RUN variable**: `--dry-run` sets `DRY_RUN="true"`. In dry-run mode, `CLAUDE_DIR` is redirected to a temp sim dir so the normal deploy/update flow runs without touching real files. External operations (Ghostty, fonts, shell RC, plugins, Codex MCP, Claude CLI) are individually guarded and logged as `[WOULD RUN]`. Sim dir snapshot/manifest are temporary artifacts discarded after the summary report. The comparison basis is always "real `~/.claude` vs sim dir result".
+- **DRY_RUN variable**: `--dry-run` sets `DRY_RUN="true"`. In dry-run mode, `CLAUDE_DIR` is redirected to a temp sim dir so the normal deploy/update flow runs without touching real files. External operations (Ghostty, fonts, shell RC, plugins, Codex MCP, Claude CLI) are individually guarded and logged as `[WOULD RUN]`. Light prerequisites (git, jq, curl) may be installed with user consent in interactive mode; `--non-interactive --dry-run` installs nothing and aborts if tools are missing. Sim dir snapshot/manifest are temporary artifacts discarded after the summary report. The comparison basis is always "real `~/.claude` vs sim dir result".
 
 ## Security Hardening
 

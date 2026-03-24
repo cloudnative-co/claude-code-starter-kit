@@ -362,25 +362,62 @@ check_gh() {
 check_prerequisites() {
   section "必要なツールを確認中 / Checking prerequisites"
 
-  # Dry-run: verify required tools exist but never install anything
+  # Dry-run mode: only light prerequisites (git, jq, curl) are checked.
+  # Heavy installs (Homebrew, Node, etc.) are skipped entirely.
+  # Interactive: offer to install missing light tools with user consent.
+  # Non-interactive: list missing tools and abort without installing.
   if [[ "${DRY_RUN:-false}" == "true" ]]; then
-    local failed=0
-    if command -v git &>/dev/null; then
-      ok "git $(git --version | awk '{print $3}')"
-    else
-      error "git is required for dry-run but not found"
-      failed=1
+    local _dr_missing=()
+    command -v git  &>/dev/null && ok "git $(git --version | awk '{print $3}')"  || _dr_missing+=("git")
+    command -v jq   &>/dev/null && ok "jq $(jq --version 2>/dev/null || echo '?')" || _dr_missing+=("jq")
+    command -v curl &>/dev/null && ok "curl found" || _dr_missing+=("curl")
+
+    if [[ ${#_dr_missing[@]} -eq 0 ]]; then
+      ok "必要なツールはすべて揃っています / All prerequisites satisfied (dry-run)"
+      return 0
     fi
-    if command -v jq &>/dev/null; then
-      ok "jq $(jq --version 2>/dev/null || echo '?')"
-    else
-      error "jq is required for dry-run but not found"
-      failed=1
-    fi
-    if [[ "$failed" -ne 0 ]]; then
+
+    # Missing tools found
+    warn "Dry-run に必要なツールが不足しています / Missing tools for dry-run: ${_dr_missing[*]}"
+
+    if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+      error "Non-interactive dry-run: 不足ツールの導入は行いません。手動でインストールして再実行してください。"
+      error "Non-interactive dry-run: will not install missing tools. Please install manually and re-run."
       return 1
     fi
-    ok "必要なツールはすべて揃っています / All prerequisites satisfied (dry-run: check only)"
+
+    # Interactive: ask for consent before installing
+    info "Dry-run のシミュレーションに上記ツールが必要です。導入しますか？"
+    info "The above tools are needed to run the simulation. Install them?"
+    printf "  [Y]es / [N]o ? " >&2
+    local _dr_confirm=""
+    if read -r _dr_confirm < /dev/tty 2>/dev/null; then
+      true
+    else
+      _dr_confirm="n"
+    fi
+    case "$_dr_confirm" in
+      [Yy]*)
+        # Install only light prerequisites via normal check functions
+        local _dr_failed=0
+        for _dr_tool in "${_dr_missing[@]}"; do
+          case "$_dr_tool" in
+            git)  check_git  || _dr_failed=1 ;;
+            jq)   check_jq   || _dr_failed=1 ;;
+            curl) check_curl || _dr_failed=1 ;;
+          esac
+        done
+        if [[ "$_dr_failed" -ne 0 ]]; then
+          error "一部のツールをインストールできませんでした / Some tools could not be installed"
+          return 1
+        fi
+        ;;
+      *)
+        error "Dry-run を中止しました / Dry-run aborted"
+        return 1
+        ;;
+    esac
+    ok "必要なツールはすべて揃っています / All prerequisites satisfied (dry-run)"
     return 0
   fi
 

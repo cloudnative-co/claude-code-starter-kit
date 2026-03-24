@@ -30,6 +30,6 @@ cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --upda
 - When a conflict is detected between user customizations and kit defaults, the update prompts for resolution. Users can choose `[RK] Keep & Remember` or `[RU] Use kit's & Remember` to save the decision for future updates.
 - Saved merge decisions are stored in `~/.claude/.starter-kit-merge-prefs.json`. To reset all saved decisions, run `setup.sh --update --reset-prefs`.
 - A backup of `~/.claude` is created before every update (`~/.claude.backup.<timestamp>`).
-- To preview what an update would change without modifying any files, run `setup.sh --update --dry-run`. This shows a summary of files that would be created, modified, merged, or skipped, plus a diff of settings.json changes and a list of external operations (plugins, Ghostty, etc.).
+- To preview what an update would change without deploying, run `setup.sh --update --dry-run`. This shows a summary of files that would be created, modified, merged, or skipped, plus a diff of settings.json changes and a list of external operations (plugins, Ghostty, etc.). Light prerequisites (git, jq, curl) may be installed with consent in interactive mode; `--non-interactive --dry-run` installs nothing.
 - Changes take effect in the **current** session (unlike auto-update which applies next session).
 - `/compact` helps reload context, but it is not a full restart. If the update changes settings, hooks, env, MCP configuration, or command discovery, recommend restarting Claude Code as well.
