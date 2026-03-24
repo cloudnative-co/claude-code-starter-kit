@@ -257,11 +257,12 @@ collect_managed_target_files() {
   _add_managed_tree_targets "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
   _add_managed_tree_targets "$PROJECT_DIR/skills" "$CLAUDE_DIR/skills"
   _add_managed_tree_targets "$PROJECT_DIR/memory" "$CLAUDE_DIR/memory"
-  _add_managed_tree_targets "$PROJECT_DIR/features/memory-persistence/scripts" "$CLAUDE_DIR/hooks/memory-persistence"
-  _add_managed_tree_targets "$PROJECT_DIR/features/strategic-compact/scripts" "$CLAUDE_DIR/hooks/strategic-compact"
-  _add_managed_tree_targets "$PROJECT_DIR/features/auto-update/scripts" "$CLAUDE_DIR/hooks/auto-update"
-  _add_managed_tree_targets "$PROJECT_DIR/features/statusline/scripts" "$CLAUDE_DIR/hooks/statusline"
-  _add_managed_tree_targets "$PROJECT_DIR/features/doc-size-guard/scripts" "$CLAUDE_DIR/hooks/doc-size-guard"
+  # Registry-driven: hook script paths from _FEATURE_HAS_SCRIPTS
+  local _feat_name
+  for _feat_name in "${_FEATURE_ORDER[@]}"; do
+    [[ "${_FEATURE_HAS_SCRIPTS[$_feat_name]+set}" ]] || continue
+    _add_managed_tree_targets "$PROJECT_DIR/features/$_feat_name/scripts" "$CLAUDE_DIR/hooks/$_feat_name"
+  done
 
   # Filter out files that the user chose to preserve during fresh install.
   # These are user-owned and must not be tracked as kit-managed.
@@ -571,86 +572,7 @@ _build_settings_safe() {
   ok "$STR_FRESH_MERGE_SETTINGS_DONE"
 }
 
-# _deploy_hook_scripts_safe
-#
-# Like deploy_hook_scripts but checks for existing hook dirs.
-# Reuses _copy_dir_safe logic per feature.
-_deploy_hook_scripts_safe() {
-  local _features=(
-    "ENABLE_MEMORY_PERSISTENCE:memory-persistence"
-    "ENABLE_STRATEGIC_COMPACT:strategic-compact"
-    "ENABLE_AUTO_UPDATE:auto-update"
-    "ENABLE_STATUSLINE:statusline"
-    "ENABLE_DOC_SIZE_GUARD:doc-size-guard"
-  )
-  local _entry _flag_var _feature_name _flag_val _src _dest
-
-  for _entry in "${_features[@]}"; do
-    _flag_var="${_entry%%:*}"
-    _feature_name="${_entry#*:}"
-    _flag_val="${!_flag_var:-false}"
-
-    if ! is_true "$_flag_val"; then
-      continue
-    fi
-
-    _src="$PROJECT_DIR/features/$_feature_name/scripts"
-    _dest="$CLAUDE_DIR/hooks/$_feature_name"
-    [[ -d "$_src" ]] || continue
-
-    mkdir -p "$_dest"
-
-    local has_existing=false
-    if [[ -n "$(ls -A "$_dest" 2>/dev/null)" ]]; then
-      has_existing=true
-    fi
-
-    if [[ "$has_existing" == "false" ]]; then
-      cp -a "$_src"/. "$_dest"/
-      chmod +x "$_dest"/*.sh 2>/dev/null || true
-      chmod +x "$_dest"/*.py 2>/dev/null || true
-      ok "Installed $_feature_name hooks"
-      continue
-    fi
-
-    # Existing hooks — new files only (non-interactive default)
-    local action="new"
-    if [[ "${_MERGE_INTERACTIVE:-true}" == "true" ]]; then
-      warn "$STR_FRESH_DIR_EXISTS hooks/$_feature_name/"
-      printf "  %s " "$STR_FRESH_DIR_PROMPT" >&2
-      local reply=""
-      if read -r reply < /dev/tty 2>/dev/null; then
-        true
-      else
-        reply="n"
-      fi
-      case "$reply" in
-        [Oo]*) action="overwrite" ;;
-        [Ss]*) action="skip" ;;
-        *)     action="new" ;;
-      esac
-    fi
-
-    case "$action" in
-      overwrite)
-        cp -a "$_src"/. "$_dest"/
-        chmod +x "$_dest"/*.sh 2>/dev/null || true
-        chmod +x "$_dest"/*.py 2>/dev/null || true
-        ok "Installed $_feature_name hooks (overwrite)"
-        ;;
-      skip)
-        _FRESH_SKIPPED_FILES+=("$_dest")
-        ok "$_feature_name hooks: $STR_FRESH_SKIPPED"
-        ;;
-      new)
-        cp -an "$_src"/. "$_dest"/
-        chmod +x "$_dest"/*.sh 2>/dev/null || true
-        chmod +x "$_dest"/*.py 2>/dev/null || true
-        ok "$_feature_name hooks: $STR_FRESH_NEW_ONLY"
-        ;;
-    esac
-  done
-}
+# _deploy_hook_scripts_safe is now replaced by deploy_hook_scripts(merge-aware) below
 
 # _deploy_fresh_with_existing
 #
@@ -668,7 +590,7 @@ _deploy_fresh_with_existing() {
 
   _build_claude_md_safe
   _build_settings_safe
-  _deploy_hook_scripts_safe
+  deploy_hook_scripts "merge-aware"
 }
 
 # ---------------------------------------------------------------------------
@@ -785,12 +707,16 @@ build_claude_md_to_file() {
 # ---------------------------------------------------------------------------
 # deploy_hook_scripts - Registry-based hook script deployment
 #
+# Usage: deploy_hook_scripts [mode]
+#   mode=simple (default): overwrite all scripts unconditionally
+#   mode=merge-aware: check for existing hooks, offer O/N/S prompt (fresh install with existing)
+#
 # Uses _FEATURE_ORDER + _FEATURE_HAS_SCRIPTS from lib/features.sh.
 # ---------------------------------------------------------------------------
 deploy_hook_scripts() {
+  local mode="${1:-simple}"
   local name flag
   for name in "${_FEATURE_ORDER[@]}"; do
-    # Skip features without deploy scripts
     [[ "${_FEATURE_HAS_SCRIPTS[$name]+set}" ]] || continue
 
     flag="${_FEATURE_FLAGS[$name]}"
@@ -801,9 +727,48 @@ deploy_hook_scripts() {
 
     local dest="$CLAUDE_DIR/hooks/$name"
     mkdir -p "$dest"
-    cp -a "$src"/. "$dest"/
-    _make_hooks_executable "$dest"
-    ok "Installed $name hooks"
+
+    if [[ "$mode" == "simple" ]]; then
+      cp -a "$src"/. "$dest"/
+      _make_hooks_executable "$dest"
+      ok "Installed $name hooks"
+    else
+      # merge-aware: check for existing files
+      if [[ -z "$(ls -A "$dest" 2>/dev/null)" ]]; then
+        cp -a "$src"/. "$dest"/
+        _make_hooks_executable "$dest"
+        ok "Installed $name hooks"
+      else
+        local action="new"
+        if [[ "${_MERGE_INTERACTIVE:-true}" == "true" ]]; then
+          warn "$STR_FRESH_DIR_EXISTS hooks/$name/"
+          printf "  %s " "$STR_FRESH_DIR_PROMPT" >&2
+          local reply=""
+          if read -r reply < /dev/tty 2>/dev/null; then true; else reply="n"; fi
+          case "$reply" in
+            [Oo]*) action="overwrite" ;;
+            [Ss]*) action="skip" ;;
+            *)     action="new" ;;
+          esac
+        fi
+        case "$action" in
+          overwrite)
+            cp -a "$src"/. "$dest"/
+            _make_hooks_executable "$dest"
+            ok "Installed $name hooks (overwrite)"
+            ;;
+          skip)
+            _FRESH_SKIPPED_FILES+=("$dest")
+            ok "$name hooks: ${STR_FRESH_SKIPPED:-skipped}"
+            ;;
+          new)
+            cp -an "$src"/. "$dest"/
+            _make_hooks_executable "$dest"
+            ok "$name hooks: ${STR_FRESH_NEW_ONLY:-new files only}"
+            ;;
+        esac
+      fi
+    fi
   done
 }
 
