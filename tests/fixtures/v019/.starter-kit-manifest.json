@@ -1,0 +1,13 @@
+{
+  "version": "2",
+  "timestamp": "2026-01-01T00:00:00Z",
+  "kit_version": "v0.19.0",
+  "profile": "standard",
+  "language": "en",
+  "editor": "vscode",
+  "commit_attribution": "false",
+  "new_init": "true",
+  "plugins": "",
+  "files": [],
+  "snapshot_dir": ""
+}

@@ -1,0 +1,22 @@
+name: Scenario Tests
+
+on:
+  push:
+    branches: [main]
+    paths: ["**/*.sh", "tests/**", "lib/**", "setup.sh", "uninstall.sh"]
+  pull_request:
+    paths: ["**/*.sh", "tests/**", "lib/**", "setup.sh", "uninstall.sh"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq gawk
+
+      - name: Run scenario tests
+        run: bash tests/run-scenarios.sh

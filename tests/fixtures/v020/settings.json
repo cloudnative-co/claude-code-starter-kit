@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "enableAllProjectMcpServers": false,
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "hooks": {},
+  "language": "en",
+  "permissions": {
+    "allow": ["Read(**)", "Bash(npm run *)"],
+    "deny": ["Edit(.env*)"]
+  },
+  "mcpServers": {
+    "my-custom-server": {
+      "command": "node",
+      "args": ["server.js"]
+    }
+  }
+}

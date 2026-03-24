@@ -256,6 +256,7 @@ managed_files_json() {
     for file in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
       [[ -f "$file" ]] && printf '%s\n' "$file"
     done
+    true  # Ensure non-zero from last [[ -f ]] miss doesn't trigger pipefail
   } | sort -u | jq -R -s 'split("\n")[:-1]'
 }
 
