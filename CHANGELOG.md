@@ -33,6 +33,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 - **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
 
+## [0.22.0] - 2026-03-24
+
+### Changed
+- **Bash 4+ 必須化**: setup.sh を二段階ブートに分割。Stage 1（wizard, detect, prerequisites）は Bash 3.2 互換を維持し、Bash 4+ を検出して re-exec。Stage 2 以降は Bash 4+ 必須
+- **`_detect_bash4()` + `check_bash4()`**: `/opt/homebrew/bin/bash`, `/usr/local/bin/bash` 等から Bash 4+ を自動検出。見つからない場合はエラーメッセージとインストール案内を表示
+- **`_SETUP_ORIG_ARGS` + `_SETUP_SCRIPT_PATH`**: CLI 引数とスクリプトパスを setup.sh 冒頭で保存し、re-exec 時に引き継ぎ
+
 ## [0.21.0] - 2026-03-24
 
 ### Added

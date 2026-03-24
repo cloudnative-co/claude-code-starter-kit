@@ -60,7 +60,11 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **Codex MCP** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
 - **Non-interactive mode** for CI/automation
 
-## Prerequisites: Claude Account (Paid)
+## Prerequisites
+
+**Bash 4+** is required. macOS ships with Bash 3.2 by default — the kit auto-detects Bash 4+ (e.g., from `brew install bash`) and re-execs. Linux/WSL typically has Bash 4+ pre-installed.
+
+### Claude Account (Paid)
 
 **Claude Code requires a paid Anthropic account.** It does not work with free plans.
 
