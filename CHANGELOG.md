@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **既存 CLAUDE.md のマイグレーション**: マーカーのない既存 CLAUDE.md は、対話モードで既存全体をユーザーセクションに移行し kit セクションを追加。非対話モードではスキップ
 
 ### Fixed
+- **CLAUDE.md スナップショットの二重マーカー自己修復**: `_snapshot_claude_md()` の書き込み後に BEGIN マーカーの数を検証し、複数ペアが検出された場合は最初のペアだけを再抽出して自動修復。v0.30.0 以前のバグでスナップショットに二重マーカーが残った環境で、update のたびに false conflict が発生する問題を解消
 - **CLAUDE.md マーカー二重挿入バグを修正**: `_replace_kit_section` の sed ロジックが macOS/GNU sed の range 挙動差でマーカーを重複挿入する問題を awk ベースに書き直して修正
 - **GNU sed / GNU awk を prerequisite に追加**: macOS の BSD sed/awk との互換性問題を根本解決。既に GNU 版がインストール済みなら導入をスキップ。`_sed()` / `_awk()` ラッパーで CLAUDE.md section 処理と関連箇所を統一。Linux/WSL でも gawk 等が不足時は自動導入を試行
 - **settings.json の snapshot にユーザーカスタマイズが混入する問題を修正**: snapshot に merge 結果ではなく kit 生成版を保存するように変更。次回 update で「ユーザー未変更」と誤判定され permissions 等が kit デフォルトに上書きされる問題を解消

@@ -154,7 +154,7 @@ _extract_kit_section() {
 
   # Warn on multiple marker pairs
   local count
-  count="$(grep -cF "$_KIT_MARKER_BEGIN" "$file" 2>/dev/null || echo 0)"
+  count="$(grep -cF "$_KIT_MARKER_BEGIN" "$file" 2>/dev/null)" || count=0
   if [[ "$count" -gt 1 ]]; then
     warn "Multiple STARTER-KIT-MANAGED marker pairs found in $file — using first pair only"
   fi

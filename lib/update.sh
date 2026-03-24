@@ -1,7 +1,8 @@
 #!/bin/bash
 # lib/update.sh - Update mode logic for Claude Code Starter Kit
 #
-# Requires: lib/colors.sh, lib/snapshot.sh, lib/merge.sh, lib/json-builder.sh,
+# Requires: lib/colors.sh, lib/snapshot.sh (_repair_snapshot_markers),
+#           lib/merge.sh, lib/json-builder.sh,
 #           lib/template.sh (_has_kit_markers, _extract_kit_section, _user_section_heading)
 # Uses globals: PROJECT_DIR, CLAUDE_DIR, DRY_RUN, _MERGE_INTERACTIVE,
 #               _SNAPSHOT_BOOTSTRAPPED, _BACKUP_TIMESTAMP, _SETUP_TMP_FILES[],
@@ -191,6 +192,9 @@ _update_claude_md() {
     _replace_kit_section "$current" "$new_kit_section"
     return 0
   fi
+
+  # Repair stale snapshot with duplicated markers (pre-v0.30.0 bug)
+  _repair_snapshot_markers "$snapshot_kit"
 
   # Compare kit sections only
   if ! _file_changed "$snapshot_kit" "$current_kit_section"; then

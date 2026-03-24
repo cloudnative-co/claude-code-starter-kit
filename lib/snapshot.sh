@@ -5,7 +5,7 @@
 # Requires: lib/colors.sh
 # Uses globals: CLAUDE_DIR
 # Exports: _write_snapshot(), _snapshot_exists(), _file_changed(),
-#          _snapshot_claude_md(), _update_snapshot_file()
+#          _snapshot_claude_md(), _repair_snapshot_markers(), _update_snapshot_file()
 # Dry-run: transparent (operates on CLAUDE_DIR which may be sim dir)
 set -euo pipefail
 
@@ -114,6 +114,27 @@ _update_snapshot_file() {
 }
 
 # ---------------------------------------------------------------------------
+# _repair_snapshot_markers <snapshot_file>
+#
+# Validates that a CLAUDE.md snapshot contains at most one BEGIN marker pair.
+# If duplicates are found (from a pre-v0.30.0 bug), re-extracts the first
+# kit section to repair. Safe to call on any file (no-ops if <=1 marker).
+# Also callable from update flow to repair stale snapshots before comparison.
+# ---------------------------------------------------------------------------
+_repair_snapshot_markers() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+
+  local begin_count
+  begin_count="$(grep -cF "$_KIT_MARKER_BEGIN" "$file" 2>/dev/null)" || begin_count=0
+  if [[ "$begin_count" -gt 1 ]]; then
+    warn "snapshot: CLAUDE.md snapshot has $begin_count marker pairs — repairing"
+    _extract_kit_section "$file" > "${file}.tmp"
+    mv "${file}.tmp" "$file"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # _snapshot_claude_md <claude_dir> <claude_md_path>
 #
 # Snapshot CLAUDE.md by extracting only the kit-managed section.
@@ -138,4 +159,6 @@ _snapshot_claude_md() {
     # No markers (pre-migration) — snapshot full file
     cp "$file_path" "$dest"
   fi
+
+  _repair_snapshot_markers "$dest"
 }
