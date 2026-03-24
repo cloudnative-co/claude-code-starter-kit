@@ -1,0 +1,12 @@
+<!-- BEGIN STARTER-KIT-MANAGED -->
+# Global Settings
+
+## Basic Principles
+- Use Conventional Commits format (feat: / fix: / refactor: / test: / docs: / chore:)
+- Use `/clear` in long sessions to refresh context
+<!-- END STARTER-KIT-MANAGED -->
+
+# User Settings
+
+<!-- Add your custom instructions below -->
+My custom instructions here.

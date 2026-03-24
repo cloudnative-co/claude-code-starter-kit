@@ -1,0 +1,5 @@
+# Global Settings
+
+## Basic Principles
+- Use Conventional Commits format (feat: / fix: / refactor: / test: / docs: / chore:)
+- Use `/clear` in long sessions to refresh context
