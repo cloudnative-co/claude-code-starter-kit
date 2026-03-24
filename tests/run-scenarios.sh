@@ -4,9 +4,8 @@
 #
 # Usage: bash tests/run-scenarios.sh
 #
-# Expected results (PR-4+): 25 PASS + 3 SKIP
-# SKIP: safety-net-first, registry-consistency (PR-8+9),
-#        bash4-noninteractive-unavailable (always SKIP on Bash 4+ CI)
+# Expected results (PR-8+9+): 27 PASS + 1 SKIP
+# SKIP: bash4-noninteractive-unavailable (always SKIP on Bash 4+ CI)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -336,17 +335,48 @@ test_settings_array_merge() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Registry stubs (2) - SKIP until PR-8+9
+# Registry tests (2)
 # ═══════════════════════════════════════════════════════════════════════════
 
 # --- 15. safety-net-first ---
 test_safety_net_first() {
-  skip "safety-net-first" "Feature registry not yet implemented (PR-8+9)"
+  # Guard: features.sh requires Bash 4+ (declare -A)
+  if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    skip "safety-net-first" "Bash 4+ required for declare -A"
+    return
+  fi
+  # shellcheck source=/dev/null
+  source "$PROJECT_DIR/lib/features.sh"
+
+  if [[ "${_FEATURE_ORDER[0]}" == "safety-net" ]]; then
+    pass "safety-net-first"
+  else
+    fail "safety-net-first (got: ${_FEATURE_ORDER[0]:-empty})"
+  fi
 }
 
 # --- 16. registry-consistency ---
 test_registry_consistency() {
-  skip "registry-consistency" "Feature registry not yet implemented (PR-8+9)"
+  if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    skip "registry-consistency" "Bash 4+ required for declare -A"
+    return
+  fi
+  # shellcheck source=/dev/null
+  source "$PROJECT_DIR/lib/features.sh"
+
+  local missing=()
+  local name
+  for name in "${_FEATURE_ORDER[@]}"; do
+    if [[ -z "${_FEATURE_FLAGS[$name]+set}" ]]; then
+      missing+=("$name")
+    fi
+  done
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    pass "registry-consistency"
+  else
+    fail "registry-consistency (missing in _FEATURE_FLAGS: ${missing[*]})"
+  fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════

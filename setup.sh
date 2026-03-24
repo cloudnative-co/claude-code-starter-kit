@@ -81,9 +81,10 @@ check_bash4 || {
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 2: Bash 4+ required from this point (template, json, merge, etc.)
-# Future: lib/features.sh with declare -A will be sourced here (PR-8+9)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/features.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/template.sh"
 # shellcheck source=/dev/null
@@ -256,11 +257,12 @@ collect_managed_target_files() {
   _add_managed_tree_targets "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
   _add_managed_tree_targets "$PROJECT_DIR/skills" "$CLAUDE_DIR/skills"
   _add_managed_tree_targets "$PROJECT_DIR/memory" "$CLAUDE_DIR/memory"
-  _add_managed_tree_targets "$PROJECT_DIR/features/memory-persistence/scripts" "$CLAUDE_DIR/hooks/memory-persistence"
-  _add_managed_tree_targets "$PROJECT_DIR/features/strategic-compact/scripts" "$CLAUDE_DIR/hooks/strategic-compact"
-  _add_managed_tree_targets "$PROJECT_DIR/features/auto-update/scripts" "$CLAUDE_DIR/hooks/auto-update"
-  _add_managed_tree_targets "$PROJECT_DIR/features/statusline/scripts" "$CLAUDE_DIR/hooks/statusline"
-  _add_managed_tree_targets "$PROJECT_DIR/features/doc-size-guard/scripts" "$CLAUDE_DIR/hooks/doc-size-guard"
+  # Registry-driven: hook script paths from _FEATURE_HAS_SCRIPTS
+  local _feat_name
+  for _feat_name in "${_FEATURE_ORDER[@]}"; do
+    [[ "${_FEATURE_HAS_SCRIPTS[$_feat_name]+set}" ]] || continue
+    _add_managed_tree_targets "$PROJECT_DIR/features/$_feat_name/scripts" "$CLAUDE_DIR/hooks/$_feat_name"
+  done
 
   # Filter out files that the user chose to preserve during fresh install.
   # These are user-owned and must not be tracked as kit-managed.
@@ -570,86 +572,7 @@ _build_settings_safe() {
   ok "$STR_FRESH_MERGE_SETTINGS_DONE"
 }
 
-# _deploy_hook_scripts_safe
-#
-# Like deploy_hook_scripts but checks for existing hook dirs.
-# Reuses _copy_dir_safe logic per feature.
-_deploy_hook_scripts_safe() {
-  local _features=(
-    "ENABLE_MEMORY_PERSISTENCE:memory-persistence"
-    "ENABLE_STRATEGIC_COMPACT:strategic-compact"
-    "ENABLE_AUTO_UPDATE:auto-update"
-    "ENABLE_STATUSLINE:statusline"
-    "ENABLE_DOC_SIZE_GUARD:doc-size-guard"
-  )
-  local _entry _flag_var _feature_name _flag_val _src _dest
-
-  for _entry in "${_features[@]}"; do
-    _flag_var="${_entry%%:*}"
-    _feature_name="${_entry#*:}"
-    _flag_val="${!_flag_var:-false}"
-
-    if ! is_true "$_flag_val"; then
-      continue
-    fi
-
-    _src="$PROJECT_DIR/features/$_feature_name/scripts"
-    _dest="$CLAUDE_DIR/hooks/$_feature_name"
-    [[ -d "$_src" ]] || continue
-
-    mkdir -p "$_dest"
-
-    local has_existing=false
-    if [[ -n "$(ls -A "$_dest" 2>/dev/null)" ]]; then
-      has_existing=true
-    fi
-
-    if [[ "$has_existing" == "false" ]]; then
-      cp -a "$_src"/. "$_dest"/
-      chmod +x "$_dest"/*.sh 2>/dev/null || true
-      chmod +x "$_dest"/*.py 2>/dev/null || true
-      ok "Installed $_feature_name hooks"
-      continue
-    fi
-
-    # Existing hooks — new files only (non-interactive default)
-    local action="new"
-    if [[ "${_MERGE_INTERACTIVE:-true}" == "true" ]]; then
-      warn "$STR_FRESH_DIR_EXISTS hooks/$_feature_name/"
-      printf "  %s " "$STR_FRESH_DIR_PROMPT" >&2
-      local reply=""
-      if read -r reply < /dev/tty 2>/dev/null; then
-        true
-      else
-        reply="n"
-      fi
-      case "$reply" in
-        [Oo]*) action="overwrite" ;;
-        [Ss]*) action="skip" ;;
-        *)     action="new" ;;
-      esac
-    fi
-
-    case "$action" in
-      overwrite)
-        cp -a "$_src"/. "$_dest"/
-        chmod +x "$_dest"/*.sh 2>/dev/null || true
-        chmod +x "$_dest"/*.py 2>/dev/null || true
-        ok "Installed $_feature_name hooks (overwrite)"
-        ;;
-      skip)
-        _FRESH_SKIPPED_FILES+=("$_dest")
-        ok "$_feature_name hooks: $STR_FRESH_SKIPPED"
-        ;;
-      new)
-        cp -an "$_src"/. "$_dest"/
-        chmod +x "$_dest"/*.sh 2>/dev/null || true
-        chmod +x "$_dest"/*.py 2>/dev/null || true
-        ok "$_feature_name hooks: $STR_FRESH_NEW_ONLY"
-        ;;
-    esac
-  done
-}
+# _deploy_hook_scripts_safe is now replaced by deploy_hook_scripts(merge-aware) below
 
 # _deploy_fresh_with_existing
 #
@@ -667,7 +590,7 @@ _deploy_fresh_with_existing() {
 
   _build_claude_md_safe
   _build_settings_safe
-  _deploy_hook_scripts_safe
+  deploy_hook_scripts "merge-aware"
 }
 
 # ---------------------------------------------------------------------------
@@ -692,60 +615,49 @@ build_claude_md() {
 # ---------------------------------------------------------------------------
 # Build settings.json
 # ---------------------------------------------------------------------------
-build_settings() {
+# ---------------------------------------------------------------------------
+# build_settings_file - Registry-based settings.json builder (unified)
+#
+# Usage: build_settings_file <output_path>
+#
+# Uses _FEATURE_ORDER and _FEATURE_FLAGS from lib/features.sh to iterate
+# enabled features. Special case: git-push-review (editor substitution).
+# Assertion: safety-net must be _FEATURE_ORDER[0].
+# ---------------------------------------------------------------------------
+build_settings_file() {
+  local out="$1"
   local base="$PROJECT_DIR/config/settings-base.json"
   local permissions="$PROJECT_DIR/config/permissions.json"
-  local out="$CLAUDE_DIR/settings.json"
 
   local hook_fragments=()
   local tmp_files=()
 
-  # Safety Net must be first in PreToolUse array (runs before other hooks)
-  if is_true "${ENABLE_SAFETY_NET:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/safety-net/hooks.json")
-  fi
-  if is_true "$ENABLE_TMUX_HOOKS"; then
-    hook_fragments+=("$PROJECT_DIR/features/tmux-hooks/hooks.json")
-  fi
-  if is_true "$ENABLE_DOC_BLOCKER"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-blocker/hooks.json")
-  fi
-  if is_true "$ENABLE_PRETTIER_HOOKS"; then
-    hook_fragments+=("$PROJECT_DIR/features/prettier-hooks/hooks.json")
-  fi
-  if is_true "$ENABLE_CONSOLE_LOG_GUARD"; then
-    hook_fragments+=("$PROJECT_DIR/features/console-log-guard/hooks.json")
-  fi
-  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
-    hook_fragments+=("$PROJECT_DIR/features/memory-persistence/hooks.json")
-  fi
-  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
-    hook_fragments+=("$PROJECT_DIR/features/strategic-compact/hooks.json")
-  fi
-  if is_true "$ENABLE_PR_CREATION_LOG"; then
-    hook_fragments+=("$PROJECT_DIR/features/pr-creation-log/hooks.json")
-  fi
-  if is_true "${ENABLE_PRE_COMPACT_COMMIT:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/pre-compact-commit/hooks.json")
-  fi
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/auto-update/hooks.json")
-  fi
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
-  fi
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-size-guard/hooks.json")
+  # Assertion: safety-net must be first in _FEATURE_ORDER
+  if [[ "${_FEATURE_ORDER[0]}" != "safety-net" ]]; then
+    error "FATAL: safety-net must be first in _FEATURE_ORDER (got: ${_FEATURE_ORDER[0]:-empty})"
+    return 1
   fi
 
-  # Git push review: needs editor command substitution
-  if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
+  # Registry-driven hook fragment collection
+  local name flag
+  for name in "${_FEATURE_ORDER[@]}"; do
+    flag="${_FEATURE_FLAGS[$name]:-}"
+    if [[ -z "$flag" ]]; then
+      error "FATAL: _FEATURE_FLAGS[$name] is empty — registry inconsistency"
+      return 1
+    fi
+    is_true "${!flag:-false}" || continue
+    local hooks_json="$PROJECT_DIR/features/$name/hooks.json"
+    [[ -f "$hooks_json" ]] && hook_fragments+=("$hooks_json")
+  done
+
+  # Special case: git-push-review (needs editor command substitution)
+  if is_true "${ENABLE_GIT_PUSH_REVIEW:-false}"; then
     if [[ "${EDITOR_CHOICE:-none}" == "none" ]]; then
       warn "Git push review hook skipped (no editor selected)"
     else
       local editor_cmd editor_cmd_escaped src tmp
       editor_cmd="$(editor_command "$EDITOR_CHOICE")"
-      # Escape sed metacharacters in the replacement string
       editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&\\|]/\\&/g')"
       src="$PROJECT_DIR/features/git-push-review/hooks.json"
       tmp="$(mktemp)"
@@ -762,7 +674,6 @@ build_settings() {
 
   build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
   apply_settings_preferences "$out"
-
   replace_home_path "$out"
 
   # Clean up temp files
@@ -771,77 +682,12 @@ build_settings() {
   fi
 }
 
+# Legacy wrappers for backward compatibility during transition
+build_settings() {
+  build_settings_file "$CLAUDE_DIR/settings.json"
+}
 build_settings_to_file() {
-  local out="$1"
-  local base="$PROJECT_DIR/config/settings-base.json"
-  local permissions="$PROJECT_DIR/config/permissions.json"
-
-  local hook_fragments=()
-  local tmp_files=()
-
-  # Safety Net must be first in PreToolUse array (runs before other hooks)
-  if is_true "${ENABLE_SAFETY_NET:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/safety-net/hooks.json")
-  fi
-  if is_true "$ENABLE_TMUX_HOOKS"; then
-    hook_fragments+=("$PROJECT_DIR/features/tmux-hooks/hooks.json")
-  fi
-  if is_true "$ENABLE_DOC_BLOCKER"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-blocker/hooks.json")
-  fi
-  if is_true "$ENABLE_PRETTIER_HOOKS"; then
-    hook_fragments+=("$PROJECT_DIR/features/prettier-hooks/hooks.json")
-  fi
-  if is_true "$ENABLE_CONSOLE_LOG_GUARD"; then
-    hook_fragments+=("$PROJECT_DIR/features/console-log-guard/hooks.json")
-  fi
-  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
-    hook_fragments+=("$PROJECT_DIR/features/memory-persistence/hooks.json")
-  fi
-  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
-    hook_fragments+=("$PROJECT_DIR/features/strategic-compact/hooks.json")
-  fi
-  if is_true "$ENABLE_PR_CREATION_LOG"; then
-    hook_fragments+=("$PROJECT_DIR/features/pr-creation-log/hooks.json")
-  fi
-  if is_true "${ENABLE_PRE_COMPACT_COMMIT:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/pre-compact-commit/hooks.json")
-  fi
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/auto-update/hooks.json")
-  fi
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/statusline/hooks.json")
-  fi
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    hook_fragments+=("$PROJECT_DIR/features/doc-size-guard/hooks.json")
-  fi
-  if is_true "$ENABLE_GIT_PUSH_REVIEW"; then
-    if [[ "${EDITOR_CHOICE:-none}" != "none" ]]; then
-      local editor_cmd editor_cmd_escaped src tmp
-      editor_cmd="$(editor_command "$EDITOR_CHOICE")"
-      editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&\\|]/\\&/g')"
-      src="$PROJECT_DIR/features/git-push-review/hooks.json"
-      tmp="$(mktemp)"
-      _SETUP_TMP_FILES+=("$tmp")
-      if grep -q "__EDITOR_CMD__" "$src" 2>/dev/null; then
-        sed "s|__EDITOR_CMD__|$editor_cmd_escaped|g" "$src" > "$tmp"
-      else
-        cp -a "$src" "$tmp"
-      fi
-      hook_fragments+=("$tmp")
-      tmp_files+=("$tmp")
-    fi
-  fi
-
-  build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
-  apply_settings_preferences "$out"
-
-  replace_home_path "$out"
-
-  if [[ ${#tmp_files[@]} -gt 0 ]]; then
-    rm -f "${tmp_files[@]}"
-  fi
+  build_settings_file "$1"
 }
 
 build_claude_md_to_file() {
@@ -862,48 +708,79 @@ build_claude_md_to_file() {
 # ---------------------------------------------------------------------------
 # Deploy hook scripts
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# deploy_hook_scripts - Registry-based hook script deployment
+#
+# Usage: deploy_hook_scripts [mode]
+#   mode=simple (default): overwrite all scripts unconditionally
+#   mode=merge-aware: check for existing hooks, offer O/N/S prompt (fresh install with existing)
+#
+# Uses _FEATURE_ORDER + _FEATURE_HAS_SCRIPTS from lib/features.sh.
+# ---------------------------------------------------------------------------
 deploy_hook_scripts() {
-  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
-    local dest="$CLAUDE_DIR/hooks/memory-persistence"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/memory-persistence/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed memory-persistence hooks"
-  fi
+  local mode="${1:-simple}"
+  local name flag
+  for name in "${_FEATURE_ORDER[@]}"; do
+    [[ "${_FEATURE_HAS_SCRIPTS[$name]+set}" ]] || continue
 
-  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
-    local dest="$CLAUDE_DIR/hooks/strategic-compact"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/strategic-compact/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed strategic-compact hooks"
-  fi
+    flag="${_FEATURE_FLAGS[$name]}"
+    is_true "${!flag:-false}" || continue
 
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    local dest="$CLAUDE_DIR/hooks/auto-update"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/auto-update/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed auto-update hook"
-  fi
+    local src="$PROJECT_DIR/features/$name/scripts"
+    [[ -d "$src" ]] || continue
 
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    local dest="$CLAUDE_DIR/hooks/statusline"
+    local dest="$CLAUDE_DIR/hooks/$name"
     mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/statusline/scripts"/. "$dest"/
-    chmod +x "$dest"/*.py 2>/dev/null || true
-    chmod +x "$dest"/*.sh 2>/dev/null || true
-    ok "Installed statusline script"
-  fi
 
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    local dest="$CLAUDE_DIR/hooks/doc-size-guard"
-    mkdir -p "$dest"
-    cp -a "$PROJECT_DIR/features/doc-size-guard/scripts"/. "$dest"/
-    chmod +x "$dest"/*.sh
-    ok "Installed doc-size-guard hook"
-  fi
+    if [[ "$mode" == "simple" ]]; then
+      cp -a "$src"/. "$dest"/
+      _make_hooks_executable "$dest"
+      ok "Installed $name hooks"
+    else
+      # merge-aware: check for existing files
+      if [[ -z "$(ls -A "$dest" 2>/dev/null)" ]]; then
+        cp -a "$src"/. "$dest"/
+        _make_hooks_executable "$dest"
+        ok "Installed $name hooks"
+      else
+        local action="new"
+        if [[ "${_MERGE_INTERACTIVE:-true}" == "true" ]]; then
+          warn "$STR_FRESH_DIR_EXISTS hooks/$name/"
+          printf "  %s " "$STR_FRESH_DIR_PROMPT" >&2
+          local reply=""
+          if read -r reply < /dev/tty 2>/dev/null; then true; else reply="n"; fi
+          case "$reply" in
+            [Oo]*) action="overwrite" ;;
+            [Ss]*) action="skip" ;;
+            *)     action="new" ;;
+          esac
+        fi
+        case "$action" in
+          overwrite)
+            cp -a "$src"/. "$dest"/
+            _make_hooks_executable "$dest"
+            ok "Installed $name hooks (overwrite)"
+            ;;
+          skip)
+            _FRESH_SKIPPED_FILES+=("$dest")
+            ok "$name hooks: ${STR_FRESH_SKIPPED:-skipped}"
+            ;;
+          new)
+            cp -an "$src"/. "$dest"/
+            _make_hooks_executable "$dest"
+            ok "$name hooks: ${STR_FRESH_NEW_ONLY:-new files only}"
+            ;;
+        esac
+      fi
+    fi
+  done
+}
 
+# Make all script files in a directory executable
+_make_hooks_executable() {
+  local dir="$1"
+  chmod +x "$dir"/*.sh 2>/dev/null || true
+  chmod +x "$dir"/*.py 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
