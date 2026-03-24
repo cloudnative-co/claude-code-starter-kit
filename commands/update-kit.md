@@ -7,7 +7,7 @@ Manually update the Claude Code Starter Kit to the latest version.
 Run the following command to update the starter kit:
 
 ```bash
-cd ~/.claude-starter-kit && git status --porcelain && git fetch --tags && git pull && bash setup.sh --update
+cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --update
 ```
 
 ### Pre-flight Checks
@@ -35,7 +35,7 @@ Before running the update:
 If an update goes wrong:
 - A backup is automatically created at `~/.claude.backup.<timestamp>` before each update
 - The latest backup path is saved in `~/.claude/.starter-kit-last-backup`
-- To restore: `mv ~/.claude ~/.claude.broken && cp -a $(cat ~/.claude/.starter-kit-last-backup) ~/.claude`
+- To restore: `mv ~/.claude ~/.claude.broken && cp -a "$(cat ~/.claude/.starter-kit-last-backup)" ~/.claude`
 - To reset saved merge decisions: `bash setup.sh --update --reset-prefs`
 
 ### Notes

@@ -36,7 +36,7 @@ remote_ver="$(git -C "$KIT_DIR" describe --tags --abbrev=0 origin/main 2>/dev/nu
 
 # Dirty check: abort if local changes exist (prevent git pull conflicts)
 if [[ -n "$(git -C "$KIT_DIR" status --porcelain 2>/dev/null)" ]]; then
-  echo "[Starter Kit] Local changes in $KIT_DIR. Run: cd $KIT_DIR && git stash" >&2
+  echo "[Starter Kit] Local changes in $KIT_DIR. Run: cd $KIT_DIR && git stash -u" >&2
   exit 0
 fi
 
@@ -55,7 +55,7 @@ fi
       if [[ -f "$_backup_path_file" ]]; then
         _backup_path="$(cat "$_backup_path_file")"
         echo "[Starter Kit] Backup at: $_backup_path" >&2
-        echo "[Starter Kit] To restore: mv ~/.claude ~/.claude.broken && cp -a $_backup_path ~/.claude" >&2
+        echo "[Starter Kit] To restore: mv ~/.claude ~/.claude.broken && cp -a \"$_backup_path\" ~/.claude" >&2
       else
         echo "[Starter Kit] Check ~/.claude.backup.* for backups" >&2
       fi

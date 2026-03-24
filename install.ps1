@@ -283,7 +283,7 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     # Dirty check: abort if local changes exist
     if [[ -n "$(git -C "$INSTALL_DIR" status --porcelain 2>/dev/null)" ]]; then
         echo "[ERROR] Local changes detected in $INSTALL_DIR" >&2
-        echo "[INFO]  Run: cd $INSTALL_DIR && git stash" >&2
+        echo "[INFO]  Run: cd $INSTALL_DIR && git stash -u" >&2
         exit 1
     fi
     echo "[INFO] Updating existing installation..."
@@ -443,7 +443,7 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     # Dirty check: abort if local changes exist
     if [[ -n "$(git -C "$INSTALL_DIR" status --porcelain 2>/dev/null)" ]]; then
         echo "[ERROR] Local changes detected in $INSTALL_DIR" >&2
-        echo "[INFO]  Run: cd $INSTALL_DIR && git stash" >&2
+        echo "[INFO]  Run: cd $INSTALL_DIR && git stash -u" >&2
         exit 1
     fi
     echo "[INFO] Updating existing installation..."

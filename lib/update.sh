@@ -27,22 +27,22 @@ _check_major_upgrade() {
   # Extract major version numbers (strip leading 'v')
   local old_major new_major
   old_major="${old_ver#v}"; old_major="${old_major%%.*}"
-  new_major="${new_ver#v}"; new_major="${new_ver%%.*}"
+  new_major="${new_ver#v}"; new_major="${new_major%%.*}"
 
   # Only warn on parseable numeric majors that differ
   [[ "$old_major" =~ ^[0-9]+$ ]] || return 0
   [[ "$new_major" =~ ^[0-9]+$ ]] || return 0
   [[ "$old_major" -ne "$new_major" ]] || return 0
 
-  warn "${STR_MAJOR_UPGRADE_WARN:-Major version upgrade detected: $old_ver → $new_ver}"
+  warn "${STR_MAJOR_UPGRADE_WARN:-Major version upgrade detected}: $old_ver → $new_ver"
   info "${STR_MAJOR_UPGRADE_BACKUP:-A backup will be created before updating.}"
 
-  # Show recovery instructions
+  # Show recovery instructions with actual backup path
   local backup_file="${claude_dir}/.starter-kit-last-backup"
   if [[ -f "$backup_file" ]]; then
     local backup_path
     backup_path="$(cat "$backup_file")"
-    info "${STR_MAJOR_UPGRADE_RESTORE:-To restore: mv ~/.claude ~/.claude.broken && cp -a $backup_path ~/.claude}"
+    info "To restore: mv ~/.claude ~/.claude.broken && cp -a \"$backup_path\" ~/.claude"
   fi
 }
 
@@ -800,7 +800,9 @@ run_update() {
       info "${STR_UPDATE_SKIPPED_HINT:-Skipped files retain your changes. Kit updates for those files will apply on next update after you accept or reset.}"
       local backup_file="${claude_dir}/.starter-kit-last-backup"
       if [[ -f "$backup_file" ]]; then
-        info "${STR_UPDATE_SKIPPED_RESTORE:-To restore kit defaults: cp -a $(cat "$backup_file") ~/.claude}"
+        local _skip_backup
+        _skip_backup="$(cat "$backup_file")"
+        info "To restore kit defaults: cp -a \"$_skip_backup\" ~/.claude"
       fi
     fi
   fi
