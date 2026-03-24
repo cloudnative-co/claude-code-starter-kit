@@ -841,6 +841,85 @@ write_manifest() {
 }
 
 # ---------------------------------------------------------------------------
+# _offer_dryrun_preview - Offer interactive dry-run before deploying
+#
+# Only called when existing files could be affected. Clean-slate installs
+# skip this entirely. The message can be customized via the first argument.
+# ---------------------------------------------------------------------------
+_offer_dryrun_preview() {
+  local message="${1:-$STR_DRYRUN_OFFER}"
+
+  # Skip if already in dry-run, or non-interactive (merge prompts disabled)
+  [[ "${DRY_RUN:-false}" == "true" ]] && return 0
+  [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]] && return 0
+
+  printf "\n"
+  info "$message"
+  printf "  [Y]es / [N]o ? " >&2
+  local _dr_offer=""
+  if read -r _dr_offer < /dev/tty 2>/dev/null; then true; else _dr_offer="n"; fi
+  case "$_dr_offer" in
+    [Yy]*)
+      info "$STR_DRYRUN_RUNNING"
+      printf "\n"
+
+      # Save current wizard state to temp config so subprocess inherits
+      # all ENABLE_*, INSTALL_*, plugins, etc. exactly as chosen.
+      local _dr_config
+      _dr_config="$(mktemp)"
+      _SETUP_TMP_FILES+=("$_dr_config")
+      save_config "$_dr_config"
+
+      # Build subprocess args
+      local _dr_args=("--non-interactive" "--dry-run" "--config=$_dr_config")
+      if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+        _dr_args+=("--update")
+      fi
+
+      DRY_RUN="true" bash "$0" "${_dr_args[@]}"
+      printf "\n"
+      info "$STR_DRYRUN_PROCEED"
+      printf "  [Y]es / [N]o ? " >&2
+      local _dr_proceed=""
+      if read -r _dr_proceed < /dev/tty 2>/dev/null; then true; else _dr_proceed="n"; fi
+      case "$_dr_proceed" in
+        [Yy]*) ;;
+        *)
+          info "Setup canceled."
+          exit 0
+          ;;
+      esac
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _has_user_customizations - Check if user modified any kit-managed files
+#
+# Compares snapshot (what kit deployed) vs current (what's on disk).
+# Returns 0 if at least one kit-managed file was modified by the user.
+# ---------------------------------------------------------------------------
+_has_user_customizations() {
+  local claude_dir="$1"
+  local snapshot_dir="${claude_dir}/.starter-kit-snapshot"
+
+  [[ -d "$snapshot_dir" ]] || return 0  # no snapshot = can't tell, assume yes
+
+  while IFS= read -r -d '' snap_file; do
+    local rel_path="${snap_file#"$snapshot_dir"/}"
+    local current_file="${claude_dir}/${rel_path}"
+    if [[ ! -f "$current_file" ]]; then
+      return 0  # user deleted a kit-managed file
+    fi
+    if _file_changed "$snap_file" "$current_file"; then
+      return 0  # user modified a kit-managed file
+    fi
+  done < <(find "$snapshot_dir" -type f -print0 2>/dev/null)
+
+  return 1  # no user modifications detected
+}
+
+# ---------------------------------------------------------------------------
 # Dry-run: redirect CLAUDE_DIR to simulation directory
 # ---------------------------------------------------------------------------
 _ORIG_CLAUDE_DIR=""
@@ -855,6 +934,9 @@ fi
 # Deploy
 # ---------------------------------------------------------------------------
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  if _has_user_customizations "$CLAUDE_DIR"; then
+    _offer_dryrun_preview "$STR_DRYRUN_OFFER_EXISTING"
+  fi
   backup_existing
   if ! _snapshot_exists "$CLAUDE_DIR"; then
     bootstrap_snapshot_from_current
@@ -871,6 +953,7 @@ else
 
   if [[ -f "$CLAUDE_DIR/settings.json" ]] && [[ ! -f "$CLAUDE_DIR/.starter-kit-manifest.json" ]]; then
     # Existing Claude Code user without starter-kit: merge-aware deploy
+    _offer_dryrun_preview "$STR_DRYRUN_OFFER_EXISTING"
     _deploy_fresh_with_existing
   else
     # Clean slate: original behavior
