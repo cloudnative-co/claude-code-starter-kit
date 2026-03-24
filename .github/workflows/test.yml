@@ -19,5 +19,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq gawk
 
+      - name: Run unit tests
+        run: bash tests/run-unit-tests.sh
+
       - name: Run scenario tests
         run: bash tests/run-scenarios.sh
