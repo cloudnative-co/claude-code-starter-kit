@@ -62,7 +62,8 @@ install_ghostty() {
 
   case "$uname_s" in
     Darwin)
-      if ! _ensure_homebrew; then
+      _ensure_homebrew
+      if ! _brew_is_usable 2>/dev/null; then
         warn "Homebrew is not available. Cannot install Ghostty."
         info "  Install manually: https://ghostty.org/"
         return 1
