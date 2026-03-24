@@ -4,6 +4,22 @@
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
-  "hooks": {},
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude-code-starter-kit/hooks/destructive-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude-code-starter-kit/hooks/branch-guard.sh"
+          }
+        ]
+      }
+    ]
+  },
   "language": "__LANGUAGE_NAME__"
 }
