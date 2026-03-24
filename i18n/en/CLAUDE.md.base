@@ -1,3 +1,4 @@
+<!-- BEGIN STARTER-KIT-MANAGED -->
 # Global Settings
 
 ## Basic Principles
@@ -5,3 +6,8 @@
 - Use `/clear` in long sessions to refresh context
 
 {{FEATURE:codex-mcp}}
+<!-- END STARTER-KIT-MANAGED -->
+
+# User Settings
+
+<!-- Add your custom instructions below -->

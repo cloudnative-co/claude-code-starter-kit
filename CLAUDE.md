@@ -192,6 +192,19 @@ When `install.sh` detects an existing installation with manifest v2 + snapshot, 
 
 **Fresh install with existing files:** When `~/.claude/settings.json` exists but no `.starter-kit-manifest.json` is found, the fresh install path uses `_deploy_fresh_with_existing()` instead of the standard overwrite flow. This calls `_merge_settings_bootstrap()` for settings.json (same merge logic as update mode), and offers per-directory `[O]verwrite all / [N]ew files only / [S]kip` prompts for content directories and hook scripts. Non-interactive mode merges settings.json (adopting kit-only keys, preserving user values) and copies only new files for other directories.
 
+**CLAUDE.md section separation:** The deployed `~/.claude/CLAUDE.md` is divided into two sections by HTML comment markers:
+- `<!-- BEGIN STARTER-KIT-MANAGED -->` ... `<!-- END STARTER-KIT-MANAGED -->`: Kit-managed content. Updated by the kit on install/update. Users should not edit this section (edits are treated as conflicts on update).
+- Everything after the END marker: User section. Kit never touches this content. Users are free to add any custom instructions here.
+
+Section-aware behavior:
+- **Snapshot**: Only the kit section is stored in the snapshot (not the full file). This prevents user section edits from triggering false conflicts.
+- **Update**: `_update_claude_md()` in `lib/update.sh` compares kit sections only. User section is always preserved.
+- **Migration**: If an existing CLAUDE.md has no markers, the entire content is treated as user content and wrapped into the user section, with the kit section prepended. Non-interactive mode skips migration (structural change requires consent).
+- **Uninstall**: Kit section is removed; user section is preserved. If the user section is empty/whitespace-only, the whole file is deleted.
+- **Manifest**: `CLAUDE.md` remains a managed file, but kit ownership applies only to the marker section.
+
+Helper functions in `lib/template.sh`: `_has_kit_markers()`, `_extract_kit_section()`, `_extract_user_section()`, `_replace_kit_section()`.
+
 **Dry-run mode:** `--dry-run` previews what install/update would change without deploying any files. Light prerequisites (git, jq, curl) may be installed with user consent in interactive mode; `--non-interactive --dry-run` installs nothing. Heavy tools (Homebrew, Node, etc.) are never installed during dry-run. Implementation in `lib/dryrun.sh`:
 - `_dryrun_init()` copies real `~/.claude` into a temp sim dir, then `CLAUDE_DIR` is redirected so the normal flow executes against it
 - `_MERGE_INTERACTIVE=false` ensures no prompts are shown

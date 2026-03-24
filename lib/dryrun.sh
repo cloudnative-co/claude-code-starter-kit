@@ -121,6 +121,9 @@ _dryrun_show_results() {
   # Show settings.json diff if both exist
   _dryrun_settings_diff "$real_dir"
 
+  # Show CLAUDE.md kit section diff
+  _dryrun_claudemd_diff "$real_dir"
+
   printf "\n"
   if [[ -n "$creates" || -n "$modifies" || -n "$deletes" || -n "$externals" ]]; then
     ok "${STR_DRYRUN_WOULD_CHANGE:-The above changes would be applied. This was a dry run — nothing was modified.}"
@@ -166,6 +169,54 @@ _dryrun_settings_diff() {
       --label "current (~/.claude/settings.json)" \
       --label "simulated (after install/update)" \
       "$real_norm" "$sim_norm" 2>/dev/null || true
+    printf "\n"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _dryrun_claudemd_diff - Show kit-section-only diff for CLAUDE.md
+#
+# Compares real CLAUDE.md kit section vs sim dir CLAUDE.md kit section.
+# User section changes are not shown (they are preserved untouched).
+# ---------------------------------------------------------------------------
+_dryrun_claudemd_diff() {
+  local real_dir="$1"
+  local real_md="${real_dir}/CLAUDE.md"
+  local sim_md="${_DRYRUN_DIR}/CLAUDE.md"
+
+  [[ -f "$sim_md" ]] || return 0
+
+  if [[ ! -f "$real_md" ]]; then
+    # New file — already shown as CREATE in file list
+    return 0
+  fi
+
+  # Extract kit sections for comparison
+  local real_kit sim_kit
+  real_kit="$(mktemp)"
+  sim_kit="$(mktemp)"
+  _SETUP_TMP_FILES+=("$real_kit" "$sim_kit")
+
+  if _has_kit_markers "$real_md"; then
+    _extract_kit_section "$real_md" > "$real_kit"
+  else
+    # No markers — compare full file
+    cp "$real_md" "$real_kit"
+  fi
+
+  if _has_kit_markers "$sim_md"; then
+    _extract_kit_section "$sim_md" > "$sim_kit"
+  else
+    cp "$sim_md" "$sim_kit"
+  fi
+
+  if ! diff -q "$real_kit" "$sim_kit" >/dev/null 2>&1; then
+    info "CLAUDE.md kit section diff (current → simulated):"
+    printf "\n"
+    diff -u \
+      --label "current (kit section)" \
+      --label "simulated (kit section)" \
+      "$real_kit" "$sim_kit" 2>/dev/null || true
     printf "\n"
   fi
 }

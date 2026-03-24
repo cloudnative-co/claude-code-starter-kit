@@ -322,6 +322,16 @@ STR_DRYRUN_OFFER_EXISTING="Existing settings detected. We recommend previewing c
 STR_DRYRUN_RUNNING="Running dry-run preview..."
 STR_DRYRUN_PROCEED="Proceed with the actual deployment?"
 
+# CLAUDE.md section-aware
+STR_CLAUDEMD_MIGRATION="Existing CLAUDE.md has no kit markers. Your content will be preserved as the User Settings section."
+STR_CLAUDEMD_MIGRATION_PROMPT="[M]erge (add kit section + keep yours) / [S]kip ?"
+STR_CLAUDEMD_MIGRATION_SKIP="CLAUDE.md migration skipped (non-interactive). Run interactively to merge."
+STR_CLAUDEMD_KIT_UPDATED="CLAUDE.md kit section updated"
+STR_CLAUDEMD_KIT_UNCHANGED="CLAUDE.md kit section unchanged"
+STR_CLAUDEMD_KIT_CONFLICT="CLAUDE.md kit section: both you and kit have changes"
+STR_CLAUDEMD_KIT_CONFLICT_PROMPT="[U]se new kit / [K]eep yours / [D]iff ?"
+STR_CLAUDEMD_USER_PRESERVED="CLAUDE.md user section preserved"
+
 STR_EXISTING_CLAUDE_WARN="Existing Claude Code configuration detected outside starter-kit update mode."
 STR_EXISTING_CLAUDE_BACKUP="This run will create a full backup of ~/.claude before changing starter-kit managed files."
 STR_EXISTING_CLAUDE_REWRITE="It will then regenerate starter-kit managed files such as CLAUDE.md and settings.json."

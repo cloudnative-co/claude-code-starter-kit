@@ -213,8 +213,24 @@ skipped=0
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   if [[ -f "$file" ]]; then
-    rm -f "$file"
-    ((removed++))
+    # CLAUDE.md: remove kit section only, preserve user content
+    if [[ "$(basename "$file")" == "CLAUDE.md" ]]; then
+      if grep -qF "<!-- BEGIN STARTER-KIT-MANAGED -->" "$file" 2>/dev/null; then
+        # Remove kit section (between markers inclusive)
+        sed -i.bak "/<!-- BEGIN STARTER-KIT-MANAGED -->/,/<!-- END STARTER-KIT-MANAGED -->/d" "$file"
+        rm -f "${file}.bak"
+        # If only whitespace remains, remove the file entirely
+        if [[ -z "$(sed '/^[[:space:]]*$/d' "$file" 2>/dev/null)" ]]; then
+          rm -f "$file"
+        fi
+      else
+        rm -f "$file"
+      fi
+      ((removed++))
+    else
+      rm -f "$file"
+      ((removed++))
+    fi
   else
     ((skipped++))
   fi

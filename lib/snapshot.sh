@@ -104,3 +104,30 @@ _update_snapshot_file() {
     return 1
   fi
 }
+
+# ---------------------------------------------------------------------------
+# _snapshot_claude_md <claude_dir> <claude_md_path>
+#
+# Snapshot CLAUDE.md by extracting only the kit-managed section.
+# If no markers are present, snapshots the full file (pre-migration state).
+# ---------------------------------------------------------------------------
+_snapshot_claude_md() {
+  local claude_dir="$1"
+  local file_path="$2"
+  local snapshot_dir="${claude_dir}/${_SNAPSHOT_DIR_NAME}"
+  local dest="${snapshot_dir}/CLAUDE.md"
+
+  mkdir -p "$snapshot_dir"
+
+  if [[ ! -f "$file_path" ]]; then
+    warn "snapshot: CLAUDE.md not found, cannot snapshot"
+    return 1
+  fi
+
+  if _has_kit_markers "$file_path"; then
+    _extract_kit_section "$file_path" > "$dest"
+  else
+    # No markers (pre-migration) — snapshot full file
+    cp "$file_path" "$dest"
+  fi
+}

@@ -842,6 +842,11 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--commit-attribution=false` はコミットと PR の Claude Code 帰属表示を両方オフにします
 > - 詳細な反映先は [ウィザード設定と反映先の対応表](docs/wizard-config-mapping.md) を参照してください
 >
+> **CLAUDE.md のカスタマイズ**:
+> - `~/.claude/CLAUDE.md` は kit 管理セクション（`<!-- BEGIN STARTER-KIT-MANAGED -->` 〜 `<!-- END STARTER-KIT-MANAGED -->`）とユーザーセクション（`# ユーザー設定`）に分かれています
+> - ユーザーセクションに自由にカスタム指示を追加できます。update 時も kit セクションのみ更新され、ユーザーセクションは保持されます
+> - 既存の CLAUDE.md にマーカーがない場合、初回 update 時に対話的にマイグレーションが行われます
+>
 > **既存ユーザー向け**:
 > - すでにこの starter kit を使っている場合は、`/update-kit` または `./setup.sh --update` を優先してください。設定の競合時は対話的に確認し、判定を記憶する `[RK]/[RU]` オプションもあります。`--reset-prefs` で記憶をクリアできます。
 > - **starter kit 未使用だが `~/.claude/settings.json` がある場合**: 初回実行時に settings.json をマージ（上書きではなく）し、他のファイルはディレクトリ単位で確認します。

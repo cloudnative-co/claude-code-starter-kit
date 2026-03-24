@@ -123,3 +123,68 @@ remove_unresolved() {
 
   mv "$tmp_file" "$file"
 }
+
+# ---------------------------------------------------------------------------
+# CLAUDE.md section markers — kit-managed vs user-owned separation
+# ---------------------------------------------------------------------------
+_KIT_MARKER_BEGIN="<!-- BEGIN STARTER-KIT-MANAGED -->"
+_KIT_MARKER_END="<!-- END STARTER-KIT-MANAGED -->"
+
+# _has_kit_markers <file>
+# Returns 0 if file contains the BEGIN marker, 1 otherwise.
+_has_kit_markers() {
+  grep -qF "$_KIT_MARKER_BEGIN" "$1" 2>/dev/null
+}
+
+# _extract_kit_section <file>
+# Prints the content between (and including) the BEGIN/END markers.
+# If multiple marker pairs exist, only the first is used (with a warning).
+_extract_kit_section() {
+  local file="$1"
+  if ! _has_kit_markers "$file"; then
+    return 1
+  fi
+
+  # Warn on multiple marker pairs
+  local count
+  count="$(grep -cF "$_KIT_MARKER_BEGIN" "$file" 2>/dev/null || echo 0)"
+  if [[ "$count" -gt 1 ]]; then
+    warn "Multiple STARTER-KIT-MANAGED marker pairs found in $file — using first pair only"
+  fi
+
+  sed -n "/$_KIT_MARKER_BEGIN/,/$_KIT_MARKER_END/p" "$file"
+}
+
+# _extract_user_section <file>
+# Prints everything after the END marker line.
+# If no markers found, returns the entire file content.
+_extract_user_section() {
+  local file="$1"
+  if ! _has_kit_markers "$file"; then
+    cat "$file"
+    return
+  fi
+  sed -n "/$_KIT_MARKER_END/,\$p" "$file" | tail -n +2
+}
+
+# _replace_kit_section <file> <new_kit_content_file>
+# Replaces everything between (and including) the markers with new content.
+# Preserves everything outside the markers (user section).
+_replace_kit_section() {
+  local file="$1"
+  local new_kit_file="$2"
+
+  local tmp_out
+  tmp_out="$(mktemp)"
+
+  # Print lines before the BEGIN marker
+  sed -n "1,/$_KIT_MARKER_BEGIN/{ /$_KIT_MARKER_BEGIN/!p; }" "$file" > "$tmp_out"
+
+  # Append new kit content
+  cat "$new_kit_file" >> "$tmp_out"
+
+  # Append lines after the END marker (user section)
+  sed -n "/$_KIT_MARKER_END/,\${ /$_KIT_MARKER_END/!p; }" "$file" >> "$tmp_out"
+
+  mv "$tmp_out" "$file"
+}
