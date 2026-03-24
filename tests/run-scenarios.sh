@@ -285,8 +285,8 @@ test_merge_prefs_persist() {
   setup_test_env
   run_setup --profile=minimal >/dev/null 2>&1
 
-  # Create a merge prefs file
-  printf '{"settings.json/permissions":{"action":"keep"}}' > "$CLAUDE_DIR/.starter-kit-merge-prefs.json"
+  # Create a merge prefs file (matches actual format: key → "keep-mine" or "use-kit")
+  printf '{"settings.json/permissions":"keep-mine"}' > "$CLAUDE_DIR/.starter-kit-merge-prefs.json"
 
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
@@ -294,7 +294,7 @@ test_merge_prefs_persist() {
   # Merge prefs file should survive update with content intact
   if [[ $rc -eq 0 ]] \
     && assert_file_exists "$CLAUDE_DIR/.starter-kit-merge-prefs.json" \
-    && assert_json_has_key "$CLAUDE_DIR/.starter-kit-merge-prefs.json" '."settings.json/permissions"'; then
+    && assert_json_field "$CLAUDE_DIR/.starter-kit-merge-prefs.json" '."settings.json/permissions"' "keep-mine"; then
     pass "merge-prefs-persist"
   else
     fail "merge-prefs-persist"
