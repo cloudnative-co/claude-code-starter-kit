@@ -217,8 +217,9 @@ while IFS= read -r file; do
     if [[ "$(basename "$file")" == "CLAUDE.md" ]]; then
       if grep -qF "<!-- BEGIN STARTER-KIT-MANAGED -->" "$file" 2>/dev/null; then
         # Remove kit section (between markers inclusive)
-        sed -i.bak "/<!-- BEGIN STARTER-KIT-MANAGED -->/,/<!-- END STARTER-KIT-MANAGED -->/d" "$file"
-        rm -f "${file}.bak"
+        # Use awk for cross-platform safety (BSD sed address ranges are fragile)
+        awk '/<!-- BEGIN STARTER-KIT-MANAGED -->/{skip=1} /<!-- END STARTER-KIT-MANAGED -->/{skip=0; next} !skip' "$file" > "${file}.tmp"
+        mv "${file}.tmp" "$file"
         # If only whitespace remains, remove the file entirely
         if [[ -z "$(sed '/^[[:space:]]*$/d' "$file" 2>/dev/null)" ]]; then
           rm -f "$file"
@@ -226,20 +227,20 @@ while IFS= read -r file; do
       else
         rm -f "$file"
       fi
-      ((removed++))
+      removed=$((removed + 1))
     else
       rm -f "$file"
-      ((removed++))
+      removed=$((removed + 1))
     fi
   else
-    ((skipped++))
+    skipped=$((skipped + 1))
   fi
 done < <(_json_files "$MANIFEST")
 
 # Remove legacy AGENTS.md from older releases that deployed it into ~/.claude
 if [[ -f "$CLAUDE_DIR/AGENTS.md" ]]; then
   rm -f "$CLAUDE_DIR/AGENTS.md"
-  ((removed++))
+  removed=$((removed + 1))
 fi
 
 # Remove manifest itself
