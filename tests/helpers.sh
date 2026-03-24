@@ -136,8 +136,8 @@ assert_dir_exists() {
 assert_file_contains() {
   local file="$1"
   local pattern="$2"
-  local msg="${3:-File should contain pattern: $pattern}"
-  if grep -q "$pattern" "$file" 2>/dev/null; then
+  local msg="${3:-File should contain: $pattern}"
+  if grep -qF "$pattern" "$file" 2>/dev/null; then
     return 0
   else
     echo "  ASSERTION FAILED: $msg (pattern not found in $file)" >&2
@@ -148,8 +148,8 @@ assert_file_contains() {
 assert_file_not_contains() {
   local file="$1"
   local pattern="$2"
-  local msg="${3:-File should not contain pattern: $pattern}"
-  if ! grep -q "$pattern" "$file" 2>/dev/null; then
+  local msg="${3:-File should not contain: $pattern}"
+  if ! grep -qF "$pattern" "$file" 2>/dev/null; then
     return 0
   else
     echo "  ASSERTION FAILED: $msg (pattern found in $file)" >&2
@@ -176,7 +176,8 @@ assert_json_has_key() {
   local file="$1"
   local key="$2"
   local msg="${3:-JSON should have key: $key}"
-  if jq -e "$key" "$file" >/dev/null 2>&1; then
+  # Use '!= null' instead of -e to avoid false negatives on false/null values
+  if jq -e "($key) != null" "$file" >/dev/null 2>&1; then
     return 0
   else
     echo "  ASSERTION FAILED: $msg" >&2
@@ -194,6 +195,89 @@ assert_exit_code() {
     echo "  ASSERTION FAILED: $msg (got: $actual)" >&2
     return 1
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Value assertions (for unit tests)
+# ---------------------------------------------------------------------------
+
+assert_equals() {
+  local expected="$1"
+  local actual="$2"
+  local msg="${3:-Values should be equal}"
+  if [[ "$actual" == "$expected" ]]; then
+    return 0
+  else
+    echo "  ASSERTION FAILED: $msg (expected: '$expected', got: '$actual')" >&2
+    return 1
+  fi
+}
+
+assert_not_equals() {
+  local a="$1"
+  local b="$2"
+  local msg="${3:-Values should differ}"
+  if [[ "$a" != "$b" ]]; then
+    return 0
+  else
+    echo "  ASSERTION FAILED: $msg (both are: '$a')" >&2
+    return 1
+  fi
+}
+
+assert_matches() {
+  local pattern="$1"
+  local actual="$2"
+  local msg="${3:-Value should match pattern: $pattern}"
+  if [[ "$actual" =~ $pattern ]]; then
+    return 0
+  else
+    echo "  ASSERTION FAILED: $msg (got: '$actual')" >&2
+    return 1
+  fi
+}
+
+assert_empty() {
+  local value="$1"
+  local msg="${2:-Value should be empty}"
+  if [[ -z "$value" ]]; then
+    return 0
+  else
+    echo "  ASSERTION FAILED: $msg (got: '$value')" >&2
+    return 1
+  fi
+}
+
+assert_not_empty() {
+  local value="$1"
+  local msg="${2:-Value should not be empty}"
+  if [[ -n "$value" ]]; then
+    return 0
+  else
+    echo "  ASSERTION FAILED: $msg (value is empty)" >&2
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# run_func - Execute a function and capture results
+#
+# Usage: run_func <func> [args...]
+# Sets: _RF_RC (exit code), _RF_STDOUT (stdout), _RF_STDERR (stderr)
+# ---------------------------------------------------------------------------
+_RF_RC=0
+_RF_STDOUT=""
+_RF_STDERR=""
+
+run_func() {
+  local _rf_stdout_file _rf_stderr_file
+  _rf_stdout_file="$(mktemp)"
+  _rf_stderr_file="$(mktemp)"
+  _RF_RC=0
+  "$@" > "$_rf_stdout_file" 2> "$_rf_stderr_file" || _RF_RC=$?
+  _RF_STDOUT="$(cat "$_rf_stdout_file")"
+  _RF_STDERR="$(cat "$_rf_stderr_file")"
+  rm -f "$_rf_stdout_file" "$_rf_stderr_file"
 }
 
 # ---------------------------------------------------------------------------

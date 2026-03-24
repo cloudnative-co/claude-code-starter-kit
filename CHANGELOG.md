@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.0] - 2026-03-25
+
+### Added
+- **単体テスト基盤**: 82 本の関数レベル単体テストを追加（template, snapshot, merge, json-builder, features, detect, prerequisites, wizard-utils）。`tests/run-unit-tests.sh` ランナーと `tests/unit/` ディレクトリ構成
+- **テストヘルパー拡充**: `assert_equals`, `assert_not_equals`, `assert_matches`, `assert_empty`, `assert_not_empty`, `run_func` を `tests/helpers.sh` に追加
+
+### Fixed
+- **`assert_json_has_key` の false/null 誤判定**: `jq -e` → `jq -e '($key) != null'` に修正。値が false/null のキーでも正しく存在検出
+- **`assert_file_contains` の正規表現マッチ**: `grep -q` → `grep -qF` に修正。リテラル文字列マッチに統一
+
+### Changed
+- **CI**: `.github/workflows/test.yml` に単体テストステップを追加（シナリオテストの前に実行）
+
 ## [0.30.1] - 2026-03-25
 
 ### Fixed
