@@ -3,6 +3,11 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# Preserve original CLI arguments for Bash 4+ re-exec
+# ---------------------------------------------------------------------------
+_SETUP_ORIG_ARGS=("$@")
+
+# ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
 _script_dir() {
@@ -34,6 +39,10 @@ _cleanup_tmp() {
 }
 trap _cleanup_tmp EXIT INT TERM
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Stage 1: Bash 3.2-compatible bootstrap (wizard, detect, prerequisites)
+# ═══════════════════════════════════════════════════════════════════════════
+
 # ---------------------------------------------------------------------------
 # Source wizard first, parse CLI args
 # ---------------------------------------------------------------------------
@@ -43,7 +52,7 @@ trap _cleanup_tmp EXIT INT TERM
 parse_cli_args "$@"
 
 # ---------------------------------------------------------------------------
-# Source libraries
+# Stage 1 libraries (must work on Bash 3.2)
 # ---------------------------------------------------------------------------
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/colors.sh"
@@ -51,6 +60,29 @@ parse_cli_args "$@"
 . "$PROJECT_DIR/lib/detect.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/prerequisites.sh"
+
+# ---------------------------------------------------------------------------
+# Prerequisites + Bash 4+ check
+# ---------------------------------------------------------------------------
+detect_os
+check_prerequisites
+
+# Check for Bash 4+ and re-exec if needed
+check_bash4 || {
+  error "Bash 4+ is required. Please install it and try again."
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    info "  brew install bash"
+  else
+    info "  sudo apt-get install bash  (or equivalent)"
+  fi
+  exit 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Stage 2: Bash 4+ required from this point (template, json, merge, etc.)
+# Future: lib/features.sh with declare -A will be sourced here (PR-8+9)
+# ═══════════════════════════════════════════════════════════════════════════
+
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/template.sh"
 # shellcheck source=/dev/null
@@ -67,12 +99,6 @@ parse_cli_args "$@"
 . "$PROJECT_DIR/lib/ghostty.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/fonts.sh"
-
-# ---------------------------------------------------------------------------
-# Prerequisites
-# ---------------------------------------------------------------------------
-detect_os
-check_prerequisites
 
 # ---------------------------------------------------------------------------
 # Wizard

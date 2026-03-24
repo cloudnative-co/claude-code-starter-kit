@@ -453,26 +453,47 @@ test_update_noninteractive_safe() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Bash version scenarios (2) - bash-reexec SKIP until PR-4
+# Bash version scenarios (2)
 # ═══════════════════════════════════════════════════════════════════════════
 
 # --- 22. bash-version-check ---
 test_bash_version_check() {
-  local bash_version
-  bash_version="$(bash --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
-  local major="${bash_version%%.*}"
+  # Verify that check_bash4 detects the current Bash version
+  local bash_major="${BASH_VERSINFO[0]}"
 
-  if [[ "$major" -ge 4 ]]; then
-    pass "bash-version-check (Bash ${bash_version})"
+  if [[ "$bash_major" -ge 4 ]]; then
+    pass "bash-version-check (Bash ${BASH_VERSION}, 4+ OK)"
   else
-    # On macOS with Bash 3.2, this is expected
-    pass "bash-version-check (Bash ${bash_version}, 3.2 OK for now)"
+    # On macOS with Bash 3.2 running the test harness, verify _detect_bash4 can find one
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/lib/colors.sh"
+    source "$PROJECT_DIR/lib/detect.sh"
+    source "$PROJECT_DIR/lib/prerequisites.sh"
+    if _detect_bash4 >/dev/null 2>&1; then
+      pass "bash-version-check (Bash ${BASH_VERSION}, Bash 4+ found for re-exec)"
+    else
+      fail "bash-version-check (Bash ${BASH_VERSION}, no Bash 4+ found)"
+    fi
   fi
 }
 
 # --- 23. bash-reexec ---
 test_bash_reexec() {
-  skip "bash-reexec" "Bash 4+ re-exec not yet implemented (PR-4)"
+  # Verify that setup.sh completes successfully even when started from the test harness
+  # (which may be Bash 4+ already — the re-exec would be a no-op)
+  setup_test_env
+  local rc=0
+  run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && assert_file_exists "$CLAUDE_DIR/settings.json" \
+    && assert_file_exists "$CLAUDE_DIR/.starter-kit-manifest.json"; then
+    pass "bash-reexec"
+  else
+    fail "bash-reexec (setup failed after re-exec, rc=$rc)"
+  fi
+
+  teardown_test_env
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -588,7 +609,32 @@ test_update_partial_failure_recovery() {
 
 # --- 28. bash4-noninteractive-unavailable ---
 test_bash4_noninteractive_unavailable() {
-  skip "bash4-noninteractive-unavailable" "Bash 4+ requirement not yet enforced (PR-4)"
+  # This test requires a Bash 3.2-only environment with no Bash 4+ available.
+  # CI (ubuntu-latest) always has Bash 4+, so we can only verify on macOS
+  # with Bash 4+ uninstalled. Skip on CI.
+  if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+    skip "bash4-noninteractive-unavailable" "Cannot test — current shell is already Bash 4+"
+  else
+    # If we're running under Bash 3.2 and _detect_bash4 fails, setup.sh should error
+    setup_test_env
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/lib/colors.sh"
+    source "$PROJECT_DIR/lib/detect.sh"
+    source "$PROJECT_DIR/lib/prerequisites.sh"
+    if _detect_bash4 >/dev/null 2>&1; then
+      skip "bash4-noninteractive-unavailable" "Bash 4+ found even on Bash 3.2 host"
+    else
+      # No Bash 4+ available + non-interactive → should get error
+      local rc=0
+      run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
+      if [[ $rc -ne 0 ]]; then
+        pass "bash4-noninteractive-unavailable"
+      else
+        fail "bash4-noninteractive-unavailable (should have failed without Bash 4+)"
+      fi
+    fi
+    teardown_test_env
+  fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════

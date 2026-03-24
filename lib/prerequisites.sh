@@ -462,6 +462,60 @@ check_gh() {
 }
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Bash 4+ detection and re-exec
+# ---------------------------------------------------------------------------
+
+# _detect_bash4 - Find a Bash 4+ binary on the system
+# Returns the path via stdout. Returns 1 if none found.
+_detect_bash4() {
+  # Check current shell first
+  if [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]; then
+    printf '%s' "$BASH"
+    return 0
+  fi
+
+  # Search common locations
+  local candidate
+  for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash /usr/bin/bash; do
+    if [[ -x "$candidate" ]]; then
+      local ver
+      ver="$("$candidate" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null || echo "0")"
+      if [[ "$ver" -ge 4 ]]; then
+        printf '%s' "$candidate"
+        return 0
+      fi
+    fi
+  done
+
+  return 1
+}
+
+# check_bash4 - Ensure we're running under Bash 4+, re-exec if not
+# Uses _SETUP_ORIG_ARGS (set at setup.sh top-level) to preserve CLI arguments.
+# Returns 0 if already Bash 4+, re-execs on success, returns 1 on failure.
+check_bash4() {
+  # Already Bash 4+?
+  if [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]; then
+    return 0
+  fi
+
+  info "Current Bash is ${BASH_VERSION} (< 4.0). Looking for Bash 4+..."
+
+  local new_bash
+  if new_bash="$(_detect_bash4)"; then
+    info "Found Bash 4+ at: $new_bash"
+    info "Re-executing setup.sh under Bash 4+..."
+    exec "$new_bash" "${BASH_SOURCE[0]}" "${_SETUP_ORIG_ARGS[@]}"
+    # exec replaces the process; if we get here, exec failed
+    error "Failed to re-exec under $new_bash"
+    return 1
+  fi
+
+  # No Bash 4+ found
+  return 1
+}
+
 # Main entry point
 # ---------------------------------------------------------------------------
 
