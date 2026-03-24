@@ -4,35 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Added
-- **CLAUDE.md ユーザーセクション分離**: kit 管理セクションとユーザーセクションを HTML コメントマーカーで分離。ユーザーは `# User Settings` 以下に自由にカスタム指示を追加可能。update 時は kit セクションのみ更新され、ユーザーセクションは保持される
-- **既存 CLAUDE.md のマイグレーション**: マーカーのない既存 CLAUDE.md は、対話モードで既存全体をユーザーセクションに移行し kit セクションを追加。非対話モードではスキップ
+## [0.30.1] - 2026-03-25
 
 ### Fixed
 - **CLAUDE.md スナップショットの二重マーカー自己修復**: `_snapshot_claude_md()` の書き込み後に BEGIN マーカーの数を検証し、複数ペアが検出された場合は最初のペアだけを再抽出して自動修復。v0.30.0 以前のバグでスナップショットに二重マーカーが残った環境で、update のたびに false conflict が発生する問題を解消
-- **CLAUDE.md マーカー二重挿入バグを修正**: `_replace_kit_section` の sed ロジックが macOS/GNU sed の range 挙動差でマーカーを重複挿入する問題を awk ベースに書き直して修正
-- **GNU sed / GNU awk を prerequisite に追加**: macOS の BSD sed/awk との互換性問題を根本解決。既に GNU 版がインストール済みなら導入をスキップ。`_sed()` / `_awk()` ラッパーで CLAUDE.md section 処理と関連箇所を統一。Linux/WSL でも gawk 等が不足時は自動導入を試行
-- **settings.json の snapshot にユーザーカスタマイズが混入する問題を修正**: snapshot に merge 結果ではなく kit 生成版を保存するように変更。次回 update で「ユーザー未変更」と誤判定され permissions 等が kit デフォルトに上書きされる問題を解消
-- **Codex MCP セットアップが update 時に毎回確認される問題を修正**: 既にセットアップ済み（CLI + 認証 + MCP 登録）の場合は確認をスキップ。非対話モードでも不要な対話が発生しなくなった
-- **settings.json の language に表示名がセットされる問題を修正**: `"日本語"` → `"ja"` に変更。不要な conflict を解消
-- **update のスキップファイル表示でサブディレクトリパスが欠落する問題を修正**
-- **dry-run 時のメッセージを予告形に差し替え**: 完了形（〜しました）→ 予告形（〜されます）
-- **旧 kit 生成 CLAUDE.md のマイグレーション判定改善**: 削除・編集も検出するよう完全一致判定に変更
-
-### Changed
-- **Uninstall 時の CLAUDE.md 保護**: uninstall は CLAUDE.md を完全削除せず、kit マーカーセクションのみ除去。ユーザーセクションに内容がある場合はファイルを残す
-- **Snapshot 粒度**: CLAUDE.md の snapshot は kit セクションのみ保存。ユーザーセクションの編集が false conflict を起こさなくなった
-- **`--dry-run` フラグ**: `setup.sh --dry-run` で install/update の影響範囲を事前プレビュー。デプロイせずにサマリ + settings.json diff を表示。軽量な前提ツール（git, jq, curl）は対話確認付きで導入可、`--non-interactive` では導入せず終了
-- **`/update-kit-dry-run` コマンド**: Claude Code 内から update のドライランを直接実行
-- **デプロイ前の dry-run 提案**: 既存設定とのバッティングがある場合のみ、デプロイ前に「プレビューしますか？」と確認。結果を見てから続行/中止を選択可能。クリーンインストールでは表示されない
-- **外部操作の事前表示**: dry-run 時に Ghostty / fonts / plugins / Codex MCP 等の外部操作を `[WOULD RUN]` としてログ
-- **初回インストール時の既存設定保護**: starter kit 未使用だが `~/.claude/settings.json` がある環境では、settings.json を上書きせずマージ。CLAUDE.md やコンテンツディレクトリはディレクトリ単位で上書き/新規のみ/スキップを選択可能
-- **Non-interactive fallback**: 非対話モードでは settings.json のみ merge（kit 追加分を採用）、他のファイルは新規のみコピーし既存を保持
-
-### Changed
-- **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
+- **`grep -cF || echo 0` の二重出力バグ修正**: コマンド置換内の `|| echo 0` が `"0\n0"` を生成する問題を `lib/snapshot.sh` / `lib/template.sh` で統一修正
 
 ## [0.30.0] - 2026-03-24
 

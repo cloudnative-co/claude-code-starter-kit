@@ -304,7 +304,7 @@ The permissions file implements a defense-in-depth strategy against prompt injec
    - `setup.sh --update` / `/update-kit`
    - saved config reuse in `wizard/wizard.sh`
    Missing keys on older installs should receive the intended default for that profile, but existing explicit user choices must win.
-10. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
+10. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Write the entry directly under the version heading (`## [x.y.z]`) that will be tagged on merge — do not use an `[Unreleased]` section. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
 
 Multiple features can safely use the same hook type (e.g., `PreCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
 
