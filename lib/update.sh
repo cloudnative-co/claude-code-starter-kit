@@ -1,7 +1,13 @@
 #!/bin/bash
 # lib/update.sh - Update mode logic for Claude Code Starter Kit
-# Requires: lib/colors.sh, lib/snapshot.sh, lib/merge.sh, lib/json-builder.sh
-# Compatible: Bash 3.2+ (macOS default) — no associative arrays, no mapfile
+#
+# Requires: lib/colors.sh, lib/snapshot.sh, lib/merge.sh, lib/json-builder.sh,
+#           lib/template.sh (_has_kit_markers, _extract_kit_section, _user_section_heading)
+# Uses globals: PROJECT_DIR, CLAUDE_DIR, DRY_RUN, _MERGE_INTERACTIVE,
+#               _SNAPSHOT_BOOTSTRAPPED, _BACKUP_TIMESTAMP, _SETUP_TMP_FILES[],
+#               LANGUAGE, UPDATE_MODE, STR_UPDATE_*
+# Exports: run_update(), _check_major_upgrade(), _sync_settings_metadata()
+# Dry-run: run_update has dry-run awareness (logs instead of deploying)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

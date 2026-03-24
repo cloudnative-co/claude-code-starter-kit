@@ -1,6 +1,10 @@
 #!/bin/bash
-# lib/ghostty.sh - Ghostty terminal emulator installation and configuration
-# Requires: lib/colors.sh and lib/detect.sh to be sourced first
+# lib/ghostty.sh - Ghostty terminal emulator installation and configuration (macOS only)
+#
+# Requires: lib/colors.sh, lib/detect.sh, lib/fonts.sh (install_hackgen_nf)
+# Sets globals: GHOSTTY_INCOMPLETE[]
+# Exports: setup_ghostty()
+# Dry-run: guarded (setup.sh logs EXTERNAL, does not call setup_ghostty)
 set -euo pipefail
 
 # Track incomplete installations for final summary (array for safe iteration)

@@ -1,6 +1,10 @@
 #!/bin/bash
 # lib/json-builder.sh - JSON construction and manipulation using jq
-# Requires: jq, lib/colors.sh to be sourced first
+#
+# Requires: jq, lib/colors.sh
+# Uses globals: _SETUP_TMP_FILES[]
+# Exports: validate_json(), replace_home_path(), build_settings_json()
+# Dry-run: transparent (operates on whatever file paths are given)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

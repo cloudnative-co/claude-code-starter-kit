@@ -1,6 +1,13 @@
 #!/bin/bash
 # lib/prerequisites.sh - Dependency checking and installation
-# Requires: lib/colors.sh and lib/detect.sh to be sourced first
+#
+# Requires: lib/colors.sh, lib/detect.sh
+# Uses globals: DISTRO_FAMILY, WIZARD_NONINTERACTIVE, DRY_RUN,
+#               _SETUP_ORIG_ARGS[], _SETUP_SCRIPT_PATH, NODE_MAJOR
+# Sets globals: _GNU_SED, _GNU_AWK (wrappers for GNU sed/awk)
+# Exports: check_prerequisites(), check_bash4(), _detect_bash4(),
+#          _sed(), _awk(), _brew_is_usable(), _ensure_homebrew()
+# Dry-run: check_prerequisites has dry-run fast path (light tools only)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,12 @@
 #!/bin/bash
 # lib/snapshot.sh - Snapshot management for Claude Code Starter Kit update mechanism
 # Saves and compares kit-deployed files to detect user modifications before updates.
+#
+# Requires: lib/colors.sh
+# Uses globals: CLAUDE_DIR
+# Exports: _write_snapshot(), _snapshot_exists(), _file_changed(),
+#          _snapshot_claude_md()
+# Dry-run: transparent (operates on CLAUDE_DIR which may be sim dir)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

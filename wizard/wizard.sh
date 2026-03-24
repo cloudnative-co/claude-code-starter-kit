@@ -1,7 +1,17 @@
 #!/bin/bash
 # wizard/wizard.sh - Interactive setup wizard for Claude Code Starter Kit
 # This file is meant to be sourced by setup.sh, not run standalone.
-# Provides: run_wizard, parse_cli_args, save_config, load_config
+#
+# Interface boundary (public functions called by setup.sh):
+#   parse_cli_args "$@"    — Parse CLI flags, set WIZARD_* and ENABLE_* globals
+#   run_wizard             — Interactive prompt flow (skipped in non-interactive)
+#   save_config <path>     — Persist wizard config to file
+#   load_config <path>     — Restore wizard config from file
+#   is_true <val>          — Boolean normalization (true/1/yes/on → true)
+#
+# Sets globals: PROFILE, LANGUAGE, EDITOR_CHOICE, COMMIT_ATTRIBUTION,
+#               ENABLE_*, INSTALL_*, SELECTED_PLUGINS, SELECTED_HOOKS,
+#               UPDATE_MODE, DRY_RUN, WIZARD_NONINTERACTIVE, _RESET_MERGE_PREFS
 
 # ---------------------------------------------------------------------------
 # Globals (defaults can be overridden by defaults.conf or loaded config)

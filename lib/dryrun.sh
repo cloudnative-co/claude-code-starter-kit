@@ -1,7 +1,11 @@
 #!/bin/bash
 # lib/dryrun.sh - Dry-run simulation infrastructure
-# Requires: lib/colors.sh
-# Compatible: Bash 3.2+ (macOS default) — no associative arrays, no mapfile
+#
+# Requires: lib/colors.sh, lib/template.sh (_extract_kit_section)
+# Uses globals: _SETUP_TMP_FILES[], DRY_RUN, CLAUDE_DIR, UPDATE_MODE
+# Sets globals: _DRYRUN_LOG[], _DRYRUN_DIR
+# Dry-run: THIS IS the dry-run implementation. Creates sim dir, logs actions,
+#          shows diff summary. Normal flow runs against sim dir transparently.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

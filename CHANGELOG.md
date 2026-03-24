@@ -33,6 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 - **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
 
+## [0.22.3] - 2026-03-24
+
+### Added
+- **ヘッダーコメント + 契約定義**: 全 lib ファイルに Requires/Uses/Sets globals/Exports/Dry-run 分類を明記。wizard.sh にインターフェース境界コメント。merge.sh にマージ戦略 3 系統を記載
+
 ## [0.22.2] - 2026-03-24
 
 ### Changed
