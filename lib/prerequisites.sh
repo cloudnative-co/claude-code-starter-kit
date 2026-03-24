@@ -362,6 +362,28 @@ check_gh() {
 check_prerequisites() {
   section "必要なツールを確認中 / Checking prerequisites"
 
+  # Dry-run: verify required tools exist but never install anything
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    local failed=0
+    if command -v git &>/dev/null; then
+      ok "git $(git --version | awk '{print $3}')"
+    else
+      error "git is required for dry-run but not found"
+      failed=1
+    fi
+    if command -v jq &>/dev/null; then
+      ok "jq $(jq --version 2>/dev/null || echo '?')"
+    else
+      error "jq is required for dry-run but not found"
+      failed=1
+    fi
+    if [[ "$failed" -ne 0 ]]; then
+      return 1
+    fi
+    ok "必要なツールはすべて揃っています / All prerequisites satisfied (dry-run: check only)"
+    return 0
+  fi
+
   # macOS: try to ensure Homebrew is available (not fatal if it fails)
   _ensure_homebrew
 

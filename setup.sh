@@ -23,9 +23,14 @@ umask 077
 # Track temp files for cleanup on exit/interrupt
 _SETUP_TMP_FILES=()
 _cleanup_tmp() {
-  if [[ ${#_SETUP_TMP_FILES[@]} -gt 0 ]]; then
-    rm -f "${_SETUP_TMP_FILES[@]}" 2>/dev/null || true
-  fi
+  local _item
+  for _item in "${_SETUP_TMP_FILES[@]+"${_SETUP_TMP_FILES[@]}"}"; do
+    if [[ -d "$_item" ]]; then
+      rm -rf "$_item" 2>/dev/null || true
+    else
+      rm -f "$_item" 2>/dev/null || true
+    fi
+  done
 }
 trap _cleanup_tmp EXIT INT TERM
 
