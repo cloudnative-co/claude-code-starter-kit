@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **macOS CI**: `test.yml` を matrix 化し `macos-latest` ジョブを追加。brew cache + Bash 4+ 明示使用 + Bash 3.2 re-exec テスト
 - **semver ルール**: CLAUDE.md に Versioning セクションを追加。patch/minor/major の判断基準を明文化
 
+### Fixed
+- **uninstall.sh**: CLAUDE.md のキットセクション除去を `sed` → `awk` に変更（macOS BSD sed の互換性問題を修正）
+
 ## [0.32.1] - 2026-03-25
 
 ### Changed
