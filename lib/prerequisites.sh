@@ -165,6 +165,96 @@ check_curl() {
   ok "curl installed"
 }
 
+# ---------------------------------------------------------------------------
+# GNU sed / GNU awk — required for reliable text processing
+#
+# macOS ships BSD sed/awk which have subtle incompatibilities.
+# Detect GNU versions (gsed/gawk or sed/awk with --version), install if missing.
+# Sets _GNU_SED and _GNU_AWK to the resolved binary paths.
+# ---------------------------------------------------------------------------
+_GNU_SED=""
+_GNU_AWK=""
+
+_detect_gnu_sed() {
+  # Check if 'sed' itself is GNU
+  if sed --version 2>/dev/null | grep -q "GNU sed"; then
+    _GNU_SED="sed"
+    return 0
+  fi
+  # Check for gsed (brew install gnu-sed)
+  if command -v gsed &>/dev/null && gsed --version 2>/dev/null | grep -q "GNU sed"; then
+    _GNU_SED="gsed"
+    return 0
+  fi
+  return 1
+}
+
+_detect_gnu_awk() {
+  # Check if 'awk' itself is GNU
+  if awk --version 2>/dev/null | grep -q "GNU Awk"; then
+    _GNU_AWK="awk"
+    return 0
+  fi
+  # Check for gawk (brew install gawk)
+  if command -v gawk &>/dev/null && gawk --version 2>/dev/null | grep -q "GNU Awk"; then
+    _GNU_AWK="gawk"
+    return 0
+  fi
+  return 1
+}
+
+check_gnu_sed() {
+  if _detect_gnu_sed; then
+    ok "GNU sed ($_GNU_SED)"
+    return 0
+  fi
+  if [[ "$DISTRO_FAMILY" == "macos" ]]; then
+    info "Installing GNU sed..."
+    _pkg_install gnu-sed
+    if _detect_gnu_sed; then
+      ok "GNU sed installed ($_GNU_SED)"
+      return 0
+    fi
+  fi
+  # On Linux, sed is already GNU — should not reach here
+  warn "GNU sed not found"
+  return 1
+}
+
+check_gnu_awk() {
+  if _detect_gnu_awk; then
+    ok "GNU awk ($_GNU_AWK)"
+    return 0
+  fi
+  if [[ "$DISTRO_FAMILY" == "macos" ]]; then
+    info "Installing GNU awk..."
+    _pkg_install gawk
+    if _detect_gnu_awk; then
+      ok "GNU awk installed ($_GNU_AWK)"
+      return 0
+    fi
+  fi
+  warn "GNU awk not found"
+  return 1
+}
+
+# Portable wrappers — use these instead of raw sed/awk in kit scripts
+_sed() {
+  if [[ -n "$_GNU_SED" ]]; then
+    "$_GNU_SED" "$@"
+  else
+    sed "$@"
+  fi
+}
+
+_awk() {
+  if [[ -n "$_GNU_AWK" ]]; then
+    "$_GNU_AWK" "$@"
+  else
+    awk "$@"
+  fi
+}
+
 check_tmux() {
   if command -v tmux &>/dev/null; then
     ok "tmux $(tmux -V 2>/dev/null | awk '{print $2}')"
@@ -371,6 +461,8 @@ check_prerequisites() {
     command -v git  &>/dev/null && ok "git $(git --version | awk '{print $3}')"  || _dr_missing+=("git")
     command -v jq   &>/dev/null && ok "jq $(jq --version 2>/dev/null || echo '?')" || _dr_missing+=("jq")
     command -v curl &>/dev/null && ok "curl found" || _dr_missing+=("curl")
+    if _detect_gnu_sed; then ok "GNU sed ($_GNU_SED)"; else _dr_missing+=("gnu-sed"); fi
+    if _detect_gnu_awk; then ok "GNU awk ($_GNU_AWK)"; else _dr_missing+=("gawk"); fi
 
     if [[ ${#_dr_missing[@]} -eq 0 ]]; then
       ok "必要なツールはすべて揃っています / All prerequisites satisfied (dry-run)"
@@ -402,9 +494,11 @@ check_prerequisites() {
         local _dr_failed=0
         for _dr_tool in "${_dr_missing[@]}"; do
           case "$_dr_tool" in
-            git)  check_git  || _dr_failed=1 ;;
-            jq)   check_jq   || _dr_failed=1 ;;
-            curl) check_curl || _dr_failed=1 ;;
+            git)     check_git     || _dr_failed=1 ;;
+            jq)      check_jq      || _dr_failed=1 ;;
+            curl)    check_curl    || _dr_failed=1 ;;
+            gnu-sed) check_gnu_sed || _dr_failed=1 ;;
+            gawk)    check_gnu_awk || _dr_failed=1 ;;
           esac
         done
         if [[ "$_dr_failed" -ne 0 ]]; then
@@ -431,9 +525,11 @@ check_prerequisites() {
 
   local failed=0
 
-  check_git   || failed=1
-  check_jq    || failed=1
-  check_curl  || failed=1
+  check_git     || failed=1
+  check_jq      || failed=1
+  check_curl    || failed=1
+  check_gnu_sed || failed=1
+  check_gnu_awk || failed=1
   check_node  # Optional: needed for Codex CLI / npm plugins only
   check_tmux
   check_dos2unix

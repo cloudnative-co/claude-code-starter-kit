@@ -186,8 +186,8 @@ _update_claude_md() {
 
     # Compare ignoring blank lines: exact match = no user edits
     local current_trimmed old_kit_trimmed
-    current_trimmed="$(sed '/^[[:space:]]*$/d' "$current")"
-    old_kit_trimmed="$(sed '/^[[:space:]]*$/d' "$old_kit_output")"
+    current_trimmed="$(_sed '/^[[:space:]]*$/d' "$current")"
+    old_kit_trimmed="$(_sed '/^[[:space:]]*$/d' "$old_kit_output")"
 
     if [[ "$current_trimmed" == "$old_kit_trimmed" ]]; then
       # Unmodified old kit output → safe to auto-upgrade

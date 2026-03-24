@@ -451,8 +451,8 @@ _build_claude_md_safe() {
 
   # Compare ignoring blank lines: exact match = no user edits
   local current_trimmed old_kit_trimmed
-  current_trimmed="$(sed '/^[[:space:]]*$/d' "$target")"
-  old_kit_trimmed="$(sed '/^[[:space:]]*$/d' "$old_kit_output")"
+  current_trimmed="$(_sed '/^[[:space:]]*$/d' "$target")"
+  old_kit_trimmed="$(_sed '/^[[:space:]]*$/d' "$old_kit_output")"
 
   if [[ "$current_trimmed" == "$old_kit_trimmed" ]]; then
     cp -a "$new_claude_md" "$target"
