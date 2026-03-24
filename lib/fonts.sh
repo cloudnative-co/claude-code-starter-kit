@@ -2,7 +2,8 @@
 # lib/fonts.sh - Cross-platform programming font installation
 # Installs IBM Plex Mono and HackGen NF (Nerd Fonts)
 #
-# Requires: lib/colors.sh, lib/detect.sh, lib/prerequisites.sh (_brew_is_usable)
+# Requires: lib/colors.sh, lib/prerequisites.sh (_brew_is_usable)
+# Note: uses uname -s directly for platform detection (not lib/detect.sh)
 # Sets globals: FONTS_INCOMPLETE[]
 # Exports: install_ibm_plex_mono(), install_hackgen_nf(), setup_fonts()
 # Dry-run: guarded (setup.sh logs EXTERNAL, does not call setup_fonts)

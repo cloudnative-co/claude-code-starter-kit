@@ -1,8 +1,12 @@
 #!/bin/bash
 # lib/codex-setup.sh - Codex MCP setup (CLI install, auth, MCP registration)
-# Requires: lib/colors.sh, lib/detect.sh, wizard/wizard.sh (is_true) to be sourced first
-# Uses globals: ENABLE_CODEX_MCP, WIZARD_NONINTERACTIVE, _SETUP_TMP_FILES,
-#               STR_CODEX_*, STR_CHOICE, is_true()
+# Requires: lib/colors.sh, lib/detect.sh, wizard/wizard.sh (is_true)
+# Uses globals: ENABLE_CODEX_MCP, WIZARD_NONINTERACTIVE, _SETUP_TMP_FILES[],
+#               STR_CODEX_*, STR_CHOICE
+# Exports: run_codex_setup(), _setup_codex_mcp(), _install_codex_cli(),
+#          _run_with_timeout(), _verify_openai_key(), _save_openai_key(),
+#          _get_shell_rc_file()
+# Dry-run: guarded externally (setup.sh logs EXTERNAL, does not call run_codex_setup)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

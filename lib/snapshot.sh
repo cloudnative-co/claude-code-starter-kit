@@ -5,7 +5,7 @@
 # Requires: lib/colors.sh
 # Uses globals: CLAUDE_DIR
 # Exports: _write_snapshot(), _snapshot_exists(), _file_changed(),
-#          _snapshot_claude_md()
+#          _snapshot_claude_md(), _update_snapshot_file()
 # Dry-run: transparent (operates on CLAUDE_DIR which may be sim dir)
 set -euo pipefail
 

@@ -9,7 +9,7 @@
 # Requires: jq, lib/colors.sh
 # Uses globals: _MERGE_INTERACTIVE, _MERGE_PREFS, _MERGE_PREFS_FILE,
 #               _RESET_MERGE_PREFS, CLAUDE_DIR, STR_MERGE_*
-# Exports: _merge_settings_3way(), _merge_settings_bootstrap(),
+# Exports: merge_settings_3way(), _merge_settings_bootstrap(),
 #          _prompt_scalar_conflict(), _prompt_array_conflict(),
 #          _load_merge_prefs(), _merge_prefs_file()
 # Dry-run: transparent (operates on whatever paths are given; _MERGE_INTERACTIVE

@@ -1,7 +1,8 @@
 #!/bin/bash
 # lib/ghostty.sh - Ghostty terminal emulator installation and configuration (macOS only)
 #
-# Requires: lib/colors.sh, lib/detect.sh, lib/fonts.sh (install_hackgen_nf)
+# Requires: lib/colors.sh, lib/detect.sh, lib/prerequisites.sh (_brew_is_usable),
+#           lib/fonts.sh (install_hackgen_nf)
 # Sets globals: GHOSTTY_INCOMPLETE[]
 # Exports: setup_ghostty()
 # Dry-run: guarded (setup.sh logs EXTERNAL, does not call setup_ghostty)
