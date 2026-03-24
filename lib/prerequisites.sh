@@ -523,6 +523,50 @@ check_bash4() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# _get_shell_rc_file - Determine the user's shell RC file
+#
+# Outputs the path to stdout. Handles MSYS (bash_profile), zsh, bash.
+# ---------------------------------------------------------------------------
+_get_shell_rc_file() {
+  if is_msys; then
+    printf '%s' "$HOME/.bash_profile"
+  else
+    case "${SHELL:-/bin/bash}" in
+      */zsh)  printf '%s' "$HOME/.zshrc" ;;
+      */bash) printf '%s' "$HOME/.bashrc" ;;
+      *)      printf '%s' "$HOME/.profile" ;;
+    esac
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _add_to_path_now_and_persist - Add a directory to PATH immediately + persist
+#
+# Usage: _add_to_path_now_and_persist <dir>
+#
+# 1. Immediate: export PATH="<dir>:$PATH" (current session)
+# 2. Persist: append to shell RC file if not already present
+# ---------------------------------------------------------------------------
+_add_to_path_now_and_persist() {
+  local dir="$1"
+
+  # Immediate export for current session
+  case ":${PATH}:" in
+    *":${dir}:"*) ;;  # already in PATH
+    *) export PATH="${dir}:${PATH}" ;;
+  esac
+
+  # Persist to RC file
+  local rc_file
+  rc_file="$(_get_shell_rc_file)"
+  [[ -f "$rc_file" ]] || touch "$rc_file"
+
+  if ! grep -q "$dir" "$rc_file" 2>/dev/null; then
+    printf '\n# Claude Code CLI\nexport PATH="%s:$PATH"\n' "$dir" >> "$rc_file"
+  fi
+}
+
 # Main entry point
 # ---------------------------------------------------------------------------
 

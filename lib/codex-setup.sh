@@ -1,11 +1,11 @@
 #!/bin/bash
 # lib/codex-setup.sh - Codex MCP setup (CLI install, auth, MCP registration)
-# Requires: lib/colors.sh, lib/detect.sh, wizard/wizard.sh (is_true)
+# Requires: lib/colors.sh, lib/detect.sh, lib/prerequisites.sh (_get_shell_rc_file),
+#           wizard/wizard.sh (is_true)
 # Uses globals: ENABLE_CODEX_MCP, WIZARD_NONINTERACTIVE, _SETUP_TMP_FILES[],
 #               STR_CODEX_*, STR_CHOICE
 # Exports: run_codex_setup(), _setup_codex_mcp(), _install_codex_cli(),
-#          _run_with_timeout(), _verify_openai_key(), _save_openai_key(),
-#          _get_shell_rc_file()
+#          _run_with_timeout(), _verify_openai_key(), _save_openai_key()
 # Dry-run: guarded externally (setup.sh logs EXTERNAL, does not call run_codex_setup)
 set -euo pipefail
 
@@ -65,20 +65,7 @@ _save_openai_key() {
   export OPENAI_API_KEY="$key"
 }
 
-_get_shell_rc_file() {
-  local _rc_file="$HOME/.bashrc"
-  if is_msys; then
-    # Git Bash sources .bash_profile, not .bashrc
-    _rc_file="$HOME/.bash_profile"
-  else
-    local _login_shell
-    _login_shell="$(basename "${SHELL:-bash}")"
-    if [[ "$_login_shell" == "zsh" ]]; then
-      _rc_file="$HOME/.zshrc"
-    fi
-  fi
-  printf '%s\n' "$_rc_file"
-}
+# _get_shell_rc_file is now in lib/prerequisites.sh (moved in v0.24.0)
 
 _codex_login_status() {
   if ! command -v codex &>/dev/null; then
