@@ -172,8 +172,31 @@ _update_claude_md() {
     return 0
   fi
 
-  # Case 2: current has no markers → migration
+  # Case 2: current has no markers → check if it's an old kit-generated file
   if ! _has_kit_markers "$current"; then
+    # Build what the old kit (without markers) would have produced
+    local old_kit_output
+    old_kit_output="$(mktemp)"
+    _SETUP_TMP_FILES+=("$old_kit_output")
+    # Strip markers from the new kit output to get comparable old-format content
+    grep -vF "<!-- BEGIN STARTER-KIT-MANAGED -->" "$new_kit_file" \
+      | grep -vF "<!-- END STARTER-KIT-MANAGED -->" \
+      | grep -vF "$(_user_section_heading)" \
+      | grep -v '^<!-- .*custom instructions' \
+      > "$old_kit_output" || true
+    # Remove leading/trailing blank lines for fair comparison
+    local current_trimmed old_kit_trimmed
+    current_trimmed="$(sed '/^[[:space:]]*$/d' "$current")"
+    old_kit_trimmed="$(sed '/^[[:space:]]*$/d' "$old_kit_output")"
+
+    if [[ "$current_trimmed" == "$old_kit_trimmed" ]]; then
+      # Old kit-generated file with no user edits → replace with new template
+      cp -a "$new_kit_file" "$current"
+      info "CLAUDE.md upgraded to section-aware format (no user edits detected)"
+      return 0
+    fi
+
+    # Has user edits → real migration needed
     warn "$STR_CLAUDEMD_MIGRATION"
     if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
       warn "$STR_CLAUDEMD_MIGRATION_SKIP"

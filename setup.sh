@@ -430,11 +430,30 @@ _build_claude_md_safe() {
     return
   fi
 
-  # No markers — migration: existing content becomes user section
+  # No markers — check if this is an unmodified old kit-generated file
+  local old_kit_output
+  old_kit_output="$(mktemp)"
+  _SETUP_TMP_FILES+=("$old_kit_output")
+  grep -vF "<!-- BEGIN STARTER-KIT-MANAGED -->" "$new_claude_md" \
+    | grep -vF "<!-- END STARTER-KIT-MANAGED -->" \
+    | grep -vF "$(_user_section_heading)" \
+    | grep -v '^<!-- .*custom instructions' \
+    > "$old_kit_output" || true
+  local current_trimmed old_kit_trimmed
+  current_trimmed="$(sed '/^[[:space:]]*$/d' "$target")"
+  old_kit_trimmed="$(sed '/^[[:space:]]*$/d' "$old_kit_output")"
+
+  if [[ "$current_trimmed" == "$old_kit_trimmed" ]]; then
+    # Old kit-generated file with no user edits → replace with new template
+    cp -a "$new_claude_md" "$target"
+    ok "CLAUDE.md upgraded to section-aware format"
+    return
+  fi
+
+  # Has user edits — real migration needed
   warn "$STR_CLAUDEMD_MIGRATION"
 
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
-    # Non-interactive: skip (structural change requires consent)
     _FRESH_SKIPPED_FILES+=("$target")
     warn "$STR_CLAUDEMD_MIGRATION_SKIP"
     return
@@ -978,6 +997,7 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
   _dryrun_init "$CLAUDE_DIR"
   CLAUDE_DIR="$_DRYRUN_DIR"
   _MERGE_INTERACTIVE="false"  # dry-run is always non-interactive
+  _QUIET_OUTPUT="true"        # suppress progress messages, show only summary
 fi
 
 # ---------------------------------------------------------------------------
