@@ -3,9 +3,10 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Preserve original CLI arguments for Bash 4+ re-exec
+# Preserve original CLI arguments and script path for Bash 4+ re-exec
 # ---------------------------------------------------------------------------
 _SETUP_ORIG_ARGS=("$@")
+_SETUP_SCRIPT_PATH="${BASH_SOURCE[0]}"
 
 # ---------------------------------------------------------------------------
 # Path helpers

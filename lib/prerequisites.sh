@@ -506,7 +506,7 @@ check_bash4() {
   if new_bash="$(_detect_bash4)"; then
     info "Found Bash 4+ at: $new_bash"
     info "Re-executing setup.sh under Bash 4+..."
-    exec "$new_bash" "${BASH_SOURCE[0]}" "${_SETUP_ORIG_ARGS[@]}"
+    exec "$new_bash" "$_SETUP_SCRIPT_PATH" "${_SETUP_ORIG_ARGS[@]+"${_SETUP_ORIG_ARGS[@]}"}"
     # exec replaces the process; if we get here, exec failed
     error "Failed to re-exec under $new_bash"
     return 1

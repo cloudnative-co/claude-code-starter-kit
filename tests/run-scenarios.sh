@@ -4,9 +4,9 @@
 #
 # Usage: bash tests/run-scenarios.sh
 #
-# Expected results (PR-2): 24 PASS + 4 SKIP
-# SKIP: safety-net-first, registry-consistency (PR-8+9), bash-reexec (PR-4),
-#        bash4-noninteractive-unavailable (PR-4)
+# Expected results (PR-4+): 25 PASS + 3 SKIP
+# SKIP: safety-net-first, registry-consistency (PR-8+9),
+#        bash4-noninteractive-unavailable (always SKIP on Bash 4+ CI)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
