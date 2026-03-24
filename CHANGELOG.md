@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.34.0] - 2026-03-25
+
+### Added
+- **プラグイン自動更新**: `setup.sh --update` / `/update-kit` 実行時にプラグインを `claude plugin install` で再インストールし最新化。add-only 方式（ユーザー追加プラグインは保持）
+- **i18n**: `STR_DEPLOY_PLUGINS_UPDATED` を en/ja に追加
+
 ## [0.33.0] - 2026-03-25
 
 ### Added
