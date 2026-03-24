@@ -256,8 +256,7 @@ test_uninstall_preserve_user() {
   run_setup --profile=minimal >/dev/null 2>&1
   # Add user content to CLAUDE.md user section
   printf "\n## My Precious Notes\nDo not delete this.\n" >> "$CLAUDE_DIR/CLAUDE.md"
-  local _uninstall_out
-  _uninstall_out="$(run_uninstall 2>&1)" || true
+  run_uninstall >/dev/null 2>&1 || true
 
   # Kit section should be removed, but user content preserved
   if assert_file_exists "$CLAUDE_DIR/CLAUDE.md" \
@@ -265,10 +264,6 @@ test_uninstall_preserve_user() {
     && assert_file_not_contains "$CLAUDE_DIR/CLAUDE.md" "BEGIN STARTER-KIT-MANAGED"; then
     pass "uninstall-preserve-user"
   else
-    # Debug output for CI diagnosis
-    printf "  [DEBUG] uninstall output:\n%s\n" "$_uninstall_out" >&2
-    printf "  [DEBUG] CLAUDE.md content:\n" >&2
-    cat "$CLAUDE_DIR/CLAUDE.md" >&2 2>/dev/null || printf "  [DEBUG] CLAUDE.md does not exist\n" >&2
     fail "uninstall-preserve-user"
   fi
 

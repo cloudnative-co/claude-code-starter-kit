@@ -227,20 +227,20 @@ while IFS= read -r file; do
       else
         rm -f "$file"
       fi
-      ((removed++))
+      removed=$((removed + 1))
     else
       rm -f "$file"
-      ((removed++))
+      removed=$((removed + 1))
     fi
   else
-    ((skipped++))
+    skipped=$((skipped + 1))
   fi
 done < <(_json_files "$MANIFEST")
 
 # Remove legacy AGENTS.md from older releases that deployed it into ~/.claude
 if [[ -f "$CLAUDE_DIR/AGENTS.md" ]]; then
   rm -f "$CLAUDE_DIR/AGENTS.md"
-  ((removed++))
+  removed=$((removed + 1))
 fi
 
 # Remove manifest itself
