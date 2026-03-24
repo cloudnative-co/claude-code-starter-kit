@@ -33,6 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 - **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
 
+## [0.22.1] - 2026-03-24
+
+### Changed
+- **Codex MCP コード分離**: setup.sh から ~420行の Codex MCP 関連コードを `lib/codex-setup.sh` に移動。`run_codex_setup()` エントリポイント関数を追加。setup.sh は source + 呼び出しのみ。動作変更なし
+
 ## [0.22.0] - 2026-03-24
 
 ### Changed
