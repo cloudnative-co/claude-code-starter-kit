@@ -33,6 +33,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 - **既存ユーザーへの警告メッセージ改善**: 既存 settings.json がある場合は「マージされます」と表示（「上書きされます」ではなく）
 
+## [0.30.0] - 2026-03-24
+
+**大規模リファクタリングマイルストーン** (v0.20.4 → v0.30.0)
+
+### Added
+- **Feature registry** (`lib/features.sh`): `declare -A _FEATURE_FLAGS`, `_FEATURE_HAS_SCRIPTS`, `_FEATURE_ORDER` で 12 feature を一元管理。新 feature 追加時の編集ファイル数を 16-19 → 5 に削減
+- **`_add_to_path_now_and_persist()`**: 即時 export + RC 永続化を統合
+- **`_check_major_upgrade()`**: semver メジャーバージョン変更検出 + 復旧案内
+- **Dirty check**: 全更新経路（install.sh, install.ps1, auto-update.sh, /update-kit）で git dirty preflight
+- **シナリオテスト基盤**: 28 テスト（27 PASS + 1 SKIP）+ CI workflow
+- **ヘッダーコメント + 契約定義**: 全 lib ファイルに Requires/Uses/Sets/Exports/Dry-run 分類
+
+### Changed
+- **Bash 4+ 必須化**: 二段階ブート（Stage 1: Bash 3.2 互換 → re-exec → Stage 2: Bash 4+）
+- **`build_settings_file()` 統合**: `build_settings()` + `build_settings_to_file()` の ~140行重複を registry ループに統合
+- **`deploy_hook_scripts()` 統合**: mode 引数（simple/merge-aware）、`_deploy_hook_scripts_safe()` 削除
+- **Codex MCP コード分離**: setup.sh から ~420行を `lib/codex-setup.sh` に移動
+- **関数一元化**: `_merge_settings_bootstrap()` → merge.sh、`_user_section_heading()` → template.sh、`_get_shell_rc_file()` → prerequisites.sh
+- **ghostty.sh HackGen 重複関数削除**: fonts.sh の `install_hackgen_nf()` を使用。`_ghostty_ensure_brew()` → `_ensure_homebrew()` に統一
+
+### Removed
+- 未使用 i18n 文字列 31 個を en/ja から削除
+
 ## [0.24.0] - 2026-03-24
 
 ### Changed

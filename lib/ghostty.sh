@@ -28,40 +28,7 @@ _ghostty_config_dir() {
   esac
 }
 
-# ---------------------------------------------------------------------------
-# Ensure Homebrew is available (find in PATH or standard locations)
-# ---------------------------------------------------------------------------
-_ghostty_ensure_brew() {
-  # _brew_is_usable is defined in lib/prerequisites.sh (sourced earlier)
-  _brew_is_usable 2>/dev/null && return 0
-
-  # Try standard Homebrew paths (may not be in PATH yet)
-  if ! command -v brew &>/dev/null; then
-    if [[ -x /opt/homebrew/bin/brew ]]; then
-      eval "$(/opt/homebrew/bin/brew shellenv)"
-    elif [[ -x /usr/local/bin/brew ]]; then
-      eval "$(/usr/local/bin/brew shellenv)"
-    fi
-  fi
-  _brew_is_usable 2>/dev/null && return 0
-
-  # Not installed or not usable (installed by another user) — try to install
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    if command -v brew &>/dev/null; then
-      warn "Homebrew found but not writable by current user"
-    fi
-    info "Installing Homebrew..."
-    if NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
-      if [[ -x /opt/homebrew/bin/brew ]]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-      elif [[ -x /usr/local/bin/brew ]]; then
-        eval "$(/usr/local/bin/brew shellenv)"
-      fi
-    fi
-  fi
-
-  _brew_is_usable 2>/dev/null
-}
+# _ghostty_ensure_brew removed in v0.30.0 — use _ensure_homebrew from prerequisites.sh
 
 # ---------------------------------------------------------------------------
 # Backup existing config
@@ -95,7 +62,8 @@ install_ghostty() {
 
   case "$uname_s" in
     Darwin)
-      if ! _ghostty_ensure_brew; then
+      _ensure_homebrew
+      if ! _brew_is_usable 2>/dev/null; then
         warn "Homebrew is not available. Cannot install Ghostty."
         info "  Install manually: https://ghostty.org/"
         return 1
