@@ -23,7 +23,7 @@ printf "\n── Claude Code Starter Kit: Scenario Tests ──\n\n"
 test_fresh_install_clean() {
   setup_test_env
   local rc=0
-  run_setup >/dev/null 2>&1 || rc=$?
+  run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
 
   if [[ $rc -eq 0 ]] \
     && assert_file_exists "$CLAUDE_DIR/settings.json" \
@@ -46,7 +46,7 @@ test_fresh_install_existing() {
   setup_test_env
   install_fixture "no-manifest"
   local rc=0
-  run_setup >/dev/null 2>&1 || rc=$?
+  run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
 
   if [[ $rc -eq 0 ]] \
     && assert_file_exists "$CLAUDE_DIR/settings.json" \
@@ -67,12 +67,18 @@ test_fresh_install_existing() {
 # --- 3. update-no-changes ---
 test_update_no_changes() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
+  # Capture settings before update
+  local before_settings
+  before_settings="$(cat "$CLAUDE_DIR/settings.json")"
   # Run update immediately (no changes)
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
+  local after_settings
+  after_settings="$(cat "$CLAUDE_DIR/settings.json")"
 
-  if [[ $rc -eq 0 ]]; then
+  # Settings should be unchanged (snapshot == current, no kit change in same version)
+  if [[ $rc -eq 0 ]] && [[ "$before_settings" == "$after_settings" ]]; then
     pass "update-no-changes"
   else
     fail "update-no-changes"
@@ -84,9 +90,9 @@ test_update_no_changes() {
 # --- 4. update-kit-changed ---
 test_update_kit_changed() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
   # Simulate kit change: modify the snapshot to differ from current
-  # (This makes it look like user didn't change, but kit did)
+  # (This makes it look like user didn't change, but kit did → overwrite)
   local snapshot_settings="$CLAUDE_DIR/.starter-kit-snapshot/settings.json"
   if [[ -f "$snapshot_settings" ]]; then
     jq '.test_old_kit = true' "$snapshot_settings" > "$snapshot_settings.tmp" && mv "$snapshot_settings.tmp" "$snapshot_settings"
@@ -94,7 +100,11 @@ test_update_kit_changed() {
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
 
-  if [[ $rc -eq 0 ]]; then
+  # After update, settings.json should NOT contain test_old_kit (it was only in snapshot)
+  # and the current file should be the new kit version
+  if [[ $rc -eq 0 ]] \
+    && assert_file_exists "$CLAUDE_DIR/settings.json" \
+    && ! jq -e '.test_old_kit' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
     pass "update-kit-changed"
   else
     fail "update-kit-changed"
@@ -106,7 +116,7 @@ test_update_kit_changed() {
 # --- 5. update-user-changed ---
 test_update_user_changed() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
   # Simulate user change: modify current settings.json
   jq '.user_custom_key = "my_value"' "$CLAUDE_DIR/settings.json" > "$CLAUDE_DIR/settings.json.tmp" \
     && mv "$CLAUDE_DIR/settings.json.tmp" "$CLAUDE_DIR/settings.json"
@@ -132,7 +142,10 @@ test_update_feature_toggle() {
   local rc=0
   run_setup_update --profile=minimal >/dev/null 2>&1 || rc=$?
 
-  if [[ $rc -eq 0 ]]; then
+  # After update, settings and manifest should still exist
+  if [[ $rc -eq 0 ]] \
+    && assert_file_exists "$CLAUDE_DIR/settings.json" \
+    && assert_file_exists "$CLAUDE_DIR/.starter-kit-manifest.json"; then
     pass "update-feature-toggle"
   else
     fail "update-feature-toggle"
@@ -164,7 +177,7 @@ test_claudemd_migration() {
 # --- 8. claudemd-section-preserve ---
 test_claudemd_section_preserve() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
   # Add user content to user section
   printf "\n## My Custom Rules\n- Always be nice\n" >> "$CLAUDE_DIR/CLAUDE.md"
   local rc=0
@@ -184,7 +197,7 @@ test_claudemd_section_preserve() {
 # --- 9. claudemd-kit-edit-conflict ---
 test_claudemd_kit_edit_conflict() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
   # Edit the kit section (between markers)
   local md="$CLAUDE_DIR/CLAUDE.md"
   if [[ -f "$md" ]]; then
@@ -195,9 +208,10 @@ test_claudemd_kit_edit_conflict() {
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
 
-  # Non-interactive: keeps user version (non-destructive)
+  # Non-interactive: keeps user version (non-destructive — user's edit preserved)
   if [[ $rc -eq 0 ]] \
-    && assert_file_exists "$CLAUDE_DIR/CLAUDE.md"; then
+    && assert_file_exists "$CLAUDE_DIR/CLAUDE.md" \
+    && assert_file_contains "$CLAUDE_DIR/CLAUDE.md" "My Custom Format"; then
     pass "claudemd-kit-edit-conflict"
   else
     fail "claudemd-kit-edit-conflict"
@@ -209,7 +223,7 @@ test_claudemd_kit_edit_conflict() {
 # --- 10. dry-run-no-mutation ---
 test_dry_run_no_mutation() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
   # Take checksum before dry-run
   local before after
   before="$(snapshot_dir_checksum "$CLAUDE_DIR")"
@@ -228,7 +242,7 @@ test_dry_run_no_mutation() {
 # --- 11. uninstall-preserve-user ---
 test_uninstall_preserve_user() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
   # Add user content to CLAUDE.md user section
   printf "\n## My Precious Notes\nDo not delete this.\n" >> "$CLAUDE_DIR/CLAUDE.md"
   run_uninstall >/dev/null 2>&1 || true
@@ -248,7 +262,7 @@ test_uninstall_preserve_user() {
 # --- 12. snapshot-baseline ---
 test_snapshot_baseline() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
 
   if assert_file_exists "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" \
     && assert_dir_exists "$CLAUDE_DIR/.starter-kit-snapshot"; then
@@ -269,7 +283,7 @@ test_snapshot_baseline() {
 # --- 13. merge-prefs-persist ---
 test_merge_prefs_persist() {
   setup_test_env
-  run_setup >/dev/null 2>&1
+  run_setup --profile=minimal >/dev/null 2>&1
 
   # Create a merge prefs file
   printf '{"settings.json/permissions":{"action":"keep"}}' > "$CLAUDE_DIR/.starter-kit-merge-prefs.json"
@@ -277,9 +291,10 @@ test_merge_prefs_persist() {
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
 
-  # Merge prefs file should survive update
+  # Merge prefs file should survive update with content intact
   if [[ $rc -eq 0 ]] \
-    && assert_file_exists "$CLAUDE_DIR/.starter-kit-merge-prefs.json"; then
+    && assert_file_exists "$CLAUDE_DIR/.starter-kit-merge-prefs.json" \
+    && assert_json_has_key "$CLAUDE_DIR/.starter-kit-merge-prefs.json" '."settings.json/permissions"'; then
     pass "merge-prefs-persist"
   else
     fail "merge-prefs-persist"
@@ -295,9 +310,10 @@ test_settings_array_merge() {
   local rc=0
   run_setup_update >/dev/null 2>&1 || rc=$?
 
-  # User's permissions.allow entries should be preserved
+  # User's mcpServers should be preserved through merge
   if [[ $rc -eq 0 ]] \
-    && assert_file_exists "$CLAUDE_DIR/settings.json"; then
+    && assert_file_exists "$CLAUDE_DIR/settings.json" \
+    && assert_json_has_key "$CLAUDE_DIR/settings.json" '.mcpServers["my-custom-server"]'; then
     pass "settings-array-merge"
   else
     fail "settings-array-merge"
@@ -472,16 +488,14 @@ test_update_v019_to_latest_direct() {
 test_snapshot_format_v019_to_latest() {
   setup_test_env
   install_fixture "v019"
-  run_setup_update >/dev/null 2>&1 || true
+  local rc=0
+  run_setup_update >/dev/null 2>&1 || rc=$?
 
-  # After update, snapshot should be valid (settings.json present)
-  if assert_file_exists "$CLAUDE_DIR/.starter-kit-snapshot/settings.json"; then
-    # Snapshot should be valid JSON
-    if jq empty "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" 2>/dev/null; then
-      pass "snapshot-format-v019-to-latest"
-    else
-      fail "snapshot-format-v019-to-latest (invalid JSON in snapshot)"
-    fi
+  # After update, snapshot should be valid (settings.json present + valid JSON)
+  if [[ $rc -eq 0 ]] \
+    && assert_file_exists "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" \
+    && jq empty "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" 2>/dev/null; then
+    pass "snapshot-format-v019-to-latest"
   else
     fail "snapshot-format-v019-to-latest"
   fi
@@ -510,26 +524,49 @@ test_snapshot_format_v020_compat() {
 # --- 27. update-partial-failure-recovery ---
 test_update_partial_failure_recovery() {
   setup_test_env
-  run_setup >/dev/null 2>&1
-  # Simulate that a backup was created
-  local backup_dir
-  backup_dir="$HOME/.claude.backup.$(date +%Y%m%d%H%M%S)"
-  cp -a "$CLAUDE_DIR" "$backup_dir"
+  run_setup --profile=minimal >/dev/null 2>&1
 
-  # Verify backup exists and has content
-  if assert_dir_exists "$backup_dir" \
-    && assert_file_exists "$backup_dir/settings.json"; then
-    # Verify we can restore from backup
-    rm -rf "$CLAUDE_DIR"
-    cp -a "$backup_dir" "$CLAUDE_DIR"
-    if assert_file_exists "$CLAUDE_DIR/settings.json" \
-      && assert_file_exists "$CLAUDE_DIR/CLAUDE.md"; then
-      pass "update-partial-failure-recovery"
+  # Run update which should create a backup via backup_existing()
+  run_setup_update >/dev/null 2>&1 || true
+
+  # Check if backup was created (backup_existing writes .starter-kit-last-backup)
+  local backup_path_file="$CLAUDE_DIR/.starter-kit-last-backup"
+  if [[ -f "$backup_path_file" ]]; then
+    local backup_dir
+    backup_dir="$(cat "$backup_path_file")"
+    if assert_dir_exists "$backup_dir" \
+      && assert_file_exists "$backup_dir/settings.json"; then
+      # Simulate failure: destroy CLAUDE_DIR and restore from backup
+      rm -rf "$CLAUDE_DIR"
+      cp -a "$backup_dir" "$CLAUDE_DIR"
+      if assert_file_exists "$CLAUDE_DIR/settings.json"; then
+        pass "update-partial-failure-recovery"
+      else
+        fail "update-partial-failure-recovery (restore failed)"
+      fi
     else
-      fail "update-partial-failure-recovery (restore failed)"
+      fail "update-partial-failure-recovery (backup incomplete)"
     fi
   else
-    fail "update-partial-failure-recovery (backup not created)"
+    # Backup may not exist if CLAUDE_DIR didn't exist before update
+    # In this case, verify at least that CLAUDE_DIR is intact
+    local backup_found=false
+    for d in "$HOME"/.claude.backup.*; do
+      if [[ -d "$d" ]] && [[ -f "$d/settings.json" ]]; then
+        backup_found=true
+        rm -rf "$CLAUDE_DIR"
+        cp -a "$d" "$CLAUDE_DIR"
+        if assert_file_exists "$CLAUDE_DIR/settings.json"; then
+          pass "update-partial-failure-recovery"
+        else
+          fail "update-partial-failure-recovery (restore failed)"
+        fi
+        break
+      fi
+    done
+    if [[ "$backup_found" == "false" ]]; then
+      fail "update-partial-failure-recovery (no backup found)"
+    fi
   fi
 
   teardown_test_env

@@ -11,6 +11,8 @@ _TEST_PASS=0
 _TEST_FAIL=0
 _TEST_SKIP=0
 _TEST_TMPDIR=""
+_ORIG_HOME="${HOME:-}"
+_ORIG_PATH="${PATH:-}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ---------------------------------------------------------------------------
@@ -24,34 +26,40 @@ setup_test_env() {
   export HOME="$_TEST_TMPDIR"
   export CLAUDE_DIR="$_TEST_TMPDIR/.claude"
   export WIZARD_NONINTERACTIVE=true
-  # Prevent real prerequisite installs during tests
-  export _SKIP_PREREQUISITES=true
 
   # Place a dummy 'claude' binary so setup.sh skips CLI installation
   mkdir -p "$_TEST_TMPDIR/.local/bin"
   printf '#!/bin/bash\nexit 0\n' > "$_TEST_TMPDIR/.local/bin/claude"
   chmod +x "$_TEST_TMPDIR/.local/bin/claude"
-  export PATH="$_TEST_TMPDIR/.local/bin:$PATH"
+  export PATH="$_TEST_TMPDIR/.local/bin:$_ORIG_PATH"
 }
 
 # ---------------------------------------------------------------------------
 # teardown_test_env - Clean up the isolated test environment
 # ---------------------------------------------------------------------------
 teardown_test_env() {
+  # Restore original HOME and PATH to prevent cross-test contamination
+  export HOME="$_ORIG_HOME"
+  export PATH="$_ORIG_PATH"
+
   if [[ -n "${_TEST_TMPDIR:-}" ]] && [[ -d "$_TEST_TMPDIR" ]]; then
     rm -rf "$_TEST_TMPDIR"
   fi
   _TEST_TMPDIR=""
 }
 
+# Ensure cleanup on unexpected exit (set -e abort, signal, etc.)
+trap 'teardown_test_env' EXIT
+
 # ---------------------------------------------------------------------------
 # run_setup - Run setup.sh with given args in the test environment
 #
 # Usage: run_setup [args...]
+# Does NOT hardcode --profile; caller must pass it if needed.
 # Returns the exit code of setup.sh
 # ---------------------------------------------------------------------------
 run_setup() {
-  bash "$PROJECT_DIR/setup.sh" --non-interactive --profile=minimal --language=en "$@" 2>&1
+  bash "$PROJECT_DIR/setup.sh" --non-interactive --language=en "$@" 2>&1
 }
 
 # ---------------------------------------------------------------------------
@@ -65,7 +73,7 @@ run_setup_update() {
 # run_uninstall - Run uninstall.sh in the test environment
 # ---------------------------------------------------------------------------
 run_uninstall() {
-  # uninstall.sh reads from /dev/tty for confirmation; provide auto-answers
+  # uninstall.sh reads from stdin for confirmation; provide auto-answers
   printf 'y\nn\n' | bash "$PROJECT_DIR/uninstall.sh" 2>&1 || true
 }
 
@@ -164,6 +172,18 @@ assert_json_field() {
   fi
 }
 
+assert_json_has_key() {
+  local file="$1"
+  local key="$2"
+  local msg="${3:-JSON should have key: $key}"
+  if jq -e "$key" "$file" >/dev/null 2>&1; then
+    return 0
+  else
+    echo "  ASSERTION FAILED: $msg" >&2
+    return 1
+  fi
+}
+
 assert_exit_code() {
   local expected="$1"
   local actual="$2"
@@ -215,17 +235,12 @@ is_macos() {
   [[ "$(uname -s)" == "Darwin" ]]
 }
 
-# Skip test if not on macOS
-skip_if_not_macos() {
-  if ! is_macos; then
-    skip "$1" "macOS only"
-    return 0
-  fi
-  return 1
-}
-
-# Save a checksum of a directory for mutation detection
+# Portable checksum of a directory (macOS uses shasum, Linux uses sha256sum)
 snapshot_dir_checksum() {
   local dir="$1"
-  find "$dir" -type f -exec md5sum {} \; 2>/dev/null | sort | md5sum | cut -d' ' -f1
+  local hash_cmd="sha256sum"
+  if ! command -v sha256sum &>/dev/null; then
+    hash_cmd="shasum -a 256"
+  fi
+  find "$dir" -type f -print0 2>/dev/null | sort -z | xargs -0 $hash_cmd 2>/dev/null | $hash_cmd | cut -d' ' -f1
 }

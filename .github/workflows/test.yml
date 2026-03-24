@@ -3,9 +3,10 @@ name: Scenario Tests
 on:
   push:
     branches: [main]
-    paths: ["**/*.sh", "tests/**", "lib/**", "setup.sh", "uninstall.sh"]
   pull_request:
-    paths: ["**/*.sh", "tests/**", "lib/**", "setup.sh", "uninstall.sh"]
+
+permissions:
+  contents: read
 
 jobs:
   test:
