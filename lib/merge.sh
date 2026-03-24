@@ -1,11 +1,19 @@
 #!/bin/bash
 # lib/merge.sh - Three-way merge for settings.json during kit upgrades
 #
-# Provides a 3-way merge strategy that preserves user customizations while
-# integrating upstream changes from the starter kit.
+# Merge strategies (3 systems):
+#   1. Scalar 3-way: snapshot vs current vs new-kit → keep/overwrite/prompt
+#   2. Array 3-way: _merge_arrays_3way() preserves both user and kit additions
+#   3. Bootstrap merge: _merge_settings_bootstrap() for first migration (no snapshot)
 #
-# Requires: jq, lib/colors.sh to be sourced first
-# Compatible: Bash 3.2+ (macOS default) — no associative arrays, no mapfile
+# Requires: jq, lib/colors.sh
+# Uses globals: _MERGE_INTERACTIVE, _MERGE_PREFS, _MERGE_PREFS_FILE,
+#               _RESET_MERGE_PREFS, CLAUDE_DIR, STR_MERGE_*
+# Exports: merge_settings_3way(), _merge_settings_bootstrap(),
+#          _prompt_scalar_conflict(), _prompt_array_conflict(),
+#          _load_merge_prefs(), _merge_prefs_file()
+# Dry-run: transparent (operates on whatever paths are given; _MERGE_INTERACTIVE
+#          is set to false by dryrun to suppress prompts)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

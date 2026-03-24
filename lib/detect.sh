@@ -1,7 +1,12 @@
 #!/bin/bash
 # shellcheck disable=SC2034
 # lib/detect.sh - OS, architecture, and WSL detection
-# Exports: OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD, WIN_BUILD
+#
+# Requires: nothing (self-contained)
+# Sets globals: OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD, WIN_BUILD
+# Exports: detect_os(), is_macos(), is_linux(), is_wsl(), is_msys(), is_windows(),
+#          is_apple_silicon()
+# Dry-run: transparent (no special behavior)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,11 @@
 # shellcheck disable=SC2034
 # lib/colors.sh - Color output helpers for terminal messages
 # Works on macOS and Linux. Falls back to plain text if terminal lacks color support.
+#
+# Requires: nothing (self-contained, first lib to be sourced)
+# Exports: info(), ok(), warn(), error(), section(), _register_tmp()
+# Exports: RED, GREEN, YELLOW, BLUE, CYAN, BOLD, NC (color codes)
+# Dry-run: transparent (no special behavior)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

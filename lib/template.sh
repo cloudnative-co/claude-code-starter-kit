@@ -1,7 +1,13 @@
 #!/bin/bash
 # lib/template.sh - Text template engine for CLAUDE.md and similar plain-text files
 # NOT for JSON files - use lib/json-builder.sh for JSON.
-# Requires: lib/colors.sh and lib/prerequisites.sh (_sed/_awk wrappers) to be sourced first
+#
+# Requires: lib/colors.sh, lib/prerequisites.sh (_sed/_awk wrappers)
+# Uses globals: _SETUP_TMP_FILES[], LANGUAGE
+# Exports: process_template(), inject_feature(), remove_unresolved(),
+#          _has_kit_markers(), _extract_kit_section(), _extract_user_section(),
+#          _replace_kit_section(), _user_section_heading()
+# Dry-run: transparent (operates on whatever file paths are given)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
