@@ -913,10 +913,16 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
     _dryrun_log "EXTERNAL" "Codex MCP" "claude mcp add -s user codex -- codex mcp-server"
   fi
 
+  # Shell RC modification (PATH entry for ~/.local/bin)
+  _dryrun_log "EXTERNAL" "Shell RC" "append PATH=\$HOME/.local/bin to shell RC file"
+
   # Log skipped files from fresh install safety
   for _sk in "${_FRESH_SKIPPED_FILES[@]+"${_FRESH_SKIPPED_FILES[@]}"}"; do
     _dryrun_log "SKIP" "\$HOME/.claude/${_sk#"$CLAUDE_DIR"/}" "user file preserved"
   done
+
+  # Detect files that would be deleted (exist in real dir but not in sim dir)
+  _dryrun_collect_deletions "$_ORIG_CLAUDE_DIR"
 
   _dryrun_show_results "$_ORIG_CLAUDE_DIR"
   exit 0

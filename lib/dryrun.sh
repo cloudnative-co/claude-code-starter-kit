@@ -64,7 +64,7 @@ _dryrun_show_results() {
   printf "\n"
 
   # Group log entries by action
-  local creates="" modifies="" merges="" skips="" externals=""
+  local creates="" modifies="" merges="" deletes="" skips="" externals=""
   local entry action target detail
   for entry in "${_DRYRUN_LOG[@]+"${_DRYRUN_LOG[@]}"}"; do
     action="${entry%%|*}"
@@ -76,6 +76,7 @@ _dryrun_show_results() {
       CREATE)   creates="${creates}  ${target}${detail:+ ($detail)}\n" ;;
       MODIFY)   modifies="${modifies}  ${target}${detail:+ ($detail)}\n" ;;
       MERGE)    merges="${merges}  ${target}\n    ${detail}\n" ;;
+      DELETE)   deletes="${deletes}  ${target}${detail:+ ($detail)}\n" ;;
       SKIP)     skips="${skips}  ${target}${detail:+ ($detail)}\n" ;;
       EXTERNAL) externals="${externals}  [WOULD RUN] ${target}${detail:+: $detail}\n" ;;
     esac
@@ -96,6 +97,12 @@ _dryrun_show_results() {
   if [[ -n "$merges" ]]; then
     info "${STR_DRYRUN_MERGED:-Files to merge:}"
     printf '%b' "$merges"
+    printf "\n"
+  fi
+
+  if [[ -n "$deletes" ]]; then
+    info "${STR_DRYRUN_DELETED:-Files to delete:}"
+    printf '%b' "$deletes"
     printf "\n"
   fi
 
@@ -187,4 +194,37 @@ _dryrun_collect_file_changes() {
       _dryrun_log "MODIFY" "\$HOME/.claude/${rel_path}"
     fi
   done < <(find "$sim_dir" -type f -print0 2>/dev/null)
+}
+
+# ---------------------------------------------------------------------------
+# _dryrun_collect_deletions - Detect files that would be deleted
+#
+# Compares kit-managed files in real dir that are absent from sim dir.
+# Only checks files tracked in the manifest (not arbitrary user files).
+# ---------------------------------------------------------------------------
+_dryrun_collect_deletions() {
+  local real_dir="$1"
+  local manifest="${real_dir}/.starter-kit-manifest.json"
+
+  # Also check known legacy files that the update path explicitly removes
+  if [[ -f "${real_dir}/AGENTS.md" ]]; then
+    _dryrun_log "DELETE" "\$HOME/.claude/AGENTS.md" "legacy file removed during update"
+  fi
+
+  # If no manifest, we can't know what's kit-managed
+  [[ -f "$manifest" ]] || return 0
+
+  # Walk manifest-tracked files; if missing from sim dir, it would be deleted
+  local file
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    [[ -f "$file" ]] || continue
+
+    local rel_path="${file#"$real_dir"/}"
+    local sim_file="${_DRYRUN_DIR}/${rel_path}"
+
+    if [[ ! -f "$sim_file" ]]; then
+      _dryrun_log "DELETE" "\$HOME/.claude/${rel_path}"
+    fi
+  done < <(jq -r '.files[]? // empty' "$manifest" 2>/dev/null)
 }
