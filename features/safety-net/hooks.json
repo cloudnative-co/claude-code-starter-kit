@@ -2,15 +2,17 @@
   "env": {
     "SAFETY_NET_STRICT": "1"
   },
-  "PreToolUse": [
-    {
-      "matcher": "tool == \"Bash\"",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "cc-safety-net --claude-code"
-        }
-      ]
-    }
-  ]
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "tool == \"Bash\"",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cc-safety-net --claude-code"
+          }
+        ]
+      }
+    ]
+  }
 }
