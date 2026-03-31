@@ -1144,7 +1144,7 @@ run_wizard() {
       EDITOR_CHOICE=""
       COMMIT_ATTRIBUTION=""
       ENABLE_NEW_INIT=""
-      ENABLE_CODEX_MCP=""
+      ENABLE_CODEX_PLUGIN=""
       ENABLE_GHOSTTY_SETUP=""
       ENABLE_FONTS_SETUP=""
       continue

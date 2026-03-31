@@ -16,7 +16,7 @@ Not every saved value is supposed to appear in `settings.json`. In particular, `
 |---|---|---|---|---|
 | Language | `LANGUAGE` / `--language` | UI language and generated language settings | `settings.json`, `CLAUDE.md`, i18n loading | Yes |
 | Profile | `PROFILE` / `--profile` | Preset bundle for other defaults | wizard initialization, manifest | No |
-| Codex MCP | `ENABLE_CODEX_MCP` / `--codex-mcp` | Whether to run Codex CLI auth and Claude MCP registration | Codex MCP setup in `setup.sh` | No |
+| Codex Plugin | `ENABLE_CODEX_PLUGIN` / `--codex-plugin` | Whether to install Codex Plugin and run CLI auth | Codex Plugin setup in `setup.sh` | No |
 | New `/init` | `ENABLE_NEW_INIT` / `--new-init` | Enable Claude Code's interactive `/init` flow | `settings.json` `env.CLAUDE_CODE_NEW_INIT` | Yes |
 | Editor | `EDITOR_CHOICE` / `--editor` | Editor command for the git push review hook | Hook template substitution, manifest | Indirectly |
 | Ghostty | `ENABLE_GHOSTTY_SETUP` / `--ghostty` | Extra Ghostty setup | Ghostty setup flow | No |
@@ -34,7 +34,7 @@ Not every saved value is supposed to appear in `settings.json`. In particular, `
 | `ENABLE_NEW_INIT` | Claude Code's new interactive `/init` mode | `settings.json` `env.CLAUDE_CODE_NEW_INIT` | Defaults to `true` for Minimal, Standard, and Full; Custom asks explicitly |
 | `EDITOR_CHOICE` | Editor command for git push review | `features/git-push-review/hooks.json` | Use `none` if you do not want editor integration |
 | `COMMIT_ATTRIBUTION` | Claude Code attribution on or off | `settings.json` `attribution.commit`, `attribution.pr` | `false` clears both commit and PR attribution |
-| `ENABLE_CODEX_MCP` | Run Codex MCP setup or skip it | Codex CLI auth and `claude mcp add` | A setup action, not a JSON setting |
+| `ENABLE_CODEX_PLUGIN` | Run Codex Plugin setup or skip it | Codex CLI auth and plugin install | A setup action, not a JSON setting |
 | `ENABLE_GHOSTTY_SETUP` | Optional Ghostty setup | Ghostty install/config flow | Disabled automatically outside macOS |
 | `ENABLE_FONTS_SETUP` | Programming font installation | Font setup flow | Changes the environment, not generated JSON |
 | `SELECTED_PLUGINS` | Recommended plugin selection | Plugin install flow, manifest | Supports `name@marketplace` |
@@ -79,6 +79,6 @@ That is expected. `PROFILE` is a preset name used to seed lower-level choices, n
 
 That is expected. Plugin selection is consumed by the plugin installation flow and stored in the manifest for later reuse.
 
-### `ENABLE_CODEX_MCP` does not show up in `settings.json`
+### `ENABLE_CODEX_PLUGIN` does not show up in `settings.json`
 
-That is expected. It controls whether Codex CLI auth and Claude MCP registration are executed, not whether a JSON key is written.
+That is expected. It controls whether Codex CLI auth and plugin install are executed, not whether a JSON key is written.
