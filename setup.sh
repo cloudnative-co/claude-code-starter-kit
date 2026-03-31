@@ -514,6 +514,13 @@ if [[ ! -x "$HOME/.local/bin/claude" ]] && ! command -v claude &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
+# Auto-update health check (fresh install path — update path runs inside run_update)
+# ---------------------------------------------------------------------------
+if [[ "${UPDATE_MODE:-false}" != "true" ]] && [[ "${DRY_RUN:-false}" != "true" ]]; then
+  _check_auto_update_health "$CLAUDE_DIR"
+fi
+
+# ---------------------------------------------------------------------------
 # Final message
 # ---------------------------------------------------------------------------
 printf "\n"

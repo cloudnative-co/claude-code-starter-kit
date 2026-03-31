@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.37.3] - 2026-03-31
+
+### Added
+- **自動更新ヘルスチェック**: `setup.sh --update` および `/update-kit` の完了時に auto-update が正しく動作しているかチェックし、問題があれば警告を表示。SessionStart hook の登録状態、Git リポジトリの存在、リモートとのバージョン差異を検証する
+
 ## [0.37.2] - 2026-03-31
 
 ### Fixed

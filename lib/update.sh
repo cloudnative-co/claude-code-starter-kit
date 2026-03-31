@@ -769,5 +769,61 @@ run_update() {
         info "To restore kit defaults: cp -a \"$_skip_backup\" ~/.claude"
       fi
     fi
+
+    # --- Auto-update health check ---
+    _check_auto_update_health "$claude_dir"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _check_auto_update_health - Warn if auto-update is not active
+#
+# Checks:
+#   1. SessionStart hook registered in settings.json
+#   2. Git repo exists at ~/.claude-starter-kit (one-liner install)
+#   3. Remote is reachable and version matches
+# ---------------------------------------------------------------------------
+_check_auto_update_health() {
+  local claude_dir="$1"
+  local settings="${claude_dir}/settings.json"
+  local kit_dir="$HOME/.claude-starter-kit"
+  local issues=()
+
+  # Check 1: hook registered
+  if ! grep -q "auto-update" "$settings" 2>/dev/null; then
+    issues+=("${STR_AUTOUPDATE_NO_HOOK:-SessionStart hook not found in settings.json}")
+  fi
+
+  # Check 2: git repo exists
+  if [[ ! -d "${kit_dir}/.git" ]]; then
+    issues+=("${STR_AUTOUPDATE_NO_REPO:-Git repo not found at ${kit_dir} (one-liner install required)}")
+  fi
+
+  # Check 3: remote version comparison (only if repo exists)
+  if [[ -d "${kit_dir}/.git" ]]; then
+    local local_ver remote_ver
+    local_ver="$(git -C "$kit_dir" describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")"
+    remote_ver="$(git -C "$kit_dir" describe --tags --abbrev=0 origin/main 2>/dev/null || echo "")"
+    if [[ -n "$local_ver" ]] && [[ -n "$remote_ver" ]] && [[ "$local_ver" != "$remote_ver" ]]; then
+      issues+=("${STR_AUTOUPDATE_OUTDATED:-Version mismatch}: ${local_ver} → ${remote_ver}")
+    fi
+  fi
+
+  if [[ ${#issues[@]} -gt 0 ]]; then
+    printf "\n"
+    info "${STR_AUTOUPDATE_NOTICE:-Auto-update is not enabled:}"
+    local issue
+    for issue in "${issues[@]}"; do
+      info "  - $issue"
+    done
+    # Show targeted hints based on what's missing
+    if ! grep -q "auto-update" "$settings" 2>/dev/null; then
+      info "${STR_AUTOUPDATE_HINT_HOOK:-To enable: re-run setup.sh and select auto-update in hooks, or use standard/full profile}"
+    fi
+    if [[ ! -d "${kit_dir}/.git" ]]; then
+      info "${STR_AUTOUPDATE_HINT_REPO:-To enable: git clone https://github.com/cloudnative-co/claude-code-starter-kit.git ~/.claude-starter-kit}"
+    fi
+  else
+    ok "${STR_AUTOUPDATE_OK:-Auto-update is active}"
   fi
 }
