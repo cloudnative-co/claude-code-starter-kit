@@ -284,8 +284,13 @@ check_tmux() {
     ok "tmux $(tmux -V 2>/dev/null | awk '{print $2}')"
     return 0
   fi
-  warn "tmux not found (optional). Install with: $(_tmux_install_hint)"
-  return 0 # Optional - do not fail
+  info "Installing tmux..."
+  if _pkg_install tmux; then
+    ok "tmux installed"
+    return 0
+  fi
+  warn "Failed to install tmux automatically. Install with: $(_tmux_install_hint)"
+  return 1
 }
 
 _tmux_install_hint() {
@@ -304,17 +309,14 @@ check_node() {
     ok "node $(node --version)"
     return 0
   fi
-  # Node.js is optional: Claude Code uses a native installer and no longer requires Node.js.
-  # However, Node.js is still needed for Codex CLI and npm-based plugins.
-  warn "Node.js not found (optional, needed for Codex CLI / npm plugins)."
+  warn "Node.js not found."
   info "Installing Node.js ${NODE_MAJOR}.x..."
   if _install_node && command -v node &>/dev/null; then
     ok "node $(node --version) installed"
   else
-    warn "Could not install Node.js. Codex CLI setup will be skipped if selected."
+    warn "Could not install Node.js automatically."
     _show_node_manual_instructions
-    # Not fatal - return success since Node.js is no longer required for Claude Code itself
-    return 0
+    return 1
   fi
 }
 
@@ -448,8 +450,13 @@ check_dos2unix() {
     return 0
   fi
   info "Installing dos2unix (recommended for WSL)..."
-  _pkg_install dos2unix
-  ok "dos2unix installed"
+  if _pkg_install dos2unix; then
+    ok "dos2unix installed"
+    return 0
+  fi
+  warn "Failed to install dos2unix automatically."
+  warn "  Or: sudo apt-get install dos2unix"
+  return 1
 }
 
 check_gh() {
@@ -457,7 +464,12 @@ check_gh() {
     ok "gh $(gh --version 2>/dev/null | head -1 | awk '{print $3}')"
     return 0
   fi
-  warn "GitHub CLI (gh) not found (optional)."
+  info "Installing GitHub CLI (gh)..."
+  if _pkg_install gh; then
+    ok "gh installed"
+    return 0
+  fi
+  warn "Failed to install GitHub CLI automatically."
   warn "  Install: https://cli.github.com/"
   case "$DISTRO_FAMILY" in
     macos)  warn "  Or: brew install gh" ;;
@@ -465,7 +477,7 @@ check_gh() {
     rhel)   warn "  Or: sudo dnf install gh" ;;
     *)      ;;
   esac
-  return 0 # Optional - do not fail
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -498,6 +510,14 @@ _detect_bash4() {
   return 1
 }
 
+_install_bash4() {
+  info "Installing Bash 4+..."
+  if _pkg_install bash; then
+    return 0
+  fi
+  return 1
+}
+
 # check_bash4 - Ensure we're running under Bash 4+, re-exec if not
 # Uses _SETUP_ORIG_ARGS (set at setup.sh top-level) to preserve CLI arguments.
 # Returns 0 if already Bash 4+, re-execs on success, returns 1 on failure.
@@ -519,7 +539,14 @@ check_bash4() {
     return 1
   fi
 
-  # No Bash 4+ found
+  if _install_bash4 && new_bash="$(_detect_bash4)"; then
+    info "Found Bash 4+ at: $new_bash"
+    info "Re-executing setup.sh under Bash 4+..."
+    exec "$new_bash" "$_SETUP_SCRIPT_PATH" "${_SETUP_ORIG_ARGS[@]+"${_SETUP_ORIG_ARGS[@]}"}"
+    error "Failed to re-exec under $new_bash"
+    return 1
+  fi
+
   return 1
 }
 
@@ -652,10 +679,10 @@ check_prerequisites() {
   check_curl    || failed=1
   check_gnu_sed || failed=1
   check_gnu_awk || failed=1
-  check_node  # Optional: needed for Codex CLI / npm plugins only
-  check_tmux
-  check_dos2unix
-  check_gh
+  check_node     || failed=1
+  check_tmux     || failed=1
+  check_dos2unix || failed=1
+  check_gh       || failed=1
 
   if [[ "$failed" -ne 0 ]]; then
     error "一部の必須ツールをインストールできませんでした。手動でインストールして再実行してください。"

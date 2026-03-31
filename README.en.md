@@ -62,7 +62,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 
 ## Prerequisites
 
-**Bash 4+** is required. macOS ships with Bash 3.2 by default — the kit auto-detects Bash 4+ (e.g., from `brew install bash`) and re-execs. Linux/WSL typically has Bash 4+ pre-installed.
+Missing prerequisites are installed automatically when possible: `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, `node`, `tmux`, and `gh`. On macOS, the kit also detects the system Bash 3.2 limitation, installs Bash 4+ when needed, and re-execs automatically. Manual commands are shown only if automatic installation fails.
 
 ### Claude Account (Paid)
 

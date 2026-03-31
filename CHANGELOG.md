@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.36.0] - 2026-03-31
+
+### Changed
+- **前提ツールの自動導入を統一**: `git` `jq` `curl` GNU `sed` GNU `awk` `bash 4+` `node` `tmux` `gh` を、未導入時に自動インストールを試みる挙動に統一
+- **Bash 4+ 更新導線を改善**: macOS の Bash 3.2 環境では Bash 4+ の自動導入を試した上で re-exec し、失敗時のみ手動コマンドを案内
+- **セットアップ失敗条件を明確化**: `node` `tmux` `gh` `dos2unix` の自動導入に失敗した場合は、警告で継続せず明示的に失敗させるよう変更
+
 ## [0.35.0] - 2026-03-31
 
 ### Changed
