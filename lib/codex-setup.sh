@@ -1,16 +1,16 @@
 #!/bin/bash
-# lib/codex-setup.sh - Codex MCP setup (CLI install, auth, MCP registration)
+# lib/codex-setup.sh - Codex Plugin setup (CLI install, auth, plugin registration)
 # Requires: lib/colors.sh, lib/detect.sh, lib/prerequisites.sh (_get_shell_rc_file),
 #           wizard/wizard.sh (is_true)
-# Uses globals: ENABLE_CODEX_MCP, WIZARD_NONINTERACTIVE, _SETUP_TMP_FILES[],
+# Uses globals: ENABLE_CODEX_PLUGIN, WIZARD_NONINTERACTIVE, _SETUP_TMP_FILES[],
 #               STR_CODEX_*, STR_CHOICE
-# Exports: run_codex_setup(), _setup_codex_mcp(), _install_codex_cli(),
+# Exports: run_codex_setup(), _setup_codex_plugin(), _install_codex_cli(),
 #          _run_with_timeout(), _verify_openai_key(), _save_openai_key()
 # Dry-run: guarded externally (setup.sh logs EXTERNAL, does not call run_codex_setup)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Codex MCP helpers
+# Codex Plugin helpers
 # ---------------------------------------------------------------------------
 
 # Portable timeout wrapper (macOS lacks `timeout` from coreutils)
@@ -306,9 +306,47 @@ _prompt_openai_key() {
 }
 
 # ---------------------------------------------------------------------------
-# Codex MCP interactive setup
+# Codex Plugin detection and management helpers
 # ---------------------------------------------------------------------------
-_setup_codex_mcp() {
+
+_has_codex_plugin() {
+  command -v claude &>/dev/null && claude plugin list 2>/dev/null | grep -qw "codex" 2>/dev/null
+}
+
+_has_legacy_mcp() {
+  command -v claude &>/dev/null && claude mcp list -s user 2>/dev/null | grep -qw "codex" 2>/dev/null
+}
+
+_install_codex_plugin() {
+  if ! command -v claude &>/dev/null; then
+    warn "${STR_CODEX_PLUGIN_FAILED:-Failed to install Codex plugin}"
+    info "  claude plugin marketplace add openai/codex-plugin-cc"
+    info "  claude plugin install codex --scope user"
+    return 1
+  fi
+  claude plugin marketplace add openai/codex-plugin-cc 2>/dev/null || true
+  if claude plugin install codex --scope user 2>/dev/null; then
+    return 0
+  fi
+  warn "${STR_CODEX_PLUGIN_FAILED:-Failed to install Codex plugin}"
+  info "  claude plugin marketplace add openai/codex-plugin-cc"
+  info "  claude plugin install codex --scope user"
+  return 1
+}
+
+_remove_legacy_mcp() {
+  if _has_legacy_mcp; then
+    if ! claude mcp remove -s user codex 2>/dev/null; then
+      warn "${STR_CODEX_MCP_REMOVE_FAILED:-Failed to remove Codex MCP. Remove manually:}"
+      info "  claude mcp remove -s user codex"
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Codex Plugin interactive setup
+# ---------------------------------------------------------------------------
+_setup_codex_plugin() {
   printf "\n"
   section "$STR_CODEX_SETUP_TITLE"
 
@@ -324,11 +362,10 @@ _setup_codex_mcp() {
   # Fast path: if everything is already configured, skip all slow checks
   if command -v codex &>/dev/null \
     && _codex_login_status >/dev/null \
-    && command -v claude &>/dev/null \
-    && claude mcp list -s user 2>/dev/null | grep -q "codex" 2>/dev/null; then
+    && _has_codex_plugin; then
     ok "$STR_CODEX_CLI_ALREADY"
     ok "$STR_CODEX_LOGIN_ALREADY"
-    ok "$STR_CODEX_MCP_ALREADY"
+    ok "${STR_CODEX_PLUGIN_ALREADY:-Codex plugin is already installed}"
     return
   fi
 
@@ -345,7 +382,7 @@ _setup_codex_mcp() {
   local _rc_file
   _rc_file="$(_get_shell_rc_file)"
   local _auth_ready=false
-  local _mcp_ready=false
+  local _plugin_ready=false
 
   # Step 2: Verify Codex CLI authentication
   printf "\n"
@@ -363,30 +400,24 @@ _setup_codex_mcp() {
     fi
   fi
 
-  # Step 3: Register MCP server with Claude Code
-  # Note: codex login handles authentication; no need to embed API key in MCP config
-  if command -v claude &>/dev/null && command -v codex &>/dev/null; then
+  # Step 3: Install Codex Plugin
+  if command -v claude &>/dev/null; then
     printf "\n"
-    local _mcp_list
-    _mcp_list="$(claude mcp list -s user 2>/dev/null || true)"
-    if echo "$_mcp_list" | grep -q "codex" 2>/dev/null; then
-      ok "$STR_CODEX_MCP_ALREADY"
-      _mcp_ready=true
+    if _has_codex_plugin; then
+      ok "${STR_CODEX_PLUGIN_ALREADY:-Codex plugin is already installed}"
+      _plugin_ready=true
     else
-      info "$STR_CODEX_MCP_REGISTERING"
-      if claude mcp add -s user codex -- codex mcp-server 2>/dev/null; then
-        ok "$STR_CODEX_MCP_REGISTERED"
-        _mcp_ready=true
-      else
-        warn "$STR_CODEX_MCP_REG_FAILED"
-        info "  claude mcp add -s user codex -- codex mcp-server"
+      info "${STR_CODEX_PLUGIN_INSTALLING:-Installing Codex plugin...}"
+      if _install_codex_plugin; then
+        ok "${STR_CODEX_PLUGIN_INSTALLED:-Codex plugin installed}"
+        _plugin_ready=true
       fi
     fi
   fi
 
   printf "\n"
   info "$STR_CODEX_RESTART_HINT"
-  if [[ "$_auth_ready" == "true" ]] && [[ "$_mcp_ready" == "true" ]]; then
+  if [[ "$_auth_ready" == "true" ]] && [[ "$_plugin_ready" == "true" ]]; then
     ok "$STR_CODEX_SETUP_DONE"
   else
     warn "$STR_CODEX_SETUP_INCOMPLETE"
@@ -395,33 +426,77 @@ _setup_codex_mcp() {
 
 # ---------------------------------------------------------------------------
 # run_codex_setup - Entry point called from setup.sh
+# 2-axis state machine: plugin × legacy MCP
 # ---------------------------------------------------------------------------
 run_codex_setup() {
-  is_true "${ENABLE_CODEX_MCP:-false}" || return 0
+  is_true "${ENABLE_CODEX_PLUGIN:-false}" || return 0
 
-  # Skip if already fully configured (codex CLI + login + MCP registered)
-  local _codex_already_done=false
-  if command -v codex &>/dev/null \
-    && _codex_login_status >/dev/null 2>&1 \
-    && command -v claude &>/dev/null \
-    && claude mcp list -s user 2>/dev/null | grep -q "codex" 2>/dev/null; then
-    _codex_already_done=true
+  # Detect state (2-axis: plugin × MCP)
+  local _plugin_present=false _mcp_present=false
+  _has_codex_plugin && _plugin_present=true
+  _has_legacy_mcp && _mcp_present=true
+
+  # State A: plugin installed, no MCP → already migrated, skip
+  if [[ "$_plugin_present" == "true" ]] && [[ "$_mcp_present" == "false" ]]; then
+    ok "${STR_CODEX_PLUGIN_ALREADY:-Codex plugin already configured}"
+    return 0
   fi
 
-  if [[ "$_codex_already_done" == "true" ]]; then
-    ok "${STR_CODEX_MCP_ALREADY:-Codex MCP already configured}"
-  elif [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
-    info "${STR_CODEX_SETUP_SKIPPED:-Codex MCP setup skipped (non-interactive)}"
-  else
+  # State B: both present → drift recovery, auto-remove MCP
+  if [[ "$_plugin_present" == "true" ]] && [[ "$_mcp_present" == "true" ]]; then
+    info "${STR_CODEX_MCP_DRIFT_CLEANUP:-Removing duplicate Codex MCP registration...}"
+    _remove_legacy_mcp
+    ok "${STR_CODEX_MCP_DRIFT_DONE:-Codex MCP duplicate registration removed}"
+    return 0
+  fi
+
+  # State C: no plugin, MCP present → migration flow
+  if [[ "$_plugin_present" == "false" ]] && [[ "$_mcp_present" == "true" ]]; then
+    if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+      info "${STR_CODEX_MIGRATE_SKIP_NONINTERACTIVE:-Codex MCP migration requires interactive mode}"
+      return 0
+    fi
+
     printf "\n"
-    info "${STR_CODEX_SETUP_CONFIRM:-Start Codex MCP setup?}"
-    printf "  1) %s\n" "${STR_CODEX_SETUP_CONFIRM_YES:-Yes}"
-    printf "  2) %s\n" "${STR_CODEX_SETUP_CONFIRM_NO:-No, skip}"
-    local _codex_confirm=""
-    read -r -p "${STR_CHOICE:-Choice}: " _codex_confirm
-    case "$_codex_confirm" in
-      1) _setup_codex_mcp ;;
-      *) info "${STR_CODEX_SETUP_SKIPPED:-Codex MCP setup skipped}" ;;
+    info "${STR_CODEX_MIGRATE_PROMPT:-Codex MCP is registered. Migrate to Codex Plugin?}"
+    printf "  1) %s\n" "${STR_CODEX_MIGRATE_YES:-Yes, migrate to plugin}"
+    printf "  2) %s\n" "${STR_CODEX_MIGRATE_NO:-No, keep MCP}"
+    local _migrate_choice=""
+    read -r -p "${STR_CHOICE:-Choice}: " _migrate_choice
+    case "$_migrate_choice" in
+      1)
+        _setup_codex_plugin
+        # Remove MCP only after plugin install verified
+        if _has_codex_plugin; then
+          _remove_legacy_mcp
+          ok "${STR_CODEX_MIGRATE_DONE:-Codex MCP → Plugin migration complete}"
+        else
+          warn "${STR_CODEX_MIGRATE_PLUGIN_FAILED:-Plugin install failed. Keeping MCP.}"
+        fi
+        ;;
+      *)
+        info "${STR_CODEX_MIGRATE_DECLINED:-Keeping Codex MCP. Plugin not installed.}"
+        ;;
     esac
+    return 0
   fi
+
+  # State D: neither present → fresh install
+  if [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
+    # Non-interactive fresh: attempt CLI install + plugin install, skip auth
+    _install_codex_cli || true
+    _install_codex_plugin || true
+    return 0
+  fi
+
+  printf "\n"
+  info "${STR_CODEX_SETUP_CONFIRM:-Start Codex Plugin setup?}"
+  printf "  1) %s\n" "${STR_CODEX_SETUP_CONFIRM_YES:-Yes}"
+  printf "  2) %s\n" "${STR_CODEX_SETUP_CONFIRM_NO:-No, skip}"
+  local _codex_confirm=""
+  read -r -p "${STR_CHOICE:-Choice}: " _codex_confirm
+  case "$_codex_confirm" in
+    1) _setup_codex_plugin ;;
+    *) info "${STR_CODEX_SETUP_SKIPPED:-Codex Plugin setup skipped}" ;;
+  esac
 }
