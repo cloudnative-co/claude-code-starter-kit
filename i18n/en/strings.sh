@@ -275,6 +275,14 @@ STR_UPDATE_MIGRATION_BOOTSTRAP="A first snapshot will be created from the curren
 STR_MAJOR_UPGRADE_WARN="Major version upgrade detected"
 STR_MAJOR_UPGRADE_BACKUP="A backup will be created before updating. You can restore if needed."
 STR_UPDATE_SKIPPED_HINT="Skipped files retain your changes. Kit updates for those files will apply on next update after you accept or reset."
+# Auto-update health check
+STR_AUTOUPDATE_NOTICE="Auto-update is not enabled. To keep the kit up to date automatically:"
+STR_AUTOUPDATE_NO_HOOK="SessionStart hook is not registered"
+STR_AUTOUPDATE_NO_REPO="Git repo not found at ~/.claude-starter-kit"
+STR_AUTOUPDATE_OUTDATED="Local version does not match remote"
+STR_AUTOUPDATE_HINT_HOOK="  → Re-run setup.sh and select auto-update in hooks, or use standard/full profile"
+STR_AUTOUPDATE_HINT_REPO="  → git clone https://github.com/cloudnative-co/claude-code-starter-kit.git ~/.claude-starter-kit"
+STR_AUTOUPDATE_OK="Auto-update is active"
 # Merge conflict prompts
 STR_MERGE_SCALAR_CONFLICT="Conflict on key:"
 STR_MERGE_SCALAR_YOUR_VALUE="Your value :"
