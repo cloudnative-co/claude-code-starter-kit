@@ -289,7 +289,7 @@ _restore_config_from_manifest() {
 
   local config_file current_settings
   local manifest_commit_attribution manifest_new_init manifest_codex_plugin
-  local saved_has_commit_attribution="false" saved_has_new_init="false"
+  local saved_has_commit_attribution="false" saved_has_new_init="false" saved_has_codex_plugin="false"
   local current_commit_attribution="" current_new_init=""
   PROFILE="$(jq -r '.profile // "standard"' "$manifest")"
   LANGUAGE="$(jq -r '.language // "en"' "$manifest")"
@@ -304,6 +304,9 @@ _restore_config_from_manifest() {
   if [[ -f "$config_file" ]]; then
     grep -q '^COMMIT_ATTRIBUTION=' "$config_file" && saved_has_commit_attribution="true"
     grep -q '^ENABLE_NEW_INIT=' "$config_file" && saved_has_new_init="true"
+    if grep -Eq '^ENABLE_CODEX_(PLUGIN|MCP)=' "$config_file"; then
+      saved_has_codex_plugin="true"
+    fi
   fi
 
   if [[ -f "$current_settings" ]]; then
@@ -338,8 +341,7 @@ _restore_config_from_manifest() {
   fi
 
   # Codex plugin: fallback to manifest if saved config has neither old nor new key
-  if [[ -z "${ENABLE_CODEX_PLUGIN:-}" ]] && [[ -z "${ENABLE_CODEX_MCP:-}" ]] \
-    && [[ -n "$manifest_codex_plugin" ]]; then
+  if [[ "$saved_has_codex_plugin" != "true" ]] && [[ -n "$manifest_codex_plugin" ]]; then
     ENABLE_CODEX_PLUGIN="$manifest_codex_plugin"
   fi
 
