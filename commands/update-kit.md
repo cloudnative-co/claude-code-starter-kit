@@ -22,6 +22,7 @@ Before running the update:
 
 1. **Before running the update**, the setup script automatically checks for user customizations. If kit-managed files have been modified by the user (snapshot differs from current), a dry-run preview is offered. If no customizations are detected, the update proceeds directly without asking.
 2. Run the update command above.
+   - This command uses the same `setup.sh --update` path as the local script, so the same `Step N/M` progress output appears here as well.
 3. Report the result to the user:
    - If successful: show the previous and new version (`git describe --tags --abbrev=0`)
    - If the kit is already up to date: report "Already on the latest version"

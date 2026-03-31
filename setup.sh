@@ -86,6 +86,8 @@ check_bash4 || {
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/features.sh"
 # shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/progress.sh"
+# shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/template.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/json-builder.sh"

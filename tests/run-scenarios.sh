@@ -711,6 +711,85 @@ test_snapshot_double_marker_repair() {
   teardown_test_env
 }
 
+# --- 30. update-progress-output ---
+test_update_progress_output() {
+  setup_test_env
+  run_setup --profile=minimal >/dev/null 2>&1 || { fail "update-progress-output (setup failed)"; teardown_test_env; return; }
+
+  local output rc=0
+  output="$(run_setup_update 2>&1)" || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && grep -q "Step 1/5:" <<< "$output" \
+    && grep -q "Managed files:" <<< "$output" \
+    && grep -q "Step 5/5:" <<< "$output"; then
+    pass "update-progress-output"
+  else
+    fail "update-progress-output"
+  fi
+
+  teardown_test_env
+}
+
+# --- 33. update-kit-command-paths ---
+test_update_kit_command_paths() {
+  local update_cmd dry_run_cmd
+  update_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit.md")"
+  dry_run_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit-dry-run.md")"
+
+  if grep -q "bash setup.sh --update" <<< "$update_cmd" \
+    && grep -q "bash setup.sh --update --dry-run" <<< "$dry_run_cmd"; then
+    pass "update-kit-command-paths"
+  else
+    fail "update-kit-command-paths"
+  fi
+}
+
+# --- 31. dry-run-progress-output ---
+test_dry_run_progress_output() {
+  setup_test_env
+  run_setup --profile=minimal >/dev/null 2>&1 || { fail "dry-run-progress-output (setup failed)"; teardown_test_env; return; }
+
+  local output rc=0
+  output="$(run_setup_update --dry-run 2>&1)" || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && grep -q "Preview Mode: Simulating update without modifying ~/.claude" <<< "$output" \
+    && grep -q "Preview 1/5:" <<< "$output"; then
+    pass "dry-run-progress-output"
+  else
+    fail "dry-run-progress-output"
+  fi
+
+  teardown_test_env
+}
+
+# --- 32. dry-run-quiet-merge-summary ---
+test_dry_run_quiet_merge_summary() {
+  setup_test_env
+  run_setup --profile=minimal >/dev/null 2>&1 || { fail "dry-run-quiet-merge-summary (setup failed)"; teardown_test_env; return; }
+
+  jq '.user_custom_key = "mine"' "$CLAUDE_DIR/settings.json" > "$CLAUDE_DIR/settings.json.tmp" \
+    && mv "$CLAUDE_DIR/settings.json.tmp" "$CLAUDE_DIR/settings.json"
+  jq '.old_kit_marker = true' "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" > "$CLAUDE_DIR/.starter-kit-snapshot/settings.json.tmp" \
+    && mv "$CLAUDE_DIR/.starter-kit-snapshot/settings.json.tmp" "$CLAUDE_DIR/.starter-kit-snapshot/settings.json"
+
+  local output rc=0
+  output="$(run_setup_update --dry-run 2>&1)" || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && grep -q "settings.json merge:" <<< "$output" \
+    && grep -q "settings.json merge summary:" <<< "$output" \
+    && ! grep -q "\[kit-update\]" <<< "$output" \
+    && ! grep -q "\[merge-array\]" <<< "$output"; then
+    pass "dry-run-quiet-merge-summary"
+  else
+    fail "dry-run-quiet-merge-summary"
+  fi
+
+  teardown_test_env
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Run all tests
 # ═══════════════════════════════════════════════════════════════════════════
@@ -744,5 +823,9 @@ test_snapshot_format_v020_compat
 test_update_partial_failure_recovery
 test_bash4_noninteractive_unavailable
 test_snapshot_double_marker_repair
+test_update_progress_output
+test_dry_run_progress_output
+test_dry_run_quiet_merge_summary
+test_update_kit_command_paths
 
 print_summary

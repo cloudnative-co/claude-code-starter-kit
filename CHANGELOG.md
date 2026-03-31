@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.37.0] - 2026-03-31
+
+### Changed
+- **update / dry-run の進捗表示を改善**: `setup.sh --update` と `/update-kit` 系の更新で `Step N/M` 表示を追加し、長い処理の途中経過が見えるよう改善
+- **settings.json merge の要約を追加**: 3-way merge 完了時に keep-user / kit-update / conflicts などの集計を表示し、quiet mode でも何が起きたか把握しやすく改善
+- **preview 実行の見分けを改善**: dry-run 子プロセスを `Preview Mode` として明示し、対話モードのプレビュー起動前後にも案内を追加
+
 ## [0.36.0] - 2026-03-31
 
 ### Changed

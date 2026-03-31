@@ -9,6 +9,7 @@
 # Dependencies
 # ---------------------------------------------------------------------------
 source "$PROJECT_DIR/lib/colors.sh"
+source "$PROJECT_DIR/lib/progress.sh"
 source "$PROJECT_DIR/lib/merge.sh"
 
 # Suppress interactive prompts for all tests
