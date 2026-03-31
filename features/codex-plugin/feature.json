@@ -1,7 +1,7 @@
 {
-  "name": "codex-mcp",
-  "displayName": "Codex MCP Integration",
-  "description": "Delegate tasks to OpenAI Codex MCP as a sub-agent",
+  "name": "codex-plugin",
+  "displayName": "Codex Plugin Integration",
+  "description": "Delegate tasks to OpenAI Codex via the official Claude Code plugin",
   "category": "integration",
   "default": false,
   "profiles": { "minimal": false, "standard": false, "full": true },

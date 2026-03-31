@@ -16,7 +16,7 @@
 |---|---|---|---|---|
 | 言語 | `LANGUAGE` / `--language` | 表示言語と生成物の言語設定 | `settings.json`, `CLAUDE.md`, i18n 読み込み | はい |
 | プロファイル | `PROFILE` / `--profile` | 個別フラグの初期値セットを決める | `wizard` の初期化, manifest | いいえ |
-| Codex MCP | `ENABLE_CODEX_MCP` / `--codex-mcp` | Codex CLI 認証と Claude MCP 登録を行うか | `setup.sh` の Codex MCP セットアップ | いいえ |
+| Codex Plugin | `ENABLE_CODEX_PLUGIN` / `--codex-plugin` | Codex プラグインのインストールと認証を行うか | `setup.sh` の Codex Plugin セットアップ | いいえ |
 | 新しい `/init` | `ENABLE_NEW_INIT` / `--new-init` | Claude Code の対話型 `/init` を有効にする | `settings.json` の `env.CLAUDE_CODE_NEW_INIT` | はい |
 | エディタ | `EDITOR_CHOICE` / `--editor` | git push review hook で使うエディタ差分表示コマンド | `hooks.json` の差し込み, manifest | 間接的 |
 | Ghostty | `ENABLE_GHOSTTY_SETUP` / `--ghostty` | Ghostty の追加セットアップ | Ghostty 設定処理 | いいえ |
@@ -34,7 +34,7 @@
 | `ENABLE_NEW_INIT` | Claude Code の新しい `/init` 対話モード | `settings.json` の `env.CLAUDE_CODE_NEW_INIT` | Minimal / Standard / Full は既定 `true`、Custom では選択式 |
 | `EDITOR_CHOICE` | git push review hook のエディタコマンド | `features/git-push-review/hooks.json` | エディタを使わない場合は `none` |
 | `COMMIT_ATTRIBUTION` | Claude Code 帰属の表示有無 | `settings.json` の `attribution.commit`, `attribution.pr` | `false` で commit / PR 両方の帰属表示を空文字にする |
-| `ENABLE_CODEX_MCP` | Codex MCP セットアップ実行可否 | Codex CLI 認証と `claude mcp add` | 反映は `settings.json` ではなく外部セットアップ |
+| `ENABLE_CODEX_PLUGIN` | Codex Plugin セットアップ実行可否 | Codex CLI 認証と plugin install | 反映は `settings.json` ではなく外部セットアップ |
 | `ENABLE_GHOSTTY_SETUP` | Ghostty の追加セットアップ | macOS 向け Ghostty 設定 | macOS 以外では無効化される |
 | `ENABLE_FONTS_SETUP` | プログラミング用フォント導入 | フォントインストール処理 | 生成設定ではなく環境変更 |
 | `SELECTED_PLUGINS` | 推奨プラグインの選択 | プラグイン導入処理, manifest | `name@marketplace` 形式に対応 |
@@ -79,6 +79,6 @@
 
 正常です。プラグインは Claude Code セッション内で導入する想定で、manifest と導入処理に使われます。
 
-### `ENABLE_CODEX_MCP` が `settings.json` に見えない
+### `ENABLE_CODEX_PLUGIN` が `settings.json` に見えない
 
-正常です。このフラグは `settings.json` を変えるのではなく、Codex CLI 認証や Claude MCP 登録の実行有無を切り替えます。
+正常です。このフラグは `settings.json` を変えるのではなく、Codex CLI 認証や plugin install の実行有無を切り替えます。

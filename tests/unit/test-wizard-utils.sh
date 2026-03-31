@@ -182,3 +182,71 @@ if [[ "$_mixed_width" -gt 3 ]]; then
 else
   fail "wizard: _display_width mixed string width '$_mixed_width' should be > 3"
 fi
+
+# ── _normalize_codex_state ────────────────────────────────────────────────
+
+ENABLE_CODEX_PLUGIN=""
+ENABLE_CODEX_MCP="true"
+SELECTED_PLUGINS="alpha,codex,beta,codex@openai"
+_CLI_OVERRIDES=()
+run_func _normalize_codex_state
+if assert_equals "true" "$ENABLE_CODEX_PLUGIN" \
+  && assert_empty "$ENABLE_CODEX_MCP" \
+  && assert_equals "alpha,beta" "$SELECTED_PLUGINS"; then
+  pass "wizard: _normalize_codex_state migrates legacy key and scrubs stale plugin entries"
+else
+  fail "wizard: _normalize_codex_state migration failed"
+fi
+
+ENABLE_CODEX_PLUGIN="false"
+ENABLE_CODEX_MCP="true"
+_CLI_OVERRIDES=("ENABLE_CODEX_PLUGIN")
+run_func _normalize_codex_state
+if assert_equals "false" "$ENABLE_CODEX_PLUGIN" \
+  && assert_empty "$ENABLE_CODEX_MCP"; then
+  pass "wizard: _normalize_codex_state respects CLI override for new key"
+else
+  fail "wizard: _normalize_codex_state should not overwrite CLI override"
+fi
+
+# ── _restore_config_from_manifest (Codex fallback) ────────────────────────
+
+_orig_home="$HOME"
+_tmp_home="$(mktemp -d)"
+export HOME="$_tmp_home"
+mkdir -p "$HOME/.claude"
+cat > "$HOME/.claude/.starter-kit-manifest.json" <<'EOF'
+{"profile":"standard","language":"en","editor":"none","plugins":"","codex_plugin":"true"}
+EOF
+WIZARD_CONFIG_FILE="$HOME/test.conf"
+PROFILE=""
+LANGUAGE=""
+EDITOR_CHOICE=""
+SELECTED_PLUGINS=""
+COMMIT_ATTRIBUTION=""
+ENABLE_NEW_INIT=""
+ENABLE_CODEX_PLUGIN=""
+ENABLE_CODEX_MCP=""
+_CLI_OVERRIDES=()
+_restore_config_from_manifest >/dev/null 2>&1
+if assert_equals "true" "$ENABLE_CODEX_PLUGIN"; then
+  pass "wizard: manifest codex_plugin fallback restores ENABLE_CODEX_PLUGIN on update"
+else
+  fail "wizard: manifest codex_plugin fallback was not restored"
+fi
+
+cat > "$WIZARD_CONFIG_FILE" <<'EOF'
+ENABLE_CODEX_PLUGIN="false"
+EOF
+ENABLE_CODEX_PLUGIN=""
+ENABLE_CODEX_MCP=""
+_CLI_OVERRIDES=()
+_restore_config_from_manifest >/dev/null 2>&1
+if assert_equals "false" "$ENABLE_CODEX_PLUGIN"; then
+  pass "wizard: saved config wins over manifest codex_plugin fallback"
+else
+  fail "wizard: saved config should win over manifest fallback"
+fi
+
+rm -rf "$_tmp_home"
+export HOME="$_orig_home"

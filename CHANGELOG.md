@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.35.0] - 2026-03-31
+
+### Changed
+- Migrated Codex integration from MCP server to official Codex Plugin (`openai/codex-plugin-cc`)
+- Renamed `ENABLE_CODEX_MCP` to `ENABLE_CODEX_PLUGIN` (backward compatible — old saved configs auto-migrate)
+- Simplified CLAUDE.md delegation rules (plugin's built-in skills replace manual 7-section format)
+- Codex setup now uses 2-axis state detection (plugin × MCP) for safe migration
+
+### Added
+- `--codex-plugin` CLI flag (alias: `--codex-mcp` preserved for backward compat)
+- Interactive migration prompt for existing Codex MCP users
+- Codex plugin and legacy MCP cleanup in uninstall flow
+- `codex_plugin` field in manifest for tracking
+
+### Removed
+- MCP server registration (`claude mcp add -s user codex -- codex mcp-server`)
+- 7-section delegation format in CLAUDE.md partials (replaced by plugin's built-in skills)
+
 ## [0.34.0] - 2026-03-25
 
 ### Added

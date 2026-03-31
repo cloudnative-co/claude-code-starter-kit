@@ -55,7 +55,7 @@ _FEATURE_ORDER=(
 # ---------------------------------------------------------------------------
 # Special-case features (not in _FEATURE_ORDER, handled individually):
 #   - git-push-review: EDITOR_CHOICE runtime substitution in build_settings_file()
-#   - codex-mcp: managed by lib/codex-setup.sh
+#   - codex-plugin: managed by lib/codex-setup.sh + plugin install
 #   - ghostty: platform-specific, managed by lib/ghostty.sh
 #   - fonts: non-hook component, managed by lib/fonts.sh
 # ---------------------------------------------------------------------------

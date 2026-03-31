@@ -1,0 +1,47 @@
+---
+
+# Codex Plugin Operation Guide
+
+> The following rules apply only when the Codex plugin (`openai/codex-plugin-cc`) is installed.
+> Simple tasks (single-file/few-line changes, config edits, doc updates) can be handled directly by Claude.
+
+## Architecture
+
+Claude Code acts as the commander (design, integration, final judgment).
+Codex acts as the executor (code generation, review, refactoring, testing, debugging, security audits).
+Claude always verifies and integrates Codex output before reporting to the user.
+
+## Delegation Criteria
+
+### Delegate to Codex when:
+- New code generation expected to be 20+ lines
+- Changes spanning multiple files
+- Code review (Codex is more thorough)
+- Test code creation
+- Refactoring / optimization
+- Root cause analysis of bugs
+- Security vulnerability scanning
+
+### Claude handles directly:
+- Single-file, few-line changes
+- Config file edits (YAML, JSON, TOML, etc.)
+- Documentation / README updates
+- Git operations (commit, branch, merge)
+- User communication / Q&A
+
+## Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `/codex:review` | Standard code review |
+| `/codex:adversarial-review` | Skeptical challenge review |
+| `/codex:rescue` | Hand work off to Codex |
+| `/codex:status` | Check running job status |
+| `/codex:result` | Retrieve job results |
+| `/codex:cancel` | Cancel a running job |
+| `/codex:setup` | Check/configure installation |
+
+## Security Notes
+
+- Never include API keys or secrets in Codex prompts
+- Always perform security reviews on Codex-generated code
