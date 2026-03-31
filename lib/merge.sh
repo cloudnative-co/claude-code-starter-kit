@@ -16,6 +16,27 @@
 #          is set to false by dryrun to suppress prompts)
 set -euo pipefail
 
+_merge_progress_detail() {
+  if [[ "${_QUIET_OUTPUT:-false}" != "true" ]]; then
+    info "$*"
+  fi
+}
+
+_merge_progress_stderr_detail() {
+  if [[ "${_QUIET_OUTPUT:-false}" != "true" ]]; then
+    printf '%s\n' "$*" >&2
+  fi
+}
+
+_merge_progress_tick_if_needed() {
+  local label="$1"
+  local current="$2"
+  local total="$3"
+  if [[ "$current" -eq "$total" ]] || (( current % 5 == 0 )); then
+    _progress_tick "$label" "$current" "$total"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Merge preference persistence ("remember my answer")
 #
@@ -191,18 +212,18 @@ _prompt_array_conflict() {
   local saved_pref
   saved_pref="$(_get_merge_pref "$key")"
   if [[ "$saved_pref" == "keep-mine" ]]; then
-    printf '  [remembered] %s %s\n' "$key" "$STR_MERGE_REMEMBERED_KEEP" >&2
+    _merge_progress_stderr_detail "  [remembered] ${key} ${STR_MERGE_REMEMBERED_KEEP}"
     printf '%s' "$c_val"
     return
   elif [[ "$saved_pref" == "use-kit" ]]; then
-    printf '  [remembered] %s %s\n' "$key" "$STR_MERGE_REMEMBERED_KIT" >&2
+    _merge_progress_stderr_detail "  [remembered] ${key} ${STR_MERGE_REMEMBERED_KIT}"
     printf '%s' "$n_val"
     return
   fi
 
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
     # Non-interactive: element-level merge preserves both user and kit additions
-    printf '  [merge-array] %s (non-interactive)\n' "$key" >&2
+    _merge_progress_stderr_detail "  [merge-array] ${key} (non-interactive)"
     _merge_arrays_3way "$arr_sv" "$c_val" "$n_val"
     return
   fi
@@ -278,11 +299,11 @@ _prompt_scalar_conflict() {
   local saved_pref
   saved_pref="$(_get_merge_pref "$key")"
   if [[ "$saved_pref" == "keep-mine" ]]; then
-    printf '  [remembered] %s %s\n' "$key" "$STR_MERGE_REMEMBERED_KEEP" >&2
+    _merge_progress_stderr_detail "  [remembered] ${key} ${STR_MERGE_REMEMBERED_KEEP}"
     printf '%s' "$c_val"
     return
   elif [[ "$saved_pref" == "use-kit" ]]; then
-    printf '  [remembered] %s %s\n' "$key" "$STR_MERGE_REMEMBERED_KIT" >&2
+    _merge_progress_stderr_detail "  [remembered] ${key} ${STR_MERGE_REMEMBERED_KIT}"
     printf '%s' "$n_val"
     return
   fi
@@ -476,10 +497,10 @@ merge_settings_3way() {
     fi
   done
 
-  info "$STR_MERGE_3WAY_STARTING"
-  info "  snapshot : $snapshot"
-  info "  current  : $current"
-  info "  new_kit  : $new_kit"
+  _progress_summary "settings.json" "$STR_MERGE_3WAY_STARTING"
+  _merge_progress_detail "  snapshot : $snapshot"
+  _merge_progress_detail "  current  : $current"
+  _merge_progress_detail "  new_kit  : $new_kit"
 
   # Collect all top-level keys from all three files
   local all_keys
@@ -488,14 +509,19 @@ merge_settings_3way() {
     --slurpfile c "$current" \
     --slurpfile n "$new_kit" \
     '(($s[0] | keys) + ($c[0] | keys) + ($n[0] | keys)) | unique[]')"
+  local total_keys=0 current_key=0
+  total_keys="$(printf '%s\n' "$all_keys" | sed '/^$/d' | wc -l | tr -d ' ')"
 
   # Start merged from current (preserves everything by default)
   local merged
   merged="$(< "$current")"
+  local keep_user_count=0 kit_add_count=0 kit_update_count=0 kit_remove_count=0 merge_object_count=0 conflict_count=0
 
   local key
   while IFS= read -r key; do
     [[ -z "$key" ]] && continue
+    current_key=$((current_key + 1))
+    _merge_progress_tick_if_needed "settings.json merge" "$current_key" "$total_keys"
 
     # Always take $schema from new_kit unchanged
     if [[ "$key" == "\$schema" ]]; then
@@ -527,12 +553,14 @@ merge_settings_3way() {
 
     if [[ "$sv" == "null" && "$nv" == "null" ]]; then
       # Key exists only in current: user added → keep it
-      info "  [keep-user] $key (user-added)"
+      keep_user_count=$((keep_user_count + 1))
+      _merge_progress_detail "  [keep-user] $key (user-added)"
       continue
 
     elif [[ "$sv" == "null" && "$cv" == "null" ]]; then
       # Key exists only in new_kit: kit added → adopt it
-      info "  [kit-add]   $key"
+      kit_add_count=$((kit_add_count + 1))
+      _merge_progress_detail "  [kit-add]   $key"
       chosen="$nv"
 
     elif [[ "$sv" == "null" ]]; then
@@ -542,22 +570,26 @@ merge_settings_3way() {
         continue  # identical, no change needed
       fi
       # Both independently added with different values: prompt
+      conflict_count=$((conflict_count + 1))
       chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
 
     elif [[ "$s_eq_c" == "true" ]]; then
       # User didn't touch it → adopt kit's new value
       if [[ "$nv" == "null" ]]; then
         # Kit removed the key
-        info "  [kit-remove] $key"
+        kit_remove_count=$((kit_remove_count + 1))
+        _merge_progress_detail "  [kit-remove] $key"
         merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')"
         continue
       fi
-      info "  [kit-update] $key"
+      kit_update_count=$((kit_update_count + 1))
+      _merge_progress_detail "  [kit-update] $key"
       chosen="$nv"
 
     elif [[ "$s_eq_n" == "true" ]]; then
       # Kit didn't change it → keep user's current value
-      info "  [keep-user] $key"
+      keep_user_count=$((keep_user_count + 1))
+      _merge_progress_detail "  [keep-user] $key"
       continue
 
     else
@@ -567,16 +599,19 @@ merge_settings_3way() {
       nv_type="$(jq -n --argjson v "$nv" '$v | type')"
 
       if [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
+        conflict_count=$((conflict_count + 1))
         chosen="$(_prompt_array_conflict "$key" "$sv" "$cv" "$nv")"
 
       elif [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
-        info "  [merge-object] $key"
+        merge_object_count=$((merge_object_count + 1))
+        _merge_progress_detail "  [merge-object] $key"
         local obj_sv
         obj_sv="$(jq -n --argjson v "$sv" 'if $v == null then {} else $v end')"
         _merge_object_3way "$key" "$obj_sv" "$cv" "$nv" merged
         continue
 
       else
+        conflict_count=$((conflict_count + 1))
         warn "  [conflict] $key — prompting for resolution"
         chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
       fi
@@ -603,6 +638,9 @@ EOF
   fi
 
   mv "$tmp_out" "$output"
+  _progress_summary \
+    "settings.json merge summary" \
+    "keep-user=${keep_user_count}, kit-add=${kit_add_count}, kit-update=${kit_update_count}, kit-remove=${kit_remove_count}, merge-object=${merge_object_count}, conflicts=${conflict_count}"
   ok "3-way merge complete: $output"
 }
 
@@ -630,10 +668,14 @@ _merge_settings_bootstrap() {
     --slurpfile c "$current" \
     --slurpfile n "$new_kit" \
     '(($c[0] | keys) + ($n[0] | keys)) | unique[]')"
+  local total_keys=0 current_key=0
+  total_keys="$(printf '%s\n' "$all_keys" | sed '/^$/d' | wc -l | tr -d ' ')"
 
   local key
   while IFS= read -r key; do
     [[ -z "$key" ]] && continue
+    current_key=$((current_key + 1))
+    _merge_progress_tick_if_needed "bootstrap merge" "$current_key" "$total_keys"
     [[ "$key" == "\$schema" ]] && continue
 
     local cv nv
@@ -644,7 +686,7 @@ _merge_settings_bootstrap() {
 
     if [[ "$cv" == "null" && "$nv" != "null" ]]; then
       # Kit-only key → adopt
-      info "  [kit-add] $key"
+      _merge_progress_detail "  [kit-add] $key"
       merged="$(printf '%s' "$merged" | jq \
         --arg k "$key" --argjson v "$nv" '.[$k] = $v')"
 
@@ -670,7 +712,7 @@ _merge_settings_bootstrap() {
         ')"
         merged="$(printf '%s' "$merged" | jq \
           --arg k "$key" --argjson v "$sub_merged" '.[$k] = $v')"
-        info "  [merge-object] $key"
+        _merge_progress_detail "  [merge-object] $key"
 
       elif [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
         # Array: use _prompt_array_conflict (has remember + non-interactive fallback)

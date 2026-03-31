@@ -338,12 +338,14 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - **First-time kit users with existing `~/.claude/settings.json`**: settings.json is merged (not overwritten), and other files are confirmed per-directory.
 > - `--non-interactive` is intended for CI/automation. Interactive mode is recommended for existing users.
 > - A backup is automatically created at `~/.claude.backup.<timestamp>` before every update or first install with existing files.
+> - `setup.sh --update` and `/update-kit` now show `Step N/M` progress so long-running phases such as settings merges no longer look stalled.
 > - **Dirty check**: If the kit repo has local changes, update is blocked with a `git stash` hint (applies to auto-update, install.sh, and /update-kit).
 > - **Recovery**: If an update fails, backup path and restore commands are shown. The latest backup path is saved in `~/.claude/.starter-kit-last-backup`.
 >
 > **Dry-run (preview before deploying)**:
 > - Use `/update-kit-dry-run` or `bash setup.sh --update --dry-run` to preview what an update would change. Shows files to create/modify/delete/skip, a settings.json diff, and external operations as `[WOULD RUN]`.
 > - During interactive install/update, if existing settings could be affected, you'll be asked "Would you like to preview changes?" automatically. Clean-slate installs skip this prompt.
+> - Dry-run output is labeled as `Preview Mode`, making it easier to distinguish from the actual update run.
 > - `--non-interactive --dry-run` installs nothing and exits immediately.
 
 ## Directory Structure

@@ -659,6 +659,7 @@ _offer_dryrun_preview() {
   if read -r _dr_offer < /dev/tty 2>/dev/null; then true; else _dr_offer="n"; fi
   case "$_dr_offer" in
     [Yy]*)
+      info "Preview requested. Launching simulation..."
       info "$STR_DRYRUN_RUNNING"
       printf "\n"
 
@@ -677,6 +678,7 @@ _offer_dryrun_preview() {
 
       DRY_RUN="true" bash "$0" "${_dr_args[@]}"
       printf "\n"
+      info "Preview complete. Continue with actual update?"
       info "$STR_DRYRUN_PROCEED"
       printf "  [Y]es / [N]o ? " >&2
       local _dr_proceed=""

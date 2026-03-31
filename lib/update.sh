@@ -479,6 +479,46 @@ _update_hook_scripts() {
   fi
 }
 
+_count_update_content_files() {
+  local total=0
+  local dir
+  for dir in agents rules commands skills memory; do
+    local src_dir="${PROJECT_DIR}/${dir}"
+    local flag_var
+    flag_var="INSTALL_$(printf '%s' "$dir" | tr '[:lower:]' '[:upper:]')"
+    [[ -d "$src_dir" ]] || continue
+    is_true "${!flag_var:-false}" || continue
+    total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
+  done
+  printf '%s' "$total"
+}
+
+_count_update_hook_files() {
+  local total=0
+  local src_dir
+  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
+    src_dir="$PROJECT_DIR/features/memory-persistence/scripts"
+    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
+  fi
+  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
+    src_dir="$PROJECT_DIR/features/strategic-compact/scripts"
+    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
+  fi
+  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
+    src_dir="$PROJECT_DIR/features/auto-update/scripts"
+    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
+  fi
+  if is_true "${ENABLE_STATUSLINE:-false}"; then
+    src_dir="$PROJECT_DIR/features/statusline/scripts"
+    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
+  fi
+  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
+    src_dir="$PROJECT_DIR/features/doc-size-guard/scripts"
+    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
+  fi
+  printf '%s' "$total"
+}
+
 # ---------------------------------------------------------------------------
 # run_update - Main entry point for update mode
 #
@@ -511,6 +551,7 @@ run_update() {
 
   if [[ "$_dr" == "true" ]]; then
     section "Dry Run: Simulating update"
+    _progress_summary "Preview Mode" "Simulating update without modifying ~/.claude"
   else
     section "$STR_UPDATE_TITLE"
   fi
@@ -519,7 +560,7 @@ run_update() {
   local skipped_files=()
 
   # --- Phase 1: settings.json ---
-  info "$STR_UPDATE_SETTINGS"
+  _progress_step 1 5 "$STR_UPDATE_SETTINGS"
 
   local new_settings
   new_settings="$(mktemp)"
@@ -588,7 +629,7 @@ run_update() {
   _sync_settings_metadata "$current_settings"
 
   # --- Phase 2: CLAUDE.md (section-aware) ---
-  info "$STR_UPDATE_CLAUDEMD"
+  _progress_step 2 5 "$STR_UPDATE_CLAUDEMD"
 
   local new_claude_md
   new_claude_md="$(mktemp)"
@@ -623,6 +664,9 @@ run_update() {
   fi
 
   # --- Phase 3: Content directories ---
+  _progress_step 3 5 "Managed content files"
+  local _content_total=0 _content_current=0
+  _content_total="$(_count_update_content_files)"
   local dir
   for dir in agents rules commands skills memory; do
     local src_dir="${project_dir}/${dir}"
@@ -641,6 +685,10 @@ run_update() {
     mkdir -p "$dest_dir"
 
     while IFS= read -r -d '' src_file; do
+      _content_current=$((_content_current + 1))
+      if [[ "$_content_total" -gt 0 ]] && { [[ "$_content_current" -eq "$_content_total" ]] || (( _content_current % 10 == 0 )); }; then
+        _progress_tick "Managed files" "$_content_current" "$_content_total"
+      fi
       local rel_file="${src_file#"$src_dir"/}"
       local dest_file="${dest_dir}/${rel_file}"
       local snap_file="${snap_dir}/${rel_file}"
@@ -657,9 +705,16 @@ run_update() {
   done
 
   # --- Phase 5: Hook scripts (update-aware) ---
+  _progress_step 4 5 "Hook scripts"
+  local _hook_total=0
+  _hook_total="$(_count_update_hook_files)"
+  if [[ "$_hook_total" -gt 0 ]]; then
+    _progress_summary "Hook scripts" "${_hook_total} files to check"
+  fi
   _update_hook_scripts "$claude_dir" "$snapshot_dir" updated_files skipped_files
 
   # --- Phase 6: Update snapshot for each updated file ---
+  _progress_step 5 5 "Snapshot and summary"
   # CRITICAL: For settings.json, snapshot must store the NEW KIT version
   # (not the merge result). This ensures the next update's 3-way comparison
   # correctly detects user modifications against the kit baseline.

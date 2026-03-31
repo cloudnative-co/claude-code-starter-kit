@@ -13,6 +13,7 @@ cd ~/.claude-starter-kit && git fetch --tags && git pull && bash setup.sh --upda
 ### Steps
 
 1. Run the dry-run command above.
+   - This uses the same `setup.sh --update --dry-run` path as the local script and is labeled as `Preview Mode` in the output.
 2. Report the results to the user:
    - **Files to create**: New files the kit would add
    - **Files to modify**: Existing files that would change
