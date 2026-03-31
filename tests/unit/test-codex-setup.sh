@@ -138,6 +138,25 @@ if assert_equals "0" "$_timeout_rc" \
 else
   fail "codex-setup: _run_with_timeout fallback should preserve stdout"
 fi
+unset -f codex 2>/dev/null || true
+codex() {
+  if [[ "${1:-}" == "login" && "${2:-}" == "status" ]]; then
+    printf 'Logged in using ChatGPT\n' >&2
+    return 0
+  fi
+  return 1
+}
+if _status="$(_codex_login_status)"; then
+  if assert_equals "Logged in using ChatGPT" "$_status"; then
+    pass "codex-setup: _codex_login_status accepts stderr-based status output"
+  else
+    fail "codex-setup: _codex_login_status should preserve stderr-based status text"
+  fi
+else
+  fail "codex-setup: _codex_login_status should succeed when status is printed to stderr"
+fi
+unset -f codex
+unset -f command
 
 # State A: plugin present / MCP absent / auth incomplete should not be treated as done
 reset_codex_mocks
