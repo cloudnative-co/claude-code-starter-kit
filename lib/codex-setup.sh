@@ -90,7 +90,7 @@ _codex_login_status() {
     return 1
   fi
   local _status
-  _status="$(_run_with_timeout 15 codex login status 2>/dev/null)" || return 1
+  _status="$(_run_with_timeout 15 codex login status 2>&1)" || return 1
   [[ "$_status" == Logged\ in* ]] || return 1
   printf '%s\n' "$_status"
 }

@@ -89,6 +89,26 @@ teardown_fake_claude() {
   export PATH="$MOCK_ORIG_PATH"
 }
 
+setup_fake_codex() {
+  MOCK_CODEX_DIR="$(mktemp -d)"
+  _SETUP_TMP_FILES+=("$MOCK_CODEX_DIR")
+  cat >"$MOCK_CODEX_DIR/codex" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "login" && "${2:-}" == "status" ]]; then
+  printf 'Logged in using ChatGPT\n' >&2
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$MOCK_CODEX_DIR/codex"
+  MOCK_ORIG_PATH="$PATH"
+  export PATH="$MOCK_CODEX_DIR:$PATH"
+}
+
+teardown_fake_codex() {
+  export PATH="$MOCK_ORIG_PATH"
+}
+
 # Legacy MCP detection should scan all scopes, not only -s user
 setup_fake_claude
 export MOCK_CLAUDE_LIST_OUTPUT=$'codex\n'
@@ -138,6 +158,18 @@ if assert_equals "0" "$_timeout_rc" \
 else
   fail "codex-setup: _run_with_timeout fallback should preserve stdout"
 fi
+setup_fake_codex
+if _status="$(_codex_login_status)"; then
+  if assert_equals "Logged in using ChatGPT" "$_status"; then
+    pass "codex-setup: _codex_login_status accepts stderr-based status output"
+  else
+    fail "codex-setup: _codex_login_status should preserve stderr-based status text"
+  fi
+else
+  fail "codex-setup: _codex_login_status should succeed when status is printed to stderr"
+fi
+teardown_fake_codex
+unset -f command 2>/dev/null || true
 
 # State A: plugin present / MCP absent / auth incomplete should not be treated as done
 reset_codex_mocks

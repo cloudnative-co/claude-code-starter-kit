@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.37.2] - 2026-03-31
+
+### Fixed
+- **Codex login status の stderr 出力を許容**: `codex login status` が stdout ではなく stderr に状態を出す環境でも `_codex_login_status` が正しく認証済みと判定できるよう修正
+
 ## [0.37.1] - 2026-03-31
 
 ### Fixed
