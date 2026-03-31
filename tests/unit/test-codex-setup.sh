@@ -2,6 +2,7 @@
 # tests/unit/test-codex-setup.sh - Unit tests for lib/codex-setup.sh state handling
 #
 # Sourced by run-unit-tests.sh (helpers.sh already loaded).
+# shellcheck disable=SC2034
 
 # Minimal stubs required by lib/codex-setup.sh
 info() { printf '%s\n' "$*"; }
@@ -12,6 +13,7 @@ is_true() { [[ "${1:-false}" == "true" ]]; }
 is_msys() { return 1; }
 _get_shell_rc_file() { printf '%s\n' "$HOME/.bashrc"; }
 
+# shellcheck disable=SC2034  # globals are consumed by sourced codex-setup.sh
 STR_CODEX_SETUP_INCOMPLETE="Codex setup incomplete"
 STR_CODEX_PLUGIN_ALREADY="Codex plugin already configured"
 STR_CODEX_MCP_DRIFT_CLEANUP="Cleaning Codex MCP drift"
@@ -43,6 +45,7 @@ MOCK_REMOVE_MCP_CALLS=0
 source "$PROJECT_DIR/lib/codex-setup.sh"
 
 reset_codex_mocks() {
+  # shellcheck disable=SC2034  # globals are consumed by sourced codex-setup.sh
   MOCK_HAS_PLUGIN=false
   MOCK_HAS_MCP=false
   MOCK_CLI_READY=false
