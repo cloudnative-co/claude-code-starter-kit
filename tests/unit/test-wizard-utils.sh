@@ -219,9 +219,16 @@ cat > "$HOME/.claude/.starter-kit-manifest.json" <<'EOF'
 {"profile":"standard","language":"en","editor":"none","plugins":"","codex_plugin":"true"}
 EOF
 WIZARD_CONFIG_FILE="$HOME/test.conf"
+PROFILE=""
+LANGUAGE=""
+EDITOR_CHOICE=""
+SELECTED_PLUGINS=""
+COMMIT_ATTRIBUTION=""
+ENABLE_NEW_INIT=""
 ENABLE_CODEX_PLUGIN=""
 ENABLE_CODEX_MCP=""
-run_func _restore_config_from_manifest
+_CLI_OVERRIDES=()
+_restore_config_from_manifest >/dev/null 2>&1
 if assert_equals "true" "$ENABLE_CODEX_PLUGIN"; then
   pass "wizard: manifest codex_plugin fallback restores ENABLE_CODEX_PLUGIN on update"
 else
@@ -233,7 +240,8 @@ ENABLE_CODEX_PLUGIN="false"
 EOF
 ENABLE_CODEX_PLUGIN=""
 ENABLE_CODEX_MCP=""
-run_func _restore_config_from_manifest
+_CLI_OVERRIDES=()
+_restore_config_from_manifest >/dev/null 2>&1
 if assert_equals "false" "$ENABLE_CODEX_PLUGIN"; then
   pass "wizard: saved config wins over manifest codex_plugin fallback"
 else
