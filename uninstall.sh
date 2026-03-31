@@ -298,6 +298,36 @@ if [[ "$skipped" -gt 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Codex Plugin / legacy MCP cleanup
+# ---------------------------------------------------------------------------
+if command -v claude &>/dev/null; then
+  # Check for Codex plugin
+  _codex_plugin_list="$(claude plugin list 2>/dev/null || true)"
+  if echo "$_codex_plugin_list" | grep -qw "codex" 2>/dev/null; then
+    printf "\n"
+    read -r -p "Remove Codex plugin? [y/N] " _codex_plugin_confirm
+    case "$_codex_plugin_confirm" in
+      y|Y|yes|YES)
+        claude plugin uninstall codex --scope user 2>/dev/null || true
+        echo "Codex plugin removed"
+        ;;
+    esac
+  fi
+  # Check for legacy Codex MCP
+  _codex_mcp_list="$(claude mcp list -s user 2>/dev/null || true)"
+  if echo "$_codex_mcp_list" | grep -qw "codex" 2>/dev/null; then
+    printf "\n"
+    read -r -p "Remove legacy Codex MCP server? [y/N] " _codex_mcp_confirm
+    case "$_codex_mcp_confirm" in
+      y|Y|yes|YES)
+        claude mcp remove -s user codex 2>/dev/null || true
+        echo "Codex MCP server removed"
+        ;;
+    esac
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Claude Code CLI uninstall
 # ---------------------------------------------------------------------------
 if command -v claude &>/dev/null; then
