@@ -234,7 +234,7 @@ Helper functions in `lib/template.sh`: `_has_kit_markers()`, `_extract_kit_secti
 
 ## Key Conventions
 
-- **Bash 4+ is required** for the main setup flow. Stage 1 bootstrap (`wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`) remains Bash 3.2 compatible for re-exec detection. Stage 2+ may use `declare -A`, `readarray`, etc. The kit auto-detects Bash 4+ and re-execs if the current shell is Bash 3.2 (e.g., macOS default `/bin/bash`). Users need `brew install bash` on macOS.
+- **Prerequisites auto-install**: The main setup flow requires `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, `node`, `tmux`, and `gh`. Stage 1 bootstrap (`wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`) remains Bash 3.2 compatible so the kit can auto-install or detect Bash 4+ and re-exec before Stage 2 (`declare -A`, `readarray`, etc.). Only show manual install commands after automatic installation fails.
 - **Variable naming**: `ENABLE_*` (feature toggles), `INSTALL_*` (component flags), `STR_*` (i18n strings), `_*` prefixed functions (private/internal)
 - **Boolean handling**: `_bool_normalize()` accepts true/1/yes/on → "true". Use `is_true()` for checks.
 - **No eval**: All dynamic variable assignment uses `printf -v` and `${!var}` (indirect expansion) to prevent injection.
