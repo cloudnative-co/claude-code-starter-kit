@@ -28,7 +28,8 @@ INSTALL_COMMANDS="${INSTALL_COMMANDS:-}"
 INSTALL_SKILLS="${INSTALL_SKILLS:-}"
 INSTALL_MEMORY="${INSTALL_MEMORY:-}"
 
-ENABLE_CODEX_MCP="${ENABLE_CODEX_MCP:-}"
+ENABLE_CODEX_PLUGIN="${ENABLE_CODEX_PLUGIN:-}"
+ENABLE_CODEX_MCP="${ENABLE_CODEX_MCP:-}"  # legacy compat (read-only, migrated by _normalize_codex_state)
 ENABLE_TMUX_HOOKS="${ENABLE_TMUX_HOOKS:-}"
 ENABLE_GIT_PUSH_REVIEW="${ENABLE_GIT_PUSH_REVIEW:-}"
 ENABLE_DOC_BLOCKER="${ENABLE_DOC_BLOCKER:-}"
@@ -141,7 +142,7 @@ _language_label() {
 # ---------------------------------------------------------------------------
 
 # Allowed config variable names (used by _safe_source_config for allowlist validation)
-_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD SELECTED_PLUGINS"
+_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_PLUGIN ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD SELECTED_PLUGINS"
 
 # Safe key=value parser: reads a config file line-by-line and only sets
 # variables whose names appear in the allowlist. This replaces the previous
@@ -192,6 +193,37 @@ load_config() {
   fi
 }
 
+# Migrate legacy ENABLE_CODEX_MCP to ENABLE_CODEX_PLUGIN.
+# Called after config loading + CLI override restore in each path.
+_normalize_codex_state() {
+  if [[ -n "${ENABLE_CODEX_MCP:-}" ]]; then
+    # Only migrate if not already explicitly set via CLI (check both old and new keys)
+    local _codex_from_cli=false _ov
+    for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
+      case "$_ov" in
+        ENABLE_CODEX_PLUGIN|ENABLE_CODEX_MCP) _codex_from_cli=true ;;
+      esac
+    done
+    if [[ "$_codex_from_cli" == "false" ]]; then
+      ENABLE_CODEX_PLUGIN="$ENABLE_CODEX_MCP"
+    fi
+    ENABLE_CODEX_MCP=""
+  fi
+
+  # Scrub stale Codex entries from SELECTED_PLUGINS (field-by-field)
+  if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
+    local _cleaned="" _field
+    IFS=',' read -r -a _sp_arr <<< "$SELECTED_PLUGINS"
+    for _field in "${_sp_arr[@]}"; do
+      case "$_field" in
+        codex@*|codex) continue ;;
+      esac
+      _cleaned="${_cleaned:+${_cleaned},}${_field}"
+    done
+    SELECTED_PLUGINS="$_cleaned"
+  fi
+}
+
 fill_missing_profile_defaults() {
   local profile="$1"
   case "$profile" in
@@ -200,9 +232,13 @@ fill_missing_profile_defaults() {
   esac
 
   local saved_enable_new_init="${ENABLE_NEW_INIT:-}"
+  local saved_enable_codex_plugin="${ENABLE_CODEX_PLUGIN:-}"
   load_profile_config "$profile"
   if [[ -n "$saved_enable_new_init" ]]; then
     ENABLE_NEW_INIT="$saved_enable_new_init"
+  fi
+  if [[ -n "$saved_enable_codex_plugin" ]]; then
+    ENABLE_CODEX_PLUGIN="$saved_enable_codex_plugin"
   fi
 }
 
@@ -218,7 +254,7 @@ _CONFIG_SAVE_KEYS=(
   ""
   INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY
   ""
-  ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER
+  ENABLE_CODEX_PLUGIN ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER
   ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE
   ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT
   ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP
@@ -300,6 +336,7 @@ _restore_config_from_manifest() {
     fi
   fi
 
+  _normalize_codex_state
   load_strings "$LANGUAGE"
 }
 
@@ -561,8 +598,10 @@ parse_cli_args() {
       --editor)          shift; EDITOR_CHOICE="${1:-}"; _CLI_OVERRIDES+=("EDITOR_CHOICE") ;;
       --new-init=*)      _set_bool ENABLE_NEW_INIT "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_NEW_INIT") ;;
       --new-init)        shift; _set_bool ENABLE_NEW_INIT "${1:-}"; _CLI_OVERRIDES+=("ENABLE_NEW_INIT") ;;
-      --codex-mcp=*)     _set_bool ENABLE_CODEX_MCP "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_CODEX_MCP") ;;
-      --codex-mcp)       shift; _set_bool ENABLE_CODEX_MCP "${1:-}"; _CLI_OVERRIDES+=("ENABLE_CODEX_MCP") ;;
+      --codex-plugin=*)  _set_bool ENABLE_CODEX_PLUGIN "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_CODEX_PLUGIN") ;;
+      --codex-plugin)    shift; _set_bool ENABLE_CODEX_PLUGIN "${1:-}"; _CLI_OVERRIDES+=("ENABLE_CODEX_PLUGIN") ;;
+      --codex-mcp=*)     _set_bool ENABLE_CODEX_PLUGIN "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_CODEX_PLUGIN") ;;
+      --codex-mcp)       shift; _set_bool ENABLE_CODEX_PLUGIN "${1:-}"; _CLI_OVERRIDES+=("ENABLE_CODEX_PLUGIN") ;;
       --commit-attribution=*) _set_bool COMMIT_ATTRIBUTION "${arg#*=}"; _CLI_OVERRIDES+=("COMMIT_ATTRIBUTION") ;;
       --commit-attribution)   shift; _set_bool COMMIT_ATTRIBUTION "${1:-}"; _CLI_OVERRIDES+=("COMMIT_ATTRIBUTION") ;;
       --ghostty=*)     _set_bool ENABLE_GHOSTTY_SETUP "${arg#*=}"; _CLI_OVERRIDES+=("ENABLE_GHOSTTY_SETUP") ;;
@@ -705,14 +744,14 @@ _prompt_yes_no() {
 
 _step_codex() {
   # Skip if explicitly set by CLI arg
-  local _ov; for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do [[ "$_ov" == "ENABLE_CODEX_MCP" ]] && return; done
+  local _ov; for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do [[ "$_ov" == "ENABLE_CODEX_PLUGIN" ]] && return; done
 
   section "$STR_CODEX_TITLE"
   printf "  1) %s\n" "$STR_CODEX_YES"
   printf "  2) %s\n" "$STR_CODEX_NO"
   local _default="2"
-  if [[ "${ENABLE_CODEX_MCP:-}" == "true" ]]; then _default="1"; fi
-  _prompt_yes_no ENABLE_CODEX_MCP "$_default"
+  if [[ "${ENABLE_CODEX_PLUGIN:-}" == "true" ]]; then _default="1"; fi
+  _prompt_yes_no ENABLE_CODEX_PLUGIN "$_default"
 }
 
 _step_new_init() {
@@ -897,7 +936,7 @@ _step_confirm() {
   section "$STR_CONFIRM_TITLE"
   printf "%-20s : %s\n" "$STR_CONFIRM_LANGUAGE" "$(_language_label "$LANGUAGE")"
   printf "%-20s : %s\n" "$STR_CONFIRM_PROFILE" "$(_profile_label "$PROFILE")"
-  printf "%-20s : %s\n" "$STR_CONFIRM_CODEX" "$(_bool_label_enabled "$ENABLE_CODEX_MCP")"
+  printf "%-20s : %s\n" "$STR_CONFIRM_CODEX" "$(_bool_label_enabled "$ENABLE_CODEX_PLUGIN")"
   printf "%-20s : %s\n" "$STR_CONFIRM_NEW_INIT" "$(_bool_label_enabled "$ENABLE_NEW_INIT")"
   printf "%-20s : %s\n" "$STR_CONFIRM_EDITOR" "$(_editor_label "$EDITOR_CHOICE")"
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -963,10 +1002,24 @@ _fill_noninteractive_defaults() {
     [[ -n "$_override" ]] && _saved_overrides+=("$_override")
   done < <(_capture_cli_overrides)
 
+  # Save migrated Codex state (may come from saved config, not CLI)
+  local _saved_codex="${ENABLE_CODEX_PLUGIN:-}"
+
   load_profile_config "$PROFILE"
 
   # Restore CLI-overridden values (CLI takes precedence over profile/config)
   _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
+
+  # Restore Codex state if it was set before profile reload and CLI didn't override it
+  if [[ -n "$_saved_codex" ]]; then
+    local _is_cli_codex=false _ov
+    for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
+      [[ "$_ov" == "ENABLE_CODEX_PLUGIN" ]] && _is_cli_codex=true
+    done
+    if [[ "$_is_cli_codex" == "false" ]]; then
+      ENABLE_CODEX_PLUGIN="$_saved_codex"
+    fi
+  fi
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
@@ -1012,6 +1065,7 @@ run_wizard() {
   if [[ "$UPDATE_MODE" == "true" ]]; then
     _restore_config_from_manifest
     _restore_cli_overrides "${_saved_cli[@]+"${_saved_cli[@]}"}"
+    _normalize_codex_state
     WIZARD_RESULT="deploy"
     return
   fi
@@ -1022,6 +1076,7 @@ run_wizard() {
 
   # Restore CLI-overridden values (CLI takes precedence over saved config)
   _restore_cli_overrides "${_saved_cli[@]+"${_saved_cli[@]}"}"
+  _normalize_codex_state
 
   # Non-interactive mode: fill defaults and return
   if [[ "$WIZARD_NONINTERACTIVE" == "true" ]]; then
@@ -1058,7 +1113,7 @@ run_wizard() {
     EDITOR_CHOICE=""
     COMMIT_ATTRIBUTION=""
     ENABLE_NEW_INIT=""
-    ENABLE_CODEX_MCP=""
+    ENABLE_CODEX_PLUGIN=""
     ENABLE_GHOSTTY_SETUP=""
     ENABLE_FONTS_SETUP=""
   fi
