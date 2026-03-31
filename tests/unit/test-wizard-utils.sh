@@ -208,3 +208,37 @@ if assert_equals "false" "$ENABLE_CODEX_PLUGIN" \
 else
   fail "wizard: _normalize_codex_state should not overwrite CLI override"
 fi
+
+# ── _restore_config_from_manifest (Codex fallback) ────────────────────────
+
+_orig_home="$HOME"
+_tmp_home="$(mktemp -d)"
+export HOME="$_tmp_home"
+mkdir -p "$HOME/.claude"
+cat > "$HOME/.claude/.starter-kit-manifest.json" <<'EOF'
+{"profile":"standard","language":"en","editor":"none","plugins":"","codex_plugin":"true"}
+EOF
+WIZARD_CONFIG_FILE="$HOME/test.conf"
+ENABLE_CODEX_PLUGIN=""
+ENABLE_CODEX_MCP=""
+run_func _restore_config_from_manifest
+if assert_equals "true" "$ENABLE_CODEX_PLUGIN"; then
+  pass "wizard: manifest codex_plugin fallback restores ENABLE_CODEX_PLUGIN on update"
+else
+  fail "wizard: manifest codex_plugin fallback was not restored"
+fi
+
+cat > "$WIZARD_CONFIG_FILE" <<'EOF'
+ENABLE_CODEX_PLUGIN="false"
+EOF
+ENABLE_CODEX_PLUGIN=""
+ENABLE_CODEX_MCP=""
+run_func _restore_config_from_manifest
+if assert_equals "false" "$ENABLE_CODEX_PLUGIN"; then
+  pass "wizard: saved config wins over manifest codex_plugin fallback"
+else
+  fail "wizard: saved config should win over manifest fallback"
+fi
+
+rm -rf "$_tmp_home"
+export HOME="$_orig_home"
