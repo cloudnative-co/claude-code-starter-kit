@@ -57,7 +57,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **12 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard (Full only)
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
 - **i18n**: English & Japanese
-- **Codex MCP** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
+- **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
 - **Non-interactive mode** for CI/automation
 
 ## Prerequisites
@@ -80,7 +80,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 | **Enterprise** | Contact sales | Large orgs | Custom contracts, audit logs, advanced security |
 
 > **Note**: Prices shown are as of March 2026. Check [claude.com/pricing](https://claude.com/pricing) for current rates.
-> Using Codex MCP (OpenAI integration) requires either an eligible ChatGPT plan for Codex sign-in, or OpenAI API key authentication with OpenAI API usage fees.
+> Using Codex Plugin (OpenAI integration) requires either an eligible ChatGPT plan for Codex sign-in, or OpenAI API key authentication with OpenAI API usage fees.
 
 > **Linux**: This kit is designed for macOS and Windows. If you want to use it on Linux, adjustments may be needed depending on your distribution (Ubuntu, Fedora, etc.) and desktop environment (GNOME, KDE, etc.). Try the one-liner or manual installation method.
 
@@ -141,7 +141,7 @@ cd claude-code-starter-kit
 ## Wizard Flow
 
 ```
-Language → Profile → Codex MCP → New /init → Editor → Hooks → Plugins → Claude Code Attribution → Confirm & Deploy
+Language → Profile → Codex Plugin → New /init → Editor → Hooks → Plugins → Claude Code Attribution → Confirm & Deploy
 ```
 
 Each step shows numbered options with descriptions. Recommended choices are marked.
@@ -164,7 +164,7 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 
 ## Profiles
 
-| Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Plugins | Codex MCP | Ghostty |
+| Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Plugins | Codex Plugin | Ghostty |
 |---------|--------|-------|----------|--------|-------|--------|---------|-----------|---------|
 | Minimal | Yes | Yes | - | - | - | - | - | - | - |
 | Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | 10 | Optional | - |
@@ -172,7 +172,7 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 
 - **Minimal**: Lightweight start with just agents and rules
 - **Standard**: Best for most teams. Includes commands, skills, core hooks, and memory
-- **Full**: Everything enabled including all hooks and Codex MCP sub-agent delegation
+- **Full**: Everything enabled including all hooks and Codex Plugin sub-agent delegation
 
 ### Hooks
 

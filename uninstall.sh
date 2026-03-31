@@ -131,6 +131,12 @@ _load_strings() {
       STR_CLI_UNINSTALL_FAILED="Claude Code CLI のアンインストールに失敗しました。手動で削除してください。"
       STR_CLI_UNINSTALL_SKIP="Claude Code CLI のアンインストールをスキップしました"
       STR_CLI_NOT_INSTALLED="Claude Code CLI はインストールされていません"
+      STR_CODEX_PLUGIN_REMOVE_ASK="Codex プラグインを削除しますか？ [y/N] "
+      STR_CODEX_PLUGIN_REMOVED="Codex プラグインを削除しました"
+      STR_CODEX_PLUGIN_REMOVE_FAILED="Codex プラグインの削除に失敗しました。手動で実行してください:"
+      STR_CODEX_MCP_REMOVE_ASK="legacy Codex MCP サーバーを削除しますか？ [y/N] "
+      STR_CODEX_MCP_REMOVED="Codex MCP サーバーを削除しました"
+      STR_CODEX_MCP_REMOVE_FAILED="Codex MCP サーバーの削除に失敗しました。手動で実行してください:"
       ;;
     *)
       STR_TITLE="Claude Code Starter Kit - Uninstall"
@@ -152,6 +158,12 @@ _load_strings() {
       STR_CLI_UNINSTALL_FAILED="Failed to uninstall Claude Code CLI. Please remove it manually."
       STR_CLI_UNINSTALL_SKIP="Skipped Claude Code CLI uninstall"
       STR_CLI_NOT_INSTALLED="Claude Code CLI is not installed"
+      STR_CODEX_PLUGIN_REMOVE_ASK="Remove Codex plugin? [y/N] "
+      STR_CODEX_PLUGIN_REMOVED="Codex plugin removed"
+      STR_CODEX_PLUGIN_REMOVE_FAILED="Failed to remove Codex plugin. Remove it manually:"
+      STR_CODEX_MCP_REMOVE_ASK="Remove legacy Codex MCP server? [y/N] "
+      STR_CODEX_MCP_REMOVED="Codex MCP server removed"
+      STR_CODEX_MCP_REMOVE_FAILED="Failed to remove Codex MCP server. Remove it manually:"
       ;;
   esac
 }
@@ -305,11 +317,15 @@ if command -v claude &>/dev/null; then
   _codex_plugin_list="$(claude plugin list 2>/dev/null || true)"
   if echo "$_codex_plugin_list" | grep -qw "codex" 2>/dev/null; then
     printf "\n"
-    read -r -p "Remove Codex plugin? [y/N] " _codex_plugin_confirm
+    read -r -p "$STR_CODEX_PLUGIN_REMOVE_ASK" _codex_plugin_confirm
     case "$_codex_plugin_confirm" in
       y|Y|yes|YES)
-        claude plugin uninstall codex --scope user 2>/dev/null || true
-        echo "Codex plugin removed"
+        if claude plugin uninstall codex --scope user; then
+          info "$STR_CODEX_PLUGIN_REMOVED"
+        else
+          warn "$STR_CODEX_PLUGIN_REMOVE_FAILED"
+          info "  claude plugin uninstall codex --scope user"
+        fi
         ;;
     esac
   fi
@@ -317,11 +333,15 @@ if command -v claude &>/dev/null; then
   _codex_mcp_list="$(claude mcp list -s user 2>/dev/null || true)"
   if echo "$_codex_mcp_list" | grep -qw "codex" 2>/dev/null; then
     printf "\n"
-    read -r -p "Remove legacy Codex MCP server? [y/N] " _codex_mcp_confirm
+    read -r -p "$STR_CODEX_MCP_REMOVE_ASK" _codex_mcp_confirm
     case "$_codex_mcp_confirm" in
       y|Y|yes|YES)
-        claude mcp remove -s user codex 2>/dev/null || true
-        echo "Codex MCP server removed"
+        if claude mcp remove -s user codex; then
+          info "$STR_CODEX_MCP_REMOVED"
+        else
+          warn "$STR_CODEX_MCP_REMOVE_FAILED"
+          info "  claude mcp remove -s user codex"
+        fi
         ;;
     esac
   fi

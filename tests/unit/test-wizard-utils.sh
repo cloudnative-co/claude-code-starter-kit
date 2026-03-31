@@ -182,3 +182,29 @@ if [[ "$_mixed_width" -gt 3 ]]; then
 else
   fail "wizard: _display_width mixed string width '$_mixed_width' should be > 3"
 fi
+
+# ── _normalize_codex_state ────────────────────────────────────────────────
+
+ENABLE_CODEX_PLUGIN=""
+ENABLE_CODEX_MCP="true"
+SELECTED_PLUGINS="alpha,codex,beta,codex@openai"
+_CLI_OVERRIDES=()
+run_func _normalize_codex_state
+if assert_equals "true" "$ENABLE_CODEX_PLUGIN" \
+  && assert_empty "$ENABLE_CODEX_MCP" \
+  && assert_equals "alpha,beta" "$SELECTED_PLUGINS"; then
+  pass "wizard: _normalize_codex_state migrates legacy key and scrubs stale plugin entries"
+else
+  fail "wizard: _normalize_codex_state migration failed"
+fi
+
+ENABLE_CODEX_PLUGIN="false"
+ENABLE_CODEX_MCP="true"
+_CLI_OVERRIDES=("ENABLE_CODEX_PLUGIN")
+run_func _normalize_codex_state
+if assert_equals "false" "$ENABLE_CODEX_PLUGIN" \
+  && assert_empty "$ENABLE_CODEX_MCP"; then
+  pass "wizard: _normalize_codex_state respects CLI override for new key"
+else
+  fail "wizard: _normalize_codex_state should not overwrite CLI override"
+fi
