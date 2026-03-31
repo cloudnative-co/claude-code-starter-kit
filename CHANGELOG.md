@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.37.1] - 2026-03-31
+
+### Fixed
+- **Codex MCP cleanup の検出漏れを修正**: `claude mcp list/remove` の user-scope 固定をやめ、`~/.claude.json` 側など user 固定で見えない legacy Codex MCP も plugin 移行時に cleanup できるよう修正
+- **macOS の timeout fallback で login 判定が空になる不具合を修正**: `_run_with_timeout` が stdout/stderr を保持するようにし、`codex login status` の結果を command substitution で正しく受け取れるよう修正
+
 ## [0.37.0] - 2026-03-31
 
 ### Changed

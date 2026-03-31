@@ -19,8 +19,14 @@ _run_with_timeout() {
   if command -v timeout &>/dev/null; then
     timeout "$secs" "$@"
   else
-    # Background the command and kill if it exceeds the limit
-    "$@" &
+    local _stdout_file _stderr_file
+    _stdout_file="$(mktemp)"
+    _stderr_file="$(mktemp)"
+    _SETUP_TMP_FILES+=("$_stdout_file" "$_stderr_file")
+
+    # Background the command and capture its output so command substitution
+    # still works on macOS where `timeout` is unavailable.
+    "$@" >"$_stdout_file" 2>"$_stderr_file" &
     local pid=$!
     ( sleep "$secs" && kill "$pid" 2>/dev/null ) &
     local watcher=$!
@@ -30,6 +36,9 @@ _run_with_timeout() {
     # Kill the watcher subshell and its sleep child to avoid orphan processes
     kill "$watcher" 2>/dev/null || true
     wait "$watcher" 2>/dev/null || true
+
+    cat "$_stdout_file"
+    cat "$_stderr_file" >&2
     return "$rc"
   fi
 }
@@ -353,7 +362,7 @@ _has_codex_plugin() {
 }
 
 _has_legacy_mcp() {
-  command -v claude &>/dev/null && claude mcp list -s user 2>/dev/null | grep -qw "codex" 2>/dev/null
+  command -v claude &>/dev/null && claude mcp list 2>/dev/null | grep -qw "codex" 2>/dev/null
 }
 
 _install_codex_plugin() {
@@ -381,12 +390,12 @@ _install_codex_plugin() {
 _remove_legacy_mcp() {
   if _has_legacy_mcp; then
     local _remove_output=""
-    if _run_capture _remove_output claude mcp remove -s user codex; then
+    if _run_capture _remove_output claude mcp remove codex; then
       return 0
     fi
     warn "${STR_CODEX_MCP_REMOVE_FAILED:-Failed to remove Codex MCP. Remove manually:}"
     [[ -n "$_remove_output" ]] && info "  $_remove_output"
-    info "  claude mcp remove -s user codex"
+    info "  claude mcp remove codex"
     return 1
   fi
   return 0  # nothing to remove

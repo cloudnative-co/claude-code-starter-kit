@@ -62,6 +62,56 @@ reset_codex_mocks() {
   WIZARD_NONINTERACTIVE=false
 }
 
+setup_fake_claude() {
+  MOCK_CLAUDE_DIR="$(mktemp -d)"
+  MOCK_CLAUDE_LOG="$MOCK_CLAUDE_DIR/claude.log"
+  export MOCK_CLAUDE_LOG
+  _SETUP_TMP_FILES+=("$MOCK_CLAUDE_DIR")
+  cat >"$MOCK_CLAUDE_DIR/claude" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" > "${MOCK_CLAUDE_LOG}"
+if [[ "${1:-}" == "mcp" && "${2:-}" == "list" ]]; then
+  printf '%s' "${MOCK_CLAUDE_LIST_OUTPUT:-}"
+  exit 0
+fi
+if [[ "${1:-}" == "mcp" && "${2:-}" == "remove" ]]; then
+  printf '%s' "${MOCK_CLAUDE_REMOVE_OUTPUT:-}"
+  exit "${MOCK_CLAUDE_REMOVE_RC:-0}"
+fi
+exit 1
+EOF
+  chmod +x "$MOCK_CLAUDE_DIR/claude"
+  MOCK_ORIG_PATH="$PATH"
+  export PATH="$MOCK_CLAUDE_DIR:$PATH"
+}
+
+teardown_fake_claude() {
+  export PATH="$MOCK_ORIG_PATH"
+}
+
+# Legacy MCP detection should scan all scopes, not only -s user
+setup_fake_claude
+export MOCK_CLAUDE_LIST_OUTPUT=$'codex\n'
+if _has_legacy_mcp \
+  && assert_equals "mcp list" "$(cat "$MOCK_CLAUDE_LOG")"; then
+  pass "codex-setup: _has_legacy_mcp checks all scopes via claude mcp list"
+else
+  fail "codex-setup: _has_legacy_mcp should not hardcode -s user"
+fi
+teardown_fake_claude
+
+# Legacy MCP removal should rely on scope-agnostic CLI removal
+setup_fake_claude
+export MOCK_CLAUDE_LIST_OUTPUT=$'codex\n'
+export MOCK_CLAUDE_REMOVE_OUTPUT="removed"
+if _remove_legacy_mcp \
+  && assert_equals "mcp remove codex" "$(cat "$MOCK_CLAUDE_LOG")"; then
+  pass "codex-setup: _remove_legacy_mcp removes codex without scope pinning"
+else
+  fail "codex-setup: _remove_legacy_mcp should not hardcode -s user"
+fi
+teardown_fake_claude
+
 _has_codex_plugin() { [[ "$MOCK_HAS_PLUGIN" == "true" ]]; }
 _has_legacy_mcp() { [[ "$MOCK_HAS_MCP" == "true" ]]; }
 _codex_cli_ready() { [[ "$MOCK_CLI_READY" == "true" ]]; }
@@ -71,6 +121,23 @@ _setup_codex_plugin() { MOCK_SETUP_CALLS=$((MOCK_SETUP_CALLS + 1)); [[ "$MOCK_SE
 _install_codex_cli() { MOCK_INSTALL_CLI_CALLS=$((MOCK_INSTALL_CLI_CALLS + 1)); [[ "$MOCK_INSTALL_CLI_SUCCESS" == "true" ]]; }
 _install_codex_plugin() { MOCK_INSTALL_PLUGIN_CALLS=$((MOCK_INSTALL_PLUGIN_CALLS + 1)); [[ "$MOCK_INSTALL_PLUGIN_SUCCESS" == "true" ]]; }
 _remove_legacy_mcp() { MOCK_REMOVE_MCP_CALLS=$((MOCK_REMOVE_MCP_CALLS + 1)); [[ "$MOCK_REMOVE_MCP_SUCCESS" == "true" ]]; }
+
+# _run_with_timeout fallback must preserve stdout for command substitution
+command() {
+  if [[ "$1" == "-v" && "$2" == "timeout" ]]; then
+    return 1
+  fi
+  builtin command "$@"
+}
+_timeout_result="$(_run_with_timeout 5 bash -lc 'printf "Logged in using ChatGPT"')"
+_timeout_rc=$?
+unset -f command
+if assert_equals "0" "$_timeout_rc" \
+  && assert_equals "Logged in using ChatGPT" "$_timeout_result"; then
+  pass "codex-setup: _run_with_timeout fallback preserves stdout for command substitution"
+else
+  fail "codex-setup: _run_with_timeout fallback should preserve stdout"
+fi
 
 # State A: plugin present / MCP absent / auth incomplete should not be treated as done
 reset_codex_mocks
