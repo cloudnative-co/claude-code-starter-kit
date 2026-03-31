@@ -339,9 +339,9 @@ build_claude_md() {
 
   cp -a "$base" "$out"
 
-  if is_true "$ENABLE_CODEX_MCP"; then
-    local partial="$PROJECT_DIR/features/codex-mcp/CLAUDE.md.partial.${lang}"
-    inject_feature "$out" "codex-mcp" "$partial"
+  if is_true "$ENABLE_CODEX_PLUGIN"; then
+    local partial="$PROJECT_DIR/features/codex-plugin/CLAUDE.md.partial.${lang}"
+    inject_feature "$out" "codex-plugin" "$partial"
   fi
 
   remove_unresolved "$out"
@@ -355,9 +355,9 @@ build_claude_md_to_file() {
 
   cp -a "$base" "$out"
 
-  if is_true "$ENABLE_CODEX_MCP"; then
-    local partial="$PROJECT_DIR/features/codex-mcp/CLAUDE.md.partial.${lang}"
-    inject_feature "$out" "codex-mcp" "$partial"
+  if is_true "$ENABLE_CODEX_PLUGIN"; then
+    local partial="$PROJECT_DIR/features/codex-plugin/CLAUDE.md.partial.${lang}"
+    inject_feature "$out" "codex-plugin" "$partial"
   fi
 
   remove_unresolved "$out"
@@ -616,6 +616,7 @@ write_manifest() {
     --arg commit_attribution "${COMMIT_ATTRIBUTION:-}" \
     --arg new_init "${ENABLE_NEW_INIT:-}" \
     --arg plugins "${SELECTED_PLUGINS:-}" \
+    --arg codex_plugin "${ENABLE_CODEX_PLUGIN:-false}" \
     --argjson files "$files_json" \
     --arg snapshot_dir "$CLAUDE_DIR/.starter-kit-snapshot" \
     '{
@@ -629,6 +630,7 @@ write_manifest() {
       commit_attribution: $commit_attribution,
       new_init: $new_init,
       plugins: $plugins,
+      codex_plugin: $codex_plugin,
       files: $files,
       snapshot_dir: $snapshot_dir
     }' > "$manifest"
