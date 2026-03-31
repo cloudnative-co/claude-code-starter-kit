@@ -288,7 +288,7 @@ _restore_config_from_manifest() {
   [[ -f "$manifest" ]] || return 1
 
   local config_file current_settings
-  local manifest_commit_attribution manifest_new_init
+  local manifest_commit_attribution manifest_new_init manifest_codex_plugin
   local saved_has_commit_attribution="false" saved_has_new_init="false"
   local current_commit_attribution="" current_new_init=""
   PROFILE="$(jq -r '.profile // "standard"' "$manifest")"
@@ -297,6 +297,7 @@ _restore_config_from_manifest() {
   SELECTED_PLUGINS="$(jq -r '.plugins // ""' "$manifest")"
   manifest_commit_attribution="$(jq -r '.commit_attribution // ""' "$manifest")"
   manifest_new_init="$(jq -r '.new_init // ""' "$manifest")"
+  manifest_codex_plugin="$(jq -r '.codex_plugin // ""' "$manifest")"
   config_file="${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
   current_settings="$HOME/.claude/settings.json"
 
@@ -334,6 +335,12 @@ _restore_config_from_manifest() {
     elif [[ -n "$manifest_new_init" ]]; then
       ENABLE_NEW_INIT="$manifest_new_init"
     fi
+  fi
+
+  # Codex plugin: fallback to manifest if saved config has neither old nor new key
+  if [[ -z "${ENABLE_CODEX_PLUGIN:-}" ]] && [[ -z "${ENABLE_CODEX_MCP:-}" ]] \
+    && [[ -n "$manifest_codex_plugin" ]]; then
+    ENABLE_CODEX_PLUGIN="$manifest_codex_plugin"
   fi
 
   _normalize_codex_state

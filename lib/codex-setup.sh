@@ -336,11 +336,14 @@ _install_codex_plugin() {
 
 _remove_legacy_mcp() {
   if _has_legacy_mcp; then
-    if ! claude mcp remove -s user codex 2>/dev/null; then
-      warn "${STR_CODEX_MCP_REMOVE_FAILED:-Failed to remove Codex MCP. Remove manually:}"
-      info "  claude mcp remove -s user codex"
+    if claude mcp remove -s user codex 2>/dev/null; then
+      return 0
     fi
+    warn "${STR_CODEX_MCP_REMOVE_FAILED:-Failed to remove Codex MCP. Remove manually:}"
+    info "  claude mcp remove -s user codex"
+    return 1
   fi
+  return 0  # nothing to remove
 }
 
 # ---------------------------------------------------------------------------
@@ -445,8 +448,9 @@ run_codex_setup() {
   # State B: both present → drift recovery, auto-remove MCP
   if [[ "$_plugin_present" == "true" ]] && [[ "$_mcp_present" == "true" ]]; then
     info "${STR_CODEX_MCP_DRIFT_CLEANUP:-Removing duplicate Codex MCP registration...}"
-    _remove_legacy_mcp
-    ok "${STR_CODEX_MCP_DRIFT_DONE:-Codex MCP duplicate registration removed}"
+    if _remove_legacy_mcp; then
+      ok "${STR_CODEX_MCP_DRIFT_DONE:-Codex MCP duplicate registration removed}"
+    fi
     return 0
   fi
 
@@ -468,8 +472,9 @@ run_codex_setup() {
         _setup_codex_plugin
         # Remove MCP only after plugin install verified
         if _has_codex_plugin; then
-          _remove_legacy_mcp
-          ok "${STR_CODEX_MIGRATE_DONE:-Codex MCP → Plugin migration complete}"
+          if _remove_legacy_mcp; then
+            ok "${STR_CODEX_MIGRATE_DONE:-Codex MCP → Plugin migration complete}"
+          fi
         else
           warn "${STR_CODEX_MIGRATE_PLUGIN_FAILED:-Plugin install failed. Keeping MCP.}"
         fi
