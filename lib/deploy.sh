@@ -101,6 +101,31 @@ _auto_update_hooks_fragment() {
   printf '%s\n' "$legacy_src"
 }
 
+_pr_creation_log_supports_if_async() {
+  local min_version="2.1.89"
+  local current_version=""
+
+  if ! command -v claude &>/dev/null; then
+    return 0
+  fi
+
+  current_version="$(_claude_cli_semver 2>/dev/null || true)"
+  [[ -n "$current_version" ]] || return 1
+  _version_ge "$current_version" "$min_version"
+}
+
+_pr_creation_log_hooks_fragment() {
+  local src="$PROJECT_DIR/features/pr-creation-log/hooks.json"
+  local legacy_src="$PROJECT_DIR/features/pr-creation-log/hooks.legacy.json"
+
+  if _pr_creation_log_supports_if_async; then
+    printf '%s\n' "$src"
+    return 0
+  fi
+
+  printf '%s\n' "$legacy_src"
+}
+
 apply_settings_preferences() {
   local file="$1"
   local lang_name tmp_file attribution_enabled
@@ -451,6 +476,8 @@ build_settings_file() {
     local hooks_json="$PROJECT_DIR/features/$name/hooks.json"
     if [[ "$name" == "auto-update" ]]; then
       hooks_json="$(_auto_update_hooks_fragment)"
+    elif [[ "$name" == "pr-creation-log" ]]; then
+      hooks_json="$(_pr_creation_log_hooks_fragment)"
     fi
     [[ -f "$hooks_json" ]] && hook_fragments+=("$hooks_json")
   done
