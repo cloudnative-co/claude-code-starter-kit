@@ -1,6 +1,7 @@
 ---
 name: coding-standards
 description: Universal coding standards, best practices, and patterns for TypeScript, JavaScript, React, and Node.js development.
+when_to_use: Use when reviewing or writing TypeScript, JavaScript, React, or Node.js code and project-wide coding conventions matter.
 ---
 
 # Coding Standards & Best Practices

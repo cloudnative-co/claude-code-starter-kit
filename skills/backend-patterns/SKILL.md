@@ -1,6 +1,7 @@
 ---
 name: backend-patterns
 description: Backend architecture patterns, API design, database optimization, and server-side best practices for Node.js, Express, and Next.js API routes.
+when_to_use: Use when the user is designing or refactoring APIs, service layers, database access, or backend architecture in Node.js or Next.js projects.
 ---
 
 # Backend Development Patterns

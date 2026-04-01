@@ -1,6 +1,7 @@
 ---
 name: strategic-compact
 description: Suggests manual context compaction at logical intervals to preserve context through task phases rather than arbitrary auto-compaction.
+when_to_use: Use when a session is getting long and the user is between phases, such as after exploration, before implementation, or before a handoff.
 ---
 
 # Strategic Compact Skill
