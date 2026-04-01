@@ -1,6 +1,7 @@
 ---
 name: clickhouse-io
 description: ClickHouse database patterns, query optimization, analytics, and data engineering best practices for high-performance analytical workloads.
+when_to_use: Use when the user is modeling analytics tables, tuning ClickHouse queries, or building ingestion and reporting workflows on ClickHouse.
 ---
 
 # ClickHouse Analytics Patterns

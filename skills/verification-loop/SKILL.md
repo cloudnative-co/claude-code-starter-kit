@@ -1,6 +1,7 @@
 ---
 name: verification-loop
 description: Comprehensive verification system for Claude Code sessions. Use after implementation to validate correctness.
+when_to_use: Use when implementation is complete and the user wants verification before handoff, commit, or PR creation.
 ---
 
 # Verification Loop Skill

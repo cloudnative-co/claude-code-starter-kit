@@ -889,6 +889,17 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 | スキルを追加 | `~/.claude/skills/{name}/` に `SKILL.md` + 必要に応じて `references/`, `scripts/`, `assets/` を作成 |
 | フックを変更 | `~/.claude/settings.json` の hooks セクションを編集 |
 
+スキルを追加するときの frontmatter は、まず次の最小セットを推奨します。
+
+- `name`: スキル名。通常はディレクトリ名と揃える
+- `description`: 一行要約
+- `when_to_use`: `Use when...` で始める自動発見用の起動条件
+
+必要なときだけ追加する項目:
+
+- `argument-hint`: 引数付き skill の補完ヒント。固定引数がない skill には付けない
+- `user-invocable: false`: `/skill-name` に出したくない背景知識・hook 連携用 skill だけに使う
+
 > **設定のやり直し**: 既存の starter kit 環境を更新するときは、`/update-kit` または `./setup.sh --update` が安全です。競合があれば対話的に確認し、判定を記憶できます。
 > starter kit を初めて使う場合でも、既存の `settings.json` があればマージされ、他のファイルもディレクトリ単位で上書き/新規のみ/スキップを選べます。
 

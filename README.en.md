@@ -402,6 +402,17 @@ After installation, you can extend or modify any component:
 - **Add a skill**: Create a new directory under `~/.claude/skills/` with a `SKILL.md`
 - **Modify hooks**: Edit `~/.claude/settings.json` hooks section
 
+For new skills, start with this minimal frontmatter:
+
+- `name`: Skill name, usually matching the directory name
+- `description`: One-line summary
+- `when_to_use`: Auto-discovery trigger starting with `Use when...`
+
+Only add these when they are truly needed:
+
+- `argument-hint`: Autocomplete hint for skills that really take arguments
+- `user-invocable: false`: For background knowledge or hook-driven skills that should stay out of the `/` menu
+
 To re-apply the starter kit config (e.g., after updating the repo), run `./setup.sh` again. Your previous selections are remembered in `~/.claude-starter-kit.conf`.
 
 ## Uninstall

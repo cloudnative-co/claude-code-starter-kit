@@ -1,6 +1,7 @@
 ---
 name: prompt-patterns
 description: Practical prompt patterns and techniques for effective Claude Code usage. Reference when crafting prompts, planning workflows, or debugging interactions.
+when_to_use: Use when the user wants help crafting prompts, planning an interaction strategy, or debugging prompt quality.
 ---
 
 # Prompt Patterns for Claude Code

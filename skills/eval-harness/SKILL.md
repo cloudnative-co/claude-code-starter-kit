@@ -1,6 +1,7 @@
 ---
 name: eval-harness
 description: Formal evaluation framework for Claude Code sessions implementing eval-driven development (EDD) principles.
+when_to_use: Use when the user wants formal evals, pass/fail regression checks, or eval-driven development for AI behavior.
 ---
 
 # Eval Harness Skill

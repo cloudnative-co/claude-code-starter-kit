@@ -1,6 +1,7 @@
 ---
 name: project-guidelines-example
 description: Example project-specific skill template. Use as a starting point when creating guidelines for your own projects.
+when_to_use: Use when creating a new project-specific skill or adapting this template into real architecture, workflow, and testing guidance.
 ---
 
 # Project Guidelines Skill (Example)

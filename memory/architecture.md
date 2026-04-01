@@ -40,11 +40,20 @@ File: `.claude/skills/<name>/SKILL.md`
 ---
 name: skill-name
 description: What this skill provides
-model: haiku
-tools: WebFetch, Read
-context: fork  # isolated execution
+when_to_use: Use when the user asks for...
+argument-hint: "[optional-args]"  # optional
+user-invocable: false  # optional, only for background or hook-driven skills
 ---
 ```
+
+Recommended minimum:
+
+- `name`
+- `description`
+- `when_to_use`
+
+Add `argument-hint` only when the skill actually takes parameters.
+Use `user-invocable: false` only when the skill should not appear in the `/` menu.
 
 ## RPI Workflow (Research → Plan → Implement)
 
