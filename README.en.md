@@ -209,13 +209,18 @@ STRICT mode (`SAFETY_NET_STRICT=1`) is enabled by default, causing unparseable c
 
 #### Auto Update
 
-Automatically checks for new starter kit releases on GitHub at the start of each Claude Code session.
+Automatically checks for new starter kit releases on GitHub on both `SessionStart` and `SessionEnd`.
 
-- **24-hour cache**: Only checks once per day (cache-hit exits in < 1ms)
-- **Background execution**: Updates run in the background, so session startup is not blocked
+- **Every-session checks**: Checks at both session start and session end
+- **Background execution**: Hooks run asynchronously, so the session is not blocked
+- **Lock-based deduplication**: A running auto-update prevents duplicate concurrent runs
 - **Settings preserved**: 3-way merge keeps your customizations intact
 - **One-liner installs only**: Only works when the kit is installed at `~/.claude-starter-kit/`
-- Changes take effect on the next session
+- **SessionEnd is best-effort**: abrupt termination may skip the end-of-session check
+- **Compatibility**: Verified on Claude Code `2.1.89`. When an older Claude Code is detected, the kit falls back to the legacy `SessionStart` + 24h cache hook
+- **Dirty check**: If the kit repo has local changes, auto-update skips and suggests `git stash`
+- **Recovery info**: If the update fails, the hook prints the backup path and restore command
+- **Failure carry-over**: Background update failures are saved once and surfaced on the next hook run
 
 > **Enabled by default in Standard / Full profiles.** Disable with `ENABLE_AUTO_UPDATE=false` in the hooks selection.
 
@@ -340,6 +345,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - A backup is automatically created at `~/.claude.backup.<timestamp>` before every update or first install with existing files.
 > - `setup.sh --update` and `/update-kit` now show `Step N/M` progress so long-running phases such as settings merges no longer look stalled.
 > - **Dirty check**: If the kit repo has local changes, update is blocked with a `git stash` hint (applies to auto-update, install.sh, and /update-kit).
+> - **Auto-update**: SessionStart and SessionEnd hooks now check on every session boundary and run asynchronously. `~/.claude/.starter-kit-update.lock` prevents overlapping updates.
 > - **Recovery**: If an update fails, backup path and restore commands are shown. The latest backup path is saved in `~/.claude/.starter-kit-last-backup`.
 >
 > **Dry-run (preview before deploying)**:

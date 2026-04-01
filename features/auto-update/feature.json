@@ -1,7 +1,7 @@
 {
   "name": "auto-update",
   "displayName": "Auto Update",
-  "description": "Automatically check for and apply starter kit updates on session start",
+  "description": "Automatically check for and apply starter kit updates on session start and end",
   "category": "hook",
   "default": true,
   "profiles": {

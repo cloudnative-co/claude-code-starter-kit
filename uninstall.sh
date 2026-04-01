@@ -283,7 +283,9 @@ if [[ -f "$HOME/.claude-starter-kit.conf" ]]; then
   ok "$STR_REMOVED_CONFIG"
 fi
 
-# Remove auto-update cache file
+# Remove auto-update lock artifact
+rm -rf "$CLAUDE_DIR/.starter-kit-update.lock"
+rm -f "$CLAUDE_DIR/.starter-kit-update-status"
 rm -f "$CLAUDE_DIR/.starter-kit-update-cache"
 
 # Remove merge preferences (used by update conflict resolution)
