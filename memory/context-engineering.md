@@ -45,10 +45,15 @@
 4. `~/.claude/settings.json` (global personal)
 5. `managed-settings.json` (organizational, read-only, lowest)
 
-## Hook Events (13 Total)
+## Hook Events Used in This Kit
 SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse,
 PostToolUseFailure, PermissionRequest, Notification, Stop,
-SubagentStart, SubagentStop, PreCompact, Setup
+SubagentStart, SubagentStop, PreCompact, PostCompact, Setup
+
+### Compaction Flow
+- `PreCompact`: Save notes before context is summarized
+- `PostCompact`: Lightweight completion reminder after compaction finishes (tested with Claude Code 2.1.89; older versions may ignore this hook)
+- `SessionStart`: Remind you that recent session notes and learned skills are available in the next session
 
 ### Exit Codes
 - 0: Success, continue

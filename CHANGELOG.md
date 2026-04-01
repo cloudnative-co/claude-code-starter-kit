@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0] - 2026-04-01
+
+### Added
+- **PostCompact hook による compact 完了通知**: `memory-persistence` に `PostCompact` を追加し、compact 後に session notes / learned context の再利用フローを案内する軽量メッセージを表示
+
+### Changed
+- **compact フロー文書を更新**: `CLAUDE.md` と `memory/context-engineering.md` に `PostCompact` を含む compact 前後の役割分担を追記
+- **検証導線を更新**: ローカル検証手順に unit / scenario test を追加し、`PostCompact` は Claude Code `2.1.89` で確認済み・旧版では無視される可能性がある旨を明記
+
 ## [0.37.3] - 2026-03-31
 
 ### Added

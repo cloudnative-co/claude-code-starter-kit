@@ -29,6 +29,12 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 # Validate all shell scripts (matches CI severity)
 shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
 
+# Run unit tests
+bash tests/run-unit-tests.sh
+
+# Run scenario tests
+bash tests/run-scenarios.sh
+
 # Validate a single file
 shellcheck lib/ghostty.sh
 
@@ -48,7 +54,7 @@ bash setup.sh --update
 bash setup.sh
 ```
 
-All scripts use `set -euo pipefail`. ShellCheck (severity: warning) runs automatically on PRs via `.github/workflows/shellcheck.yml`. There is no traditional test suite (jest, pytest, etc.) — validation is ShellCheck CI only.
+All scripts use `set -euo pipefail`. ShellCheck (severity: warning) runs automatically on PRs via `.github/workflows/shellcheck.yml`. Validation also includes `bash tests/run-unit-tests.sh` and `bash tests/run-scenarios.sh`.
 
 ## Architecture
 
@@ -111,13 +117,13 @@ Wizard flow: `_load_plugins()` reads the JSON (including `PLUGIN_MARKETPLACES[]`
 
 ### Hook Fragment Assembly
 
-Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions and/or top-level settings. `build_settings_file()` (in `lib/deploy.sh`) conditionally merges enabled features' fragments into `settings.json` via a custom jq deep-merge that **concatenates arrays** (so multiple features can add entries to the same hook type like `PreCompact`).
+Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions and/or top-level settings. `build_settings_file()` (in `lib/deploy.sh`) conditionally merges enabled features' fragments into `settings.json` via a custom jq deep-merge that **concatenates arrays** (so multiple features can add entries to the same hook type like `PreCompact` or `PostCompact`).
 
-**IMPORTANT: Hook types (`SessionStart`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Stop`, `Notification`) MUST be nested inside a `"hooks"` key in hooks.json.** Claude Code reads hooks from `settings.json.hooks.*`, not from the top level. Top-level settings keys (`env`, `statusLine`, etc.) remain at the root.
+**IMPORTANT: Hook types (`SessionStart`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`, `Notification`) MUST be nested inside a `"hooks"` key in hooks.json.** Claude Code reads hooks from `settings.json.hooks.*`, not from the top level. Top-level settings keys (`env`, `statusLine`, etc.) remain at the root.
 
 Three fragment styles exist:
 - **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields, nested inside `"hooks"` (e.g., `features/tmux-hooks/hooks.json`)
-- **External script hooks**: `hooks.json` references a script path with `__HOME__` token inside `"hooks"`, (e.g., `"hooks": {"PreCompact": [{"hooks": [{"command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"}]}]}`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`. Both `.sh` and `.py` scripts are supported.
+- **External script hooks**: `hooks.json` references a script path with `__HOME__` token inside `"hooks"`, (e.g., `"hooks": {"PreCompact": [{"hooks": [{"command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"}]}], "PostCompact": [{"hooks": [{"command": "__HOME__/.claude/hooks/memory-persistence/post-compact.sh"}]}]}`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`. Both `.sh` and `.py` scripts are supported.
 - **Top-level settings**: `hooks.json` can contain any top-level settings key alongside `"hooks"`. The jq deep-merge applies at root level, so `{"statusLine": {...}}` and `{"env": {...}}` merge correctly (e.g., `features/statusline/hooks.json`, `features/safety-net/hooks.json`).
 
 `build_settings_json()` in `lib/json-builder.sh` performs the merge:
@@ -317,7 +323,7 @@ The permissions file implements a defense-in-depth strategy against prompt injec
    Missing keys on older installs should receive the intended default for that profile, but existing explicit user choices must win.
 10. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Write the entry directly under the version heading (`## [x.y.z]`) that will be tagged on merge — do not use an `[Unreleased]` section. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
 
-Multiple features can safely use the same hook type (e.g., `PreCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
+Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
 
 **Hook ordering matters**: `safety-net` must be the **first** entry in `hook_fragments[]` so its `PreToolUse` entry appears at index 0 (runs before other PreToolUse hooks). When adding new PreToolUse hooks, append after safety-net.
 
