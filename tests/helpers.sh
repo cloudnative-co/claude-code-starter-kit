@@ -29,7 +29,14 @@ setup_test_env() {
 
   # Place a dummy 'claude' binary so setup.sh skips CLI installation
   mkdir -p "$_TEST_TMPDIR/.local/bin"
-  printf '#!/bin/bash\nexit 0\n' > "$_TEST_TMPDIR/.local/bin/claude"
+  cat > "$_TEST_TMPDIR/.local/bin/claude" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "--version" ]]; then
+  printf '%s\n' "${MOCK_CLAUDE_VERSION:-2.1.89 (Claude Code)}"
+  exit 0
+fi
+exit 0
+EOF
   chmod +x "$_TEST_TMPDIR/.local/bin/claude"
   export PATH="$_TEST_TMPDIR/.local/bin:$_ORIG_PATH"
 }

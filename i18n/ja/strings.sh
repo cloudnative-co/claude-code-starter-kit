@@ -275,7 +275,7 @@ STR_MAJOR_UPGRADE_BACKUP="更新前にバックアップが作成されます。
 STR_UPDATE_SKIPPED_HINT="スキップされたファイルにはあなたの変更が保持されています。次回の update で受け入れるかリセットすると kit 更新が適用されます。"
 # 自動更新ヘルスチェック
 STR_AUTOUPDATE_NOTICE="自動更新は無効です。kit を自動で最新に保つには:"
-STR_AUTOUPDATE_NO_HOOK="SessionStart hook が登録されていません"
+STR_AUTOUPDATE_NO_HOOK="SessionStart / SessionEnd hook が揃って登録されていません"
 STR_AUTOUPDATE_NO_REPO="\$HOME/.claude-starter-kit に Git リポジトリがありません"
 STR_AUTOUPDATE_OUTDATED="ローカルとリモートのバージョンが異なります"
 STR_AUTOUPDATE_HINT_HOOK="  → setup.sh を再実行し hooks で auto-update を選択するか、standard/full プロファイルを使用"

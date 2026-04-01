@@ -50,6 +50,57 @@ _bool_to_string() {
   fi
 }
 
+_version_ge() {
+  local lhs="${1:-0}"
+  local rhs="${2:-0}"
+  local lhs_a lhs_b lhs_c rhs_a rhs_b rhs_c _
+
+  IFS='.' read -r lhs_a lhs_b lhs_c _ <<< "$lhs"
+  IFS='.' read -r rhs_a rhs_b rhs_c _ <<< "$rhs"
+  lhs_a="${lhs_a:-0}"; lhs_b="${lhs_b:-0}"; lhs_c="${lhs_c:-0}"
+  rhs_a="${rhs_a:-0}"; rhs_b="${rhs_b:-0}"; rhs_c="${rhs_c:-0}"
+
+  (( lhs_a > rhs_a )) && return 0
+  (( lhs_a < rhs_a )) && return 1
+  (( lhs_b > rhs_b )) && return 0
+  (( lhs_b < rhs_b )) && return 1
+  (( lhs_c >= rhs_c ))
+}
+
+_claude_cli_semver() {
+  local raw version
+  command -v claude &>/dev/null || return 1
+  raw="$(claude --version 2>/dev/null | head -1)"
+  [[ "$raw" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
+  version="${BASH_REMATCH[1]}"
+  printf '%s\n' "$version"
+}
+
+_auto_update_supports_session_end_async() {
+  local min_version="2.1.89"
+  local current_version=""
+
+  if ! command -v claude &>/dev/null; then
+    return 0
+  fi
+
+  current_version="$(_claude_cli_semver 2>/dev/null || true)"
+  [[ -n "$current_version" ]] || return 1
+  _version_ge "$current_version" "$min_version"
+}
+
+_auto_update_hooks_fragment() {
+  local src="$PROJECT_DIR/features/auto-update/hooks.json"
+  local legacy_src="$PROJECT_DIR/features/auto-update/hooks.legacy.json"
+
+  if _auto_update_supports_session_end_async; then
+    printf '%s\n' "$src"
+    return 0
+  fi
+
+  printf '%s\n' "$legacy_src"
+}
+
 apply_settings_preferences() {
   local file="$1"
   local lang_name tmp_file attribution_enabled
@@ -398,6 +449,9 @@ build_settings_file() {
     fi
     is_true "${!flag:-false}" || continue
     local hooks_json="$PROJECT_DIR/features/$name/hooks.json"
+    if [[ "$name" == "auto-update" ]]; then
+      hooks_json="$(_auto_update_hooks_fragment)"
+    fi
     [[ -f "$hooks_json" ]] && hook_fragments+=("$hooks_json")
   done
 

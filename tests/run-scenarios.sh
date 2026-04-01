@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/run-scenarios.sh - Scenario test runner for Claude Code Starter Kit
-# Runs 28 scenarios covering fresh install, update, migration, and edge cases.
+# Runs 34 scenarios covering fresh install, update, migration, and edge cases.
 #
 # Usage: bash tests/run-scenarios.sh
 #
@@ -120,6 +120,42 @@ test_update_kit_changed() {
     fail "update-kit-changed"
   fi
 
+  teardown_test_env
+}
+
+# --- 4b. auto-update-session-hooks ---
+test_auto_update_session_hooks() {
+  setup_test_env
+  run_setup --profile=standard >/dev/null 2>&1 || { fail "auto-update-session-hooks (setup failed)"; teardown_test_env; return; }
+
+  if jq -e '
+    any(.hooks.SessionStart[]?.hooks[]?; .async == true and ((.command? // "") | contains("auto-update"))) and
+    any(.hooks.SessionEnd[]?.hooks[]?; .async == true and ((.command? // "") | contains("auto-update")))
+  ' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    pass "auto-update-session-hooks"
+  else
+    fail "auto-update-session-hooks"
+  fi
+
+  teardown_test_env
+}
+
+# --- 4c. auto-update-legacy-claude-fallback ---
+test_auto_update_legacy_claude_fallback() {
+  setup_test_env
+  export MOCK_CLAUDE_VERSION="2.1.88 (Claude Code)"
+  run_setup --profile=standard >/dev/null 2>&1 || { fail "auto-update-legacy-claude-fallback (setup failed)"; teardown_test_env; unset MOCK_CLAUDE_VERSION; return; }
+
+  if jq -e '
+    any(.hooks.SessionStart[]?.hooks[]?; ((.command? // "") | contains("auto-update")) and ((has("async") | not) or (.async != true))) and
+    ((.hooks.SessionEnd // []) | length == 0)
+  ' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    pass "auto-update-legacy-claude-fallback"
+  else
+    fail "auto-update-legacy-claude-fallback"
+  fi
+
+  unset MOCK_CLAUDE_VERSION
   teardown_test_env
 }
 
@@ -731,21 +767,7 @@ test_update_progress_output() {
   teardown_test_env
 }
 
-# --- 33. update-kit-command-paths ---
-test_update_kit_command_paths() {
-  local update_cmd dry_run_cmd
-  update_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit.md")"
-  dry_run_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit-dry-run.md")"
-
-  if grep -q "bash setup.sh --update" <<< "$update_cmd" \
-    && grep -q "bash setup.sh --update --dry-run" <<< "$dry_run_cmd"; then
-    pass "update-kit-command-paths"
-  else
-    fail "update-kit-command-paths"
-  fi
-}
-
-# --- 31. dry-run-progress-output ---
+# --- 32. dry-run-progress-output ---
 test_dry_run_progress_output() {
   setup_test_env
   run_setup --profile=minimal >/dev/null 2>&1 || { fail "dry-run-progress-output (setup failed)"; teardown_test_env; return; }
@@ -764,7 +786,7 @@ test_dry_run_progress_output() {
   teardown_test_env
 }
 
-# --- 32. dry-run-quiet-merge-summary ---
+# --- 33. dry-run-quiet-merge-summary ---
 test_dry_run_quiet_merge_summary() {
   setup_test_env
   run_setup --profile=minimal >/dev/null 2>&1 || { fail "dry-run-quiet-merge-summary (setup failed)"; teardown_test_env; return; }
@@ -790,9 +812,23 @@ test_dry_run_quiet_merge_summary() {
   teardown_test_env
 }
 
-# ═══════════════════════════════════════════════════════════════════════════
+# --- 34. update-kit-command-paths ---
+test_update_kit_command_paths() {
+  local update_cmd dry_run_cmd
+  update_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit.md")"
+  dry_run_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit-dry-run.md")"
+
+  if grep -q "bash setup.sh --update" <<< "$update_cmd" \
+    && grep -q "bash setup.sh --update --dry-run" <<< "$dry_run_cmd"; then
+    pass "update-kit-command-paths"
+  else
+    fail "update-kit-command-paths"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Run all tests
-# ═══════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
 test_fresh_install_clean
 test_fresh_install_existing
@@ -824,6 +860,8 @@ test_update_partial_failure_recovery
 test_bash4_noninteractive_unavailable
 test_snapshot_double_marker_repair
 test_update_progress_output
+test_auto_update_session_hooks
+test_auto_update_legacy_claude_fallback
 test_dry_run_progress_output
 test_dry_run_quiet_merge_summary
 test_update_kit_command_paths

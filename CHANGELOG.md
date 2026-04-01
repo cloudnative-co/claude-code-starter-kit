@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.39.0] - 2026-04-01
+
+### Changed
+- **auto-update を session 境界の async 実行へ移行**: `SessionStart` に加えて `SessionEnd` でも毎回更新確認を行い、hook-level `async: true` で非同期実行するよう変更
+- **24時間キャッシュを廃止**: Claude Code `2.1.89+` では 24h TTL をやめ、`~/.claude/.starter-kit-update.lock/` による重複実行防止へ移行
+- **更新確認の頻度を変更**: Claude Code `2.1.89+` では 24h に 1 回ではなく、session 境界ごとに `git fetch --tags --quiet` を試みるよう変更
+- **auto-update の健全性チェックを拡張**: update 完了後の health check が `SessionStart` と `SessionEnd` の両 hook 登録を確認するよう変更
+- **旧版 Claude Code へ安全にフォールバック**: `2.1.89` 未満を検出した場合は `SessionStart` のみの旧 auto-update hook を生成するよう変更
+- **非同期失敗を次回へ持ち越し**: バックグラウンド更新失敗を `~/.claude/.starter-kit-update-status` に保存し、次回 hook 実行時に 1 回だけ警告するよう変更
+
+### Compatibility
+- Claude Code `2.1.89` で確認
+- auto-update は引き続き one-liner install (`~/.claude-starter-kit/.git` が存在する環境) のみで有効
+- 旧版 Claude Code を検出した場合は `SessionStart` + 24h cache の旧 hook へフォールバック
+
 ## [0.38.0] - 2026-04-01
 
 ### Added

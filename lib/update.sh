@@ -779,7 +779,7 @@ run_update() {
 # _check_auto_update_health - Warn if auto-update is not active
 #
 # Checks:
-#   1. SessionStart hook registered in settings.json
+#   1. SessionStart / SessionEnd hooks registered in settings.json
 #   2. Git repo exists at ~/.claude-starter-kit (one-liner install)
 #   3. Remote is reachable and version matches
 # ---------------------------------------------------------------------------
@@ -788,10 +788,35 @@ _check_auto_update_health() {
   local settings="${claude_dir}/settings.json"
   local kit_dir="$HOME/.claude-starter-kit"
   local issues=()
+  local has_session_start=false
+  local has_session_end=false
+  local require_session_end=false
+
+  if _auto_update_supports_session_end_async; then
+    require_session_end=true
+  fi
+
+  if command -v jq &>/dev/null; then
+    if jq -e '.hooks.SessionStart[]?.hooks[]?.command | contains("auto-update")' "$settings" >/dev/null 2>&1; then
+      has_session_start=true
+    fi
+    if jq -e '.hooks.SessionEnd[]?.hooks[]?.command | contains("auto-update")' "$settings" >/dev/null 2>&1; then
+      has_session_end=true
+    fi
+  else
+    if grep -q '"SessionStart"' "$settings" 2>/dev/null && grep -q "auto-update" "$settings" 2>/dev/null; then
+      has_session_start=true
+    fi
+    if grep -q '"SessionEnd"' "$settings" 2>/dev/null && grep -q "auto-update" "$settings" 2>/dev/null; then
+      has_session_end=true
+    fi
+  fi
 
   # Check 1: hook registered
-  if ! grep -q "auto-update" "$settings" 2>/dev/null; then
-    issues+=("${STR_AUTOUPDATE_NO_HOOK:-SessionStart hook not found in settings.json}")
+  if [[ "$has_session_start" != "true" ]]; then
+    issues+=("${STR_AUTOUPDATE_NO_HOOK:-SessionStart / SessionEnd hooks are not fully registered}")
+  elif [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; then
+    issues+=("${STR_AUTOUPDATE_NO_HOOK:-SessionStart / SessionEnd hooks are not fully registered}")
   fi
 
   # Check 2: git repo exists
@@ -817,7 +842,7 @@ _check_auto_update_health() {
       info "  - $issue"
     done
     # Show targeted hints based on what's missing
-    if ! grep -q "auto-update" "$settings" 2>/dev/null; then
+    if [[ "$has_session_start" != "true" ]] || { [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; }; then
       info "${STR_AUTOUPDATE_HINT_HOOK:-To enable: re-run setup.sh and select auto-update in hooks, or use standard/full profile}"
     fi
     if [[ ! -d "${kit_dir}/.git" ]]; then

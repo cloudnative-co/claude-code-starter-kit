@@ -119,7 +119,7 @@ Wizard flow: `_load_plugins()` reads the JSON (including `PLUGIN_MARKETPLACES[]`
 
 Each feature in `features/*/` has a `hooks.json` containing Claude Code hook definitions and/or top-level settings. `build_settings_file()` (in `lib/deploy.sh`) conditionally merges enabled features' fragments into `settings.json` via a custom jq deep-merge that **concatenates arrays** (so multiple features can add entries to the same hook type like `PreCompact` or `PostCompact`).
 
-**IMPORTANT: Hook types (`SessionStart`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`, `Notification`) MUST be nested inside a `"hooks"` key in hooks.json.** Claude Code reads hooks from `settings.json.hooks.*`, not from the top level. Top-level settings keys (`env`, `statusLine`, etc.) remain at the root.
+**IMPORTANT: Hook types (`SessionStart`, `SessionEnd`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`, `Notification`) MUST be nested inside a `"hooks"` key in hooks.json.** Claude Code reads hooks from `settings.json.hooks.*`, not from the top level. Top-level settings keys (`env`, `statusLine`, etc.) remain at the root.
 
 Three fragment styles exist:
 - **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields, nested inside `"hooks"` (e.g., `features/tmux-hooks/hooks.json`)
@@ -164,7 +164,8 @@ PowerShell entry point for Windows. Two modes:
 `write_manifest()` records all deployed file paths in `~/.claude/.starter-kit-manifest.json`. `uninstall.sh` reads this manifest and removes only tracked files, preserving user-added content. Uninstall is self-contained (inline platform detection, jq with grep/sed fallback).
 
 In addition to manifest-tracked files, `uninstall.sh` explicitly removes:
-- `~/.claude/.starter-kit-update-cache` — auto-update timestamp cache
+- `~/.claude/.starter-kit-update.lock/` — auto-update lock directory
+- `~/.claude/.starter-kit-update-status` — deferred auto-update failure message
 - `~/.claude/.starter-kit-snapshot/` — update mechanism snapshot directory
 
 When adding features that create files outside `~/.claude/{agents,rules,commands,skills,memory,hooks}/`, add explicit cleanup to `uninstall.sh`'s "Clean saved config" section.
@@ -344,7 +345,7 @@ PreToolUse hook via [cc-safety-net](https://github.com/kenryu42/claude-code-safe
 
 ### Auto Update (`features/auto-update/`)
 
-SessionStart hook that checks GitHub for new kit versions with 24h file cache (`~/.claude/.starter-kit-update-cache`). Only activates for one-liner installs (`~/.claude-starter-kit/.git` must exist). Updates run in background `( ... ) &` to avoid blocking session startup. Calls `setup.sh --update` for 3-way merge.
+SessionStart + SessionEnd hooks that check GitHub for new kit versions on each session boundary. Uses hook-level `async: true` instead of shell `( ... ) &`, and a lock directory at `~/.claude/.starter-kit-update.lock/` to prevent concurrent runs. Only activates for one-liner installs (`~/.claude-starter-kit/.git` must exist). Calls `setup.sh --update` for 3-way merge. `SessionEnd` is best-effort and re-spawns itself detached so end-of-session teardown is less likely to interrupt the update. This flow is verified on Claude Code `2.1.89`; older detected versions fall back to a legacy SessionStart + 24h cache hook. Failed background updates are persisted to `~/.claude/.starter-kit-update-status` and surfaced once on the next hook run.
 
 ### Status Line (`features/statusline/`)
 
