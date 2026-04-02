@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.43.0] - 2026-04-03
+
+### Changed
+- **bootstrapped snapshot 環境での hook スクリプト更新動作を変更**: `_update_file()` に `kit_owned` フラグを追加。bootstrapped snapshot（初回 update 等ベースラインが存在しない状態）で `setup.sh --update` を実行した際、hook スクリプト（auto-update, statusline 等）の kit 管理ファイルが interactive/non-interactive を問わず最新版に差し替わるよう変更。これにより auto-update hook が自身を更新できない問題を解消
+
 ## [0.42.0] - 2026-04-03
 
 ### Added
