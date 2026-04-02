@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.44.0] - 2026-04-03
+
+### Changed
+- **No Flicker モードを standard プロファイルでも有効化**: `CLAUDE_CODE_NO_FLICKER=1` を standard/full 両プロファイルでデフォルト有効に変更
+
 ## [0.43.1] - 2026-04-03
 
 ### Fixed

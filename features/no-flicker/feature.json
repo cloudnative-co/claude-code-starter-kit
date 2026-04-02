@@ -6,7 +6,7 @@
   "default": false,
   "profiles": {
     "minimal": false,
-    "standard": false,
+    "standard": true,
     "full": true
   },
   "dependencies": [],
