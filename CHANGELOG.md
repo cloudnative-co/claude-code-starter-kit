@@ -4,12 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.40.0] - 2026-04-01
+## [0.42.0] - 2026-04-03
 
-### Changed
-- **skill frontmatter を限定強化**: 同梱 skill すべてに `when_to_use` を追加し、Claude Code が起動条件を判断しやすい形に整理
-- **背景 skill を slash menu から除外**: `continuous-learning` に `user-invocable: false` を追加し、hook 連携前提の skill を前面に出さないよう調整
-- **skill 作成ガイドを明文化**: README と architecture 文書に、starter-kit が推奨する最小 frontmatter セット (`name` / `description` / `when_to_use`) と `argument-hint` / `user-invocable` の使い分けを追記
+### Added
+- **No Flicker モード**: Claude Code の実験的フリッカー防止レンダラー (`CLAUDE_CODE_NO_FLICKER=1`) を feature toggle として追加。full プロファイルで有効、minimal/standard では無効
 
 ## [0.41.0] - 2026-04-01
 
@@ -17,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **PR creation hook を限定実行へ最適化**: `pr-creation-log` に hook-level `if` と `async` を導入し、`gh pr create` 以外の Bash 実行では hook を起動しないよう変更
 - **PR creation hook の shell を簡素化**: shell 内の `gh pr create` 再判定を削除し、PR URL 抽出だけに責務を絞って後処理を軽量化
 - **旧版 Claude Code へ安全にフォールバック**: `2.1.89` 未満では `pr-creation-log` を legacy hook 形状で生成し、`if` / `async` 非対応環境でも従来挙動を維持
+
+## [0.40.0] - 2026-04-01
+
+### Changed
+- **skill frontmatter を限定強化**: 同梱 skill すべてに `when_to_use` を追加し、Claude Code が起動条件を判断しやすい形に整理
+- **背景 skill を slash menu から除外**: `continuous-learning` に `user-invocable: false` を追加し、hook 連携前提の skill を前面に出さないよう調整
+- **skill 作成ガイドを明文化**: README と architecture 文書に、starter-kit が推奨する最小 frontmatter セット (`name` / `description` / `when_to_use`) と `argument-hint` / `user-invocable` の使い分けを追記
 
 ## [0.39.0] - 2026-04-01
 

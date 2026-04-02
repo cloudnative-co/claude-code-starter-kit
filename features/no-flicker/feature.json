@@ -1,0 +1,14 @@
+{
+  "name": "no-flicker",
+  "displayName": "No Flicker",
+  "description": "Enable Claude Code experimental flicker-free terminal renderer via CLAUDE_CODE_NO_FLICKER env var",
+  "category": "settings",
+  "default": false,
+  "profiles": {
+    "minimal": false,
+    "standard": false,
+    "full": true
+  },
+  "dependencies": [],
+  "conflicts": []
+}
