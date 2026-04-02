@@ -53,6 +53,7 @@ STR_FONTS_YES="Yes - Install IBM Plex Mono + HackGen NF"
 STR_FONTS_NO="No - Skip font installation"
 STR_CONFIRM_FONTS="Fonts"
 STR_CONFIRM_STATUSLINE="Status Line"
+STR_CONFIRM_NO_FLICKER="No Flicker"
 
 # Font installation messages
 STR_FONTS_SECTION_TITLE="Installing Programming Fonts"

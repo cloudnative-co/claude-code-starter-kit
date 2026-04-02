@@ -29,6 +29,7 @@ declare -A _FEATURE_FLAGS=(
   [auto-update]=ENABLE_AUTO_UPDATE
   [statusline]=ENABLE_STATUSLINE
   [doc-size-guard]=ENABLE_DOC_SIZE_GUARD
+  [no-flicker]=ENABLE_NO_FLICKER
 )
 
 # ---------------------------------------------------------------------------
@@ -49,7 +50,7 @@ declare -A _FEATURE_HAS_SCRIPTS=(
 _FEATURE_ORDER=(
   safety-net tmux-hooks doc-blocker prettier-hooks console-log-guard
   memory-persistence strategic-compact pr-creation-log pre-compact-commit
-  auto-update statusline doc-size-guard
+  auto-update statusline doc-size-guard no-flicker
 )
 
 # ---------------------------------------------------------------------------
