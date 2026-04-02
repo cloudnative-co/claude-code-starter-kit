@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.43.1] - 2026-04-03
+
+### Fixed
+- **legacy 24h キャッシュが auto-update の hook スクリプト差し替えを阻害する問題を修正**: `setup.sh --update` 実行時に旧版 auto-update.sh が使用する `~/.claude/.starter-kit-update-cache` を削除するよう変更。v0.43.0 の `kit_owned` 修正が実際に適用されるために必要な前提条件
+
 ## [0.43.0] - 2026-04-03
 
 ### Changed
