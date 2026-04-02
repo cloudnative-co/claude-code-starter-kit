@@ -227,6 +227,11 @@ fi
 # Deploy
 # ---------------------------------------------------------------------------
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  # Remove legacy 24h update cache so the old auto-update.sh (pre-v0.39.0)
+  # won't skip the next check. Once the new hook scripts are deployed by this
+  # update, the cache file is no longer used.
+  rm -f "$CLAUDE_DIR/.starter-kit-update-cache" 2>/dev/null || true
+
   if _has_user_customizations "$CLAUDE_DIR"; then
     _offer_dryrun_preview "$STR_DRYRUN_OFFER_EXISTING"
   fi
