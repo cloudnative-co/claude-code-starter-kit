@@ -302,7 +302,7 @@ _prompt_file_action() {
 # ---------------------------------------------------------------------------
 # _update_file - Update a single file with user change detection
 #
-# Usage: _update_file <current_path> <snapshot_path> <newkit_path>
+# Usage: _update_file <current_path> <snapshot_path> <newkit_path> [kit_owned]
 # Returns 0 if file was updated, 1 if skipped
 #
 # Logic:
@@ -311,11 +311,16 @@ _prompt_file_action() {
 #   3. No user change (snapshot == current) → overwrite with newkit, return 0
 #   4. No kit change (snapshot == newkit) → keep current, return 1
 #   5. Both changed → prompt user, handle append or skip
+#
+# When kit_owned=true (e.g., hook scripts), bootstrapped-snapshot overwrites
+# unconditionally (both interactive and non-interactive) because these files are
+# fully managed by the kit and user customization is not expected.
 # ---------------------------------------------------------------------------
 _update_file() {
   local current="$1"
   local snapshot="$2"
   local newkit="$3"
+  local kit_owned="${4:-false}"
 
   # New file from kit (not in snapshot)
   if [[ ! -f "$snapshot" ]]; then
@@ -357,11 +362,16 @@ _update_file() {
         # Current already matches new kit — nothing to do
         return 1
       fi
-      # Kit differs from current — non-interactive: keep current (protect
-      # user customizations; kit additions come in on subsequent updates
-      # once a real snapshot exists). Interactive: ask user.
-      if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
-        return 1
+      # Kit differs from current — kit_owned files (hook scripts) are safe
+      # to overwrite unconditionally. Other files: non-interactive keeps
+      # current (protects user customizations); interactive asks user.
+      if [[ "$kit_owned" != "true" ]]; then
+        if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
+          return 1
+        fi
+      else
+        cp -a "$newkit" "$current"
+        return 0
       fi
       _prompt_file_action "$current" "$snapshot" "$newkit"
       case "$_FILE_ACTION" in
@@ -425,7 +435,7 @@ _update_hook_feature() {
     local dest_file="${dest_dir}/${basename_file}"
     local snap_file="${snap_dir}/${basename_file}"
 
-    if _update_file "$dest_file" "$snap_file" "$src_file"; then
+    if _update_file "$dest_file" "$snap_file" "$src_file" "true"; then
       chmod +x "$dest_file" 2>/dev/null || true
       eval "${updated_var}+=(\"\$dest_file\")"
     else
@@ -437,8 +447,9 @@ _update_hook_feature() {
 # ---------------------------------------------------------------------------
 # _update_hook_scripts - Update-aware hook script deployment
 #
-# Deploys hook scripts through _update_file() so user customizations
-# are detected and preserved instead of being silently overwritten.
+# Deploys hook scripts through _update_file(kit_owned=true). With a real
+# snapshot baseline, user customizations are detected and preserved. With a
+# bootstrapped snapshot (no real baseline), kit versions overwrite unconditionally.
 #
 # Usage: _update_hook_scripts <claude_dir> <snapshot_dir> <updated_array_name> <skipped_array_name>
 # ---------------------------------------------------------------------------
