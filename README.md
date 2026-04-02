@@ -515,6 +515,14 @@ SessionStart / SessionEnd フック発火
 - **互換性**: Claude Code `2.1.89` で確認済みです。旧版を検出した場合は `SessionStart` + 24h cache の旧 hook へ自動フォールバックします
 - **失敗の持ち越し**: バックグラウンド更新に失敗した場合は結果を保存し、次回 hook 実行時に 1 回だけ警告します
 
+> **legacy auto-update の復旧**: 旧 24h cache 環境や auto-update 無効環境で、確実に最新版へ更新して hook を再配備したい場合は次を実行してください。
+>
+> ```bash
+> test -z "$(git -C ~/.claude-starter-kit status --porcelain 2>/dev/null)" && rm -f ~/.claude/.starter-kit-update-cache && git -C ~/.claude-starter-kit fetch --tags && git -C ~/.claude-starter-kit pull --ff-only && bash ~/.claude-starter-kit/setup.sh --update || echo "Local changes detected in ~/.claude-starter-kit. Run: cd ~/.claude-starter-kit && git stash -u"
+> ```
+>
+> dirty な作業ツリーでは安全のため停止します。その場合は `git stash -u` などで退避してから再実行してください。
+
 > **Standard / Full プロファイルでデフォルト有効です。** ウィザードのフック選択で無効にできます。
 
 #### コンパクト前自動コミットとは？
