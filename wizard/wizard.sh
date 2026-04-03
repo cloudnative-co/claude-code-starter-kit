@@ -145,6 +145,10 @@ _language_label() {
 # Allowed config variable names (used by _safe_source_config for allowlist validation)
 _CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_PLUGIN ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_NO_FLICKER SELECTED_PLUGINS"
 
+# Keys where empty string is a valid saved value (e.g., "" = "no plugins selected").
+# All other keys: empty values in saved config are skipped so profile defaults are preserved.
+_CONFIG_EMPTY_ALLOWED_KEYS="SELECTED_PLUGINS"
+
 # Safe key=value parser: reads a config file line-by-line and only sets
 # variables whose names appear in the allowlist. This replaces the previous
 # `. "$file"` pattern to prevent arbitrary code execution.
@@ -160,6 +164,12 @@ _safe_source_config() {
     value="$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')"
     # Validate key is alphanumeric/underscore and in allowlist
     if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && [[ " $_CONFIG_ALLOWED_KEYS " == *" $key "* ]]; then
+      # Skip empty values unless the key is in _CONFIG_EMPTY_ALLOWED_KEYS.
+      # This preserves profile defaults for new feature flags (ENABLE_*) that
+      # were saved as empty in older config files before the feature existed.
+      if [[ -z "$value" ]] && [[ " $_CONFIG_EMPTY_ALLOWED_KEYS " != *" $key "* ]]; then
+        continue
+      fi
       printf -v "$key" '%s' "$value"
     fi
   done < "$file"
@@ -273,7 +283,13 @@ save_config() {
       if [[ -z "$_key" ]]; then
         printf '\n'
       else
-        printf '%s="%s"\n' "$_key" "$(_sanitize_config_value "${!_key:-}")"
+        local _val="${!_key:-}"
+        # Don't save empty values unless the key allows it (see _CONFIG_EMPTY_ALLOWED_KEYS).
+        # This prevents stale empty entries from overriding profile defaults on update.
+        if [[ -z "$_val" ]] && [[ " $_CONFIG_EMPTY_ALLOWED_KEYS " != *" $_key "* ]]; then
+          continue
+        fi
+        printf '%s="%s"\n' "$_key" "$(_sanitize_config_value "$_val")"
       fi
     done
   } > "$file"

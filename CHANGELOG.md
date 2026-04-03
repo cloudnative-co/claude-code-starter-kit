@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.45.0] - 2026-04-03
+
+### Fixed
+- **saved config の空値が profile default を上書きする問題を修正**: `_safe_source_config()` で空値をスキップし、`save_config()` で空値を書き出さないよう変更。新機能の `ENABLE_*` フラグが update path で正しく採用されるようになる。`SELECTED_PLUGINS=""` 等の正当な空値は `_CONFIG_EMPTY_ALLOWED_KEYS` 定数で例外管理
+
 ## [0.44.0] - 2026-04-03
 
 ### Changed
