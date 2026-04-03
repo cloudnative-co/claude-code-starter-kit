@@ -150,6 +150,30 @@ else
 fi
 rm -f "$_tmp"
 
+# Test: empty values are skipped (profile defaults preserved)
+_tmp="$(mktemp)"
+printf 'LANGUAGE="en"\nENABLE_NO_FLICKER=""\nPROFILE="standard"\n' > "$_tmp"
+ENABLE_NO_FLICKER="true"  # simulate profile default already loaded
+run_func _safe_source_config "$_tmp"
+if assert_equals "true" "$ENABLE_NO_FLICKER"; then
+  pass "wizard: _safe_source_config skips empty values (preserves profile default)"
+else
+  fail "wizard: _safe_source_config overwrote profile default with empty value (got '$ENABLE_NO_FLICKER')"
+fi
+rm -f "$_tmp"
+
+# Test: SELECTED_PLUGINS="" is preserved (empty is valid for this key)
+_tmp="$(mktemp)"
+printf 'SELECTED_PLUGINS=""\nLANGUAGE="ja"\n' > "$_tmp"
+SELECTED_PLUGINS="some-plugin"
+run_func _safe_source_config "$_tmp"
+if assert_equals "" "$SELECTED_PLUGINS"; then
+  pass "wizard: _safe_source_config allows empty SELECTED_PLUGINS"
+else
+  fail "wizard: _safe_source_config did not allow empty SELECTED_PLUGINS (got '$SELECTED_PLUGINS')"
+fi
+rm -f "$_tmp"
+
 # ── _display_width ────────────────────────────────────────────────────────
 
 # Test: ASCII string width equals character count
