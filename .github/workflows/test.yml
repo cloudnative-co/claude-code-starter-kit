@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ── Linux prerequisites ──
       - name: Install prerequisites (Linux)
@@ -28,7 +28,7 @@ jobs:
       # ── macOS prerequisites ──
       - name: Cache Homebrew downloads
         if: runner.os == 'macOS'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/Library/Caches/Homebrew
           key: brew-${{ runner.os }}-${{ hashFiles('.github/workflows/test.yml') }}
