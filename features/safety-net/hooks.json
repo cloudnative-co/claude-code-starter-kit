@@ -1,18 +1,18 @@
 {
-  "env": {
-    "SAFETY_NET_STRICT": "1"
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "tool == \"Bash\"",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cc-safety-net --claude-code"
-          }
-        ]
-      }
-    ]
-  }
+	"env": {
+		"SAFETY_NET_STRICT": "1"
+	},
+	"hooks": {
+		"PreToolUse": [
+			{
+				"matcher": "tool == \"Bash\"",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "cc-safety-net --claude-code"
+					}
+				]
+			}
+		]
+	}
 }

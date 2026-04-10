@@ -1,10 +1,10 @@
 {
-  "name": "codex-plugin",
-  "displayName": "Codex Plugin Integration",
-  "description": "Delegate tasks to OpenAI Codex via the official Claude Code plugin",
-  "category": "integration",
-  "default": false,
-  "profiles": { "minimal": false, "standard": false, "full": true },
-  "dependencies": [],
-  "conflicts": []
+	"name": "codex-plugin",
+	"displayName": "Codex Plugin Integration",
+	"description": "Delegate tasks to OpenAI Codex via the official Claude Code plugin",
+	"category": "integration",
+	"default": false,
+	"profiles": { "minimal": false, "standard": false, "full": true },
+	"dependencies": [],
+	"conflicts": []
 }

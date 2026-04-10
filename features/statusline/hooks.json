@@ -1,6 +1,6 @@
 {
-  "statusLine": {
-    "type": "command",
-    "command": "python3 __HOME__/.claude/hooks/statusline/statusline-command.py"
-  }
+	"statusLine": {
+		"type": "command",
+		"command": "python3 __HOME__/.claude/hooks/statusline/statusline-command.py"
+	}
 }

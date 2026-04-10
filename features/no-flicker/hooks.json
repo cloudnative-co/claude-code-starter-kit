@@ -1,5 +1,5 @@
 {
-  "env": {
-    "CLAUDE_CODE_NO_FLICKER": "1"
-  }
+	"env": {
+		"CLAUDE_CODE_NO_FLICKER": "1"
+	}
 }

@@ -1,8 +1,8 @@
 {
-  "enableAllProjectMcpServers": false,
-  "mcpServers": {
-    "user-custom-mcp": {
-      "command": "custom-tool"
-    }
-  }
+	"enableAllProjectMcpServers": false,
+	"mcpServers": {
+		"user-custom-mcp": {
+			"command": "custom-tool"
+		}
+	}
 }

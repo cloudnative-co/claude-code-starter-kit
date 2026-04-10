@@ -1,14 +1,14 @@
 {
-  "version": "2",
-  "timestamp": "2026-02-01T00:00:00Z",
-  "kit_version": "v0.20.0",
-  "kit_commit": "abc1234",
-  "profile": "standard",
-  "language": "en",
-  "editor": "vscode",
-  "commit_attribution": "false",
-  "new_init": "true",
-  "plugins": "",
-  "files": [],
-  "snapshot_dir": ""
+	"version": "2",
+	"timestamp": "2026-02-01T00:00:00Z",
+	"kit_version": "v0.20.0",
+	"kit_commit": "abc1234",
+	"profile": "standard",
+	"language": "en",
+	"editor": "vscode",
+	"commit_attribution": "false",
+	"new_init": "true",
+	"plugins": "",
+	"files": [],
+	"snapshot_dir": ""
 }

@@ -1,17 +1,17 @@
 {
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "tool == \"Bash\"",
-        "hooks": [
-          {
-            "type": "command",
-            "if": "Bash(gh pr create *)",
-            "async": true,
-            "command": "#!/bin/bash\ninput=$(cat)\noutput=$(printf '%s' \"$input\" | jq -r '.tool_output.output // \"\"')\npr_url=$(printf '%s' \"$output\" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)\nif [ -n \"$pr_url\" ]; then\n  echo \"[Hook] PR created: $pr_url\" >&2\nfi\nprintf '%s\\n' \"$input\""
-          }
-        ]
-      }
-    ]
-  }
+	"hooks": {
+		"PostToolUse": [
+			{
+				"matcher": "tool == \"Bash\"",
+				"hooks": [
+					{
+						"type": "command",
+						"if": "Bash(gh pr create *)",
+						"async": true,
+						"command": "#!/bin/bash\ninput=$(cat)\noutput=$(printf '%s' \"$input\" | jq -r '.tool_output.output // \"\"')\npr_url=$(printf '%s' \"$output\" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)\nif [ -n \"$pr_url\" ]; then\n  echo \"[Hook] PR created: $pr_url\" >&2\nfi\nprintf '%s\\n' \"$input\""
+					}
+				]
+			}
+		]
+	}
 }

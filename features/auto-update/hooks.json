@@ -1,30 +1,30 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "AUTO_UPDATE_HOOK=SessionStart __HOME__/.claude/hooks/auto-update/auto-update.sh",
-            "async": true,
-            "asyncTimeout": 300000
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "AUTO_UPDATE_HOOK=SessionEnd __HOME__/.claude/hooks/auto-update/auto-update.sh",
-            "async": true,
-            "asyncTimeout": 300000
-          }
-        ]
-      }
-    ]
-  }
+	"hooks": {
+		"SessionStart": [
+			{
+				"matcher": "*",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "AUTO_UPDATE_HOOK=SessionStart __HOME__/.claude/hooks/auto-update/auto-update.sh",
+						"async": true,
+						"asyncTimeout": 300000
+					}
+				]
+			}
+		],
+		"SessionEnd": [
+			{
+				"matcher": "*",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "AUTO_UPDATE_HOOK=SessionEnd __HOME__/.claude/hooks/auto-update/auto-update.sh",
+						"async": true,
+						"asyncTimeout": 300000
+					}
+				]
+			}
+		]
+	}
 }
