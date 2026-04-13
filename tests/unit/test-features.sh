@@ -53,6 +53,20 @@ else
   fail "features: _FEATURE_ORDER[0] is '${_FEATURE_ORDER[0]}', expected 'safety-net'"
 fi
 
+# ── biome-hooks is registered immediately after prettier-hooks ────────────
+
+_prettier_idx=-1
+_biome_idx=-1
+for i in "${!_FEATURE_ORDER[@]}"; do
+  [[ "${_FEATURE_ORDER[$i]}" == "prettier-hooks" ]] && _prettier_idx="$i"
+  [[ "${_FEATURE_ORDER[$i]}" == "biome-hooks" ]] && _biome_idx="$i"
+done
+if [[ "$_prettier_idx" -ge 0 ]] && [[ "$_biome_idx" -eq $((_prettier_idx + 1)) ]]; then
+  pass "features: biome-hooks is ordered immediately after prettier-hooks"
+else
+  fail "features: biome-hooks is not ordered immediately after prettier-hooks"
+fi
+
 # ── No duplicate entries in _FEATURE_ORDER ────────────────────────────────
 
 declare -A _seen_features=()

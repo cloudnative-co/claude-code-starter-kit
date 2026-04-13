@@ -1,0 +1,10 @@
+{
+	"name": "biome-hooks",
+	"displayName": "Biome Auto-format",
+	"description": "Auto-format and lint JS/TS files with Biome after edits when biome is available in PATH",
+	"category": "hook",
+	"default": false,
+	"profiles": { "minimal": false, "standard": false, "full": true },
+	"dependencies": [],
+	"conflicts": ["prettier-hooks"]
+}

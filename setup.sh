@@ -136,6 +136,27 @@ ensure_dirs() {
   mkdir -p "$CLAUDE_DIR"/{agents,rules,commands,skills,memory,hooks}
 }
 
+should_auto_install_biome() {
+  command -v biome &>/dev/null && return 1
+
+  if [[ "${PROFILE:-}" == "full" ]]; then
+    return 0
+  fi
+
+  is_true "${ENABLE_BIOME_HOOKS:-false}"
+}
+
+maybe_install_biome() {
+  should_auto_install_biome || return 0
+
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    _dryrun_log "EXTERNAL" "Biome" "brew install biome || npm install -g @biomejs/biome"
+    return 0
+  fi
+
+  check_biome || true
+}
+
 # ---------------------------------------------------------------------------
 # Deploy hook scripts
 # ---------------------------------------------------------------------------
@@ -225,6 +246,8 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
   _MERGE_INTERACTIVE="false"  # dry-run is always non-interactive
   _QUIET_OUTPUT="true"        # suppress progress messages, show only summary
 fi
+
+maybe_install_biome
 
 # ---------------------------------------------------------------------------
 # Deploy

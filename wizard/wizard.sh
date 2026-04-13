@@ -34,6 +34,7 @@ ENABLE_TMUX_HOOKS="${ENABLE_TMUX_HOOKS:-}"
 ENABLE_GIT_PUSH_REVIEW="${ENABLE_GIT_PUSH_REVIEW:-}"
 ENABLE_DOC_BLOCKER="${ENABLE_DOC_BLOCKER:-}"
 ENABLE_PRETTIER_HOOKS="${ENABLE_PRETTIER_HOOKS:-}"
+ENABLE_BIOME_HOOKS="${ENABLE_BIOME_HOOKS:-}"
 ENABLE_CONSOLE_LOG_GUARD="${ENABLE_CONSOLE_LOG_GUARD:-}"
 ENABLE_MEMORY_PERSISTENCE="${ENABLE_MEMORY_PERSISTENCE:-}"
 ENABLE_STRATEGIC_COMPACT="${ENABLE_STRATEGIC_COMPACT:-}"
@@ -146,7 +147,7 @@ _language_label() {
 # ---------------------------------------------------------------------------
 
 # Allowed config variable names (used by _safe_source_config for allowlist validation)
-_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_PLUGIN ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_NO_FLICKER ENABLE_FEATURE_RECOMMENDATION DISMISSED_FEATURES SELECTED_PLUGINS"
+_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_PLUGIN ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_BIOME_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_NO_FLICKER ENABLE_FEATURE_RECOMMENDATION DISMISSED_FEATURES SELECTED_PLUGINS"
 
 # Keys where empty string is a valid saved value (e.g., "" = "no plugins selected").
 # All other keys: empty values in saved config are skipped so profile defaults are preserved.
@@ -186,6 +187,16 @@ load_defaults() {
   fi
 }
 
+_normalize_formatter_hooks() {
+  local prefer="${1:-biome}"
+  if [[ "${ENABLE_BIOME_HOOKS:-false}" == "true" ]] && [[ "${ENABLE_PRETTIER_HOOKS:-false}" == "true" ]]; then
+    case "$prefer" in
+      prettier) ENABLE_BIOME_HOOKS="false" ;;
+      *)        ENABLE_PRETTIER_HOOKS="false" ;;
+    esac
+  fi
+}
+
 load_profile_config() {
   local profile="$1"
   # Validate profile against allowlist to prevent path traversal
@@ -204,6 +215,12 @@ load_config() {
   local file="${1:-$HOME/.claude-starter-kit.conf}"
   if [[ -f "$file" ]]; then
     _safe_source_config "$file"
+    local prefer="biome"
+    if grep -q '^ENABLE_PRETTIER_HOOKS=' "$file" 2>/dev/null \
+      && ! grep -q '^ENABLE_BIOME_HOOKS=' "$file" 2>/dev/null; then
+      prefer="prettier"
+    fi
+    _normalize_formatter_hooks "$prefer"
   fi
 }
 
@@ -245,15 +262,22 @@ fill_missing_profile_defaults() {
     *) return 1 ;;
   esac
 
-  local saved_enable_new_init="${ENABLE_NEW_INIT:-}"
-  local saved_enable_codex_plugin="${ENABLE_CODEX_PLUGIN:-}"
+  local _saved_pairs=()
+  local _var _val _pair _restore_key _restore_val
+  for _var in $_CONFIG_ALLOWED_KEYS; do
+    _val="${!_var:-}"
+    if [[ -n "$_val" ]]; then
+      _saved_pairs+=("${_var}=${_val}")
+    fi
+  done
+
   load_profile_config "$profile"
-  if [[ -n "$saved_enable_new_init" ]]; then
-    ENABLE_NEW_INIT="$saved_enable_new_init"
-  fi
-  if [[ -n "$saved_enable_codex_plugin" ]]; then
-    ENABLE_CODEX_PLUGIN="$saved_enable_codex_plugin"
-  fi
+  for _pair in "${_saved_pairs[@]+"${_saved_pairs[@]}"}"; do
+    _restore_key="${_pair%%=*}"
+    _restore_val="${_pair#*=}"
+    printf -v "$_restore_key" '%s' "$_restore_val"
+  done
+  _normalize_formatter_hooks
 }
 
 # Sanitize a value for safe inclusion in a key=value config file.
@@ -269,7 +293,7 @@ _CONFIG_SAVE_KEYS=(
   INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY
   ""
   ENABLE_CODEX_PLUGIN ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER
-  ENABLE_PRETTIER_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE
+  ENABLE_PRETTIER_HOOKS ENABLE_BIOME_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE
   ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT
   ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP
   ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_NO_FLICKER
@@ -368,6 +392,7 @@ _restore_config_from_manifest() {
     ENABLE_CODEX_PLUGIN="$manifest_codex_plugin"
   fi
 
+  _normalize_formatter_hooks
   _normalize_codex_state
   load_strings "$LANGUAGE"
 }
@@ -543,6 +568,7 @@ HOOK_KEYS=(
   "ENABLE_GIT_PUSH_REVIEW"
   "ENABLE_DOC_BLOCKER"
   "ENABLE_PRETTIER_HOOKS"
+  "ENABLE_BIOME_HOOKS"
   "ENABLE_CONSOLE_LOG_GUARD"
   "ENABLE_MEMORY_PERSISTENCE"
   "ENABLE_STRATEGIC_COMPACT"
@@ -565,6 +591,7 @@ _init_hook_labels() {
     "$STR_HOOKS_GIT_PUSH"
     "$STR_HOOKS_DOC_BLOCK"
     "$STR_HOOKS_PRETTIER"
+    "${STR_HOOKS_BIOME:-Biome Auto-format - Format and lint JS/TS files after edits}"
     "$STR_HOOKS_CONSOLE"
     "$STR_HOOKS_MEMORY"
     "$STR_HOOKS_COMPACT"
@@ -592,6 +619,7 @@ _apply_hooks_csv() {
       git-push)   ENABLE_GIT_PUSH_REVIEW="true" ;;
       doc-block)  ENABLE_DOC_BLOCKER="true" ;;
       prettier)   ENABLE_PRETTIER_HOOKS="true" ;;
+      biome)      ENABLE_BIOME_HOOKS="true" ;;
       console)    ENABLE_CONSOLE_LOG_GUARD="true" ;;
       memory)     ENABLE_MEMORY_PERSISTENCE="true" ;;
       compact)    ENABLE_STRATEGIC_COMPACT="true" ;;
@@ -601,6 +629,7 @@ _apply_hooks_csv() {
       feature-rec) ENABLE_FEATURE_RECOMMENDATION="true" ;;
     esac
   done
+  _normalize_formatter_hooks "biome"
 }
 
 # ---------------------------------------------------------------------------
@@ -887,11 +916,16 @@ _step_hooks() {
               printf -v "$key" '%s' "false"
             else
               printf -v "$key" '%s' "true"
+              case "$key" in
+                ENABLE_PRETTIER_HOOKS) ENABLE_BIOME_HOOKS="false" ;;
+                ENABLE_BIOME_HOOKS) ENABLE_PRETTIER_HOOKS="false" ;;
+              esac
             fi
           fi
         done
         ;;
     esac
+    _normalize_formatter_hooks
     printf "\n"
   done
 }
@@ -1066,6 +1100,7 @@ _fill_noninteractive_defaults() {
   [[ -z "${ENABLE_FEATURE_RECOMMENDATION:-}" ]] && ENABLE_FEATURE_RECOMMENDATION="false"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
   [[ -z "$ENABLE_FONTS_SETUP" ]] && ENABLE_FONTS_SETUP="false"
+  _normalize_formatter_hooks
 
   # Force-disable Ghostty on non-macOS platforms
   if [[ "$(uname -s)" != "Darwin" ]]; then

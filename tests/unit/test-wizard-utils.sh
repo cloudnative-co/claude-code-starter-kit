@@ -31,6 +31,8 @@ STR_PROFILE_STANDARD="Standard"
 STR_PROFILE_FULL="Full"
 # shellcheck disable=SC2034
 STR_PROFILE_CUSTOM="Custom"
+# shellcheck disable=SC2034
+STR_HOOKS_BIOME="Biome Auto-format - Format and lint JS/TS files after edits"
 
 # shellcheck source=wizard/wizard.sh
 source "$PROJECT_DIR/wizard/wizard.sh"
@@ -274,3 +276,49 @@ fi
 
 rm -rf "$_tmp_home"
 export HOME="$_orig_home"
+
+# ── formatter hook normalization ──────────────────────────────────────────
+
+ENABLE_PRETTIER_HOOKS="true"
+ENABLE_BIOME_HOOKS="true"
+run_func _normalize_formatter_hooks
+if assert_equals "true" "$ENABLE_BIOME_HOOKS" \
+  && assert_equals "false" "$ENABLE_PRETTIER_HOOKS"; then
+  pass "wizard: _normalize_formatter_hooks gives Biome precedence when both are enabled"
+else
+  fail "wizard: _normalize_formatter_hooks did not normalize formatter hooks correctly"
+fi
+
+ENABLE_PRETTIER_HOOKS="false"
+ENABLE_BIOME_HOOKS="false"
+run_func _apply_hooks_csv "prettier,biome"
+if assert_equals "true" "$ENABLE_BIOME_HOOKS" \
+  && assert_equals "false" "$ENABLE_PRETTIER_HOOKS"; then
+  pass "wizard: _apply_hooks_csv normalizes prettier,biome to Biome only"
+else
+  fail "wizard: _apply_hooks_csv did not normalize prettier,biome"
+fi
+
+ENABLE_PRETTIER_HOOKS="false"
+ENABLE_BIOME_HOOKS="false"
+run_func _apply_hooks_csv "prettier"
+if assert_equals "true" "$ENABLE_PRETTIER_HOOKS" \
+  && assert_equals "false" "$ENABLE_BIOME_HOOKS"; then
+  pass "wizard: _apply_hooks_csv preserves prettier-only selection"
+else
+  fail "wizard: _apply_hooks_csv did not preserve prettier-only selection"
+fi
+
+_tmp_cfg="$(mktemp)"
+printf 'ENABLE_PRETTIER_HOOKS="true"\n' > "$_tmp_cfg"
+ENABLE_PRETTIER_HOOKS=""
+ENABLE_BIOME_HOOKS=""
+load_profile_config full
+load_config "$_tmp_cfg"
+if assert_equals "true" "$ENABLE_PRETTIER_HOOKS" \
+  && assert_equals "false" "$ENABLE_BIOME_HOOKS"; then
+  pass "wizard: saved config prettier preference overrides full profile biome default"
+else
+  fail "wizard: saved config prettier preference did not override full profile biome default"
+fi
+rm -f "$_tmp_cfg"

@@ -230,3 +230,96 @@ eval "$_orig_pkg_install"
 IS_WSL="$_saved_is_wsl"
 export PATH="$_saved_path"
 rm -rf "$_tmpdir"
+
+# ── check_biome installs via brew when available ──────────────────────────
+
+_saved_path="$PATH"
+_tmpdir="$(mktemp -d)"
+export PATH="$_tmpdir:$_saved_path"
+_orig_brew_usable="$(declare -f _brew_is_usable)"
+_brew_is_usable() { return 0; }
+cat > "$_tmpdir/brew" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "install" && "$2" == "biome" ]]; then
+  cat > "$(dirname "$0")/biome" <<'INNER'
+#!/bin/bash
+echo "biome 1.0.0"
+INNER
+  chmod +x "$(dirname "$0")/biome"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$_tmpdir/brew"
+run_func check_biome
+if assert_exit_code 0 "$_RF_RC" && command -v biome >/dev/null 2>&1; then
+  pass "prerequisites: check_biome installs via brew when available"
+else
+  fail "prerequisites: check_biome did not install via brew"
+fi
+eval "$_orig_brew_usable"
+export PATH="$_saved_path"
+rm -rf "$_tmpdir"
+
+# ── check_biome falls back to npm when brew is unavailable ───────────────
+
+_saved_path="$PATH"
+_tmpdir="$(mktemp -d)"
+mkdir -p "$_tmpdir/prefix/bin" "$_tmpdir/prefix/lib"
+export PATH="$_tmpdir:$_saved_path"
+_orig_brew_usable="$(declare -f _brew_is_usable)"
+_brew_is_usable() { return 1; }
+_npm_script="$(cat <<'EOF'
+#!/bin/bash
+if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then
+  echo "__PREFIX__"
+  exit 0
+fi
+if [[ "$1" == "install" && "$2" == "-g" && "$3" == "@biomejs/biome" ]]; then
+  cat > "__PREFIX__/bin/biome" <<'INNER'
+#!/bin/bash
+echo "biome 1.0.0"
+INNER
+  chmod +x "__PREFIX__/bin/biome"
+  exit 0
+fi
+exit 1
+EOF
+)"
+printf '%s\n' "${_npm_script//__PREFIX__/$_tmpdir/prefix}" > "$_tmpdir/npm"
+chmod +x "$_tmpdir/npm"
+run_func check_biome
+if assert_exit_code 0 "$_RF_RC" && command -v biome >/dev/null 2>&1; then
+  pass "prerequisites: check_biome falls back to npm when brew is unavailable"
+else
+  fail "prerequisites: check_biome did not fall back to npm"
+fi
+eval "$_orig_brew_usable"
+export PATH="$_saved_path"
+rm -rf "$_tmpdir"
+
+# ── check_biome returns failure when both brew and npm fail ──────────────
+
+_saved_path="$PATH"
+_tmpdir="$(mktemp -d)"
+export PATH="$_tmpdir:$_saved_path"
+_orig_brew_usable="$(declare -f _brew_is_usable)"
+_brew_is_usable() { return 1; }
+cat > "$_tmpdir/npm" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then
+  echo "/nonexistent"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$_tmpdir/npm"
+run_func check_biome
+if assert_exit_code 1 "$_RF_RC" "check_biome should fail when brew and npm both fail"; then
+  pass "prerequisites: check_biome fails when brew and npm both fail"
+else
+  fail "prerequisites: check_biome unexpectedly succeeded when brew and npm failed"
+fi
+eval "$_orig_brew_usable"
+export PATH="$_saved_path"
+rm -rf "$_tmpdir"

@@ -4,7 +4,7 @@
 	"description": "Auto-format JS/TS files with Prettier after edits",
 	"category": "hook",
 	"default": true,
-	"profiles": { "minimal": false, "standard": true, "full": true },
+	"profiles": { "minimal": false, "standard": true, "full": false },
 	"dependencies": [],
-	"conflicts": []
+	"conflicts": ["biome-hooks"]
 }

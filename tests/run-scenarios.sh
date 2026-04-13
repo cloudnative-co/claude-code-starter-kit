@@ -826,6 +826,120 @@ test_update_kit_command_paths() {
   fi
 }
 
+# --- 35. biome-hooks-full-profile ---
+test_biome_hooks_full_profile() {
+  setup_test_env
+  local rc=0
+  run_setup --profile=full >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    pass "biome-hooks-full-profile"
+  else
+    fail "biome-hooks-full-profile"
+  fi
+
+  teardown_test_env
+}
+
+# --- 36. biome-hooks-standard-profile ---
+test_biome_hooks_standard_profile() {
+  setup_test_env
+  local rc=0
+  run_setup --profile=standard >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    pass "biome-hooks-standard-profile"
+  else
+    fail "biome-hooks-standard-profile"
+  fi
+
+  teardown_test_env
+}
+
+# --- 37. biome-hooks-minimal-profile ---
+test_biome_hooks_minimal_profile() {
+  setup_test_env
+  local rc=0
+  run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write") or contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    pass "biome-hooks-minimal-profile"
+  else
+    fail "biome-hooks-minimal-profile"
+  fi
+
+  teardown_test_env
+}
+
+# --- 38. biome-auto-install-full-profile ---
+test_biome_auto_install_full_profile() {
+  setup_test_env
+  local stub_dir="$HOME/test-bin"
+  mkdir -p "$stub_dir"
+  export PATH="$stub_dir:$PATH"
+  cat > "$stub_dir/brew" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "install" && "$2" == "biome" ]]; then
+  cat > "$(dirname "$0")/biome" <<'INNER'
+#!/bin/bash
+echo "biome 1.0.0"
+INNER
+  chmod +x "$(dirname "$0")/biome"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$stub_dir/brew"
+
+  local rc=0
+  run_setup --profile=full >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] && command -v biome >/dev/null 2>&1; then
+    pass "biome-auto-install-full-profile"
+  else
+    fail "biome-auto-install-full-profile"
+  fi
+
+  teardown_test_env
+}
+
+# --- 39. biome-auto-install-opt-in ---
+test_biome_auto_install_opt_in() {
+  setup_test_env
+  local stub_dir="$HOME/test-bin"
+  mkdir -p "$stub_dir"
+  export PATH="$stub_dir:$PATH"
+  cat > "$stub_dir/brew" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "install" && "$2" == "biome" ]]; then
+  cat > "$(dirname "$0")/biome" <<'INNER'
+#!/bin/bash
+echo "biome 1.0.0"
+INNER
+  chmod +x "$(dirname "$0")/biome"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$stub_dir/brew"
+
+  local rc=0
+  run_setup --profile=standard --hooks=biome >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] && command -v biome >/dev/null 2>&1; then
+    pass "biome-auto-install-opt-in"
+  else
+    fail "biome-auto-install-opt-in"
+  fi
+
+  teardown_test_env
+}
+
 # ---------------------------------------------------------------------------
 # Run all tests
 # ---------------------------------------------------------------------------
@@ -865,5 +979,10 @@ test_auto_update_legacy_claude_fallback
 test_dry_run_progress_output
 test_dry_run_quiet_merge_summary
 test_update_kit_command_paths
+test_biome_hooks_full_profile
+test_biome_hooks_standard_profile
+test_biome_hooks_minimal_profile
+test_biome_auto_install_full_profile
+test_biome_auto_install_opt_in
 
 print_summary
