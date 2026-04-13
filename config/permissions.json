@@ -138,6 +138,7 @@
 			"Bash(tsc:*)",
 			"Bash(eslint:*)",
 			"Bash(prettier:*)",
+			"Bash(biome:*)",
 			"Bash(vitest:*)",
 			"Bash(jest:*)",
 			"Bash(pytest:*)",

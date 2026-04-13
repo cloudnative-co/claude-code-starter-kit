@@ -21,6 +21,7 @@ declare -A _FEATURE_FLAGS=(
   [tmux-hooks]=ENABLE_TMUX_HOOKS
   [doc-blocker]=ENABLE_DOC_BLOCKER
   [prettier-hooks]=ENABLE_PRETTIER_HOOKS
+  [biome-hooks]=ENABLE_BIOME_HOOKS
   [console-log-guard]=ENABLE_CONSOLE_LOG_GUARD
   [memory-persistence]=ENABLE_MEMORY_PERSISTENCE
   [strategic-compact]=ENABLE_STRATEGIC_COMPACT
@@ -50,7 +51,7 @@ declare -A _FEATURE_HAS_SCRIPTS=(
 # CRITICAL: safety-net MUST be first (PreToolUse runs in array order)
 # ---------------------------------------------------------------------------
 _FEATURE_ORDER=(
-  safety-net tmux-hooks doc-blocker prettier-hooks console-log-guard
+  safety-net tmux-hooks doc-blocker prettier-hooks biome-hooks console-log-guard
   memory-persistence strategic-compact pr-creation-log pre-compact-commit
   auto-update statusline doc-size-guard no-flicker
   feature-recommendation

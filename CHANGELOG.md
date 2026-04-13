@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.50.0] - 2026-04-13
+
+### Added
+- **Biome hooks と条件付き自動インストール**: `biome-hooks` feature を追加し、JS/TS の `Edit` / `Write` 後に `biome check --write` を実行可能にした。`full` profile では Biome を既定有効にし、`biome` が未導入なら `brew install biome` を先に試行、失敗時のみ `npm install -g @biomejs/biome` にフォールバックする。standard/minimal/custom では Biome を明示有効化した場合のみ自動インストールを試行する
+
+### Changed
+- **formatter hook の排他制御を追加**: `prettier-hooks` と `biome-hooks` に相互 conflict を定義し、saved config / update / non-interactive / CSV hooks を含む全設定経路で両方が同時有効のまま残らないよう wizard 側で正規化する
+
 ## [0.49.1] - 2026-04-13
 
 ### Changed

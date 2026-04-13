@@ -480,6 +480,48 @@ check_gh() {
   return 1
 }
 
+check_biome() {
+  if command -v biome &>/dev/null; then
+    ok "biome $(biome --version 2>/dev/null | head -1)"
+    return 0
+  fi
+
+  info "Installing Biome..."
+
+  if _brew_is_usable 2>/dev/null; then
+    if brew install biome 2>/dev/null && command -v biome &>/dev/null; then
+      ok "biome installed via Homebrew"
+      return 0
+    fi
+  fi
+
+  if command -v npm &>/dev/null; then
+    local npm_prefix=""
+    npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
+    if [[ -n "$npm_prefix" ]]; then
+      export PATH="${npm_prefix}/bin:$PATH"
+    fi
+    if [[ -n "$npm_prefix" ]] && [[ -w "$npm_prefix" ]]; then
+      if npm install -g @biomejs/biome 2>/dev/null && command -v biome &>/dev/null; then
+        ok "biome installed via npm"
+        return 0
+      fi
+    elif [[ -n "$npm_prefix" ]] && [[ -w "${npm_prefix}/lib" ]]; then
+      if npm install -g @biomejs/biome 2>/dev/null && command -v biome &>/dev/null; then
+        ok "biome installed via npm"
+        return 0
+      fi
+    fi
+  fi
+
+  warn "Failed to install Biome automatically."
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    warn "  Or: brew install biome"
+  fi
+  warn "  Or: npm install -g @biomejs/biome"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Bash 4+ detection and re-exec

@@ -1,0 +1,15 @@
+{
+	"hooks": {
+		"PostToolUse": [
+			{
+				"matcher": "(tool == \"Edit\" || tool == \"Write\") && tool_input.file_path matches \"\\\\.(ts|tsx|js|jsx)$\"",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "#!/bin/bash\ninput=$(cat)\nfile_path=$(printf '%s' \"$input\" | jq -r '.tool_input.file_path // \"\"')\nif [ -n \"$file_path\" ] && [ -f \"$file_path\" ] && command -v biome >/dev/null 2>&1; then\n  biome check --write \"$file_path\" 2>&1 | head -5 >&2 || true\nfi\nprintf '%s\\n' \"$input\""
+					}
+				]
+			}
+		]
+	}
+}
