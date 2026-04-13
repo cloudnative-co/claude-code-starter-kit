@@ -52,6 +52,7 @@ STR_FONTS_NO="いいえ - フォントのインストールをスキップ"
 STR_CONFIRM_FONTS="フォント"
 STR_CONFIRM_STATUSLINE="ステータスライン"
 STR_CONFIRM_NO_FLICKER="フリッカー防止"
+STR_CONFIRM_FEATURE_RECOMMENDATION="機能レコメンド"
 
 # Font installation messages
 STR_FONTS_SECTION_TITLE="プログラミングフォントのインストール"
@@ -90,6 +91,7 @@ STR_HOOKS_COMPACT="戦略的コンパクト - 論理的なタイミングで /co
 STR_HOOKS_PR_LOG="PR 作成ログ - PR 作成後に URL をログ"
 STR_HOOKS_PRE_COMMIT="コンパクト前自動コミット - compact 前に変更を自動コミット"
 STR_HOOKS_DOC_SIZE="ドキュメントサイズガード - CLAUDE.md/AGENTS.md の肥大化を警告"
+STR_HOOKS_FEATURE_RECOMMENDATION="機能レコメンド - セッション開始時に新機能を通知"
 
 # Step 6: Plugins
 STR_PLUGINS_TITLE="インストールするプラグインを選択してください（番号をスペース区切りで入力）："

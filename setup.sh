@@ -85,6 +85,9 @@ check_bash4 || {
 
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/features.sh"
+
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/recommendation.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/progress.sh"
 # shellcheck source=/dev/null
@@ -239,6 +242,19 @@ if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
   if ! _snapshot_exists "$CLAUDE_DIR"; then
     bootstrap_snapshot_from_current
   fi
+
+  # Migrate: initialize DISMISSED_FEATURES if not present in saved config.
+  # This prevents all existing features from being treated as "new" on the
+  # first update after the feature recommendation system is deployed.
+  # The key's existence (even empty) serves as the migration marker.
+  _conf_path="${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+  if [[ " $_CONFIG_ALLOWED_KEYS " == *" DISMISSED_FEATURES "* ]] \
+     && ! grep -q '^DISMISSED_FEATURES=' "$_conf_path" 2>/dev/null; then
+    # shellcheck disable=SC2034 # DISMISSED_FEATURES is used by save_config() and lib/recommendation.sh
+    DISMISSED_FEATURES=""
+  fi
+  _validate_dismissed_features
+
   # Update mode: run update with merge logic
   run_update "$PROJECT_DIR" "$CLAUDE_DIR"
 else

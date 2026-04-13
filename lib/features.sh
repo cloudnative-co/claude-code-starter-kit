@@ -30,6 +30,7 @@ declare -A _FEATURE_FLAGS=(
   [statusline]=ENABLE_STATUSLINE
   [doc-size-guard]=ENABLE_DOC_SIZE_GUARD
   [no-flicker]=ENABLE_NO_FLICKER
+  [feature-recommendation]=ENABLE_FEATURE_RECOMMENDATION
 )
 
 # ---------------------------------------------------------------------------
@@ -51,6 +52,7 @@ _FEATURE_ORDER=(
   safety-net tmux-hooks doc-blocker prettier-hooks console-log-guard
   memory-persistence strategic-compact pr-creation-log pre-compact-commit
   auto-update statusline doc-size-guard no-flicker
+  feature-recommendation
 )
 
 # ---------------------------------------------------------------------------

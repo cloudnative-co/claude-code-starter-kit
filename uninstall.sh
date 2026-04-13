@@ -291,6 +291,9 @@ rm -f "$CLAUDE_DIR/.starter-kit-update-cache"
 # Remove merge preferences (used by update conflict resolution)
 rm -f "$CLAUDE_DIR/.starter-kit-merge-prefs.json"
 
+# Remove pending features file (created by setup.sh --update for feature recommendation)
+rm -f "$CLAUDE_DIR/.starter-kit-pending-features.json"
+
 # Remove snapshot directory (used by update mechanism)
 if [[ -d "$CLAUDE_DIR/.starter-kit-snapshot" ]]; then
   rm -rf "$CLAUDE_DIR/.starter-kit-snapshot"
