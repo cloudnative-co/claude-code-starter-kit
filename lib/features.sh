@@ -42,6 +42,7 @@ declare -A _FEATURE_HAS_SCRIPTS=(
   [auto-update]=true
   [statusline]=true
   [doc-size-guard]=true
+  [feature-recommendation]=true
 )
 
 # ---------------------------------------------------------------------------
