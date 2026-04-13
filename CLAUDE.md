@@ -84,10 +84,11 @@ install.sh (re-run with manifest v2 + snapshot)
   → setup.sh --update (update mode)
       → _restore_config_from_manifest() — reads settings from manifest
       → run_update() — 3-way merge settings.json, selective file updates
+      → _detect_and_write_pending_features() — detect new features, write pending-features.json
       → write_manifest() — updates manifest v2
 ```
 
-Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/features.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
+Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/features.sh`, `lib/recommendation.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
 
 ### Profile System
 
@@ -323,6 +324,7 @@ The permissions file implements a defense-in-depth strategy against prompt injec
    - saved config reuse in `wizard/wizard.sh`
    Missing keys on older installs should receive the intended default for that profile, but existing explicit user choices must win.
 10. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Write the entry directly under the version heading (`## [x.y.z]`) that will be tagged on merge — do not use an `[Unreleased]` section. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
+11. **Feature recommendation**: Ensure `feature.json` has `displayName` and `description` fields for the notification display. If the feature should NOT be recommended (special-case features), verify it is excluded from `_FEATURE_FLAGS` or is handled by `_detect_and_write_pending_features()` exclusion logic.
 
 Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
 
@@ -354,6 +356,10 @@ Braille Dots pattern status line implemented in Python. Displays model name, con
 ### Doc Size Guard (`features/doc-size-guard/`)
 
 PostToolUse hook that validates CLAUDE.md/AGENTS.md file size when the Write tool targets these files. External script at `scripts/check-doc-size.sh`. Thresholds: AGENTS.md warns at 60 lines / errors at 100; CLAUDE.md warns at 150 / errors at 300. Also checks for broken path references in backtick-quoted strings.
+
+### Feature Recommendation (`features/feature-recommendation/`)
+
+SessionStart hook that notifies users about new features available for their profile. Three-state management: enabled (conf `ENABLE_X=true/false`), dismissed (`DISMISSED_FEATURES` CSV in conf), pending (implicit: not in either). `lib/recommendation.sh` provides helpers (`_is_feature_dismissed`, `_add_dismissed_feature`, `_validate_dismissed_features`, `_detect_and_write_pending_features`). Pending features are written to `~/.claude/.starter-kit-pending-features.json` (atomic write, name-only). `check-pending.sh` is self-contained (no `lib/` deps, Bash 3.2 compatible), reads pending JSON and resolves displayName/description from kit repo's `feature.json`. The `/update-kit` command handles interactive review (Claude-side, not shell wizard). Full profile auto-enables all features (no pending). Minimal generates pending but has no SessionStart notification (hook not deployed).
 
 ## Platform Detection
 
