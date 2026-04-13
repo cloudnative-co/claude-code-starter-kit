@@ -31,6 +31,74 @@ Before running the update:
    - Always suggest `/compact` to refresh the current session cleanly.
    - Also mention that some changes may require starting a new Claude Code session or opening a new terminal, especially settings/env changes, hook updates, MCP-related changes, or newly added slash commands.
 
+### Pending Feature Review
+
+After a successful update (or if already up to date), check for pending feature recommendations.
+
+**Note**: Always use the Read tool (not `cat`) to read files, and the Edit tool to modify `~/.claude-starter-kit.conf`. Skip any feature named `feature-recommendation` if it appears in the pending list (self-referential — should not happen, but guard against it).
+
+#### Step 1: Check for pending features
+
+Read `~/.claude/.starter-kit-pending-features.json`. If the file does not exist or is empty, skip this section entirely.
+
+#### Step 2: Resolve feature flag names
+
+Read `~/.claude-starter-kit/lib/features.sh` and find the `_FEATURE_FLAGS` associative array. Each entry maps feature name to `ENABLE_*` variable (e.g., `[doc-size-guard]=ENABLE_DOC_SIZE_GUARD`). Build a mapping for the pending features.
+
+#### Step 3: Present each feature to the user
+
+For each feature name in the `features` array (one at a time):
+
+1. Read `~/.claude-starter-kit/features/<name>/feature.json` to get `displayName` and `description`
+2. If `feature.json` has a non-empty `conflicts` array, check if any conflicting features are currently enabled. If so, mention the conflict to the user
+3. Present to the user:
+   ```
+   新機能: <displayName>
+   <description>
+     1) 有効にする
+     2) 今はいい（次回また聞きます）
+     3) 今後聞かない
+   ```
+4. Ask the user to choose
+
+#### Step 4: Apply choices
+
+After all features are reviewed, apply in this order:
+
+**有効にする (choice 1)**: Read `~/.claude-starter-kit.conf` with the Read tool, then use the Edit tool:
+- If a line `ENABLE_<FLAG>=...` already exists → replace the entire line with `ENABLE_<FLAG>="true"`
+- If no such line exists → append `ENABLE_<FLAG>="true"` before the `SELECTED_PLUGINS` line (or at end of file)
+
+**今はいい (choice 2)**: Do nothing. Feature stays in pending list for next session.
+
+**今後聞かない (choice 3)**: Read `~/.claude-starter-kit.conf`, find the `DISMISSED_FEATURES="..."` line:
+- Extract current CSV value. If feature name is already in it, skip
+- Append the feature name with comma separator (e.g., `""` → `"feat-name"`, `"a,b"` → `"a,b,feat-name"`)
+- Use the Edit tool to replace the `DISMISSED_FEATURES="..."` line
+
+#### Step 5: Update pending-features.json
+
+Remove features that were enabled (choice 1) or dismissed (choice 3) from the `features` array. Keep features where the user chose "今はいい" (choice 2).
+
+```bash
+# Example: remove "doc-size-guard" from pending, keep the rest
+jq '.features |= map(select(. != "doc-size-guard"))' \
+  ~/.claude/.starter-kit-pending-features.json > /tmp/pf.$$ \
+  && mv /tmp/pf.$$ ~/.claude/.starter-kit-pending-features.json
+```
+
+If the `features` array is now empty, delete the file: `rm -f ~/.claude/.starter-kit-pending-features.json`
+
+#### Step 6: Regenerate settings.json
+
+If any features were enabled (choice 1), run:
+
+```bash
+cd ~/.claude-starter-kit && bash setup.sh --update
+```
+
+This re-executes the 3-way merge path, safely regenerating `settings.json` while preserving user additions like `mcpServers`.
+
 ### Recovery
 
 If an update goes wrong:

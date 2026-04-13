@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.49.0] - 2026-04-13
+
+### Added
+- **/update-kit で pending feature の対話的レビュー**: update 完了後に `pending-features.json` を検出し、各新機能について「有効にする / 今はいい / 今後聞かない」を Claude が対話的に提示。有効化時は `setup.sh --update` を再実行して 3-way merge 経由で settings.json を安全に再生成
+
 ## [0.48.0] - 2026-04-13
 
 ### Added
