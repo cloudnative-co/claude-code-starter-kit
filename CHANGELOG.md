@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.46.0] - 2026-04-13
+
+### Added
+- **effortLevel のデフォルトを high に設定**: `settings-base.json` に `"effortLevel": "high"` を追加。全プロファイル共通で Claude の推論深度を high に固定。ユーザーは settings.json で個別に上書き可能
+
 ## [0.45.1] - 2026-04-13
 
 ### Changed

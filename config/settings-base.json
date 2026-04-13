@@ -4,6 +4,7 @@
 	"env": {
 		"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
 	},
+	"effortLevel": "high",
 	"hooks": {},
 	"language": "__LANGUAGE_NAME__"
 }
