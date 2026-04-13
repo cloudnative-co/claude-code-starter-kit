@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.45.1] - 2026-04-13
+
+### Changed
+- **GitHub Actions を SHA pinning に変更**: `actions/checkout`, `actions/cache`, `ludeeus/action-shellcheck` をタグ指定からコミット SHA 固定に変更し、サプライチェーン攻撃リスクを低減
+- **Dependabot で GitHub Actions の自動更新を有効化**: `.github/dependabot.yml` を追加し、SHA pinning されたアクションの週次自動更新 PR を生成
+
 ## [0.45.0] - 2026-04-03
 
 ### Fixed
