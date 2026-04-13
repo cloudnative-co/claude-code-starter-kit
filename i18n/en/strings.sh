@@ -54,6 +54,7 @@ STR_FONTS_NO="No - Skip font installation"
 STR_CONFIRM_FONTS="Fonts"
 STR_CONFIRM_STATUSLINE="Status Line"
 STR_CONFIRM_NO_FLICKER="No Flicker"
+STR_CONFIRM_FEATURE_RECOMMENDATION="Feature Rec."
 
 # Font installation messages
 STR_FONTS_SECTION_TITLE="Installing Programming Fonts"
@@ -92,6 +93,7 @@ STR_HOOKS_COMPACT="Strategic Compact - Suggest /compact at logical intervals"
 STR_HOOKS_PR_LOG="PR Creation Log - Log PR URL after creation"
 STR_HOOKS_PRE_COMMIT="Pre-compact Auto-commit - Auto-commit before context compaction"
 STR_HOOKS_DOC_SIZE="Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large"
+STR_HOOKS_FEATURE_RECOMMENDATION="Feature Recommendation - Notify about new features on session start"
 
 # Step 6: Plugins
 STR_PLUGINS_TITLE="Select plugins to install (enter numbers separated by spaces):"

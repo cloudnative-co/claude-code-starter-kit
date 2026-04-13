@@ -1,5 +1,15 @@
 {
 	"name": "statusline",
+	"displayName": "Status Line",
 	"description": "Show token usage, context remaining, and version in the Claude Code status line",
-	"type": "settings"
+	"category": "settings",
+	"default": true,
+	"profiles": {
+		"minimal": false,
+		"standard": true,
+		"full": true
+	},
+	"dependencies": [],
+	"conflicts": [],
+	"hasScripts": true
 }

@@ -1,0 +1,14 @@
+{
+	"name": "feature-recommendation",
+	"displayName": "Feature Recommendation",
+	"description": "Notify users about new features available for their profile on session start",
+	"category": "hook",
+	"default": false,
+	"profiles": {
+		"minimal": false,
+		"standard": true,
+		"full": true
+	},
+	"dependencies": [],
+	"conflicts": []
+}

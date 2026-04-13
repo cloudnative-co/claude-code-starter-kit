@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.47.0] - 2026-04-13
+
+### Added
+- **Feature Recommendation データ基盤**: `DISMISSED_FEATURES` CSV による dismiss 管理、`ENABLE_FEATURE_RECOMMENDATION` フラグ、既存ユーザー向けマイグレーションロジックを追加。`lib/recommendation.sh` にヘルパー関数を配置。`profiles/*.conf` / `wizard.sh` / `i18n` を更新
+- **feature.json スキーマ正規化**: `pre-compact-commit` と `statusline` の `feature.json` に不足していた `displayName` を追加し、全 feature で統一スキーマに正規化
+
 ## [0.46.0] - 2026-04-13
 
 ### Added
