@@ -488,6 +488,12 @@ _update_hook_scripts() {
       "$PROJECT_DIR/features/doc-size-guard/scripts" \
       "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
   fi
+
+  if is_true "${ENABLE_FEATURE_RECOMMENDATION:-false}"; then
+    _update_hook_feature "feature-recommendation" \
+      "$PROJECT_DIR/features/feature-recommendation/scripts" \
+      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
+  fi
 }
 
 _count_update_content_files() {
@@ -525,6 +531,10 @@ _count_update_hook_files() {
   fi
   if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
     src_dir="$PROJECT_DIR/features/doc-size-guard/scripts"
+    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
+  fi
+  if is_true "${ENABLE_FEATURE_RECOMMENDATION:-false}"; then
+    src_dir="$PROJECT_DIR/features/feature-recommendation/scripts"
     [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
   fi
   printf '%s' "$total"

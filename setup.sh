@@ -257,6 +257,9 @@ if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
 
   # Update mode: run update with merge logic
   run_update "$PROJECT_DIR" "$CLAUDE_DIR"
+
+  # Detect new features and write pending notification (non-fatal)
+  _detect_and_write_pending_features "$CLAUDE_DIR" || true
 else
   # Fresh install / full re-setup
   section "Deploying Claude Code Starter Kit"

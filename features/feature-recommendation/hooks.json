@@ -1,3 +1,15 @@
 {
-	"hooks": {}
+	"hooks": {
+		"SessionStart": [
+			{
+				"matcher": "*",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "__HOME__/.claude/hooks/feature-recommendation/check-pending.sh"
+					}
+				]
+			}
+		]
+	}
 }

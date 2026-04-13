@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.48.0] - 2026-04-13
+
+### Added
+- **update 時の pending 検出と SessionStart 通知**: `setup.sh --update` 後に新機能を自動検出し `pending-features.json` を生成。SessionStart hook で新機能の名前・概要を通知し `/update-kit` への誘導を表示。通知は日本語/英語対応、4件以上は先頭3件+省略表示。Full profile は全自動有効化のため通知なし
+
 ## [0.47.0] - 2026-04-13
 
 ### Added
