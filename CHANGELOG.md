@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.49.1] - 2026-04-13
+
+### Changed
+- **CLAUDE.md 更新**: Feature Recommendation System のアーキテクチャ概要を Notable Features に追加。Execution Flow に `_detect_and_write_pending_features` を追加。「Adding a New Feature」チェックリストに `displayName`/`description` 整備と recommendation 除外の確認項目を追加
+
 ## [0.49.0] - 2026-04-13
 
 ### Added
