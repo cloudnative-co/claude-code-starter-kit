@@ -138,11 +138,6 @@ ensure_dirs() {
 
 should_auto_install_biome() {
   command -v biome &>/dev/null && return 1
-
-  if [[ "${PROFILE:-}" == "full" ]]; then
-    return 0
-  fi
-
   is_true "${ENABLE_BIOME_HOOKS:-false}"
 }
 

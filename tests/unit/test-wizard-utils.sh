@@ -322,3 +322,39 @@ else
   fail "wizard: saved config prettier preference did not override full profile biome default"
 fi
 rm -f "$_tmp_cfg"
+
+ENABLE_PRETTIER_HOOKS="true"
+ENABLE_BIOME_HOOKS=""
+PROFILE=""
+fill_missing_profile_defaults full
+if assert_equals "true" "$ENABLE_PRETTIER_HOOKS" \
+  && assert_equals "false" "$ENABLE_BIOME_HOOKS"; then
+  pass "wizard: fill_missing_profile_defaults preserves explicit prettier on full profile"
+else
+  fail "wizard: fill_missing_profile_defaults did not preserve explicit prettier on full profile"
+fi
+
+_tmp_cfg="$(mktemp)"
+printf 'ENABLE_PRETTIER_HOOKS="false"\n' > "$_tmp_cfg"
+ENABLE_PRETTIER_HOOKS=""
+ENABLE_BIOME_HOOKS=""
+load_profile_config full
+load_config "$_tmp_cfg"
+if assert_equals "false" "$ENABLE_PRETTIER_HOOKS" \
+  && assert_equals "false" "$ENABLE_BIOME_HOOKS"; then
+  pass "wizard: legacy prettier=false keeps formatter hooks disabled on full profile"
+else
+  fail "wizard: legacy prettier=false unexpectedly enabled biome on full profile"
+fi
+rm -f "$_tmp_cfg"
+
+ENABLE_PRETTIER_HOOKS="false"
+ENABLE_BIOME_HOOKS=""
+PROFILE=""
+fill_missing_profile_defaults full
+if assert_equals "false" "$ENABLE_PRETTIER_HOOKS" \
+  && assert_equals "false" "$ENABLE_BIOME_HOOKS"; then
+  pass "wizard: fill_missing_profile_defaults preserves legacy formatter disable on full profile"
+else
+  fail "wizard: fill_missing_profile_defaults unexpectedly enabled biome for legacy disable"
+fi

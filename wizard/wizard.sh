@@ -218,6 +218,7 @@ load_config() {
     local prefer="biome"
     if grep -q '^ENABLE_PRETTIER_HOOKS=' "$file" 2>/dev/null \
       && ! grep -q '^ENABLE_BIOME_HOOKS=' "$file" 2>/dev/null; then
+      ENABLE_BIOME_HOOKS="false"
       prefer="prettier"
     fi
     _normalize_formatter_hooks "$prefer"
@@ -264,12 +265,20 @@ fill_missing_profile_defaults() {
 
   local _saved_pairs=()
   local _var _val _pair _restore_key _restore_val
+  local _formatter_prefer="biome"
+  local _legacy_formatter_state=false
   for _var in $_CONFIG_ALLOWED_KEYS; do
     _val="${!_var:-}"
     if [[ -n "$_val" ]]; then
       _saved_pairs+=("${_var}=${_val}")
     fi
   done
+  if [[ "${ENABLE_PRETTIER_HOOKS:-}" == "true" ]] && [[ -z "${ENABLE_BIOME_HOOKS:-}" ]]; then
+    _formatter_prefer="prettier"
+  fi
+  if [[ -n "${ENABLE_PRETTIER_HOOKS:-}" ]] && [[ -z "${ENABLE_BIOME_HOOKS:-}" ]]; then
+    _legacy_formatter_state=true
+  fi
 
   load_profile_config "$profile"
   for _pair in "${_saved_pairs[@]+"${_saved_pairs[@]}"}"; do
@@ -277,7 +286,10 @@ fill_missing_profile_defaults() {
     _restore_val="${_pair#*=}"
     printf -v "$_restore_key" '%s' "$_restore_val"
   done
-  _normalize_formatter_hooks
+  if [[ "$_legacy_formatter_state" == "true" ]]; then
+    ENABLE_BIOME_HOOKS="false"
+  fi
+  _normalize_formatter_hooks "$_formatter_prefer"
 }
 
 # Sanitize a value for safe inclusion in a key=value config file.
@@ -674,6 +686,54 @@ parse_cli_args() {
       --fonts)         shift; _set_bool ENABLE_FONTS_SETUP "${1:-}"; _CLI_OVERRIDES+=("ENABLE_FONTS_SETUP") ;;
       --hooks=*)
         _apply_hooks_csv "${arg#*=}"
+        case ",${arg#*=}," in
+          *,tmux,*) _CLI_OVERRIDES+=("ENABLE_TMUX_HOOKS") ;;
+        esac
+        case ",${arg#*=}," in
+          *,git-push,*) _CLI_OVERRIDES+=("ENABLE_GIT_PUSH_REVIEW") ;;
+        esac
+        case ",${arg#*=}," in
+          *,doc-block,*) _CLI_OVERRIDES+=("ENABLE_DOC_BLOCKER") ;;
+        esac
+        case ",${arg#*=}," in
+          *,prettier,*) _CLI_OVERRIDES+=("ENABLE_PRETTIER_HOOKS") ;;
+        esac
+        case ",${arg#*=}," in
+          *,biome,*) _CLI_OVERRIDES+=("ENABLE_BIOME_HOOKS") ;;
+        esac
+        case ",${arg#*=}," in
+          *,console,*) _CLI_OVERRIDES+=("ENABLE_CONSOLE_LOG_GUARD") ;;
+        esac
+        case ",${arg#*=}," in
+          *,memory,*) _CLI_OVERRIDES+=("ENABLE_MEMORY_PERSISTENCE") ;;
+        esac
+        case ",${arg#*=}," in
+          *,compact,*) _CLI_OVERRIDES+=("ENABLE_STRATEGIC_COMPACT") ;;
+        esac
+        case ",${arg#*=}," in
+          *,pr-log,*) _CLI_OVERRIDES+=("ENABLE_PR_CREATION_LOG") ;;
+        esac
+        case ",${arg#*=}," in
+          *,pre-compact-commit,*) _CLI_OVERRIDES+=("ENABLE_PRE_COMPACT_COMMIT") ;;
+        esac
+        case ",${arg#*=}," in
+          *,safety,*) _CLI_OVERRIDES+=("ENABLE_SAFETY_NET") ;;
+        esac
+        case ",${arg#*=}," in
+          *,auto-update,*) _CLI_OVERRIDES+=("ENABLE_AUTO_UPDATE") ;;
+        esac
+        case ",${arg#*=}," in
+          *,statusline,*) _CLI_OVERRIDES+=("ENABLE_STATUSLINE") ;;
+        esac
+        case ",${arg#*=}," in
+          *,doc-size,*) _CLI_OVERRIDES+=("ENABLE_DOC_SIZE_GUARD") ;;
+        esac
+        case ",${arg#*=}," in
+          *,no-flicker,*) _CLI_OVERRIDES+=("ENABLE_NO_FLICKER") ;;
+        esac
+        case ",${arg#*=}," in
+          *,feature-rec,*) _CLI_OVERRIDES+=("ENABLE_FEATURE_RECOMMENDATION") ;;
+        esac
         ;;
       --plugins=*)
         _load_plugins
@@ -1066,31 +1126,42 @@ _fill_noninteractive_defaults() {
   [[ -z "$LANGUAGE" ]] && LANGUAGE="en"
   [[ -z "$PROFILE" ]] && PROFILE="standard"
 
-  # Save CLI-overridden values before loading profile/config
-  # (both load_config and load_profile_config unconditionally set ENABLE_* flags)
+  # Save CLI-overridden values before loading profile/config.
   local _saved_overrides=()
   while IFS= read -r _override; do
     [[ -n "$_override" ]] && _saved_overrides+=("$_override")
   done < <(_capture_cli_overrides)
 
-  # Save migrated Codex state (may come from saved config, not CLI)
-  local _saved_codex="${ENABLE_CODEX_PLUGIN:-}"
+  local _saved_pairs=()
+  local _var _val _pair _restore_key _restore_val
+  local _formatter_prefer="biome"
+  local _legacy_formatter_state=false
+  for _var in $_CONFIG_ALLOWED_KEYS; do
+    _val="${!_var:-}"
+    if [[ -n "$_val" ]]; then
+      _saved_pairs+=("${_var}=${_val}")
+    fi
+  done
+  if [[ "${ENABLE_PRETTIER_HOOKS:-}" == "true" ]] && [[ -z "${ENABLE_BIOME_HOOKS:-}" ]]; then
+    _formatter_prefer="prettier"
+  fi
+  if [[ -n "${ENABLE_PRETTIER_HOOKS:-}" ]] && [[ -z "${ENABLE_BIOME_HOOKS:-}" ]]; then
+    _legacy_formatter_state=true
+  fi
 
   load_profile_config "$PROFILE"
 
-  # Restore CLI-overridden values (CLI takes precedence over profile/config)
-  _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
+  for _pair in "${_saved_pairs[@]+"${_saved_pairs[@]}"}"; do
+    _restore_key="${_pair%%=*}"
+    _restore_val="${_pair#*=}"
+    printf -v "$_restore_key" '%s' "$_restore_val"
+  done
 
-  # Restore Codex state if it was set before profile reload and CLI didn't override it
-  if [[ -n "$_saved_codex" ]]; then
-    local _is_cli_codex=false _ov
-    for _ov in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
-      [[ "$_ov" == "ENABLE_CODEX_PLUGIN" ]] && _is_cli_codex=true
-    done
-    if [[ "$_is_cli_codex" == "false" ]]; then
-      ENABLE_CODEX_PLUGIN="$_saved_codex"
-    fi
+  if [[ "$_legacy_formatter_state" == "true" ]]; then
+    ENABLE_BIOME_HOOKS="false"
   fi
+
+  _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
@@ -1100,7 +1171,7 @@ _fill_noninteractive_defaults() {
   [[ -z "${ENABLE_FEATURE_RECOMMENDATION:-}" ]] && ENABLE_FEATURE_RECOMMENDATION="false"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
   [[ -z "$ENABLE_FONTS_SETUP" ]] && ENABLE_FONTS_SETUP="false"
-  _normalize_formatter_hooks
+  _normalize_formatter_hooks "$_formatter_prefer"
 
   # Force-disable Ghostty on non-macOS platforms
   if [[ "$(uname -s)" != "Darwin" ]]; then

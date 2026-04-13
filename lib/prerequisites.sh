@@ -498,7 +498,7 @@ check_biome() {
   if command -v npm &>/dev/null; then
     local npm_prefix=""
     npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
-    if [[ -n "$npm_prefix" ]] && [[ -d "${npm_prefix}/bin" ]]; then
+    if [[ -n "$npm_prefix" ]]; then
       export PATH="${npm_prefix}/bin:$PATH"
     fi
     if [[ -n "$npm_prefix" ]] && [[ -w "$npm_prefix" ]]; then

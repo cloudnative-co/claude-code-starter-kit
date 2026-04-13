@@ -138,7 +138,7 @@ eval "$_orig_pkg_install"
 
 _saved_path="$PATH"
 _tmpdir="$(mktemp -d)"
-export PATH="$_tmpdir:$_saved_path"
+export PATH="$_tmpdir:/usr/bin:/bin"
 _orig_pkg_install="$(declare -f _pkg_install)"
 _pkg_install() {
   if [[ "$1" == "tmux" ]]; then
@@ -185,7 +185,7 @@ eval "$_orig_install_node"
 
 _saved_path="$PATH"
 _tmpdir="$(mktemp -d)"
-export PATH="$_tmpdir:$_saved_path"
+export PATH="$_tmpdir:/usr/bin:/bin"
 _orig_pkg_install="$(declare -f _pkg_install)"
 _pkg_install() {
   if [[ "$1" == "gh" ]]; then
@@ -235,7 +235,7 @@ rm -rf "$_tmpdir"
 
 _saved_path="$PATH"
 _tmpdir="$(mktemp -d)"
-export PATH="$_tmpdir:$_saved_path"
+export PATH="$_tmpdir:/usr/bin:/bin"
 _orig_brew_usable="$(declare -f _brew_is_usable)"
 _brew_is_usable() { return 0; }
 cat > "$_tmpdir/brew" <<'EOF'
@@ -252,7 +252,8 @@ exit 1
 EOF
 chmod +x "$_tmpdir/brew"
 run_func check_biome
-if assert_exit_code 0 "$_RF_RC" && command -v biome >/dev/null 2>&1; then
+_biome_path="$(command -v biome 2>/dev/null || true)"
+if assert_exit_code 0 "$_RF_RC" && assert_equals "$_tmpdir/biome" "$_biome_path"; then
   pass "prerequisites: check_biome installs via brew when available"
 else
   fail "prerequisites: check_biome did not install via brew"
@@ -265,8 +266,8 @@ rm -rf "$_tmpdir"
 
 _saved_path="$PATH"
 _tmpdir="$(mktemp -d)"
-mkdir -p "$_tmpdir/prefix/bin" "$_tmpdir/prefix/lib"
-export PATH="$_tmpdir:$_saved_path"
+mkdir -p "$_tmpdir/prefix/lib"
+export PATH="$_tmpdir:/usr/bin:/bin"
 _orig_brew_usable="$(declare -f _brew_is_usable)"
 _brew_is_usable() { return 1; }
 _npm_script="$(cat <<'EOF'
@@ -276,6 +277,7 @@ if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then
   exit 0
 fi
 if [[ "$1" == "install" && "$2" == "-g" && "$3" == "@biomejs/biome" ]]; then
+  mkdir -p "__PREFIX__/bin"
   cat > "__PREFIX__/bin/biome" <<'INNER'
 #!/bin/bash
 echo "biome 1.0.0"
@@ -289,7 +291,8 @@ EOF
 printf '%s\n' "${_npm_script//__PREFIX__/$_tmpdir/prefix}" > "$_tmpdir/npm"
 chmod +x "$_tmpdir/npm"
 run_func check_biome
-if assert_exit_code 0 "$_RF_RC" && command -v biome >/dev/null 2>&1; then
+_biome_path="$(command -v biome 2>/dev/null || true)"
+if assert_exit_code 0 "$_RF_RC" && assert_equals "$_tmpdir/prefix/bin/biome" "$_biome_path"; then
   pass "prerequisites: check_biome falls back to npm when brew is unavailable"
 else
   fail "prerequisites: check_biome did not fall back to npm"
@@ -302,7 +305,7 @@ rm -rf "$_tmpdir"
 
 _saved_path="$PATH"
 _tmpdir="$(mktemp -d)"
-export PATH="$_tmpdir:$_saved_path"
+export PATH="$_tmpdir:/usr/bin:/bin"
 _orig_brew_usable="$(declare -f _brew_is_usable)"
 _brew_is_usable() { return 1; }
 cat > "$_tmpdir/npm" <<'EOF'

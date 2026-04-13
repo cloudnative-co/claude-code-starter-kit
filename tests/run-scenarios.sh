@@ -876,30 +876,50 @@ test_biome_hooks_minimal_profile() {
   teardown_test_env
 }
 
-# --- 38. biome-auto-install-full-profile ---
-test_biome_auto_install_full_profile() {
-  setup_test_env
+setup_biome_auto_install_stub() {
   local stub_dir="$HOME/test-bin"
   mkdir -p "$stub_dir"
-  export PATH="$stub_dir:$PATH"
-  cat > "$stub_dir/brew" <<'EOF'
+
+  local tool tool_path
+  for tool in gsed gawk node npm tmux gh; do
+    tool_path="$(PATH="$_ORIG_PATH" command -v "$tool" 2>/dev/null || true)"
+    if [[ -n "$tool_path" ]]; then
+      ln -sf "$tool_path" "$stub_dir/$tool"
+    fi
+  done
+
+  export PATH="$stub_dir:$HOME/.local/bin:/usr/bin:/bin"
+  cat > "$stub_dir/brew" <<EOF
 #!/bin/bash
-if [[ "$1" == "install" && "$2" == "biome" ]]; then
-  cat > "$(dirname "$0")/biome" <<'INNER'
+if [[ "\$1" == "--prefix" ]]; then
+  echo "$stub_dir"
+  exit 0
+fi
+if [[ "\$1" == "install" && "\$2" == "biome" ]]; then
+  cat > "$stub_dir/biome" <<'INNER'
 #!/bin/bash
 echo "biome 1.0.0"
 INNER
-  chmod +x "$(dirname "$0")/biome"
+  chmod +x "$stub_dir/biome"
   exit 0
 fi
 exit 1
 EOF
   chmod +x "$stub_dir/brew"
+}
+
+# --- 38. biome-auto-install-full-profile ---
+test_biome_auto_install_full_profile() {
+  setup_test_env
+  local stub_dir="$HOME/test-bin"
+  setup_biome_auto_install_stub
 
   local rc=0
   run_setup --profile=full >/dev/null 2>&1 || rc=$?
 
-  if [[ $rc -eq 0 ]] && command -v biome >/dev/null 2>&1; then
+  local biome_path=""
+  biome_path="$(command -v biome 2>/dev/null || true)"
+  if [[ $rc -eq 0 ]] && [[ "$biome_path" == "$stub_dir/biome" ]]; then
     pass "biome-auto-install-full-profile"
   else
     fail "biome-auto-install-full-profile"
@@ -912,29 +932,104 @@ EOF
 test_biome_auto_install_opt_in() {
   setup_test_env
   local stub_dir="$HOME/test-bin"
-  mkdir -p "$stub_dir"
-  export PATH="$stub_dir:$PATH"
-  cat > "$stub_dir/brew" <<'EOF'
-#!/bin/bash
-if [[ "$1" == "install" && "$2" == "biome" ]]; then
-  cat > "$(dirname "$0")/biome" <<'INNER'
-#!/bin/bash
-echo "biome 1.0.0"
-INNER
-  chmod +x "$(dirname "$0")/biome"
-  exit 0
-fi
-exit 1
-EOF
-  chmod +x "$stub_dir/brew"
+  setup_biome_auto_install_stub
 
   local rc=0
   run_setup --profile=standard --hooks=biome >/dev/null 2>&1 || rc=$?
 
-  if [[ $rc -eq 0 ]] && command -v biome >/dev/null 2>&1; then
+  local biome_path=""
+  biome_path="$(command -v biome 2>/dev/null || true)"
+  if [[ $rc -eq 0 ]] && [[ "$biome_path" == "$stub_dir/biome" ]]; then
     pass "biome-auto-install-opt-in"
   else
     fail "biome-auto-install-opt-in"
+  fi
+
+  teardown_test_env
+}
+
+# --- 40. biome-auto-install-disabled-standard ---
+test_biome_auto_install_disabled_standard() {
+  setup_test_env
+  local stub_dir="$HOME/test-bin"
+  setup_biome_auto_install_stub
+
+  local rc=0
+  run_setup --profile=standard >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] && [[ ! -x "$stub_dir/biome" ]]; then
+    pass "biome-auto-install-disabled-standard"
+  else
+    fail "biome-auto-install-disabled-standard"
+  fi
+
+  teardown_test_env
+}
+
+# --- 41. biome-auto-install-disabled-minimal ---
+test_biome_auto_install_disabled_minimal() {
+  setup_test_env
+  local stub_dir="$HOME/test-bin"
+  setup_biome_auto_install_stub
+
+  local rc=0
+  run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] && [[ ! -x "$stub_dir/biome" ]]; then
+    pass "biome-auto-install-disabled-minimal"
+  else
+    fail "biome-auto-install-disabled-minimal"
+  fi
+
+  teardown_test_env
+}
+
+# --- 42. biome-auto-install-respects-saved-prettier-on-full ---
+test_biome_auto_install_respects_saved_prettier_on_full() {
+  setup_test_env
+  cat > "$HOME/.claude-starter-kit.conf" <<'EOF'
+PROFILE="full"
+ENABLE_PRETTIER_HOOKS="true"
+EOF
+
+  local stub_dir="$HOME/test-bin"
+  setup_biome_auto_install_stub
+
+  local rc=0
+  run_setup >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && [[ ! -x "$stub_dir/biome" ]] \
+    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    pass "biome-auto-install-respects-saved-prettier-on-full"
+  else
+    fail "biome-auto-install-respects-saved-prettier-on-full"
+  fi
+
+  teardown_test_env
+}
+
+# --- 43. biome-auto-install-respects-legacy-disable-on-full ---
+test_biome_auto_install_respects_legacy_disable_on_full() {
+  setup_test_env
+  cat > "$HOME/.claude-starter-kit.conf" <<'EOF'
+PROFILE="full"
+ENABLE_PRETTIER_HOOKS="false"
+EOF
+
+  local stub_dir="$HOME/test-bin"
+  setup_biome_auto_install_stub
+
+  local rc=0
+  run_setup >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && [[ ! -x "$stub_dir/biome" ]] \
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write") or contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    pass "biome-auto-install-respects-legacy-disable-on-full"
+  else
+    fail "biome-auto-install-respects-legacy-disable-on-full"
   fi
 
   teardown_test_env
@@ -984,5 +1079,9 @@ test_biome_hooks_standard_profile
 test_biome_hooks_minimal_profile
 test_biome_auto_install_full_profile
 test_biome_auto_install_opt_in
+test_biome_auto_install_disabled_standard
+test_biome_auto_install_disabled_minimal
+test_biome_auto_install_respects_saved_prettier_on_full
+test_biome_auto_install_respects_legacy_disable_on_full
 
 print_summary
