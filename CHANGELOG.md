@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.50.2] - 2026-05-15
+
+### Fixed
+- **macOS bash で PATH 永続化先を修正**: `$SHELL` が bash の macOS 環境では `~/.bash_profile` と `~/.bashrc` の両方に `~/.local/bin` や Homebrew Node.js の PATH を追加するよう変更。Ghostty などの bash login shell と通常の bash の両方で `claude` が見つからない問題を解消
+
 ## [0.50.1] - 2026-05-15
 
 ### Fixed

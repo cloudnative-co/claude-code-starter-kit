@@ -40,6 +40,76 @@ else
   fail "prerequisites: _get_shell_rc_file path does not start with \$HOME ('$_RF_STDOUT')"
 fi
 
+# ── _get_shell_rc_file and _get_shell_rc_files shell choices ──────────────
+
+_saved_shell="$SHELL"
+_saved_os="${OS:-}"
+export SHELL="/bin/bash"
+OS="macos"
+
+run_func _get_shell_rc_file
+if assert_equals "$HOME/.bash_profile" "$_RF_STDOUT"; then
+  pass "prerequisites: _get_shell_rc_file uses .bash_profile for macOS bash"
+else
+  fail "prerequisites: _get_shell_rc_file did not use .bash_profile for macOS bash"
+fi
+
+_tmp_rc_home="$(mktemp -d)"
+_saved_home_for_rc="$HOME"
+export HOME="$_tmp_rc_home"
+run_func _get_shell_rc_files
+if [[ "$_RF_STDOUT" == *"$HOME/.bash_profile"* && "$_RF_STDOUT" == *"$HOME/.bashrc"* ]]; then
+  pass "prerequisites: _get_shell_rc_files covers login and non-login macOS bash"
+else
+  fail "prerequisites: _get_shell_rc_files did not cover both macOS bash files"
+fi
+
+printf '%s\n' '[[ -f "$HOME/.bashrc" ]] && . "$HOME/.bashrc"' > "$HOME/.bash_profile"
+run_func _get_shell_rc_files
+if assert_equals "$HOME/.bashrc" "$_RF_STDOUT"; then
+  pass "prerequisites: _get_shell_rc_files avoids duplicate PATH when bash_profile sources bashrc"
+else
+  fail "prerequisites: _get_shell_rc_files did not avoid duplicate sourced bashrc"
+fi
+
+printf '%s\n' 'source "${HOME}/.bashrc"' > "$HOME/.bash_profile"
+run_func _get_shell_rc_files
+if assert_equals "$HOME/.bashrc" "$_RF_STDOUT"; then
+  pass "prerequisites: _get_shell_rc_files recognizes braced HOME bashrc source"
+else
+  fail "prerequisites: _get_shell_rc_files missed braced HOME bashrc source"
+fi
+
+printf '%s\n' '# source ~/.bashrc' > "$HOME/.bash_profile"
+run_func _get_shell_rc_files
+if [[ "$_RF_STDOUT" == *"$HOME/.bash_profile"* && "$_RF_STDOUT" == *"$HOME/.bashrc"* ]]; then
+  pass "prerequisites: _get_shell_rc_files ignores commented bashrc source"
+else
+  fail "prerequisites: _get_shell_rc_files treated commented bashrc source as active"
+fi
+export HOME="$_saved_home_for_rc"
+rm -rf "$_tmp_rc_home"
+
+OS="linux"
+run_func _get_shell_rc_file
+if assert_equals "$HOME/.bashrc" "$_RF_STDOUT"; then
+  pass "prerequisites: _get_shell_rc_file keeps .bashrc for Linux bash"
+else
+  fail "prerequisites: _get_shell_rc_file did not keep .bashrc for Linux bash"
+fi
+
+export SHELL="/bin/zsh"
+OS="macos"
+run_func _get_shell_rc_file
+if assert_equals "$HOME/.zshrc" "$_RF_STDOUT"; then
+  pass "prerequisites: _get_shell_rc_file keeps .zshrc for zsh"
+else
+  fail "prerequisites: _get_shell_rc_file did not keep .zshrc for zsh"
+fi
+
+export SHELL="$_saved_shell"
+OS="$_saved_os"
+
 # ── _detect_bash4 finds a Bash 4+ binary ─────────────────────────────────
 
 # We are running under Bash 4+ (run-unit-tests.sh enforces this),
@@ -107,12 +177,14 @@ rm -rf "$_tmpdir"
 
 _saved_home="$HOME"
 _saved_shell="$SHELL"
+_saved_os="$OS"
 _tmpdir="$(mktemp -d)"
 export HOME="$_tmpdir"
 export SHELL="/bin/bash"
+OS="macos"
 
 # Create the RC file so _add_to_path_now_and_persist can append to it
-touch "$_tmpdir/.bashrc"
+touch "$_tmpdir/.bash_profile"
 
 _test_dir="$_tmpdir/mybin"
 mkdir -p "$_test_dir"
@@ -121,9 +193,8 @@ run_func _add_to_path_now_and_persist "$_test_dir"
 if assert_exit_code 0 "$_RF_RC"; then
   # Check PATH contains the directory
   if [[ ":${PATH}:" == *":${_test_dir}:"* ]]; then
-    # Check RC file was updated
-    if assert_file_contains "$_tmpdir/.bashrc" "$_test_dir" \
-      "RC file should contain the added path"; then
+    if assert_file_contains "$_tmpdir/.bash_profile" "$_test_dir" \
+      && assert_file_contains "$_tmpdir/.bashrc" "$_test_dir"; then
       pass "prerequisites: _add_to_path_now_and_persist adds to PATH and RC file"
     else
       fail "prerequisites: _add_to_path_now_and_persist did not update RC file"
@@ -138,6 +209,7 @@ fi
 # Restore
 export HOME="$_saved_home"
 export SHELL="$_saved_shell"
+OS="$_saved_os"
 # Remove the test dir from PATH
 PATH="${PATH//:$_test_dir:/:}"; PATH="${PATH/#$_test_dir:/}"; PATH="${PATH/%:$_test_dir/}"; export PATH
 rm -rf "$_tmpdir"
@@ -146,10 +218,12 @@ rm -rf "$_tmpdir"
 
 _saved_home="$HOME"
 _saved_shell="$SHELL"
+_saved_os="$OS"
 _tmpdir="$(mktemp -d)"
 export HOME="$_tmpdir"
 export SHELL="/bin/bash"
-touch "$_tmpdir/.bashrc"
+OS="macos"
+touch "$_tmpdir/.bash_profile"
 
 _test_dir="$_tmpdir/mybin2"
 mkdir -p "$_test_dir"
@@ -158,16 +232,156 @@ mkdir -p "$_test_dir"
 _add_to_path_now_and_persist "$_test_dir"
 _add_to_path_now_and_persist "$_test_dir"
 
-_line_count="$(grep -c "$_test_dir" "$_tmpdir/.bashrc")"
-if assert_equals "1" "$_line_count" "RC file should contain path only once"; then
+_line_count="$(grep -c "$_test_dir" "$_tmpdir/.bash_profile")"
+_bashrc_line_count="$(grep -c "$_test_dir" "$_tmpdir/.bashrc")"
+if assert_equals "1" "$_line_count" "RC file should contain path only once" \
+  && assert_equals "1" "$_bashrc_line_count" "bashrc should contain path only once"; then
   pass "prerequisites: _add_to_path_now_and_persist is idempotent"
 else
-  fail "prerequisites: _add_to_path_now_and_persist wrote path $_line_count times"
+  fail "prerequisites: _add_to_path_now_and_persist wrote path duplicate entries"
 fi
 
 export HOME="$_saved_home"
 export SHELL="$_saved_shell"
+OS="$_saved_os"
 PATH="${PATH//:$_test_dir:/:}"; PATH="${PATH/#$_test_dir:/}"; PATH="${PATH/%:$_test_dir/}"; export PATH
+rm -rf "$_tmpdir"
+
+# ── _add_to_path_now_and_persist avoids sourced bashrc duplicate ──────────
+
+_saved_home="$HOME"
+_saved_shell="$SHELL"
+_saved_os="${OS:-}"
+_tmpdir="$(mktemp -d)"
+export HOME="$_tmpdir"
+export SHELL="/bin/bash"
+OS="macos"
+printf '%s\n' 'source "${HOME}/.bashrc"' > "$_tmpdir/.bash_profile"
+touch "$_tmpdir/.bashrc"
+
+_test_dir="$_tmpdir/sourced-bin"
+mkdir -p "$_test_dir"
+
+run_func _add_to_path_now_and_persist "$_test_dir"
+if assert_exit_code 0 "$_RF_RC" \
+  && assert_file_contains "$_tmpdir/.bashrc" "$_test_dir" \
+  && ! grep -q "$_test_dir" "$_tmpdir/.bash_profile"; then
+  pass "prerequisites: _add_to_path_now_and_persist avoids sourced bashrc duplicate"
+else
+  fail "prerequisites: _add_to_path_now_and_persist duplicated sourced bashrc path"
+fi
+
+export HOME="$_saved_home"
+export SHELL="$_saved_shell"
+OS="$_saved_os"
+PATH="${PATH//:$_test_dir:/:}"; PATH="${PATH/#$_test_dir:/}"; PATH="${PATH/%:$_test_dir/}"; export PATH
+rm -rf "$_tmpdir"
+
+# ── _add_to_path_now_and_persist writes .bashrc on Linux bash ─────────────
+
+_saved_home="$HOME"
+_saved_shell="$SHELL"
+_saved_os="${OS:-}"
+_tmpdir="$(mktemp -d)"
+export HOME="$_tmpdir"
+export SHELL="/bin/bash"
+OS="linux"
+touch "$_tmpdir/.bashrc"
+
+_test_dir="$_tmpdir/linux-bin"
+mkdir -p "$_test_dir"
+
+run_func _add_to_path_now_and_persist "$_test_dir"
+if assert_exit_code 0 "$_RF_RC" \
+  && assert_file_contains "$_tmpdir/.bashrc" "$_test_dir" \
+  && [[ ! -f "$_tmpdir/.bash_profile" ]]; then
+  pass "prerequisites: _add_to_path_now_and_persist writes .bashrc on Linux bash"
+else
+  fail "prerequisites: _add_to_path_now_and_persist did not use Linux bashrc"
+fi
+
+export HOME="$_saved_home"
+export SHELL="$_saved_shell"
+OS="$_saved_os"
+PATH="${PATH//:$_test_dir:/:}"; PATH="${PATH/#$_test_dir:/}"; PATH="${PATH/%:$_test_dir/}"; export PATH
+rm -rf "$_tmpdir"
+
+# ── _persist_node_path follows macOS bash rc selection ───────────────────
+
+_saved_home="$HOME"
+_saved_shell="$SHELL"
+_saved_os="${OS:-}"
+_tmpdir="$(mktemp -d)"
+export HOME="$_tmpdir"
+export SHELL="/bin/bash"
+OS="macos"
+touch "$_tmpdir/.bash_profile" "$_tmpdir/.bashrc"
+
+_node_bin="$_tmpdir/node-bin"
+mkdir -p "$_node_bin"
+_persist_node_path "$_node_bin"
+_persist_node_path "$_node_bin"
+
+_node_profile_count="$(grep -c "$_node_bin" "$_tmpdir/.bash_profile")"
+_node_bashrc_count="$(grep -c "$_node_bin" "$_tmpdir/.bashrc")"
+if assert_equals "1" "$_node_profile_count" "bash_profile should contain node path once" \
+  && assert_equals "1" "$_node_bashrc_count" "bashrc should contain node path once"; then
+  pass "prerequisites: _persist_node_path writes macOS bash rc files idempotently"
+else
+  fail "prerequisites: _persist_node_path did not write macOS bash rc files idempotently"
+fi
+
+export HOME="$_saved_home"
+export SHELL="$_saved_shell"
+OS="$_saved_os"
+rm -rf "$_tmpdir"
+
+# ── _install_node persists brew keg-only node path on macOS bash ──────────
+
+_saved_home="$HOME"
+_saved_shell="$SHELL"
+_saved_os="${OS:-}"
+_saved_distro_family="${DISTRO_FAMILY:-}"
+_saved_path="$PATH"
+_orig_brew_is_usable="$(declare -f _brew_is_usable)"
+_tmpdir="$(mktemp -d)"
+export HOME="$_tmpdir/home"
+export SHELL="/bin/bash"
+OS="macos"
+DISTRO_FAMILY="macos"
+mkdir -p "$HOME" "$_tmpdir/prefix/bin"
+touch "$HOME/.bash_profile" "$HOME/.bashrc"
+cat > "$_tmpdir/prefix/bin/node" <<'EOF'
+#!/bin/bash
+echo v20.0.0
+EOF
+chmod +x "$_tmpdir/prefix/bin/node"
+
+_brew_is_usable() { return 0; }
+brew() {
+  case "$1" in
+    install) return 0 ;;
+    --prefix) printf '%s\n' "$_tmpdir/prefix" ;;
+  esac
+}
+
+run_func _install_node
+if assert_exit_code 0 "$_RF_RC" \
+  && assert_file_contains "$HOME/.bash_profile" "$_tmpdir/prefix/bin" \
+  && assert_file_contains "$HOME/.bashrc" "$_tmpdir/prefix/bin" \
+  && command -v node >/dev/null 2>&1; then
+  pass "prerequisites: _install_node persists brew keg-only node path on macOS bash"
+else
+  fail "prerequisites: _install_node did not persist brew keg-only node path"
+fi
+
+unset -f brew
+eval "$_orig_brew_is_usable"
+export HOME="$_saved_home"
+export SHELL="$_saved_shell"
+OS="$_saved_os"
+DISTRO_FAMILY="$_saved_distro_family"
+export PATH="$_saved_path"
 rm -rf "$_tmpdir"
 
 # ── _install_bash4 uses package installer when needed ────────────────────

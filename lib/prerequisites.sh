@@ -362,15 +362,13 @@ ZSHRC
 _persist_node_path() {
   local node_bin="$1"
   local rc_file
-  case "$(basename "${SHELL:-}")" in
-    zsh)  rc_file="$HOME/.zshrc" ;;
-    bash) rc_file="$HOME/.bashrc" ;;
-    *)    rc_file="$HOME/.profile" ;;
-  esac
-  [[ -f "$rc_file" ]] || touch "$rc_file"
-  if ! grep -q "$node_bin" "$rc_file" 2>/dev/null; then
-    printf '\n# Node.js (brew keg-only, added by claude-code-starter-kit)\nexport PATH="%s:$PATH"\n' "$node_bin" >> "$rc_file"
-  fi
+  _get_shell_rc_files | while IFS= read -r rc_file; do
+    [[ -n "$rc_file" ]] || continue
+    [[ -f "$rc_file" ]] || touch "$rc_file"
+    if ! grep -q "$node_bin" "$rc_file" 2>/dev/null; then
+      printf '\n# Node.js (brew keg-only, added by claude-code-starter-kit)\nexport PATH="%s:$PATH"\n' "$node_bin" >> "$rc_file"
+    fi
+  done
 }
 
 _install_node() {
@@ -619,10 +617,37 @@ _get_shell_rc_file() {
   else
     case "${SHELL:-/bin/bash}" in
       */zsh)  printf '%s' "$HOME/.zshrc" ;;
-      */bash) printf '%s' "$HOME/.bashrc" ;;
+      */bash)
+        if is_macos; then
+          printf '%s' "$HOME/.bash_profile"
+        else
+          printf '%s' "$HOME/.bashrc"
+        fi
+        ;;
       *)      printf '%s' "$HOME/.profile" ;;
     esac
   fi
+}
+
+_get_shell_rc_files() {
+  local primary
+  primary="$(_get_shell_rc_file)"
+  if is_macos && [[ "${SHELL:-/bin/bash}" == */bash ]] && _bash_profile_sources_bashrc "$primary"; then
+    printf '%s\n' "$HOME/.bashrc"
+    return 0
+  fi
+
+  printf '%s\n' "$primary"
+  if is_macos && [[ "${SHELL:-/bin/bash}" == */bash ]] && [[ "$primary" != "$HOME/.bashrc" ]]; then
+    printf '%s\n' "$HOME/.bashrc"
+  fi
+}
+
+_bash_profile_sources_bashrc() {
+  local bash_profile="$1"
+  [[ -f "$bash_profile" ]] || return 1
+  grep -Ev '^[[:space:]]*#' "$bash_profile" 2>/dev/null \
+    | grep -Eq '(^|[[:space:];])(\.|source)[[:space:]]+["'\'']?((~|\$HOME|\$\{HOME\})/)?\.bashrc["'\'']?'
 }
 
 # ---------------------------------------------------------------------------
@@ -642,14 +667,17 @@ _add_to_path_now_and_persist() {
     *) export PATH="${dir}:${PATH}" ;;
   esac
 
-  # Persist to RC file
+  # Persist to shell startup files. macOS bash writes both login and
+  # non-login files so Ghostty/login shells and plain bash both work.
   local rc_file
-  rc_file="$(_get_shell_rc_file)"
-  [[ -f "$rc_file" ]] || touch "$rc_file"
+  _get_shell_rc_files | while IFS= read -r rc_file; do
+    [[ -n "$rc_file" ]] || continue
+    [[ -f "$rc_file" ]] || touch "$rc_file"
 
-  if ! grep -q "$dir" "$rc_file" 2>/dev/null; then
-    printf '\n# Claude Code CLI\nexport PATH="%s:$PATH"\n' "$dir" >> "$rc_file"
-  fi
+    if ! grep -q "$dir" "$rc_file" 2>/dev/null; then
+      printf '\n# Claude Code CLI\nexport PATH="%s:$PATH"\n' "$dir" >> "$rc_file"
+    fi
+  done
 }
 
 # Main entry point
