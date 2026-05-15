@@ -55,6 +55,54 @@ else
   fail "prerequisites: _detect_bash4 could not find Bash 4+"
 fi
 
+# ── _is_bash4_candidate validates candidate version ──────────────────────
+
+_tmpdir="$(mktemp -d)"
+cat > "$_tmpdir/bash4" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "-c" ]]; then
+  echo 5
+fi
+EOF
+cat > "$_tmpdir/bash3" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "-c" ]]; then
+  echo 3
+fi
+EOF
+cat > "$_tmpdir/bashbad" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "-c" ]]; then
+  echo not-a-version
+fi
+EOF
+chmod +x "$_tmpdir/bash4" "$_tmpdir/bash3" "$_tmpdir/bashbad"
+
+if _is_bash4_candidate "$_tmpdir/bash4"; then
+  pass "prerequisites: _is_bash4_candidate accepts Bash 4+ candidate"
+else
+  fail "prerequisites: _is_bash4_candidate rejected Bash 4+ candidate"
+fi
+
+if _is_bash4_candidate "$_tmpdir/bash3"; then
+  fail "prerequisites: _is_bash4_candidate accepted Bash 3 candidate"
+else
+  pass "prerequisites: _is_bash4_candidate rejects Bash 3 candidate"
+fi
+
+if _is_bash4_candidate "$_tmpdir/bashbad" 2>/dev/null; then
+  fail "prerequisites: _is_bash4_candidate accepted non-numeric version"
+else
+  pass "prerequisites: _is_bash4_candidate rejects non-numeric version"
+fi
+
+if _is_bash4_candidate "$_tmpdir/missing"; then
+  fail "prerequisites: _is_bash4_candidate accepted missing path"
+else
+  pass "prerequisites: _is_bash4_candidate rejects missing path"
+fi
+rm -rf "$_tmpdir"
+
 # ── _add_to_path_now_and_persist with isolated HOME ──────────────────────
 
 _saved_home="$HOME"
@@ -133,6 +181,29 @@ else
   fail "prerequisites: _install_bash4 did not succeed"
 fi
 eval "$_orig_pkg_install"
+
+# ── _install_bash4 skips package installer during dry-run ────────────────
+
+_orig_pkg_install="$(declare -f _pkg_install)"
+_saved_dry_run="${DRY_RUN:-}"
+DRY_RUN="true"
+_pkg_install_called=0
+_pkg_install() {
+  _pkg_install_called=1
+  return 0
+}
+run_func _install_bash4
+if assert_exit_code 1 "$_RF_RC" "_install_bash4 should not install bash during dry-run"; then
+  if [[ "$_pkg_install_called" -eq 0 ]]; then
+    pass "prerequisites: _install_bash4 skips package installer during dry-run"
+  else
+    fail "prerequisites: _install_bash4 called package installer during dry-run"
+  fi
+else
+  fail "prerequisites: _install_bash4 attempted install during dry-run"
+fi
+eval "$_orig_pkg_install"
+DRY_RUN="$_saved_dry_run"
 
 # ── check_tmux auto-installs when missing ────────────────────────────────
 

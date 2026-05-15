@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.50.1] - 2026-05-15
+
+### Fixed
+- **macOS 初回セットアップ時の Bash 4+ 検出を堅牢化**: Homebrew 標準配置の Bash 4+ 候補を明示的に検証してから `setup.sh` を re-exec するよう変更。非数値のバージョン出力を拒否し、`/bin/bash` が Bash 3.2 の環境でも安全に Bash 4+ を探せるよう改善
+- **dry-run 中の Bash 自動インストールを抑止**: Bash 4+ が未導入の dry-run では package manager による Bash インストールへ進まず、副作用なしで失敗するよう変更
+
 ## [0.50.0] - 2026-04-13
 
 ### Added

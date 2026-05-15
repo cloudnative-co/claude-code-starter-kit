@@ -527,6 +527,15 @@ check_biome() {
 # Bash 4+ detection and re-exec
 # ---------------------------------------------------------------------------
 
+_is_bash4_candidate() {
+  local candidate="$1"
+  [[ -x "$candidate" ]] || return 1
+
+  local ver
+  ver="$("$candidate" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null || echo "0")"
+  [[ "$ver" =~ ^[0-9]+$ ]] && [[ "$ver" -ge 4 ]]
+}
+
 # _detect_bash4 - Find a Bash 4+ binary on the system
 # Returns the path via stdout. Returns 1 if none found.
 _detect_bash4() {
@@ -536,13 +545,15 @@ _detect_bash4() {
     return 0
   fi
 
-  # Search common locations
+  # Search trusted common locations first.
   local candidate
-  for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash /usr/bin/bash; do
+  for candidate in \
+    /opt/homebrew/bin/bash \
+    /usr/local/bin/bash \
+    /bin/bash \
+    /usr/bin/bash; do
     if [[ -x "$candidate" ]]; then
-      local ver
-      ver="$("$candidate" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null || echo "0")"
-      if [[ "$ver" -ge 4 ]]; then
+      if _is_bash4_candidate "$candidate"; then
         printf '%s' "$candidate"
         return 0
       fi
@@ -553,6 +564,11 @@ _detect_bash4() {
 }
 
 _install_bash4() {
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    warn "Dry-run: Bash 4+ is missing; skipping automatic Bash install"
+    return 1
+  fi
+
   info "Installing Bash 4+..."
   if _pkg_install bash; then
     return 0
