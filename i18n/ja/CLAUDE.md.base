@@ -5,6 +5,11 @@
 - Conventional Commits 形式でコミットする（feat: / fix: / refactor: / test: / docs: / chore:）
 - 長いセッションでは `/clear` を活用してコンテキストをリフレッシュする
 
+## オプション: GitHub Spec Kit（仕様駆動開発）
+- プロジェクトが GitHub Spec Kit を利用する場合、本ファイル内に独立した `<!-- SPECKIT START --> ... <!-- SPECKIT END -->` ブロックが追加される。2 つのブロックは共存させ、結合や順序変更は行わない。
+- プロジェクトローカルの `<project>/.specify/memory/constitution.md` は、そのプロジェクトのスコープに限り `~/.claude/memory/`（cn-memory）の規約を **上書き** する。
+- プロジェクト内で `/spec-kit-init` を実行すると SDD ワークフローを導入できる。`specify-cli` 本体は `uv tool install` でユーザー側に入れる前提（本キットはインストールしない）。
+
 {{FEATURE:codex-plugin}}
 <!-- END STARTER-KIT-MANAGED -->
 
