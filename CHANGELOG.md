@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.51.0] - 2026-05-20
+
+### Added
+- **GitHub Spec Kit 統合プロポーザル**: 仕様駆動開発（SDD）ツールキットである [GitHub Spec Kit](https://github.com/github/spec-kit) を StarterKit と並存させるための薄い導線として `/spec-kit-init` コマンドを追加。`specify-cli` 本体は本キットがインストールせず、`uv tool install specify-cli` でユーザー側に入れる前提。コマンドは前提条件チェック → `specify init --integration claude` 案内 → cn-memory との責務分離説明 → SDD ワークフロー誘導の 5 ステップで構成
+- **評価レポート**: `docs/spec-kit-evaluation.md` を新規追加。Spec Kit v0.8.11 を実プロジェクトで `constitution → specify → clarify → plan → tasks` まで走破し、各コマンドを 5 段階評価。グローバル `~/.claude/` への書き込みゼロを実測確認、StarterKit との衝突マトリクス、cn-memory との責務分離方針、フル統合（案A）/隔離（案B）/方法論吸収（案C）の 3 案比較を含む
+- **CLAUDE.md kit-managed セクション拡張**: `i18n/{en,ja}/CLAUDE.md.base` に Spec Kit との並存規約を 3 行追加。`<!-- SPECKIT START --> ... <!-- SPECKIT END -->` マーカーが `<!-- BEGIN STARTER-KIT-MANAGED --> ... <!-- END STARTER-KIT-MANAGED -->` と共存可能であること、プロジェクトローカル constitution が cn-memory のグローバル規約を上書きする優先順位を明示
+
 ## [0.50.2] - 2026-05-15
 
 ### Fixed
