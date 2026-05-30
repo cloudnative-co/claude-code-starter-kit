@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.51.1] - 2026-05-31
+
+### Added
+- **mattpocock/skills 評価レポート（見送り判断）**: [mattpocock/skills](https://github.com/mattpocock/skills)（commit `e3b90b5`）を StarterKit に取り込むか調査し、`docs/mattpocock-skills-evaluation.md` を新規追加。14 skill を個別評価した結果、過半が既存資産（常時起動 `superpowers` + キット独自の `/tdd` `/plan` `/handover` 等）と重複・競合し、ネイティブ plugin 統合は `marketplace.json` 不在でブロック、公式導入は第三者製 `npx skills` installer 依存であることから **見送り（案 D）** を推奨。キット本体（`setup.sh` / `config/` / `commands/` / `skills/` / `features/`）は不変。将来 `marketplace.json` が上流に追加された場合の再評価トリガーも記載
+
 ## [0.51.0] - 2026-05-20
 
 ### Added
