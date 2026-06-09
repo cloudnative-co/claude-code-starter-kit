@@ -310,6 +310,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Install heavy-skill npm dependencies (web-content-extraction)
+# Node-optional (warns + continues if Node/npm missing); dry-run logs only.
+# Placed after the deploy branch so it covers update / fresh / fresh-with-existing.
+# ---------------------------------------------------------------------------
+maybe_install_web_content_deps
+
+# ---------------------------------------------------------------------------
 # Dry-run: collect file changes, log external operations, show results, exit
 # ---------------------------------------------------------------------------
 if [[ "${DRY_RUN:-false}" == "true" ]]; then

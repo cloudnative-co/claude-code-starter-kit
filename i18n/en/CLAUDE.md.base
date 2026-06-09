@@ -10,6 +10,7 @@
 - Project-local `<project>/.specify/memory/constitution.md` **overrides** the rules in `~/.claude/memory/` (cn-memory) for that project's scope.
 - Run `/spec-kit-init` inside a project to bootstrap the SDD workflow; `specify-cli` itself is installed via `uv tool install`, not by this kit.
 
+{{FEATURE:web-content-extraction}}
 {{FEATURE:codex-plugin}}
 <!-- END STARTER-KIT-MANAGED -->
 

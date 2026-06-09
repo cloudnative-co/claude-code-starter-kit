@@ -26,6 +26,9 @@ setup_test_env() {
   export HOME="$_TEST_TMPDIR"
   export CLAUDE_DIR="$_TEST_TMPDIR/.claude"
   export WIZARD_NONINTERACTIVE=true
+  # Skip the heavy (network) npm install for the web-content-extraction skill;
+  # the skill's own deps/tests run in its dedicated CI workflow, not here.
+  export WCE_SKIP_NPM_INSTALL=1
 
   # Place a dummy 'claude' binary so setup.sh skips CLI installation
   mkdir -p "$_TEST_TMPDIR/.local/bin"
