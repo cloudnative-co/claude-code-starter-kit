@@ -440,6 +440,17 @@ _merge_object_3way() {
       fi
     fi
 
+    # "null" means the resolution chose a side where the sub-key does not
+    # exist (kit removed it, or the user deleted it) → delete the key;
+    # assigning would write a literal JSON null into settings.json
+    if [[ "$chosen" == "null" ]]; then
+      obj_merged="$(jq -n \
+        --argjson obj "$obj_merged" \
+        --arg k "$sub_key" \
+        '$obj | del(.[$k])')"
+      continue
+    fi
+
     obj_merged="$(jq -n \
       --argjson obj "$obj_merged" \
       --arg k "$sub_key" \
@@ -617,7 +628,15 @@ merge_settings_3way() {
       fi
     fi
 
-    # Apply the chosen value into merged
+    # Apply the chosen value into merged.
+    # "null" means the resolution chose a side where the key does not exist
+    # (kit removed it, or the user deleted it) → delete the key; assigning
+    # would write a literal JSON null into settings.json
+    if [[ "$chosen" == "null" ]]; then
+      merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')"
+      continue
+    fi
+
     merged="$(printf '%s' "$merged" | jq \
       --arg k "$key" \
       --argjson v "$chosen" \
