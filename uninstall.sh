@@ -259,6 +259,16 @@ fi
 rm -f "$MANIFEST"
 
 # ---------------------------------------------------------------------------
+# Remove web-content-extraction skill runtime artifacts
+# node_modules/ and logs/ are created post-deploy (npm install / auto-update)
+# and are NOT tracked in the manifest, so remove the whole skill dir explicitly
+# for a clean uninstall. The directory is entirely kit-managed.
+# ---------------------------------------------------------------------------
+if [[ -d "$CLAUDE_DIR/skills/web-content-extraction" ]]; then
+  rm -rf "$CLAUDE_DIR/skills/web-content-extraction"
+fi
+
+# ---------------------------------------------------------------------------
 # Clean up empty directories
 # ---------------------------------------------------------------------------
 for dir in agents rules commands skills memory hooks; do

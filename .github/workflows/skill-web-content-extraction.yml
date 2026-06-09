@@ -1,0 +1,45 @@
+name: skill-web-content-extraction
+
+# Node test matrix for the heavy web-content-extraction skill (defuddle/jsdom/
+# pdfjs-dist/undici). Runs only when the skill (or this workflow) changes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "skills/web-content-extraction/**"
+      - ".github/workflows/skill-web-content-extraction.yml"
+  pull_request:
+    paths:
+      - "skills/web-content-extraction/**"
+      - ".github/workflows/skill-web-content-extraction.yml"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: skills/web-content-extraction
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20.x, 22.x, 24.x]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: skills/web-content-extraction/package-lock.json
+      - name: Install dependencies (from lockfile)
+        run: npm ci
+      - name: Syntax check scripts
+        run: |
+          for f in scripts/*.mjs scripts/lib/*.mjs; do node --check "$f"; done
+      - name: Run tests
+        run: npm test

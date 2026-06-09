@@ -52,9 +52,9 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **3 profiles**: Minimal, Standard (recommended), Full
 - **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
 - **10 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide
-- **17 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /handover, /update-kit, and more
+- **20 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
-- **12 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard (Full only)
+- **13 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard (Full only), web content update (opt-in, Full only)
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
@@ -174,6 +174,14 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 - **Standard**: Best for most teams. Includes commands, skills, core hooks, and memory
 - **Full**: Everything enabled including all hooks and Codex Plugin sub-agent delegation
 
+### Web Content Extraction Skill
+
+When reading a URL, official docs, a blog/news article, or an OSS page, this executable skill **extracts the main content with [Defuddle](https://github.com/kepano/defuddle) into Markdown/JSON instead of reading raw HTML** (installed in Standard / Full). The `/web-article`, `/oss-analyze`, and `/web-source-review` commands and the CLAUDE.md standard rule rely on it.
+
+- **Requires Node.js 20+** (tested on 20/22/24). `npm install --omit=dev` runs automatically on deploy. If Node is missing, the skill is still placed but URL/PDF features are disabled (a warning is shown; setup does not fail).
+- **Security**: layered SSRF defense (http(s) only, internal/private IPs rejected, connection IP pinned, each redirect hop re-validated), a non-fetching DOM (no external sub-resource fetch, no script execution), and CJK-aware, decompression-bomb-guarded PDF extraction. Set `ALLOW_PRIVATE_URLS=true` for internal URLs in development only.
+- **Opt-in dependency auto-update**: the `web-content-update` hook updates the skill's deps (defuddle/jsdom/pdfjs-dist) on SessionStart (24h throttle, test gate + rollback). **Enabled by default in Full only**; opt-in in Standard. Manual update: `npm run update:deps`.
+
 ### Hooks
 
 Hooks are automated safety checks that run automatically when Claude Code executes commands or edits files.
@@ -192,6 +200,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | PR Creation Log | Logs PR URL after creation |
 | Pre-compact Auto-commit | Auto-commits changes before context compaction |
 | Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds recommended line count (Full only) |
+| Web Content Update | Auto-updates the web-content-extraction skill's deps on session start (opt-in; default in Full only) |
 
 #### Safety Net
 
@@ -242,6 +251,9 @@ After restarting your terminal, start `claude` in your project directory. The in
 /refactor-clean  # Find and clean up unused code
 /update-docs     # Update documentation to latest state
 /research        # Deep codebase investigation (RPI workflow)
+/web-article     # Extract a URL with Defuddle and summarize the article
+/oss-analyze     # Analyze an OSS repo/doc URL for tech + adoption decisions
+/web-source-review # Evaluate a URL's credibility as an information source
 /handover        # Structured session handover document
 /update-kit      # Manually update starter kit to latest version
 ```
@@ -387,8 +399,8 @@ claude-code-starter-kit/
 │   └── ja/                 # Japanese templates & strings
 ├── agents/                 # Agent definitions (9 files)
 ├── rules/                  # Rule files (10 files)
-├── commands/               # Slash commands (17 files)
-├── skills/                 # Skill modules (12 dirs)
+├── commands/               # Slash commands (20 files)
+├── skills/                 # Skill modules (13 dirs)
 └── memory/                 # Best practice memory (5 files)
 ```
 

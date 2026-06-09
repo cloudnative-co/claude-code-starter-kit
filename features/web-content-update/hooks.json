@@ -1,0 +1,17 @@
+{
+	"hooks": {
+		"SessionStart": [
+			{
+				"matcher": "*",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "node __HOME__/.claude/skills/web-content-extraction/scripts/update-deps.mjs",
+						"async": true,
+						"asyncTimeout": 300000
+					}
+				]
+			}
+		]
+	}
+}
