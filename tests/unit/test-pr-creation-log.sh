@@ -48,8 +48,8 @@ build_settings_json \
   "$_pr_settings" \
   "$_pr_hooks" >/dev/null
 
-if jq -e '.hooks.PostToolUse[] | select(.matcher == "tool == \"Bash\"") | .hooks[0].if == "Bash(gh pr create *)"' "$_pr_settings" >/dev/null 2>&1 \
-  && jq -e '.hooks.PostToolUse[] | select(.matcher == "tool == \"Bash\"") | .hooks[0].async == true' "$_pr_settings" >/dev/null 2>&1; then
+if jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0].if == "Bash(gh pr create *)"' "$_pr_settings" >/dev/null 2>&1 \
+  && jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0].async == true' "$_pr_settings" >/dev/null 2>&1; then
   pass "pr-creation-log: merged settings keep if condition and async execution"
 else
   fail "pr-creation-log: merged settings should keep if condition and async execution"
@@ -66,8 +66,8 @@ EOF
 chmod +x "$_pr_tmp/claude-current-bin/claude"
 PATH="$_pr_tmp/claude-current-bin:$PATH" build_settings_file "$_pr_supported_settings" >/dev/null
 
-if jq -e '.hooks.PostToolUse[] | select(.matcher == "tool == \"Bash\"") | .hooks[0].if == "Bash(gh pr create *)"' "$_pr_supported_settings" >/dev/null 2>&1 \
-  && jq -e '.hooks.PostToolUse[] | select(.matcher == "tool == \"Bash\"") | .hooks[0].async == true' "$_pr_supported_settings" >/dev/null 2>&1; then
+if jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0].if == "Bash(gh pr create *)"' "$_pr_supported_settings" >/dev/null 2>&1 \
+  && jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0].async == true' "$_pr_supported_settings" >/dev/null 2>&1; then
   pass "pr-creation-log: supported Claude Code gets if/async hook"
 else
   fail "pr-creation-log: supported Claude Code should get if/async hook"
@@ -84,8 +84,8 @@ EOF
 chmod +x "$_pr_tmp/claude-legacy-bin/claude"
 PATH="$_pr_tmp/claude-legacy-bin:$PATH" build_settings_file "$_pr_legacy_settings" >/dev/null
 
-if jq -e '.hooks.PostToolUse[] | select(.matcher == "tool == \"Bash\"") | .hooks[0] | has("if") | not' "$_pr_legacy_settings" >/dev/null 2>&1 \
-  && jq -e '.hooks.PostToolUse[] | select(.matcher == "tool == \"Bash\"") | .hooks[0] | has("async") | not' "$_pr_legacy_settings" >/dev/null 2>&1; then
+if jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0] | has("if") | not' "$_pr_legacy_settings" >/dev/null 2>&1 \
+  && jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0] | has("async") | not' "$_pr_legacy_settings" >/dev/null 2>&1; then
   pass "pr-creation-log: legacy Claude Code falls back to legacy hook fragment"
 else
   fail "pr-creation-log: legacy Claude Code should fall back to legacy hook fragment"

@@ -2,20 +2,20 @@
 	"hooks": {
 		"PreToolUse": [
 			{
-				"matcher": "tool == \"Bash\" && tool_input.command matches \"(npm run dev|pnpm( run)? dev|yarn dev|bun run dev)\"",
+				"matcher": "Bash",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "#!/bin/bash\ninput=$(cat)\necho '[Hook] BLOCKED: Dev server must run in tmux for log access' >&2\necho '[Hook] Use: tmux new-session -d -s dev \"npm run dev\"' >&2\necho '[Hook] Then: tmux attach -t dev' >&2\nexit 1"
+						"command": "#!/bin/bash\ninput=$(cat)\ncmd=$(printf '%s' \"$input\" | jq -r '.tool_input.command // \"\"')\nif printf '%s' \"$cmd\" | grep -qE '(npm run dev|pnpm( run)? dev|yarn dev|bun run dev)' && ! printf '%s' \"$cmd\" | grep -qw 'tmux'; then\n  echo '[Hook] BLOCKED: Dev server must run in tmux for log access' >&2\n  echo '[Hook] Use: tmux new-session -d -s dev \"npm run dev\"' >&2\n  echo '[Hook] Then: tmux attach -t dev' >&2\n  exit 2\nfi\nprintf '%s\\n' \"$input\""
 					}
 				]
 			},
 			{
-				"matcher": "tool == \"Bash\" && tool_input.command matches \"(npm (install|test)|pnpm (install|test)|yarn (install|test)|bun (install|test)|cargo build|make|docker|pytest|vitest|playwright)\"",
+				"matcher": "Bash",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "#!/bin/bash\ninput=$(cat)\nif [ -z \"$TMUX\" ]; then\n  echo '[Hook] Consider running in tmux for session persistence' >&2\nfi\nprintf '%s\\n' \"$input\""
+						"command": "#!/bin/bash\ninput=$(cat)\ncmd=$(printf '%s' \"$input\" | jq -r '.tool_input.command // \"\"')\nif printf '%s' \"$cmd\" | grep -qE '(npm (install|test)|pnpm (install|test)|yarn (install|test)|bun (install|test)|cargo build|make|docker|pytest|vitest|playwright)'; then\n  if [ -z \"$TMUX\" ]; then\n    echo '[Hook] Consider running in tmux for session persistence' >&2\n  fi\nfi\nprintf '%s\\n' \"$input\""
 					}
 				]
 			}

@@ -7,6 +7,14 @@ set -euo pipefail
 # Read hook input from stdin (required by Claude Code hook protocol)
 input=$(cat)
 
+# Only act when the Write tool targeted CLAUDE.md / AGENTS.md. The Claude Code
+# matcher can only filter by tool name, so the file_path filter lives here.
+written_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || true)
+if [[ ! "$written_path" =~ (CLAUDE|AGENTS)\.md$ ]]; then
+    printf '%s\n' "$input"
+    exit 0
+fi
+
 WARN_LINES_AGENTS=60
 ERROR_LINES_AGENTS=100
 WARN_LINES_CLAUDE=150

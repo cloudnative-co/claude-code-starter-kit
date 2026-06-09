@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.52.1] - 2026-06-09
+
+### Fixed
+- **hook の matcher を Claude Code 仕様（tool 名マッチ）に修正（#67）**: base settings および `features/*/hooks.json` の多くの hook が matcher に `tool == "Bash" && tool_input.command matches "..."` のような **boolean 式**を使っていたが、Claude Code の matcher は tool 名への完全一致 / `|` 区切り / 正規表現のみをサポートするため、これらは正規表現として tool 名に評価され**一切マッチせず hook が発火していなかった**。全 hook の matcher を tool 名形式（`"Bash"` / `"Write"` / `"Edit"` / `"Edit|Write"`）へ修正。対象: `safety-net` / `doc-blocker` / `tmux-hooks`（dev サーバーブロック・reminder）/ `git-push-review` / `prettier-hooks` / `console-log-guard` / `biome-hooks` / `doc-size-guard` / `pr-creation-log`（通常・legacy）/ `strategic-compact`
+- **matcher が担っていた tool 入力フィルタをスクリプト内 stdin 判定へ移設**: matcher は tool 名しか絞れないため、`tool_input.command` / `tool_input.file_path` による絞り込みを各 hook スクリプト内（`jq` で stdin JSON を判定）へ移動。これにより `tmux-hooks` の dev サーバーブロックが全 Bash をブロックする・`prettier`/`biome`/`console-log-guard` が全ファイルで走る・`doc-size-guard` が全 Write で走る、といった広すぎる発火を防止
+- **ブロック用 exit code を 2 に修正**: `doc-blocker` と `tmux-hooks` の dev サーバーブロックが `exit 1`（Claude Code では non-blocking でツール実行は継続）だったため、`exit 2`（ブロック）へ修正。matcher 修正だけではブロックとして機能しなかった問題を解消
+- **`strategic-compact` の matcher が全ツールにマッチしていた問題**: `tool == "Edit" || tool == "Write"` の `||` が正規表現の空選択肢となり全ツールにマッチしていたため、`"Edit|Write"` へ修正
+- **`git-push-review` の hook 化**: hook 実行環境には対話 TTY が無く `read -r` が機能しないため、`git push` 検出時に**非ブロッキングのレビュー喚起メッセージ**を stderr へ出す形に修正
+- **`tmux-hooks` dev サーバーブロックの自己ブロック（デッドロック）解消**: matcher 修正で hook が実際に発火するようになった結果、ブロック時に案内する推奨コマンド `tmux new-session -d -s dev "npm run dev"` 自体が `npm run dev` に再マッチして `exit 2` され、推奨どおり tmux で dev サーバーを起動できないデッドロックが顕在化していた。コマンドが既に `tmux` を含む場合はブロックしないガード（`&& ! ... | grep -qw 'tmux'`）を追加
+
 ## [0.52.0] - 2026-06-09
 
 ### Added

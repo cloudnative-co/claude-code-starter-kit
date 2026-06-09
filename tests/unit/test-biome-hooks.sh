@@ -20,21 +20,22 @@ else
   fail "biome-hooks: prettier feature is missing reverse conflict"
 fi
 
-if jq -e '.hooks.PostToolUse[0].matcher == "(tool == \"Edit\" || tool == \"Write\") && tool_input.file_path matches \"\\\\.(ts|tsx|js|jsx)$\""' "$_biome_hooks" >/dev/null 2>&1; then
-  pass "biome-hooks: hooks.json matcher targets Edit and Write for JS/TS files"
+if jq -e '.hooks.PostToolUse[0].matcher == "Edit|Write"' "$_biome_hooks" >/dev/null 2>&1; then
+  pass "biome-hooks: hooks.json matcher targets Edit and Write tools"
 else
-  fail "biome-hooks: hooks.json matcher is not the expected Edit/Write JS/TS matcher"
+  fail "biome-hooks: hooks.json matcher is not the expected Edit|Write matcher"
 fi
 
 _biome_cmd="$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$_biome_hooks")"
 if [[ "$_biome_cmd" == *'input=$(cat)'* ]] \
+  && [[ "$_biome_cmd" == *'\.(ts|tsx|js|jsx)$'* ]] \
   && [[ "$_biome_cmd" == *"command -v biome"* ]] \
   && [[ "$_biome_cmd" == *"biome check --write"* ]] \
   && [[ "$_biome_cmd" == *"|| true"* ]] \
   && [[ "$_biome_cmd" == *"printf '%s\\n' \"\$input\""* ]]; then
-  pass "biome-hooks: hook command preserves stdin and gracefully handles failures"
+  pass "biome-hooks: hook command preserves stdin, filters JS/TS files, and handles failures"
 else
-  fail "biome-hooks: hook command is missing stdin passthrough or graceful failure handling"
+  fail "biome-hooks: hook command is missing stdin passthrough, file filter, or graceful failure handling"
 fi
 
 if jq -e '.permissions.allow | index("Bash(biome:*)") != null' "$_permissions" >/dev/null 2>&1; then

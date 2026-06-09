@@ -2,11 +2,11 @@
 	"hooks": {
 		"PostToolUse": [
 			{
-				"matcher": "tool == \"Edit\" && tool_input.file_path matches \"\\\\.(ts|tsx|js|jsx)$\"",
+				"matcher": "Edit",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "#!/bin/bash\ninput=$(cat)\nfile_path=$(printf '%s' \"$input\" | jq -r '.tool_input.file_path // \"\"')\nif [ -n \"$file_path\" ] && [ -f \"$file_path\" ]; then\n  console_logs=$(grep -n \"console\\\\.log\" \"$file_path\" 2>/dev/null || true)\n  if [ -n \"$console_logs\" ]; then\n    echo \"[Hook] WARNING: console.log found in $file_path\" >&2\n    printf '%s\\n' \"$console_logs\" | head -5 >&2\n  fi\nfi\nprintf '%s\\n' \"$input\""
+						"command": "#!/bin/bash\ninput=$(cat)\nfile_path=$(printf '%s' \"$input\" | jq -r '.tool_input.file_path // \"\"')\nif [[ \"$file_path\" =~ \\.(ts|tsx|js|jsx)$ ]] && [ -f \"$file_path\" ]; then\n  console_logs=$(grep -n \"console\\\\.log\" \"$file_path\" 2>/dev/null || true)\n  if [ -n \"$console_logs\" ]; then\n    echo \"[Hook] WARNING: console.log found in $file_path\" >&2\n    printf '%s\\n' \"$console_logs\" | head -5 >&2\n  fi\nfi\nprintf '%s\\n' \"$input\""
 					}
 				]
 			}
