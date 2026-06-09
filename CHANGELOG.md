@@ -17,11 +17,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Security
 - **非フェッチ安全 DOM**: 自前構築の JSDOM を `defuddle/node` に渡し（`resources:'usable'`/`runScripts` を付けない）、サブリソース外部取得・ページ内スクリプト実行を行わない（`linkedom` は `defuddle/node` 非互換のため jsdom 採用）
 - **SSRF 多層防御**: http(s) 限定・認証情報付き URL 拒否、IPv4 private/reserved 全域 + IPv6 default-deny（`2000::/3` のみ許可、Teredo/6to4/NAT64/site-local 等を除外）をバイト単位判定。`undici` の guarded dispatcher で接続 IP を pin（DNS リバインディング/TOCTOU 対策）、リダイレクトは各ホップ再検査（https→http ダウングレード拒否）、本文はストリーム上限。`ALLOW_PRIVATE_URLS=true` 時のみ解除し stderr 監査
-- **PDF 安全抽出**: pdfjs-dist legacy + 自前 `FsCMapReaderFactory`（CJK 対応）、CMap/font 名 allowlist、ページ/文字数上限（解凍爆弾対策）、`loadingTask` を try/finally で必ず destroy。stdout は JSON 専用
+- **PDF 安全抽出**: pdfjs-dist legacy + デフォルト Node data factory が `cMapUrl` 絶対パスから CMap を読んで CJK 対応（外部通信なし）、ページ/文字数上限（解凍爆弾対策）、`loadingTask` を try/finally で必ず destroy。stdout は JSON 専用
 
 ### Notes
 - アンインストール: `uninstall.sh` がスキルの `node_modules/`・`logs/`（manifest 非追跡）を明示削除
 - 配布物に `node_modules/`・`logs/`・`*.bak` を含めない（`.gitignore` に追加）
+
+## [0.51.1] - 2026-05-31
+
+### Added
+- **mattpocock/skills 評価レポート（見送り判断）**: [mattpocock/skills](https://github.com/mattpocock/skills)（commit `e3b90b5`）を StarterKit に取り込むか調査し、`docs/mattpocock-skills-evaluation.md` を新規追加。14 skill を個別評価した結果、過半が既存資産（常時起動 `superpowers` + キット独自の `/tdd` `/plan` `/handover` 等）と重複・競合し、ネイティブ plugin 統合は `marketplace.json` 不在でブロック、公式導入は第三者製 `npx skills` installer 依存であることから **見送り（案 D）** を推奨。キット本体（`setup.sh` / `config/` / `commands/` / `skills/` / `features/`）は不変。将来 `marketplace.json` が上流に追加された場合の再評価トリガーも記載
 
 ## [0.51.0] - 2026-05-20
 
