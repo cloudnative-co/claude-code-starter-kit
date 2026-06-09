@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.53.1] - 2026-06-10
+
+### Fixed
+- **3-way merge がキー削除の代わりに literal JSON `null` を書き込むバグを修正**: `lib/merge.sh` の `merge_settings_3way()`（トップレベルキー）と `_merge_object_3way()`（env 等のオブジェクト内サブキー）で、競合解決の結果が「キーが存在しない側」（kit がキーを削除 / ユーザーがキーを削除）になった場合に、`del(.[$k])` ではなく `null` がそのまま `settings.json` へ代入されていた。代表的な影響経路: ① kit がキーを削除 + ユーザーが値を変更 + 「[U]se kit's」選択（または記憶済み use-kit preference）→ 削除したはずのキーが `"KEY": null` として残存 ② ユーザーがサブキーを手動削除 + kit 側は未変更 → update のたびに削除したキーが `null` 値で復活（このほか「ユーザーがキー削除 + kit が値変更 + keep-mine/非対話」等、解決結果が不在側になる経路すべてに同じガードが効く）。Claude Code の `env` は文字列値を想定するため `null` は不正値。代入チョークポイントで `"null"` 選択を `del` に変換する形で両関数を修正し、回帰テスト 3 件を `tests/unit/test-merge.sh` に追加（修正なしで FAIL することを確認済み）。なお `_merge_settings_bootstrap()` は分岐構造上 null が競合経路に到達しないため対象外
+
 ## [0.52.2] - 2026-06-10
 
 ### Fixed

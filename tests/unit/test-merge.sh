@@ -330,3 +330,91 @@ _write_json() {
   fi
   rm -f "$snapshot" "$current" "$new_kit" "$output"
 }
+
+# ---------------------------------------------------------------------------
+# 13. _merge_object_3way: kit-removed sub-key + use-kit pref deletes the key
+#     (regression: literal JSON null used to be written instead)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: kit-removed env sub-key with use-kit pref is deleted, not null"
+  snapshot="$(_write_json '{"env": {"OLDKEY": "1", "KEEP": "x"}}')"
+  current="$(_write_json '{"env": {"OLDKEY": "0", "KEEP": "x"}}')"
+  new_kit="$(_write_json '{"env": {"NEWKEY": "1", "KEEP": "x"}}')"
+  output="$(mktemp)"
+
+  # Remembered "use kit's" answer for the conflicting sub-key (no prompt)
+  _MERGE_PREFS='{"env.OLDKEY": "use-kit"}'
+  _MERGE_PREFS_LOADED=true
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.env | has("OLDKEY") | not' "$output" >/dev/null \
+    && assert_json_field "$output" '.env.NEWKEY' "1" \
+    && assert_json_field "$output" '.env.KEEP' "x"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+
+  # Reset prefs for subsequent tests
+  _MERGE_PREFS_FILE=""
+  _MERGE_PREFS_LOADED=false
+  _MERGE_PREFS="{}"
+}
+
+# ---------------------------------------------------------------------------
+# 14. _merge_object_3way: user-deleted sub-key stays deleted
+#     (regression: kit-unchanged sub-key was resurrected as literal null)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: user-deleted env sub-key is not resurrected as null"
+  snapshot="$(_write_json '{"env": {"A": "1", "B": "2"}}')"
+  current="$(_write_json '{"env": {"B": "2"}}')"
+  new_kit="$(_write_json '{"env": {"A": "1", "B": "2", "C": "3"}}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.env | has("A") | not' "$output" >/dev/null \
+    && assert_json_field "$output" '.env.B' "2" \
+    && assert_json_field "$output" '.env.C' "3"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# 15. merge_settings_3way: kit-removed top-level key + use-kit pref deletes it
+#     (regression: literal JSON null used to be written instead)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: kit-removed top-level key with use-kit pref is deleted, not null"
+  snapshot="$(_write_json '{"oldTop": "1", "stay": "x"}')"
+  current="$(_write_json '{"oldTop": "0", "stay": "x"}')"
+  new_kit="$(_write_json '{"stay": "x"}')"
+  output="$(mktemp)"
+
+  _MERGE_PREFS='{"oldTop": "use-kit"}'
+  _MERGE_PREFS_LOADED=true
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e 'has("oldTop") | not' "$output" >/dev/null \
+    && assert_json_field "$output" '.stay' "x"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+
+  # Reset prefs for subsequent tests
+  _MERGE_PREFS_FILE=""
+  _MERGE_PREFS_LOADED=false
+  _MERGE_PREFS="{}"
+}
