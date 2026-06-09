@@ -11,16 +11,18 @@
 // ("ٗ׃צע..."); with it, text is correct ("ゼロトラスト幻想を断つ...").
 
 import { fileURLToPath } from 'node:url'
-import { countChars } from './defuddle-core.mjs'
+import { countChars, parsePositiveInt, withSilencedStdout } from './defuddle-core.mjs'
 
 const CMAP_DIR = fileURLToPath(new URL('../../node_modules/pdfjs-dist/cmaps/', import.meta.url))
 const STANDARD_FONTS_DIR = fileURLToPath(new URL('../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url))
 const MIN_CONTENT_CHARS = 200
 // Read at call-time (not import-time) so callers/tests can override via env.
-const maxPdfPages = () => Number(process.env.DEFUDDLE_MAX_PDF_PAGES ?? 2000)
+// parsePositiveInt rejects non-numeric / zero / negative values so a bad
+// override cannot silently disable the page/char caps.
+const maxPdfPages = () => parsePositiveInt(process.env.DEFUDDLE_MAX_PDF_PAGES, 2000)
 // Bound total extracted text so a small compressed PDF cannot expand into a
 // huge in-memory string (decompression-bomb style DoS).
-const maxPdfTextChars = () => Number(process.env.DEFUDDLE_MAX_PDF_TEXT_CHARS ?? 5_000_000)
+const maxPdfTextChars = () => parsePositiveInt(process.env.DEFUDDLE_MAX_PDF_TEXT_CHARS, 5_000_000)
 
 /** Parse a PDF date string ("D:20260409120000+09'00'") to ISO, best-effort. */
 function parsePdfDate(value) {
@@ -39,67 +41,71 @@ function parsePdfDate(value) {
  * @returns {Promise<{text: string, pageCount: number, processedPages: number, info: object}>}
  */
 export async function extractPdfText(data) {
-  // Imported lazily so HTML-only runs never load the (heavy) pdfjs bundle.
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const loadingTask = pdfjs.getDocument({
-    data,
-    // Absolute file paths under the local pdfjs-dist install. The default Node
-    // data factory reads .bcmap / standard-font files from these dirs via
-    // fs.readFile, so CJK CMaps load without any network access.
-    cMapUrl: CMAP_DIR,
-    cMapPacked: true,
-    standardFontDataUrl: STANDARD_FONTS_DIR,
-    isEvalSupported: false,
-    useSystemFonts: false,
+  // pdfjs can write deprecation/info notices to stdout on some code paths;
+  // wrap the whole parse so stdout stays pure JSON (parity with defuddle-core).
+  return withSilencedStdout(async () => {
+    // Imported lazily so HTML-only runs never load the (heavy) pdfjs bundle.
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const loadingTask = pdfjs.getDocument({
+      data,
+      // Absolute file paths under the local pdfjs-dist install. The default Node
+      // data factory reads .bcmap / standard-font files from these dirs via
+      // fs.readFile, so CJK CMaps load without any network access.
+      cMapUrl: CMAP_DIR,
+      cMapPacked: true,
+      standardFontDataUrl: STANDARD_FONTS_DIR,
+      isEvalSupported: false,
+      useSystemFonts: false,
+    })
+    // try/finally wraps loadingTask itself so destroy() runs even if .promise rejects.
+    try {
+      const doc = await loadingTask.promise
+      const pageCount = doc.numPages
+      const maxPages = maxPdfPages()
+      const maxChars = maxPdfTextChars()
+      let processedPages = Math.min(pageCount, maxPages) // bound parsing-DoS
+
+      const parts = []
+      let totalChars = 0
+      let textTruncated = false
+      for (let i = 1; i <= processedPages; i++) {
+        const page = await doc.getPage(i)
+        const tc = await page.getTextContent()
+        // Join text items; insert newlines where pdfjs marks an end-of-line.
+        let line = ''
+        for (const item of tc.items) {
+          line += item.str
+          if (item.hasEOL) line += '\n'
+        }
+        page.cleanup()
+        totalChars += line.length
+        if (totalChars > maxChars) {
+          const room = maxChars - (totalChars - line.length)
+          if (room > 0) parts.push(line.slice(0, room).trim())
+          textTruncated = true
+          processedPages = i
+          break
+        }
+        parts.push(line.trim())
+      }
+
+      let info = {}
+      try {
+        const meta = await doc.getMetadata()
+        info = meta?.info ?? {}
+      } catch {
+        info = {}
+      }
+
+      return { text: parts.join('\n\n').trim(), pageCount, processedPages, textTruncated, info }
+    } finally {
+      try {
+        await loadingTask.destroy()
+      } catch {
+        /* destroy best-effort */
+      }
+    }
   })
-  // try/finally wraps loadingTask itself so destroy() runs even if .promise rejects.
-  try {
-    const doc = await loadingTask.promise
-    const pageCount = doc.numPages
-    const maxPages = maxPdfPages()
-    const maxChars = maxPdfTextChars()
-    let processedPages = Math.min(pageCount, maxPages) // bound parsing-DoS
-
-    const parts = []
-    let totalChars = 0
-    let textTruncated = false
-    for (let i = 1; i <= processedPages; i++) {
-      const page = await doc.getPage(i)
-      const tc = await page.getTextContent()
-      // Join text items; insert newlines where pdfjs marks an end-of-line.
-      let line = ''
-      for (const item of tc.items) {
-        line += item.str
-        if (item.hasEOL) line += '\n'
-      }
-      page.cleanup()
-      totalChars += line.length
-      if (totalChars > maxChars) {
-        const room = maxChars - (totalChars - line.length)
-        if (room > 0) parts.push(line.slice(0, room).trim())
-        textTruncated = true
-        processedPages = i
-        break
-      }
-      parts.push(line.trim())
-    }
-
-    let info = {}
-    try {
-      const meta = await doc.getMetadata()
-      info = meta?.info ?? {}
-    } catch {
-      info = {}
-    }
-
-    return { text: parts.join('\n\n').trim(), pageCount, processedPages, textTruncated, info }
-  } finally {
-    try {
-      await loadingTask.destroy()
-    } catch {
-      /* destroy best-effort */
-    }
-  }
 }
 
 /**
