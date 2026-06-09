@@ -152,6 +152,25 @@ maybe_install_biome() {
   check_biome || true
 }
 
+should_auto_install_cc_safety_net() {
+  command -v cc-safety-net &>/dev/null && return 1
+  is_true "${ENABLE_SAFETY_NET:-false}"
+}
+
+maybe_install_cc_safety_net() {
+  should_auto_install_cc_safety_net || return 0
+
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    _dryrun_log "EXTERNAL" "cc-safety-net" "npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net"
+    return 0
+  fi
+
+  # Test harness opt-out: skip the (network) npm install during automated tests.
+  [[ -n "${SAFETY_NET_SKIP_NPM_INSTALL:-}" ]] && return 0
+
+  check_cc_safety_net || true
+}
+
 # ---------------------------------------------------------------------------
 # Deploy hook scripts
 # ---------------------------------------------------------------------------
@@ -243,6 +262,7 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
 fi
 
 maybe_install_biome
+maybe_install_cc_safety_net
 
 # ---------------------------------------------------------------------------
 # Deploy

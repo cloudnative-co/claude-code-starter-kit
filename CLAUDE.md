@@ -343,7 +343,7 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCo
 
 ### Safety Net (`features/safety-net/`)
 
-PreToolUse hook via [cc-safety-net](https://github.com/kenryu42/claude-code-safety-net). Blocks destructive commands (`git reset --hard`, `rm -rf`, etc.) before execution. Uses `SAFETY_NET_STRICT=1` env (fail-closed for unparseable commands). The `env` key in `hooks.json` is deep-merged into `settings.json` top-level. Requires `npm install -g cc-safety-net` (external dependency, not managed by kit).
+PreToolUse hook via [cc-safety-net](https://github.com/kenryu42/cc-safety-net). Blocks destructive commands (`git reset --hard`, `rm -rf`, etc.) before execution by emitting a `permissionDecision: deny` JSON response (not exit code 2). Sets both `CC_SAFETY_NET_STRICT=1` (canonical, read by 1.x binaries) and `SAFETY_NET_STRICT=1` (legacy alias, the only name pre-1.0 binaries recognize) for fail-closed on unparseable commands — keep both: setup skips install when a binary already exists, so old binaries would silently lose strict mode with the canonical name alone. The `env` key in `hooks.json` is deep-merged into `settings.json` top-level. `setup.sh` auto-installs the binary when the feature is enabled and `cc-safety-net` is missing: `maybe_install_cc_safety_net()` → `check_cc_safety_net()` in `lib/prerequisites.sh` (`npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net`, npm-only, requires a writable npm prefix, warn-and-continue on failure). Dry-run logs `[WOULD RUN]` only; `SAFETY_NET_SKIP_NPM_INSTALL=1` skips the install (test harness opt-out, checked after the dry-run guard like Biome/WCE). `uninstall.sh` offers a prompted `npm uninstall -g cc-safety-net`.
 
 ### Auto Update (`features/auto-update/`)
 

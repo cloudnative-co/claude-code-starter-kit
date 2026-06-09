@@ -30,6 +30,9 @@ setup_test_env() {
   # the skill's own deps/tests run in its dedicated CI workflow, not here.
   export WCE_SKIP_NPM_INSTALL=1
 
+  # Skip the (network) npm install -g for cc-safety-net during automated tests.
+  export SAFETY_NET_SKIP_NPM_INSTALL=1
+
   # Place a dummy 'claude' binary so setup.sh skips CLI installation
   mkdir -p "$_TEST_TMPDIR/.local/bin"
   cat > "$_TEST_TMPDIR/.local/bin/claude" <<'EOF'
