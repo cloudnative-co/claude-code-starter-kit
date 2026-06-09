@@ -1,19 +1,16 @@
 // PDF text extraction for the web-content-extraction skill.
 //
-// Uses the pdfjs-dist *legacy* build (Node-friendly) directly, with a custom
-// filesystem-based CMapReaderFactory. This is required for correct CJK
-// (Japanese/Chinese/Korean) extraction: pdfjs needs packed CMap data to map
-// CIDs to Unicode, and Node's fetch cannot read the file:// cMapUrl, so we read
-// the .bcmap files from disk ourselves.
+// Uses the pdfjs-dist *legacy* build (Node-friendly) directly. Correct CJK
+// (Japanese/Chinese/Korean) extraction needs packed CMap data to map CIDs to
+// Unicode. pdfjs's default Node data factory reads the .bcmap and standard-font
+// files straight from disk using the absolute cMapUrl / standardFontDataUrl we
+// pass below (paths inside the local pdfjs-dist install), so no network access
+// is performed.
 //
-// Verified: without this factory, Japanese PDFs extract as garbage
+// Verified: without the CMap data, Japanese PDFs extract as garbage
 // ("ٗ׃צע..."); with it, text is correct ("ゼロトラスト幻想を断つ...").
-//
-// No network access is performed.
 
-import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { resolve, sep } from 'node:path'
 import { countChars } from './defuddle-core.mjs'
 
 const CMAP_DIR = fileURLToPath(new URL('../../node_modules/pdfjs-dist/cmaps/', import.meta.url))
@@ -24,39 +21,6 @@ const maxPdfPages = () => Number(process.env.DEFUDDLE_MAX_PDF_PAGES ?? 2000)
 // Bound total extracted text so a small compressed PDF cannot expand into a
 // huge in-memory string (decompression-bomb style DoS).
 const maxPdfTextChars = () => Number(process.env.DEFUDDLE_MAX_PDF_TEXT_CHARS ?? 5_000_000)
-
-/**
- * Resolve a pdfjs-supplied resource name under a fixed base dir, rejecting any
- * name that could escape it (path traversal). pdfjs normally passes clean names
- * like "Adobe-Japan1-UCS2", but we never trust them blindly.
- */
-function safeResourcePath(baseDir, name) {
-  if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(name)) {
-    throw new Error(`不正なリソース名: ${JSON.stringify(name)}`)
-  }
-  const full = resolve(baseDir, name)
-  const base = resolve(baseDir) + sep
-  if (!full.startsWith(base)) {
-    throw new Error(`ベースディレクトリ外参照: ${name}`)
-  }
-  return full
-}
-
-/** Read packed CMap (.bcmap) files from the local pdfjs-dist install. */
-class FsCMapReaderFactory {
-  async fetch({ name }) {
-    const data = await readFile(safeResourcePath(CMAP_DIR, name + '.bcmap'))
-    return { cMapData: new Uint8Array(data), isCompressed: true }
-  }
-}
-
-/** Read standard font data from the local pdfjs-dist install (reduces warnings). */
-class FsStandardFontDataFactory {
-  async fetch({ filename }) {
-    const data = await readFile(safeResourcePath(STANDARD_FONTS_DIR, filename))
-    return new Uint8Array(data)
-  }
-}
 
 /** Parse a PDF date string ("D:20260409120000+09'00'") to ISO, best-effort. */
 function parsePdfDate(value) {
@@ -79,11 +43,12 @@ export async function extractPdfText(data) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const loadingTask = pdfjs.getDocument({
     data,
+    // Absolute file paths under the local pdfjs-dist install. The default Node
+    // data factory reads .bcmap / standard-font files from these dirs via
+    // fs.readFile, so CJK CMaps load without any network access.
     cMapUrl: CMAP_DIR,
     cMapPacked: true,
-    CMapReaderFactory: FsCMapReaderFactory,
     standardFontDataUrl: STANDARD_FONTS_DIR,
-    StandardFontDataFactory: FsStandardFontDataFactory,
     isEvalSupported: false,
     useSystemFonts: false,
   })

@@ -97,7 +97,7 @@ cd ~/.claude/skills/web-content-extraction && npm test   # node --test
 
 `test/url-guard.test.mjs`（SSRFガード）/ `test/defuddle-core.test.mjs`（charCount）/
 `test/extract-smoke.test.mjs`（**実抽出スモーク: HTML+PDF**）を実行。DNS非依存・オフラインの
-決定的テストのみ。CIは `.github/workflows/test.yml`（要リポジトリ化）。
+決定的テストのみ。CIは `.github/workflows/skill-web-content-extraction.yml`（Node 22/24 マトリクス）。
 
 ## 自動アップデート
 

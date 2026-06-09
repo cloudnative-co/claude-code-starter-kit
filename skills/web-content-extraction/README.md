@@ -23,7 +23,7 @@ npm test   # node --test
 - `test/extract-smoke.test.mjs` — **実抽出スモーク（HTML: defuddle+jsdom / PDF: pdfjs）**
 
 DNS非依存・オフラインの決定的テストのみ。
-CI は `.github/workflows/test.yml`（Node 20/22/24 マトリクス）。**注: `~/.claude` は git repo
+CI は `.github/workflows/skill-web-content-extraction.yml`（Node 22/24 マトリクス）。**注: `~/.claude` は git repo
 ではないため、このディレクトリをリポジトリ化するまで CI は起動しない。**
 
 ## 使い方

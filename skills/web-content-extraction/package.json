@@ -10,6 +10,9 @@
     "test": "node --test",
     "update:deps": "node scripts/update-deps.mjs --force"
   },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "dependencies": {
     "defuddle": "^0.18.1",
     "jsdom": "^29.1.1",

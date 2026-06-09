@@ -425,7 +425,7 @@ maybe_install_web_content_deps() {
   [[ -f "$skill_dir/package.json" ]] || return 0
 
   if [[ "${DRY_RUN:-false}" == "true" ]]; then
-    _dryrun_log "EXTERNAL" "web-content-extraction" "npm install --omit=dev (in ~/.claude/skills/web-content-extraction)"
+    _dryrun_log "EXTERNAL" "web-content-extraction" "npm ci --omit=dev (in ~/.claude/skills/web-content-extraction)"
     return 0
   fi
 
@@ -434,7 +434,7 @@ maybe_install_web_content_deps() {
 
   if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
     warn "${STR_WCE_NODE_MISSING:-Node.js not found — web-content-extraction URL/PDF features are disabled until dependencies are installed.}"
-    info "${STR_WCE_NODE_HINT:-Install Node.js 20+ then run: (cd ~/.claude/skills/web-content-extraction && npm install --omit=dev)}"
+    info "${STR_WCE_NODE_HINT:-Install Node.js 22+ then run: (cd ~/.claude/skills/web-content-extraction && npm ci --omit=dev)}"
     return 0
   fi
 

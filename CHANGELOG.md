@@ -7,12 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ## [0.52.0] - 2026-06-09
 
 ### Added
-- **web-content-extraction スキル（Defuddle ベース Web 取得標準レイヤー）**: URL・公式ドキュメント・ブログ・ニュース・OSS ページを読むとき、生 HTML を直接読まずに [Defuddle](https://github.com/kepano/defuddle) で本文を Markdown/JSON 化してから読むための実行スキルを追加（`standard`/`full` で導入）。既存スキルと異なり **実行スクリプト + npm 依存（`defuddle` / `jsdom` / `pdfjs-dist` / `undici`）を持つ「重い」スキル**。公開 URL 取得（`scripts/defuddle-url.mjs`、SSRF 防御・PDF 対応）とローカル HTML 抽出（`scripts/defuddle-file.mjs`、外部通信なし・PDF 拒否）を提供。**Node.js 20+ が必要**（CI で 20/22/24 をテスト）。Node 未検出環境では URL/PDF 機能を「Node 未検出」と明示して無効化し、インストールは失敗させない
+- **web-content-extraction スキル（Defuddle ベース Web 取得標準レイヤー）**: URL・公式ドキュメント・ブログ・ニュース・OSS ページを読むとき、生 HTML を直接読まずに [Defuddle](https://github.com/kepano/defuddle) で本文を Markdown/JSON 化してから読むための実行スキルを追加（`standard`/`full` で導入）。既存スキルと異なり **実行スクリプト + npm 依存（`defuddle` / `jsdom` / `pdfjs-dist` / `undici`）を持つ「重い」スキル**。公開 URL 取得（`scripts/defuddle-url.mjs`、SSRF 防御・PDF 対応）とローカル HTML 抽出（`scripts/defuddle-file.mjs`、外部通信なし・PDF 拒否）を提供。**Node.js 22+ が必要**（CI で 22/24 をテスト）。Node 未検出環境では URL/PDF 機能を「Node 未検出」と明示して無効化し、インストールは失敗させない
 - **コマンド3種**: `/web-article`（記事の構造的要約・事実と意見の分離）、`/oss-analyze`（OSS を技術×導入判断で整理、GitHub は raw README/メタ併用）、`/web-source-review`（情報源の信頼性評価）。いずれも `$ARGUMENTS` を bash へ直接展開せず、単一 http(s) URL 検証 → 単一引数渡しの command injection 対策を保持
 - **web-content-update feature（opt-in 自動更新フック）**: SessionStart で `update-deps.mjs` を async 実行し、スキルの依存（`defuddle`/`jsdom`/`pdfjs-dist`）を latest 追従更新。24h スロットル・1h backoff・`wx` atomic lock（stale 30 分で奪取）・**`npm test` テストゲート + 失敗時ロールバック（`npm ci`）**。ゼロトラスト観点から **既定 OFF（`full` のみ既定 ON、`minimal`/`standard` は opt-in）**。`undici` は自動更新対象に含めず手動更新（`npm run update:deps`）
 - **CLAUDE.md 標準ルール（i18n 経由・INSTALL_SKILLS ゲート）**: `i18n/{ja,en}/CLAUDE.md.base` の kit-managed 区画に `{{FEATURE:web-content-extraction}}` マーカーを追加し、`i18n/{ja,en}/partials/web-content-extraction.md` の本文をスキル導入時のみ注入。`minimal`（スキル未導入）では注入せずマーカーを除去
-- **依存解決の配線**: `setup.sh`（fresh / fresh-with-existing / update / dry-run の全経路）でスキル配置後に `npm install --omit=dev` を実行する `maybe_install_web_content_deps()` を追加。Node/npm 未検出時は警告して継続（非致命）、dry-run は `[WOULD RUN]` ログのみ、テストハーネスは `WCE_SKIP_NPM_INSTALL` でスキップ
-- **CI / テスト**: `tests/unit/test-web-content-extraction.sh`（スキル配置・registry 配線・hooks.json・settings/CLAUDE.md ゲートの検証）と、Node 20/22/24 マトリクスでスキルの `node --check` + `npm ci` + `npm test` を回す `.github/workflows/skill-web-content-extraction.yml` を追加
+- **依存解決の配線**: `setup.sh`（fresh / fresh-with-existing / update / dry-run の全経路）でスキル配置後に `npm ci --omit=dev` を実行する `maybe_install_web_content_deps()` を追加。Node/npm 未検出時は警告して継続（非致命）、dry-run は `[WOULD RUN]` ログのみ、テストハーネスは `WCE_SKIP_NPM_INSTALL` でスキップ
+- **CI / テスト**: `tests/unit/test-web-content-extraction.sh`（スキル配置・registry 配線・hooks.json・settings/CLAUDE.md ゲートの検証）と、Node 22/24 マトリクスでスキルの `node --check` + `npm ci` + `npm test` を回す `.github/workflows/skill-web-content-extraction.yml` を追加
 
 ### Security
 - **非フェッチ安全 DOM**: 自前構築の JSDOM を `defuddle/node` に渡し（`resources:'usable'`/`runScripts` を付けない）、サブリソース外部取得・ページ内スクリプト実行を行わない（`linkedom` は `defuddle/node` 非互換のため jsdom 採用）

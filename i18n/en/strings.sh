@@ -100,10 +100,10 @@ STR_HOOKS_FEATURE_RECOMMENDATION="Feature Recommendation - Notify about new feat
 
 # web-content-extraction skill dependency install (deploy-time messages)
 STR_WCE_NODE_MISSING="Node.js not found — web-content-extraction URL/PDF features are disabled until dependencies are installed."
-STR_WCE_NODE_HINT="Install Node.js 20+ then run: (cd ~/.claude/skills/web-content-extraction && npm install --omit=dev)"
+STR_WCE_NODE_HINT="Install Node.js 22+ then run: (cd ~/.claude/skills/web-content-extraction && npm ci --omit=dev)"
 STR_WCE_NPM_INSTALLING="Installing web-content-extraction skill dependencies..."
 STR_WCE_NPM_DONE="web-content-extraction dependencies installed"
-STR_WCE_NPM_FAILED="npm install failed for web-content-extraction; skill scripts may not run until dependencies are installed."
+STR_WCE_NPM_FAILED="npm ci failed for web-content-extraction; skill scripts may not run until dependencies are installed."
 
 # Step 6: Plugins
 STR_PLUGINS_TITLE="Select plugins to install (enter numbers separated by spaces):"

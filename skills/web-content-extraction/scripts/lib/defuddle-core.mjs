@@ -1,9 +1,12 @@
 // Shared Defuddle extraction core for the web-content-extraction skill.
 //
 // Design notes (verified against defuddle 0.6.x, re-confirmed on 0.18.x; deps auto-update):
-// - `defuddle/node` is hard-wired to jsdom (peerDependency jsdom@^24). linkedom
-//   is NOT compatible: Defuddle calls window.getComputedStyle / media-query
-//   evaluation which linkedom does not implement, producing degraded extraction.
+// - `defuddle/node` requires a jsdom-class DOM. This skill pins the jsdom major
+//   in package.json (currently the jsdom 29 line); defuddle 0.18.x declares no
+//   jsdom peerDependency, so compatibility is guarded by the smoke tests rather
+//   than a version constraint. linkedom is NOT compatible: Defuddle calls
+//   window.getComputedStyle / media-query evaluation which linkedom does not
+//   implement, producing degraded extraction.
 // - When `defuddle/node` is given an HTML *string* it builds a JSDOM with
 //   `resources: 'usable'`, which fetches sub-resources over the network. To keep
 //   the standard layer offline-by-default we build the JSDOM *ourselves* WITHOUT

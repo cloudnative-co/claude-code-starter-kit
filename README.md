@@ -430,7 +430,7 @@ cd claude-code-starter-kit
 | **refactor-cleaner** | コード整理 | 不要なコードの削除・整理 |
 | **doc-updater** | ドキュメント更新 | README やドキュメントの更新 |
 
-### 💬 スラッシュコマンド（20個）
+### 💬 スラッシュコマンド（22個）
 
 スラッシュコマンドは、Claude に **ワンタッチで指示を出すショートカット** です。
 Claude Code のチャットで `/` に続けて入力します。
@@ -457,7 +457,7 @@ Claude Code のチャットで `/` に続けて入力します。
 
 URL・公式ドキュメント・ブログ・ニュース・OSS ページを読むとき、**生 HTML を直接読まずに [Defuddle](https://github.com/kepano/defuddle) で本文を Markdown/JSON 化** してから読むための実行スキルです（Standard / Full で導入）。`/web-article`・`/oss-analyze`・`/web-source-review` の3コマンドと CLAUDE.md の標準ルールがこのスキルを使います。
 
-- **Node.js 20+ が必要**（20/22/24 でテスト）。導入時に `npm install --omit=dev` が自動実行されます。Node 未検出環境ではスキルは配置されますが URL/PDF 機能は無効（警告を表示し、セットアップは失敗しません）。
+- **Node.js 22+ が必要**（22/24 でテスト）。導入時に `npm ci --omit=dev` が自動実行されます。Node 未検出環境ではスキルは配置されますが URL/PDF 機能は無効（警告を表示し、セットアップは失敗しません）。
 - **セキュリティ**: SSRF 多層防御（http(s) 限定・内部/プライベート IP 拒否・接続 IP pin・リダイレクト各ホップ検査）、非フェッチ DOM（外部サブリソース取得・スクリプト実行なし）、PDF は CJK 対応・解凍爆弾対策付き。開発時のみ `ALLOW_PRIVATE_URLS=true` で内部 URL を許可。
 - **依存の自動更新（opt-in）**: `web-content-update` フックが SessionStart でスキルの依存（defuddle/jsdom/pdfjs-dist）を更新（24h スロットル・テストゲート+ロールバック）。**Full のみ既定有効**、Standard では opt-in。手動更新は `npm run update:deps`。
 
@@ -1111,7 +1111,7 @@ claude-code-starter-kit/
 │   └── ja/                 # 日本語
 ├── agents/                 # AI エージェント定義（9種）
 ├── rules/                  # コーディングルール（10種）
-├── commands/               # スラッシュコマンド（20個）
+├── commands/               # スラッシュコマンド（22個）
 ├── skills/                 # スキルモジュール（13個）
 └── memory/                 # ベストプラクティス記憶
 ```
