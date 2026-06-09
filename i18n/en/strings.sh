@@ -84,6 +84,7 @@ STR_FINAL_INCOMPLETE_FONTS="The following fonts could not be installed:"
 STR_HOOKS_TITLE="Select hooks to enable (enter numbers separated by spaces):"
 STR_HOOKS_SAFETY_NET="Safety Net - Block destructive git/filesystem commands (cc-safety-net)"
 STR_HOOKS_AUTO_UPDATE="Auto Update - Automatically update starter kit on session start"
+STR_HOOKS_WEB_CONTENT_UPDATE="Web Content Update - Auto-update web-content-extraction skill deps on session start (opt-in)"
 STR_HOOKS_TMUX="Tmux Reminder - Suggest tmux for long-running commands"
 STR_HOOKS_GIT_PUSH="Git Push Review - Pause before git push for review"
 STR_HOOKS_DOC_BLOCK="Doc Blocker - Block creation of random .md/.txt files"
@@ -96,6 +97,13 @@ STR_HOOKS_PR_LOG="PR Creation Log - Log PR URL after creation"
 STR_HOOKS_PRE_COMMIT="Pre-compact Auto-commit - Auto-commit before context compaction"
 STR_HOOKS_DOC_SIZE="Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large"
 STR_HOOKS_FEATURE_RECOMMENDATION="Feature Recommendation - Notify about new features on session start"
+
+# web-content-extraction skill dependency install (deploy-time messages)
+STR_WCE_NODE_MISSING="Node.js not found — web-content-extraction URL/PDF features are disabled until dependencies are installed."
+STR_WCE_NODE_HINT="Install Node.js 22+ then run: (cd ~/.claude/skills/web-content-extraction && npm ci --omit=dev)"
+STR_WCE_NPM_INSTALLING="Installing web-content-extraction skill dependencies..."
+STR_WCE_NPM_DONE="web-content-extraction dependencies installed"
+STR_WCE_NPM_FAILED="npm ci failed for web-content-extraction; skill scripts may not run until dependencies are installed."
 
 # Step 6: Plugins
 STR_PLUGINS_TITLE="Select plugins to install (enter numbers separated by spaces):"

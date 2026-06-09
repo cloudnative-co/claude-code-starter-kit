@@ -406,6 +406,52 @@ _copy_dir_safe() {
 }
 
 # ---------------------------------------------------------------------------
+# maybe_install_web_content_deps - npm deps for the web-content-extraction skill
+#
+# The web-content-extraction skill ships executable Node scripts that depend on
+# defuddle/jsdom/pdfjs-dist/undici. After the skill is deployed, install its
+# production dependencies in place.
+#
+# - Only runs when INSTALL_SKILLS is enabled and the skill's package.json exists.
+# - Node-optional: if node/npm is missing, warns and returns 0 (never fails the
+#   install). The skill's pure-JS guard logic still ships; URL/PDF fetch needs deps.
+# - Idempotent: safe to re-run (npm install is idempotent).
+# - Dry-run: logs a [WOULD RUN] entry and does not execute.
+# Covers fresh, fresh-with-existing, and update paths (called once after deploy).
+# ---------------------------------------------------------------------------
+maybe_install_web_content_deps() {
+  is_true "${INSTALL_SKILLS:-false}" || return 0
+  local skill_dir="$CLAUDE_DIR/skills/web-content-extraction"
+  [[ -f "$skill_dir/package.json" ]] || return 0
+
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    _dryrun_log "EXTERNAL" "web-content-extraction" "npm ci --omit=dev (in ~/.claude/skills/web-content-extraction)"
+    return 0
+  fi
+
+  # Test harness opt-out: skip the (network) npm install during automated tests.
+  [[ -n "${WCE_SKIP_NPM_INSTALL:-}" ]] && return 0
+
+  if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
+    warn "${STR_WCE_NODE_MISSING:-Node.js not found — web-content-extraction URL/PDF features are disabled until dependencies are installed.}"
+    info "${STR_WCE_NODE_HINT:-Install Node.js 22+ then run: (cd ~/.claude/skills/web-content-extraction && npm ci --omit=dev)}"
+    return 0
+  fi
+
+  info "${STR_WCE_NPM_INSTALLING:-Installing web-content-extraction skill dependencies...}"
+  mkdir -p "$skill_dir/logs"
+  # Use `npm ci` to install strictly from the committed package-lock.json
+  # (reproducible, version-pinned — matches update-deps.mjs's rollback path).
+  # Output is kept in the skill's logs/ for debuggability instead of discarded.
+  if ( cd "$skill_dir" && npm ci --omit=dev --no-audit --no-fund >"$skill_dir/logs/install.log" 2>&1 ); then
+    ok "${STR_WCE_NPM_DONE:-web-content-extraction dependencies installed}"
+  else
+    warn "${STR_WCE_NPM_FAILED:-npm install failed for web-content-extraction; skill scripts may not run until dependencies are installed.}"
+    info "  → ~/.claude/skills/web-content-extraction/logs/install.log"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Build CLAUDE.md
 # ---------------------------------------------------------------------------
 build_claude_md() {
@@ -414,6 +460,12 @@ build_claude_md() {
   local out="$CLAUDE_DIR/CLAUDE.md"
 
   cp -a "$base" "$out"
+
+  # Web content extraction standard rule — only when the skill is installed
+  if is_true "${INSTALL_SKILLS:-false}"; then
+    local wce_partial="$PROJECT_DIR/i18n/${lang}/partials/web-content-extraction.md"
+    inject_feature "$out" "web-content-extraction" "$wce_partial"
+  fi
 
   if is_true "$ENABLE_CODEX_PLUGIN"; then
     local partial="$PROJECT_DIR/features/codex-plugin/CLAUDE.md.partial.${lang}"
@@ -430,6 +482,12 @@ build_claude_md_to_file() {
   local base="$PROJECT_DIR/i18n/${lang}/CLAUDE.md.base"
 
   cp -a "$base" "$out"
+
+  # Web content extraction standard rule — only when the skill is installed
+  if is_true "${INSTALL_SKILLS:-false}"; then
+    local wce_partial="$PROJECT_DIR/i18n/${lang}/partials/web-content-extraction.md"
+    inject_feature "$out" "web-content-extraction" "$wce_partial"
+  fi
 
   if is_true "$ENABLE_CODEX_PLUGIN"; then
     local partial="$PROJECT_DIR/features/codex-plugin/CLAUDE.md.partial.${lang}"
@@ -473,6 +531,12 @@ build_settings_file() {
       return 1
     fi
     is_true "${!flag:-false}" || continue
+    # web-content-update's hook targets a script inside the skill dir; only emit
+    # it when the skill is actually installed (avoids a dangling SessionStart hook
+    # if the flag is enabled via CLI/hand-edited config without INSTALL_SKILLS).
+    if [[ "$name" == "web-content-update" ]] && ! is_true "${INSTALL_SKILLS:-false}"; then
+      continue
+    fi
     local hooks_json="$PROJECT_DIR/features/$name/hooks.json"
     if [[ "$name" == "auto-update" ]]; then
       hooks_json="$(_auto_update_hooks_fragment)"

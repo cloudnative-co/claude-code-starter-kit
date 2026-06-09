@@ -1,0 +1,22 @@
+{
+  "name": "web-content-extraction",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Defuddle-based standard web content extraction layer for Claude Code (URL + local HTML -> Markdown/JSON).",
+  "scripts": {
+    "url": "node scripts/defuddle-url.mjs",
+    "file": "node scripts/defuddle-file.mjs",
+    "test": "node --test",
+    "update:deps": "node scripts/update-deps.mjs --force"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "defuddle": "^0.18.1",
+    "jsdom": "^29.1.1",
+    "pdfjs-dist": "^6.0.227",
+    "undici": "^8.4.1"
+  }
+}

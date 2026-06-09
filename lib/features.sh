@@ -28,6 +28,7 @@ declare -A _FEATURE_FLAGS=(
   [pr-creation-log]=ENABLE_PR_CREATION_LOG
   [pre-compact-commit]=ENABLE_PRE_COMPACT_COMMIT
   [auto-update]=ENABLE_AUTO_UPDATE
+  [web-content-update]=ENABLE_WEB_CONTENT_UPDATE
   [statusline]=ENABLE_STATUSLINE
   [doc-size-guard]=ENABLE_DOC_SIZE_GUARD
   [no-flicker]=ENABLE_NO_FLICKER
@@ -53,7 +54,7 @@ declare -A _FEATURE_HAS_SCRIPTS=(
 _FEATURE_ORDER=(
   safety-net tmux-hooks doc-blocker prettier-hooks biome-hooks console-log-guard
   memory-persistence strategic-compact pr-creation-log pre-compact-commit
-  auto-update statusline doc-size-guard no-flicker
+  auto-update web-content-update statusline doc-size-guard no-flicker
   feature-recommendation
 )
 

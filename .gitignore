@@ -13,6 +13,11 @@ Thumbs.db
 *.bak
 *.tmp
 
+# Skill runtime artifacts (heavy skills with npm deps; never distributed)
+skills/web-content-extraction/node_modules/
+skills/web-content-extraction/logs/
+skills/**/*.bak
+
 # Machine-specific Claude settings (should not be shared)
 .claude/settings.local.json
 
