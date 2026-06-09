@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.52.1] - 2026-06-10
+
+### Fixed
+- **web-content-extraction の堅牢化（レビュー追補）**: env 上限値（`DEFUDDLE_MAX_PDF_PAGES` / `DEFUDDLE_MAX_PDF_TEXT_CHARS` / `DEFUDDLE_MAX_BYTES` / `DEFUDDLE_TIMEOUT_MS`）を `parsePositiveInt` で検証し、非数値・0・負などの不正値で上限が無効化される fail-open / fail-broken を防止。PDF 抽出全体を `withSilencedStdout` で包み、pdfjs のログによる stdout(JSON) 汚染を防止（`defuddle-core` と対称化）。自動更新フック（`update-deps.mjs`）と deploy / CI の `npm install` / `npm ci` に `--ignore-scripts` を付与し、依存の lifecycle script 経由のサプライチェーン攻撃面を縮小。`assertPublicUrl` の DNS 事前チェック（公開ホスト名→プライベート IP 解決の拒否）を `dns.lookup` モックで検証するテストを追加
+
 ## [0.52.0] - 2026-06-09
 
 ### Added

@@ -40,6 +40,21 @@ export function countChars(text) {
 }
 
 /**
+ * Parse an environment value as a positive integer, falling back to `fallback`
+ * for missing / non-numeric / zero / negative input. This prevents a bad
+ * override from silently disabling a limit: e.g. `Number('unlimited')` is NaN,
+ * and `total > NaN` is always false, which would turn a decompression-bomb cap
+ * into no cap at all.
+ * @param {string|undefined} value
+ * @param {number} fallback
+ * @returns {number}
+ */
+export function parsePositiveInt(value, fallback) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback
+}
+
+/**
  * Build a JSDOM instance that never fetches sub-resources and never runs scripts.
  * @param {string} html Raw HTML markup.
  * @param {string} url Absolute URL used for relative-link resolution.
@@ -57,13 +72,18 @@ export function buildSafeDom(html, url) {
 }
 
 /**
- * Run Defuddle while preventing its internal console.* logging from polluting
- * stdout. All Defuddle logs are redirected to stderr so stdout stays pure JSON.
- * @param {JSDOM} dom
- * @param {string} url
- * @returns {Promise<import('defuddle').DefuddleResponse>}
+ * Run an async function with console.* redirected to stderr, so any library
+ * logging (Defuddle, pdfjs, ...) can never pollute stdout — which is reserved
+ * for the single JSON record.
+ *
+ * NOTE: this swaps the *global* console for the duration of `fn`, so it is for
+ * one-shot CLI use (one extraction per process). Concurrent calls in the same
+ * process would race on the shared console and are NOT supported.
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
  */
-async function parseWithSilencedStdout(dom, url) {
+export async function withSilencedStdout(fn) {
   const original = {
     log: console.log,
     info: console.info,
@@ -78,11 +98,21 @@ async function parseWithSilencedStdout(dom, url) {
   console.error = toStderr
   console.debug = toStderr
   try {
-    // markdown: true => content is converted to Markdown by the node wrapper.
-    return await Defuddle(dom, url, { markdown: true })
+    return await fn()
   } finally {
     Object.assign(console, original)
   }
+}
+
+/**
+ * Run Defuddle while keeping stdout pure JSON (see withSilencedStdout).
+ * @param {JSDOM} dom
+ * @param {string} url
+ * @returns {Promise<import('defuddle').DefuddleResponse>}
+ */
+async function parseWithSilencedStdout(dom, url) {
+  // markdown: true => content is converted to Markdown by the node wrapper.
+  return withSilencedStdout(() => Defuddle(dom, url, { markdown: true }))
 }
 
 /**
