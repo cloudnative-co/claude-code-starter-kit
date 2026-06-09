@@ -9,6 +9,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 - **3-way merge がキー削除の代わりに literal JSON `null` を書き込むバグを修正**: `lib/merge.sh` の `merge_settings_3way()`（トップレベルキー）と `_merge_object_3way()`（env 等のオブジェクト内サブキー）で、競合解決の結果が「キーが存在しない側」（kit がキーを削除 / ユーザーがキーを削除）になった場合に、`del(.[$k])` ではなく `null` がそのまま `settings.json` へ代入されていた。代表的な影響経路: ① kit がキーを削除 + ユーザーが値を変更 + 「[U]se kit's」選択（または記憶済み use-kit preference）→ 削除したはずのキーが `"KEY": null` として残存 ② ユーザーがサブキーを手動削除 + kit 側は未変更 → update のたびに削除したキーが `null` 値で復活（このほか「ユーザーがキー削除 + kit が値変更 + keep-mine/非対話」等、解決結果が不在側になる経路すべてに同じガードが効く）。Claude Code の `env` は文字列値を想定するため `null` は不正値。代入チョークポイントで `"null"` 選択を `del` に変換する形で両関数を修正し、回帰テスト 3 件を `tests/unit/test-merge.sh` に追加（修正なしで FAIL することを確認済み）。なお `_merge_settings_bootstrap()` は分岐構造上 null が競合経路に到達しないため対象外
 
+## [0.53.0] - 2026-06-10
+
+### Fixed
+- **safety-net の `cc-safety-net` バイナリを自動インストールするように修正（#68）**: これまで safety-net feature は hook 定義と STRICT env を `settings.json` に配置するだけで、hook が呼び出す `cc-safety-net` バイナリ自体はインストールしていなかった。#67 の matcher 修正で hook が実際に発火するようになった結果、バイナリ不在環境では `command not found`（deny JSON が出力されない）となり、**保護が黙って無効化（silent fail-open）** されていた。`setup.sh` に `maybe_install_cc_safety_net()` を追加し、feature 有効かつバイナリ未導入のとき `npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net` で自動導入する（`lib/prerequisites.sh` の `check_cc_safety_net()`、Biome と同パターン + WCE と同水準のサプライチェーン hardening。`--ignore-scripts` でも bin link は npm の reify ステップで作成されるため動作に影響なし）。npm prefix が書き込み不可・npm 不在などで失敗した場合は警告して継続（非致命）し、手動インストール手順を案内。dry-run では `[WOULD RUN]` ログのみ、テストハーネスは `SAFETY_NET_SKIP_NPM_INSTALL=1` でスキップ
+
+### Changed
+- **STRICT env に正準名 `CC_SAFETY_NET_STRICT` を追加（legacy 名は互換のため併置）**: upstream の正準環境変数は `CC_SAFETY_NET_STRICT` で、従来の `SAFETY_NET_STRICT` は legacy alias。一方、旧バイナリ（0.7.x 等）は legacy 名しか認識せず、`setup.sh` はバイナリ既存時にインストールをスキップするため、正準名への置き換えだけでは既存環境の strict mode が黙って無効化される（Codex レビュー指摘・0.7.1 で実証）。このため `features/safety-net/hooks.json` は両方の名前を `"1"` で設定する: 新バイナリ（1.x）は正準名を優先し、旧バイナリは legacy 名で fail-closed を維持。既存インストールは update の 3-way merge で追従する。**注意**: `SAFETY_NET_STRICT` の値を手動変更していた場合（例: `"0"` で fail-closed を無効化）、1.x バイナリでは新たに追加される正準名 `CC_SAFETY_NET_STRICT="1"` が legacy 名より優先されるため strict mode が再有効化される（安全側への変化）。カスタム値を維持したい場合は `~/.claude/settings.json` の `CC_SAFETY_NET_STRICT` に再設定すること
+- **cc-safety-net のリポジトリ URL を更新**: upstream が `kenryu42/claude-code-safety-net` から `kenryu42/cc-safety-net` にリネームされたため、README（ja/en）・CLAUDE.md のリンクを新 URL へ更新（旧 URL も GitHub のリダイレクトで到達可能）
+
+### Added
+- **`uninstall.sh` に cc-safety-net の削除プロンプトを追加**: npm グローバルに `cc-safety-net` が存在する場合、削除するか確認する（他の AI CLI でも使われ得るため既定は残す）。削除失敗は非致命で手動コマンドを案内
+- **unit テスト**: `tests/unit/test-safety-net-install.sh` を追加（hooks.json の env / matcher / コマンド、profiles 配線、setup.sh / prerequisites.sh / uninstall.sh の自動導入配線、`check_cc_safety_net()` の stub npm による機能テスト）
+
+## [0.52.3] - 2026-06-10
+
+### Fixed
+- **doc-blocker が Claude Code の auto-memory 書き込みをブロックしていた問題を修正**: doc-blocker hook（PreToolUse / Write）の除外条件に `~/.claude/projects/<プロジェクト>/memory/` 配下を追加。Claude Code 本体の永続メモリ機能（`MEMORY.md` および各メモリファイル）への `.md` Write が `exit 2` でブロックされ、メモリが保存できなかった。通常の `.md`/`.txt` 散乱防止と README/CLAUDE/AGENTS/CONTRIBUTING の除外は従来どおり維持
+
 ## [0.52.2] - 2026-06-10
 
 ### Fixed

@@ -520,6 +520,39 @@ check_biome() {
   return 1
 }
 
+check_cc_safety_net() {
+  if command -v cc-safety-net &>/dev/null; then
+    ok "cc-safety-net $(cc-safety-net --version 2>/dev/null | head -1)"
+    return 0
+  fi
+
+  info "Installing cc-safety-net..."
+
+  if command -v npm &>/dev/null; then
+    local npm_prefix=""
+    npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
+    if [[ -n "$npm_prefix" ]]; then
+      export PATH="${npm_prefix}/bin:$PATH"
+    fi
+    if [[ -n "$npm_prefix" ]] && [[ -w "$npm_prefix" ]]; then
+      if npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net 2>/dev/null && command -v cc-safety-net &>/dev/null; then
+        ok "cc-safety-net installed via npm"
+        return 0
+      fi
+    elif [[ -n "$npm_prefix" ]] && [[ -w "${npm_prefix}/lib" ]]; then
+      if npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net 2>/dev/null && command -v cc-safety-net &>/dev/null; then
+        ok "cc-safety-net installed via npm"
+        return 0
+      fi
+    fi
+  fi
+
+  warn "Failed to install cc-safety-net automatically."
+  warn "  The safety-net hook cannot block destructive commands until it is installed."
+  warn "  Install manually: npm install -g --ignore-scripts cc-safety-net"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Bash 4+ detection and re-exec

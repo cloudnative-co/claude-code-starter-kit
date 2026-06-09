@@ -204,7 +204,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 
 #### Safety Net
 
-[cc-safety-net](https://github.com/kenryu42/claude-code-safety-net) intercepts Bash commands via a PreToolUse hook and blocks destructive operations before they execute.
+[cc-safety-net](https://github.com/kenryu42/cc-safety-net) intercepts Bash commands via a PreToolUse hook and blocks destructive operations before they execute.
 
 Blocked commands include:
 - `git reset --hard` — discards uncommitted changes
@@ -212,9 +212,9 @@ Blocked commands include:
 - `git push --force` — overwrites remote history
 - `rm -rf` — irreversible file/directory deletion
 
-STRICT mode (`SAFETY_NET_STRICT=1`) is enabled by default, causing unparseable commands to be blocked (fail-closed).
+STRICT mode (`CC_SAFETY_NET_STRICT=1`) is enabled by default, causing unparseable commands to be blocked (fail-closed).
 
-> **Enabled by default in Standard / Full profiles.** Requires `npm install -g cc-safety-net`.
+> **Enabled by default in Standard / Full profiles.** Setup auto-installs `cc-safety-net` via npm when it is missing (with `--ignore-scripts`, so no lifecycle scripts run). If automatic installation fails, run `npm install -g --ignore-scripts cc-safety-net` manually.
 
 #### Auto Update
 

@@ -137,6 +137,9 @@ _load_strings() {
       STR_CODEX_MCP_REMOVE_ASK="legacy Codex MCP サーバーを削除しますか？ [y/N] "
       STR_CODEX_MCP_REMOVED="Codex MCP サーバーを削除しました"
       STR_CODEX_MCP_REMOVE_FAILED="Codex MCP サーバーの削除に失敗しました。手動で実行してください:"
+      STR_SAFETY_NET_REMOVE_ASK="cc-safety-net (npm) も削除しますか？他の AI CLI でも使用中なら残してください [y/N] "
+      STR_SAFETY_NET_REMOVED="cc-safety-net を削除しました"
+      STR_SAFETY_NET_REMOVE_FAILED="cc-safety-net の削除に失敗しました。手動で実行してください:"
       ;;
     *)
       STR_TITLE="Claude Code Starter Kit - Uninstall"
@@ -164,6 +167,9 @@ _load_strings() {
       STR_CODEX_MCP_REMOVE_ASK="Remove legacy Codex MCP server? [y/N] "
       STR_CODEX_MCP_REMOVED="Codex MCP server removed"
       STR_CODEX_MCP_REMOVE_FAILED="Failed to remove Codex MCP server. Remove it manually:"
+      STR_SAFETY_NET_REMOVE_ASK="Also remove cc-safety-net (npm)? Keep it if other AI CLIs use it [y/N] "
+      STR_SAFETY_NET_REMOVED="cc-safety-net removed"
+      STR_SAFETY_NET_REMOVE_FAILED="Failed to remove cc-safety-net. Remove it manually:"
       ;;
   esac
 }
@@ -428,6 +434,25 @@ if command -v claude &>/dev/null; then
   esac
 else
   info "$STR_CLI_NOT_INSTALLED"
+fi
+
+# ---------------------------------------------------------------------------
+# cc-safety-net uninstall (auto-installed by setup.sh for the safety-net hook)
+# ---------------------------------------------------------------------------
+if command -v npm &>/dev/null && npm list -g cc-safety-net &>/dev/null; then
+  printf "\n"
+  # EOF-tolerant read: piped/automated runs default to keeping the package
+  read -r -p "$STR_SAFETY_NET_REMOVE_ASK" _safety_net_confirm || _safety_net_confirm="n"
+  case "$_safety_net_confirm" in
+    y|Y|yes|YES)
+      if npm uninstall -g cc-safety-net 2>/dev/null; then
+        ok "$STR_SAFETY_NET_REMOVED"
+      else
+        warn "$STR_SAFETY_NET_REMOVE_FAILED"
+        info "  npm uninstall -g cc-safety-net"
+      fi
+      ;;
+  esac
 fi
 
 # Check if ~/.claude still has content
