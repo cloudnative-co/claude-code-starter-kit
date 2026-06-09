@@ -39,7 +39,7 @@ jobs:
           cache: npm
           cache-dependency-path: skills/web-content-extraction/package-lock.json
       - name: Install dependencies (from lockfile)
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Syntax check scripts
         run: |
           for f in scripts/*.mjs scripts/lib/*.mjs; do node --check "$f"; done

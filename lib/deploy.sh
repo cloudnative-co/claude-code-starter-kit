@@ -443,7 +443,7 @@ maybe_install_web_content_deps() {
   # Use `npm ci` to install strictly from the committed package-lock.json
   # (reproducible, version-pinned — matches update-deps.mjs's rollback path).
   # Output is kept in the skill's logs/ for debuggability instead of discarded.
-  if ( cd "$skill_dir" && npm ci --omit=dev --no-audit --no-fund >"$skill_dir/logs/install.log" 2>&1 ); then
+  if ( cd "$skill_dir" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >"$skill_dir/logs/install.log" 2>&1 ); then
     ok "${STR_WCE_NPM_DONE:-web-content-extraction dependencies installed}"
   else
     warn "${STR_WCE_NPM_FAILED:-npm install failed for web-content-extraction; skill scripts may not run until dependencies are installed.}"

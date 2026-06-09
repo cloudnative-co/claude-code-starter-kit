@@ -29,14 +29,14 @@
 // with Node's built-in undici throws "invalid onRequestStart method".
 import { Agent, fetch as undiciFetch } from 'undici'
 import { assertPublicUrl, createGuardedLookup } from './lib/url-guard.mjs'
-import { extractRecord, printJson } from './lib/defuddle-core.mjs'
+import { extractRecord, printJson, parsePositiveInt } from './lib/defuddle-core.mjs'
 import { extractPdfRecord } from './lib/pdf-extract.mjs'
 
 const USER_AGENT =
   process.env.DEFUDDLE_USER_AGENT ??
   'Claude-Code-Defuddle/1.0 (+https://github.com/kepano/defuddle; web-content-extraction skill)'
-const TIMEOUT_MS = Number(process.env.DEFUDDLE_TIMEOUT_MS ?? 20000)
-const MAX_BYTES = Number(process.env.DEFUDDLE_MAX_BYTES ?? 10 * 1024 * 1024) // 10 MB
+const TIMEOUT_MS = parsePositiveInt(process.env.DEFUDDLE_TIMEOUT_MS, 20000)
+const MAX_BYTES = parsePositiveInt(process.env.DEFUDDLE_MAX_BYTES, 10 * 1024 * 1024) // 10 MB
 const MAX_REDIRECTS = Number(process.env.DEFUDDLE_MAX_REDIRECTS ?? 5)
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 

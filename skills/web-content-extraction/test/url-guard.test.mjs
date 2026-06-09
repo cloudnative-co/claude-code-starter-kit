@@ -2,8 +2,9 @@
 // Run: npm test   (node --test)
 // Deterministic only: no real DNS-dependent assertions (avoids CI flakiness).
 
-import { test } from 'node:test'
+import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
+import dns from 'node:dns/promises'
 import { isPrivateIp, assertPublicUrl, createGuardedLookup } from '../scripts/lib/url-guard.mjs'
 
 test('isPrivateIp: IPv4 private/reserved ranges are private', () => {
@@ -144,5 +145,27 @@ test('assertPublicUrl: ALLOW_PRIVATE_URLS=true bypasses guards (no DNS)', async 
   } finally {
     if (prev === undefined) delete process.env.ALLOW_PRIVATE_URLS
     else process.env.ALLOW_PRIVATE_URLS = prev
+  }
+})
+
+// Guard-time DNS pre-check: a public-looking hostname whose A record points at a
+// private IP must be rejected before any connection. dns.lookup is mocked so the
+// test stays deterministic and offline.
+test('assertPublicUrl: rejects a public hostname resolving to a private IP (mocked DNS)', async () => {
+  mock.method(dns, 'lookup', async () => [{ address: '10.0.0.7', family: 4 }])
+  try {
+    await assert.rejects(assertPublicUrl('http://totally.example.com/'), /プライベートIPに解決/)
+  } finally {
+    mock.restoreAll()
+  }
+})
+
+test('assertPublicUrl: allows a public hostname resolving to a public IP (mocked DNS)', async () => {
+  mock.method(dns, 'lookup', async () => [{ address: '93.184.216.34', family: 4 }])
+  try {
+    const url = await assertPublicUrl('http://totally.example.com/')
+    assert.equal(url.hostname, 'totally.example.com')
+  } finally {
+    mock.restoreAll()
   }
 })

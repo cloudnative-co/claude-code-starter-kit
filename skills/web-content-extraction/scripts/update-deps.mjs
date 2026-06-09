@@ -188,7 +188,9 @@ function main() {
     const specs = updates.map((u) => `${u.pkg}@${u.latest}`)
     log(`applying updates: ${specs.join(', ')}`)
     try {
-      execFileSync('npm', ['install', ...specs], {
+      // --ignore-scripts: never run lifecycle scripts of newly resolved deps;
+      // the test gate only catches broken behavior, not malicious install hooks.
+      execFileSync('npm', ['install', '--ignore-scripts', ...specs], {
         cwd: SKILL_DIR,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -249,7 +251,7 @@ function rollback(backups) {
   // `npm ci` reinstalls strictly from the restored lockfile, guaranteeing
   // node_modules matches the previous versions (no partial-upgrade drift).
   try {
-    execFileSync('npm', ['ci'], {
+    execFileSync('npm', ['ci', '--ignore-scripts'], {
       cwd: SKILL_DIR,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
