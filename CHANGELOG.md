@@ -17,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **`uninstall.sh` に cc-safety-net の削除プロンプトを追加**: npm グローバルに `cc-safety-net` が存在する場合、削除するか確認する（他の AI CLI でも使われ得るため既定は残す）。削除失敗は非致命で手動コマンドを案内
 - **unit テスト**: `tests/unit/test-safety-net-install.sh` を追加（hooks.json の env / matcher / コマンド、profiles 配線、setup.sh / prerequisites.sh / uninstall.sh の自動導入配線、`check_cc_safety_net()` の stub npm による機能テスト）
 
+## [0.52.3] - 2026-06-10
+
+### Fixed
+- **doc-blocker が Claude Code の auto-memory 書き込みをブロックしていた問題を修正**: doc-blocker hook（PreToolUse / Write）の除外条件に `~/.claude/projects/<プロジェクト>/memory/` 配下を追加。Claude Code 本体の永続メモリ機能（`MEMORY.md` および各メモリファイル）への `.md` Write が `exit 2` でブロックされ、メモリが保存できなかった。通常の `.md`/`.txt` 散乱防止と README/CLAUDE/AGENTS/CONTRIBUTING の除外は従来どおり維持
+
 ## [0.52.2] - 2026-06-10
 
 ### Fixed
