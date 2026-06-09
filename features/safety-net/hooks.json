@@ -1,5 +1,6 @@
 {
 	"env": {
+		"CC_SAFETY_NET_STRICT": "1",
 		"SAFETY_NET_STRICT": "1"
 	},
 	"hooks": {

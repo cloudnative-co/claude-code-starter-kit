@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.53.0] - 2026-06-10
+
+### Fixed
+- **safety-net の `cc-safety-net` バイナリを自動インストールするように修正（#68）**: これまで safety-net feature は hook 定義と STRICT env を `settings.json` に配置するだけで、hook が呼び出す `cc-safety-net` バイナリ自体はインストールしていなかった。#67 の matcher 修正で hook が実際に発火するようになった結果、バイナリ不在環境では `command not found`（deny JSON が出力されない）となり、**保護が黙って無効化（silent fail-open）** されていた。`setup.sh` に `maybe_install_cc_safety_net()` を追加し、feature 有効かつバイナリ未導入のとき `npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net` で自動導入する（`lib/prerequisites.sh` の `check_cc_safety_net()`、Biome と同パターン + WCE と同水準のサプライチェーン hardening。`--ignore-scripts` でも bin link は npm の reify ステップで作成されるため動作に影響なし）。npm prefix が書き込み不可・npm 不在などで失敗した場合は警告して継続（非致命）し、手動インストール手順を案内。dry-run では `[WOULD RUN]` ログのみ、テストハーネスは `SAFETY_NET_SKIP_NPM_INSTALL=1` でスキップ
+
+### Changed
+- **STRICT env に正準名 `CC_SAFETY_NET_STRICT` を追加（legacy 名は互換のため併置）**: upstream の正準環境変数は `CC_SAFETY_NET_STRICT` で、従来の `SAFETY_NET_STRICT` は legacy alias。一方、旧バイナリ（0.7.x 等）は legacy 名しか認識せず、`setup.sh` はバイナリ既存時にインストールをスキップするため、正準名への置き換えだけでは既存環境の strict mode が黙って無効化される（Codex レビュー指摘・0.7.1 で実証）。このため `features/safety-net/hooks.json` は両方の名前を `"1"` で設定する: 新バイナリ（1.x）は正準名を優先し、旧バイナリは legacy 名で fail-closed を維持。既存インストールは update の 3-way merge で追従する。**注意**: `SAFETY_NET_STRICT` の値を手動変更していた場合（例: `"0"` で fail-closed を無効化）、1.x バイナリでは新たに追加される正準名 `CC_SAFETY_NET_STRICT="1"` が legacy 名より優先されるため strict mode が再有効化される（安全側への変化）。カスタム値を維持したい場合は `~/.claude/settings.json` の `CC_SAFETY_NET_STRICT` に再設定すること
+- **cc-safety-net のリポジトリ URL を更新**: upstream が `kenryu42/claude-code-safety-net` から `kenryu42/cc-safety-net` にリネームされたため、README（ja/en）・CLAUDE.md のリンクを新 URL へ更新（旧 URL も GitHub のリダイレクトで到達可能）
+
+### Added
+- **`uninstall.sh` に cc-safety-net の削除プロンプトを追加**: npm グローバルに `cc-safety-net` が存在する場合、削除するか確認する（他の AI CLI でも使われ得るため既定は残す）。削除失敗は非致命で手動コマンドを案内
+- **unit テスト**: `tests/unit/test-safety-net-install.sh` を追加（hooks.json の env / matcher / コマンド、profiles 配線、setup.sh / prerequisites.sh / uninstall.sh の自動導入配線、`check_cc_safety_net()` の stub npm による機能テスト）
+
 ## [0.52.2] - 2026-06-10
 
 ### Fixed
