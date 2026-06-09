@@ -2,11 +2,11 @@
 	"hooks": {
 		"PreToolUse": [
 			{
-				"matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"",
+				"matcher": "Bash",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "#!/bin/bash\necho '[Hook] Review changes before push...' >&2\necho '[Hook] Press Enter to continue or Ctrl+C to abort...' >&2\nread -r"
+						"command": "#!/bin/bash\ninput=$(cat)\ncmd=$(printf '%s' \"$input\" | jq -r '.tool_input.command // \"\"')\nif printf '%s' \"$cmd\" | grep -qE 'git[[:space:]]+push'; then\n  echo '[Hook] Reminder: review your staged changes and target branch before pushing.' >&2\n  echo '[Hook] Tip: run `git log origin/HEAD..HEAD --oneline` and `git diff origin/HEAD..HEAD` to review.' >&2\nfi\nprintf '%s\\n' \"$input\""
 					}
 				]
 			}
