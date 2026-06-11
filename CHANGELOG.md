@@ -33,7 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **commands / skills / memory を整理（#94）**: 例示肥大の削減（計約 1,500 行）、memory/ ドキュメントの実態同期
 - **uninstall を manifest 駆動化（#99）**: ランタイム生成物の削除を manifest の `cleanup_paths` 読み取りへ変更（旧 manifest 向けフォールバック維持）、削除前に `_safe_cleanup_path()` で検証、glob 掃除を空白を含むパスでも安全な実装へ
 - **CI を分割・高速化（#103）**: unit と scenario を別ジョブ化し、scenario を `core` / `update` / `features` の 3 shard で並列実行（`SCENARIO_GROUP` は allowlist 検証付き — 未知値は fail-open せず即エラー）
-- **内部リファクタ（ユーザー動作不変）**: setup.sh 後半約 280 行を `setup_main()` 等へ関数化（#95）、lib/deploy.sh の `build_claude_md` 二重実装統合と semver 判定共通化（#96）、lib/merge.sh / lib/update.sh の重複統合・`eval` 排除（#97）、wizard.sh（1,307 行）を registry / steps に 3 分割（#98）、install.sh / install.ps1 の bootstrap 重複統合（#99）、prerequisites / fonts の重複統合（#100）
+- **内部リファクタ（ユーザー動作不変）**: setup.sh 後半約 280 行を `setup_main()` 等へ関数化（#95）、lib/deploy.sh の `build_claude_md` 二重実装統合と semver 判定共通化（#96 の一部）、lib/update.sh の hook 配備 registry 駆動化と `eval` 排除（#97 の一部 — 3-way merge の単一実装統合は継続課題）、wizard.sh（1,307 行）を registry / steps に 3 分割し hook キーを `HOOK_KEYS` / `HOOK_TOKENS` レジストリへ一元化（#98 の一部 — `ENABLE_*` 設定キーの完全レジストリ化は継続課題）、install.sh の `install_main()` 関数化と更新自動検出の整理（#99 の一部 — `_safe_install_dir` 埋め込みコピーの単一ソース化は継続課題）、prerequisites / fonts の重複統合（#100）
 
 ### Removed
 - **dead code を一掃（#101）**: 旧 bash 版ステータスライン `statusline-command.sh`（Python 版が正）、`skills/strategic-compact/suggest-compact.sh`（重複コピー）、`skills/continuous-learning`（未参照 skill）、実装済み計画書 `docs/superpowers/`、`lib/template.sh` の参照ゼロ関数、未使用 i18n 文字列、profiles の廃止キー `AGENTS_MD` を削除

@@ -139,3 +139,131 @@ if [[ "$_script_smoke_ok" == "true" ]] \
 else
   fail "hook-fixtures: distributed hook scripts should consume real-schema fixtures"
 fi
+
+# ---------------------------------------------------------------------------
+# Issue #103: execute the remaining distributed hooks against real fixtures.
+# Intentionally excluded from fixture execution (static checks elsewhere):
+#   - web-content-update: inline `node` one-liner; not reliably runnable in CI
+#   - safety-net: requires the external cc-safety-net binary, absent in CI
+# ---------------------------------------------------------------------------
+
+# console-log-guard audit-session.sh (SessionEnd) — needs a git repo with an
+# unstaged console.log change; run inside an isolated temp repo + temp HOME.
+_cla_repo="$_hook_tmp/console-audit-repo"
+_cla_home="$_hook_tmp/console-audit-home"
+_cla_err="$_hook_tmp/cla.err"
+_cla_setup_ok=true
+mkdir -p "$_cla_repo" "$_cla_home"
+(
+  export HOME="$_cla_home" GIT_CONFIG_NOSYSTEM=1
+  cd "$_cla_repo" \
+    && git init -q . \
+    && git config user.name "Fixture" \
+    && git config user.email "fixture@example.com" \
+    && printf 'export const ok = true\n' >app.ts \
+    && git add app.ts \
+    && git commit -qm 'init' \
+    && printf "console.log('leftover')\n" >>app.ts
+) >/dev/null 2>&1 || _cla_setup_ok=false
+
+_cla_rc=0
+(
+  cd "$_cla_repo" \
+    && HOME="$_cla_home" GIT_CONFIG_NOSYSTEM=1 \
+      bash "$PROJECT_DIR/features/console-log-guard/scripts/audit-session.sh" \
+      <"$_hook_fixture_dir/sessionend-other.json" >/dev/null 2>"$_cla_err"
+) || _cla_rc=$?
+
+if [[ "$_cla_setup_ok" == "true" ]] \
+  && [[ "$_cla_rc" -eq 0 ]] \
+  && assert_matches "\\[Hook\\] WARNING: console\\.log in app\\.ts" "$(cat "$_cla_err")"; then
+  pass "hook-fixtures: console-log-guard session audit consumes SessionEnd fixture"
+else
+  fail "hook-fixtures: console-log-guard session audit should consume SessionEnd fixture"
+fi
+
+# pre-compact-commit inline PreCompact command — executed verbatim from
+# hooks.json via bash -c with the PreCompact fixture on stdin.
+_pcc_cmd="$(jq -r '.hooks.PreCompact[0].hooks[0].command' "$PROJECT_DIR/features/pre-compact-commit/hooks.json")"
+_pcc_home="$_hook_tmp/pre-compact-home"
+_pcc_repo="$_hook_tmp/pre-compact-repo"
+_pcc_setup_ok=true
+mkdir -p "$_pcc_home" "$_pcc_repo"
+(
+  export HOME="$_pcc_home" GIT_CONFIG_NOSYSTEM=1
+  cd "$_pcc_repo" \
+    && git init -q . \
+    && git config user.name "Fixture" \
+    && git config user.email "fixture@example.com" \
+    && printf 'pending change\n' >notes.txt
+) >/dev/null 2>&1 || _pcc_setup_ok=false
+
+_pcc_rc=0
+HOME="$_pcc_home" GIT_CONFIG_NOSYSTEM=1 CLAUDE_PROJECT_DIR="$_pcc_repo" \
+  bash -c "$_pcc_cmd" <"$_hook_fixture_dir/precompact-manual.json" >/dev/null 2>&1 || _pcc_rc=$?
+
+_pcc_last_subject="$(HOME="$_pcc_home" git -C "$_pcc_repo" log -1 --format=%s 2>/dev/null || true)"
+_pcc_dirty="$(HOME="$_pcc_home" git -C "$_pcc_repo" status --porcelain 2>/dev/null || true)"
+
+if [[ "$_pcc_setup_ok" == "true" ]] \
+  && [[ "$_pcc_rc" -eq 0 ]] \
+  && assert_equals "checkpoint: pre-compact auto-commit" "$_pcc_last_subject" \
+  && assert_empty "$_pcc_dirty"; then
+  pass "hook-fixtures: pre-compact-commit inline command commits inside CLAUDE_PROJECT_DIR"
+else
+  fail "hook-fixtures: pre-compact-commit inline command should commit inside CLAUDE_PROJECT_DIR"
+fi
+
+# pre-compact-commit safety: with CLAUDE_PROJECT_DIR unset the command must
+# NOT fall back to committing in the current working directory.
+_pcc_norun_repo="$_hook_tmp/pre-compact-norun-repo"
+_pcc_norun_setup_ok=true
+mkdir -p "$_pcc_norun_repo"
+(
+  export HOME="$_pcc_home" GIT_CONFIG_NOSYSTEM=1
+  cd "$_pcc_norun_repo" \
+    && git init -q . \
+    && printf 'untouched\n' >stray.txt
+) >/dev/null 2>&1 || _pcc_norun_setup_ok=false
+
+_pcc_norun_rc=0
+(
+  cd "$_pcc_norun_repo" \
+    && env -u CLAUDE_PROJECT_DIR HOME="$_pcc_home" GIT_CONFIG_NOSYSTEM=1 \
+      bash -c "$_pcc_cmd" <"$_hook_fixture_dir/precompact-manual.json" >/dev/null 2>&1
+) || _pcc_norun_rc=$?
+
+_pcc_norun_status="$(HOME="$_pcc_home" git -C "$_pcc_norun_repo" status --porcelain 2>/dev/null || true)"
+_pcc_norun_head="$(HOME="$_pcc_home" git -C "$_pcc_norun_repo" rev-parse --quiet --verify HEAD 2>/dev/null || true)"
+
+if [[ "$_pcc_norun_setup_ok" == "true" ]] \
+  && [[ "$_pcc_norun_rc" -eq 0 ]] \
+  && assert_matches "\\?\\? stray\\.txt" "$_pcc_norun_status" \
+  && assert_empty "$_pcc_norun_head"; then
+  pass "hook-fixtures: pre-compact-commit skips commit when CLAUDE_PROJECT_DIR is unset"
+else
+  fail "hook-fixtures: pre-compact-commit should not commit in cwd when CLAUDE_PROJECT_DIR is unset"
+fi
+
+# auto-update.sh (SessionStart) — offline short-circuit: a missing KIT_DIR/.git
+# returns before any lock/fetch/pull, so no network is touched. A pre-seeded
+# status file proves the script ran and consumed the fixture environment.
+_auf_home="$_hook_tmp/auto-update-home"
+_auf_err="$_hook_tmp/auf.err"
+mkdir -p "$_auf_home/.claude"
+printf 'fixture-previous-failure\n' >"$_auf_home/.claude/.starter-kit-update-status"
+
+_auf_rc=0
+HOME="$_auf_home" KIT_DIR="$_auf_home/.claude-starter-kit-missing" \
+  AUTO_UPDATE_HOOK=SessionStart AUTO_UPDATE_LEGACY=0 \
+  bash "$PROJECT_DIR/features/auto-update/scripts/auto-update.sh" \
+  <"$_hook_fixture_dir/sessionstart-startup.json" >/dev/null 2>"$_auf_err" || _auf_rc=$?
+
+if [[ "$_auf_rc" -eq 0 ]] \
+  && assert_matches "Previous auto-update failed: fixture-previous-failure" "$(cat "$_auf_err")" \
+  && [[ ! -f "$_auf_home/.claude/.starter-kit-update-status" ]] \
+  && [[ ! -d "$_auf_home/.claude/.starter-kit-update.lock" ]]; then
+  pass "hook-fixtures: auto-update consumes SessionStart fixture via offline short-circuit"
+else
+  fail "hook-fixtures: auto-update should consume SessionStart fixture without network access"
+fi

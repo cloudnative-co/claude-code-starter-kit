@@ -9,7 +9,7 @@ _doc_blocker_allowed_path() {
   local path="$1"
   case "$path" in
     *README.md|*CLAUDE.md|*AGENTS.md|*CONTRIBUTING.md) return 0 ;;
-    *HANDOVER.md|*research.md) return 0 ;;
+    HANDOVER.md|*/HANDOVER.md|research.md|*/research.md) return 0 ;;
     *docs/CONTRIB.md|*docs/RUNBOOK.md|*docs/DELETION_LOG.md|*docs/SECURITY.md) return 0 ;;
     *docs/CODEMAPS/*.md|*docs/GUIDES/*.md|*codemaps/*.md) return 0 ;;
     *.claude/evals/*.md|*.claude/skills/*|*.claude/projects/*/memory/*) return 0 ;;

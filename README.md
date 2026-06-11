@@ -354,10 +354,11 @@ cd claude-code-starter-kit
 4. 新しい /init    → Claude Code の対話型 /init を使うか（Custom のみ）
 5. エディタ        → VS Code / Cursor / Zed / Neovim / なし
 6. Ghostty         → ターミナルアプリの自動設定（macOS のみ・Full/Custom）
-7. フック          → 安全装置の選択
-8. プラグイン      → 追加機能の選択
-9. Claude Code 帰属 → コミットとPRの帰属表示を残すか
-10. 確認・デプロイ → 設定内容を確認して実行
+7. フォント        → プログラミングフォントの導入（Custom のみ質問）
+8. フック          → 安全装置の選択
+9. プラグイン      → 追加機能の選択
+10. Claude Code 帰属 → コミットとPRの帰属表示を残すか
+11. 確認・デプロイ   → 設定内容を確認して実行
 ```
 
 > **迷ったら？** すべての質問には「おすすめ」のマークが付いています。
@@ -1091,13 +1092,7 @@ claude-code-starter-kit/
 ├── install.ps1             # Windows PowerShell インストール用
 ├── setup.sh                # メインセットアップ（ウィザード + デプロイ）
 ├── uninstall.sh            # アンインストール用スクリプト
-├── lib/                    # 内部で使うシェルライブラリ
-│   ├── colors.sh           # 色付き表示
-│   ├── detect.sh           # OS の自動検出
-│   ├── prerequisites.sh    # 必要ツールの確認・インストール
-│   ├── ghostty.sh          # Ghostty セットアップ（macOS のみ）
-│   ├── template.sh         # テキスト置換エンジン
-│   └── json-builder.sh     # JSON ファイルの組み立て
+├── lib/                    # 共有シェルライブラリ（detect, deploy, update, merge ほか）
 ├── wizard/                 # 対話型ウィザード
 │   ├── wizard.sh           # ウィザードの入口・設定復元
 │   ├── registry.sh         # hook / plugin レジストリと CLI 解析

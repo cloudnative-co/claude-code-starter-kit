@@ -53,3 +53,25 @@
     fail "$test_name"
   fi
 }
+
+{
+  # Fable 5 safety-classifier regression guard (#76 / #90): the kit-managed
+  # CLAUDE.md section is assembled from CLAUDE.md.base + injected partials and
+  # is ALWAYS in context. Keep the per-language total small so cumulative
+  # security-adjacent prose can't re-trigger the classifier.
+  test_name="context-budget: kit-managed CLAUDE.md sources stay minimal per language"
+  _cb_ok=true
+  for _cb_lang in ja en; do
+    _cb_total="$(cat "$PROJECT_DIR/i18n/$_cb_lang/CLAUDE.md.base" \
+      "$PROJECT_DIR/i18n/$_cb_lang/partials/"*.md \
+      "$PROJECT_DIR/features/codex-plugin/CLAUDE.md.partial.$_cb_lang" 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "${_cb_total:-0}" -le 0 || "${_cb_total:-0}" -gt 60 ]]; then
+      _cb_ok=false
+    fi
+  done
+  if [[ "$_cb_ok" == "true" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name (ja/en kit-managed sources exceed 60 lines)"
+  fi
+}

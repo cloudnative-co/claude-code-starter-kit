@@ -141,7 +141,7 @@ cd claude-code-starter-kit
 ## Wizard Flow
 
 ```
-Language → Profile → Codex Plugin → New /init → Editor → Hooks → Plugins → Claude Code Attribution → Confirm & Deploy
+Language → Profile → Codex Plugin → New /init → Editor → Ghostty → Fonts → Hooks → Plugins → Claude Code Attribution → Confirm & Deploy
 ```
 
 Each step shows numbered options with descriptions. Recommended choices are marked.
@@ -375,12 +375,7 @@ claude-code-starter-kit/
 ├── install.ps1             # Windows PowerShell bootstrap
 ├── setup.sh                # Main setup script (wizard + deploy)
 ├── uninstall.sh            # Manifest-based clean uninstall
-├── lib/                    # Shell libraries
-│   ├── colors.sh           # Terminal color helpers
-│   ├── detect.sh           # OS/WSL detection
-│   ├── prerequisites.sh    # Dependency checks
-│   ├── template.sh         # Text template engine
-│   └── json-builder.sh     # JSON builder (jq-based)
+├── lib/                    # Shared shell libraries (detect, deploy, update, merge, etc.)
 ├── wizard/                 # Interactive wizard
 │   ├── wizard.sh           # Wizard entrypoint and config restore
 │   ├── registry.sh         # Hook/plugin registries and CLI parsing

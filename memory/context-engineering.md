@@ -49,7 +49,7 @@
 
 The starter kit currently deploys hooks for these event families:
 
-SessionStart, SessionEnd, PreToolUse, PostToolUse, PreCompact, PostCompact, Stop
+SessionStart, SessionEnd, PreToolUse, PostToolUse, PreCompact, PostCompact
 
 ### Compaction Flow
 - `PreCompact`: Save notes before context is summarized

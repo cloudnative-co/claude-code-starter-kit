@@ -679,4 +679,8 @@ setup_main() {
   setup_finalize
 }
 
-setup_main "$@"
+# テストから source して関数を直接検証できるようにする（install.sh 末尾と同形式）。
+# unset（パイプ実行）または $0 一致（ファイル実行）で main を呼び、source 時のみスキップ。
+if [[ "${BASH_SOURCE[0]:-}" == "" || "${BASH_SOURCE[0]:-}" == "$0" ]]; then
+  setup_main "$@"
+fi
