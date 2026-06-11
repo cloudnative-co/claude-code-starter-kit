@@ -299,6 +299,36 @@ _prompt_file_action() {
   done
 }
 
+_is_auto_managed_web_content_package() {
+  local path="$1"
+  case "$path" in
+    */skills/web-content-extraction/package.json|*/skills/web-content-extraction/package-lock.json)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+_find_update_content_files() {
+  local src_dir="$1"
+  if declare -F _find_distribution_files >/dev/null 2>&1; then
+    _find_distribution_files "$src_dir"
+  else
+    find "$src_dir" -type f -print0 2>/dev/null
+  fi
+}
+
+_count_update_files_in_dir() {
+  local src_dir="$1"
+  local total=0 _file
+  while IFS= read -r -d '' _file; do
+    total=$((total + 1))
+  done < <(_find_update_content_files "$src_dir")
+  printf '%s' "$total"
+}
+
 # ---------------------------------------------------------------------------
 # _update_file - Update a single file with user change detection
 #
@@ -365,6 +395,9 @@ _update_file() {
       # Kit differs from current — kit_owned files (hook scripts) are safe
       # to overwrite unconditionally. Other files: non-interactive keeps
       # current (protects user customizations); interactive asks user.
+      if _is_auto_managed_web_content_package "$current"; then
+        return 0
+      fi
       if [[ "$kit_owned" != "true" ]]; then
         if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
           return 1
@@ -395,6 +428,9 @@ _update_file() {
   fi
 
   # Both changed → ask user
+  if _is_auto_managed_web_content_package "$current"; then
+    return 0
+  fi
   _prompt_file_action "$current" "$snapshot" "$newkit"
   case "$_FILE_ACTION" in
     append)
@@ -412,15 +448,16 @@ _update_file() {
 # ---------------------------------------------------------------------------
 # _update_hook_feature - Update hook scripts for a single feature
 #
-# Usage: _update_hook_feature <feature_name> <src_dir> <claude_dir> <snapshot_dir> <updated_var> <skipped_var>
+# Usage: _update_hook_feature <feature_name> <src_dir> <claude_dir> <snapshot_dir>
 # ---------------------------------------------------------------------------
+_UPDATE_UPDATED_FILES=()
+_UPDATE_SKIPPED_FILES=()
+
 _update_hook_feature() {
   local feature_name="$1"
   local src_dir="$2"
   local claude_dir="$3"
   local snapshot_dir="$4"
-  local updated_var="$5"
-  local skipped_var="$6"
 
   local dest_dir="${claude_dir}/hooks/${feature_name}"
   local snap_dir="${snapshot_dir}/hooks/${feature_name}"
@@ -437,9 +474,9 @@ _update_hook_feature() {
 
     if _update_file "$dest_file" "$snap_file" "$src_file" "true"; then
       chmod +x "$dest_file" 2>/dev/null || true
-      eval "${updated_var}+=(\"\$dest_file\")"
+      _UPDATE_UPDATED_FILES+=("$dest_file")
     else
-      eval "${skipped_var}+=(\"hooks/${feature_name}/${basename_file}\")"
+      _UPDATE_SKIPPED_FILES+=("hooks/${feature_name}/${basename_file}")
     fi
   done < <(find "$src_dir" -type f -print0 2>/dev/null)
 }
@@ -451,49 +488,51 @@ _update_hook_feature() {
 # snapshot baseline, user customizations are detected and preserved. With a
 # bootstrapped snapshot (no real baseline), kit versions overwrite unconditionally.
 #
-# Usage: _update_hook_scripts <claude_dir> <snapshot_dir> <updated_array_name> <skipped_array_name>
+# Usage: _update_hook_scripts <claude_dir> <snapshot_dir>
 # ---------------------------------------------------------------------------
 _update_hook_scripts() {
   local claude_dir="$1"
   local snapshot_dir="$2"
-  local updated_var="$3"
-  local skipped_var="$4"
 
-  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
-    _update_hook_feature "memory-persistence" \
-      "$PROJECT_DIR/features/memory-persistence/scripts" \
-      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
-  fi
+  _UPDATE_UPDATED_FILES=()
+  _UPDATE_SKIPPED_FILES=()
 
-  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
-    _update_hook_feature "strategic-compact" \
-      "$PROJECT_DIR/features/strategic-compact/scripts" \
-      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
-  fi
+  local feature_name flag src_dir
+  for feature_name in "${_FEATURE_ORDER[@]}"; do
+    [[ "${_FEATURE_HAS_SCRIPTS[$feature_name]+set}" ]] || continue
+    flag="${_FEATURE_FLAGS[$feature_name]:-}"
+    [[ -n "$flag" ]] || continue
+    is_true "${!flag:-false}" || continue
+    src_dir="$PROJECT_DIR/features/${feature_name}/scripts"
+    _update_hook_feature "$feature_name" "$src_dir" "$claude_dir" "$snapshot_dir"
+  done
+}
 
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    _update_hook_feature "auto-update" \
-      "$PROJECT_DIR/features/auto-update/scripts" \
-      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
-  fi
+_remove_retired_managed_files() {
+  local claude_dir="$1"
+  local snapshot_dir="$2"
+  local manifest="${claude_dir}/.starter-kit-manifest.json"
+  [[ -f "$manifest" ]] || return 0
 
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    _update_hook_feature "statusline" \
-      "$PROJECT_DIR/features/statusline/scripts" \
-      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
-  fi
+  local current_files_json
+  current_files_json="$(managed_files_json)"
 
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    _update_hook_feature "doc-size-guard" \
-      "$PROJECT_DIR/features/doc-size-guard/scripts" \
-      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
-  fi
-
-  if is_true "${ENABLE_FEATURE_RECOMMENDATION:-false}"; then
-    _update_hook_feature "feature-recommendation" \
-      "$PROJECT_DIR/features/feature-recommendation/scripts" \
-      "$claude_dir" "$snapshot_dir" "$updated_var" "$skipped_var"
-  fi
+  local old_file rel_file
+  while IFS= read -r old_file; do
+    [[ -n "$old_file" ]] || continue
+    if jq -e --arg file "$old_file" 'index($file) != null' <<< "$current_files_json" >/dev/null 2>&1; then
+      continue
+    fi
+    case "$old_file" in
+      "$claude_dir/settings.json"|"$claude_dir/CLAUDE.md") continue ;;
+      "$claude_dir"/*)
+        rel_file="${old_file#"$claude_dir"/}"
+        rm -f "$old_file"
+        rm -f "$snapshot_dir/$rel_file"
+        ok "Removed retired managed file: $rel_file"
+        ;;
+    esac
+  done < <(jq -r '.files[]? // empty' "$manifest" 2>/dev/null)
 }
 
 _count_update_content_files() {
@@ -505,38 +544,22 @@ _count_update_content_files() {
     flag_var="INSTALL_$(printf '%s' "$dir" | tr '[:lower:]' '[:upper:]')"
     [[ -d "$src_dir" ]] || continue
     is_true "${!flag_var:-false}" || continue
-    total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
+    total=$((total + $(_count_update_files_in_dir "$src_dir")))
   done
   printf '%s' "$total"
 }
 
 _count_update_hook_files() {
   local total=0
-  local src_dir
-  if is_true "$ENABLE_MEMORY_PERSISTENCE"; then
-    src_dir="$PROJECT_DIR/features/memory-persistence/scripts"
+  local feature_name flag src_dir
+  for feature_name in "${_FEATURE_ORDER[@]}"; do
+    [[ "${_FEATURE_HAS_SCRIPTS[$feature_name]+set}" ]] || continue
+    flag="${_FEATURE_FLAGS[$feature_name]:-}"
+    [[ -n "$flag" ]] || continue
+    is_true "${!flag:-false}" || continue
+    src_dir="$PROJECT_DIR/features/${feature_name}/scripts"
     [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
-  fi
-  if is_true "$ENABLE_STRATEGIC_COMPACT"; then
-    src_dir="$PROJECT_DIR/features/strategic-compact/scripts"
-    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
-  fi
-  if is_true "${ENABLE_AUTO_UPDATE:-false}"; then
-    src_dir="$PROJECT_DIR/features/auto-update/scripts"
-    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
-  fi
-  if is_true "${ENABLE_STATUSLINE:-false}"; then
-    src_dir="$PROJECT_DIR/features/statusline/scripts"
-    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
-  fi
-  if is_true "${ENABLE_DOC_SIZE_GUARD:-false}"; then
-    src_dir="$PROJECT_DIR/features/doc-size-guard/scripts"
-    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
-  fi
-  if is_true "${ENABLE_FEATURE_RECOMMENDATION:-false}"; then
-    src_dir="$PROJECT_DIR/features/feature-recommendation/scripts"
-    [[ -d "$src_dir" ]] && total=$((total + $(find "$src_dir" -type f 2>/dev/null | wc -l | tr -d ' ')))
-  fi
+  done
   printf '%s' "$total"
 }
 
@@ -722,7 +745,7 @@ run_update() {
       else
         skipped_files+=("${dir}/${rel_file}")
       fi
-    done < <(find "$src_dir" -type f -print0 2>/dev/null)
+    done < <(_find_update_content_files "$src_dir")
   done
 
   # --- Phase 5: Hook scripts (update-aware) ---
@@ -732,7 +755,10 @@ run_update() {
   if [[ "$_hook_total" -gt 0 ]]; then
     _progress_summary "Hook scripts" "${_hook_total} files to check"
   fi
-  _update_hook_scripts "$claude_dir" "$snapshot_dir" updated_files skipped_files
+  _update_hook_scripts "$claude_dir" "$snapshot_dir"
+  updated_files+=("${_UPDATE_UPDATED_FILES[@]+"${_UPDATE_UPDATED_FILES[@]}"}")
+  skipped_files+=("${_UPDATE_SKIPPED_FILES[@]+"${_UPDATE_SKIPPED_FILES[@]}"}")
+  _remove_retired_managed_files "$claude_dir" "$snapshot_dir"
 
   # --- Phase 6: Update snapshot for each updated file ---
   _progress_step 5 5 "Snapshot and summary"
@@ -813,7 +839,7 @@ _check_auto_update_health() {
   local has_session_end=false
   local require_session_end=false
 
-  if _auto_update_supports_session_end_async; then
+  if _claude_supports_async_hooks "2.1.89"; then
     require_session_end=true
   fi
 

@@ -57,10 +57,12 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 |---|---|---|---|
 | `ENABLE_SAFETY_NET` | Safety Net | Block destructive commands | Yes |
 | `ENABLE_AUTO_UPDATE` | Auto Update | Check for starter kit updates on session start | Yes |
+| `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Check web extraction skill dependency updates | Yes |
 | `ENABLE_TMUX_HOOKS` | Tmux Reminder | Encourage tmux for long-running work | Yes |
 | `ENABLE_GIT_PUSH_REVIEW` | Git Push Review | Pause before push and open a diff | Yes |
 | `ENABLE_DOC_BLOCKER` | Doc Blocker | Prevent unnecessary `.md` / `.txt` files | Yes |
 | `ENABLE_PRETTIER_HOOKS` | Prettier Auto-format | Format JS / TS edits | Yes |
+| `ENABLE_BIOME_HOOKS` | Biome Auto-format | Format and lint JS / TS edits | Yes |
 | `ENABLE_CONSOLE_LOG_GUARD` | Console Log Guard | Warn on leftover `console.log` | Yes |
 | `ENABLE_MEMORY_PERSISTENCE` | Memory Persistence | Persist important knowledge | Yes |
 | `ENABLE_STRATEGIC_COMPACT` | Strategic Compact | Compact suggestion support | Yes |
@@ -68,6 +70,8 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 | `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Commit | Commit helper before compact | Yes |
 | `ENABLE_STATUSLINE` | Statusline | Statusline feature toggle | Yes |
 | `ENABLE_DOC_SIZE_GUARD` | Doc Size Guard | Warn when `CLAUDE.md` / `AGENTS.md` is too large | Yes |
+| `ENABLE_NO_FLICKER` | No Flicker | Reduce display flicker | Yes |
+| `ENABLE_FEATURE_RECOMMENDATION` | Feature Recommendation | Notify about newly available features | Yes |
 
 ## Common Misunderstandings
 

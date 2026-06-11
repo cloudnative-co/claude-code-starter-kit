@@ -189,3 +189,32 @@ else
   fail "recommendation: _add_dismissed_feature failed on unset DISMISSED_FEATURES"
 fi
 DISMISSED_FEATURES=""
+
+# ══════════════════════════════════════════════════════════════════════════
+# _detect_and_write_pending_features: preserve existing EXIT trap
+# ══════════════════════════════════════════════════════════════════════════
+
+_rec_tmp="$(mktemp -d)"
+_SETUP_TMP_FILES+=("$_rec_tmp")
+PROFILE="minimal"
+PROJECT_DIR="$PROJECT_DIR"
+DISMISSED_FEATURES=""
+# shellcheck source=lib/features.sh
+source "$PROJECT_DIR/lib/features.sh"
+for _rec_feat in "${_FEATURE_ORDER[@]}"; do
+  _rec_flag="${_FEATURE_FLAGS[$_rec_feat]}"
+  printf -v "$_rec_flag" '%s' ""
+done
+trap 'printf cleanup >/dev/null' EXIT
+_rec_trap_before="$(trap -p EXIT)"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+_rec_trap_after="$(trap -p EXIT)"
+trap - EXIT
+
+if [[ "$_RF_RC" -eq 0 ]] \
+  && assert_equals "$_rec_trap_before" "$_rec_trap_after" \
+  && assert_file_exists "$_rec_tmp/.starter-kit-pending-features.json"; then
+  pass "recommendation: pending feature detection preserves existing EXIT trap"
+else
+  fail "recommendation: pending feature detection should not replace EXIT trap"
+fi

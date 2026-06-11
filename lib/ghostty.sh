@@ -15,20 +15,8 @@ GHOSTTY_INCOMPLETE=()
 # Config path detection
 # ---------------------------------------------------------------------------
 _ghostty_config_dir() {
-  case "$(uname -s)" in
-    Darwin) printf '%s' "$HOME/Library/Application Support/com.mitchellh.ghostty" ;;
-    MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*)
-      if [[ -n "${APPDATA:-}" ]]; then
-        printf '%s' "$(cygpath -u "$APPDATA")/Ghostty"
-      else
-        printf '%s' "$HOME/.config/ghostty"
-      fi
-      ;;
-    *)      printf '%s' "$HOME/.config/ghostty" ;;
-  esac
+  printf '%s' "$HOME/Library/Application Support/com.mitchellh.ghostty"
 }
-
-# _ghostty_ensure_brew removed in v0.30.0 — use _ensure_homebrew from prerequisites.sh
 
 # ---------------------------------------------------------------------------
 # Backup existing config
@@ -57,60 +45,28 @@ install_ghostty() {
     return 0
   fi
 
-  local uname_s
-  uname_s="$(uname -s)"
-
-  case "$uname_s" in
-    Darwin)
-      _ensure_homebrew
-      if ! _brew_is_usable 2>/dev/null; then
-        warn "Homebrew is not available. Cannot install Ghostty."
-        info "  Install manually: https://ghostty.org/"
-        return 1
-      fi
-      info "Installing Ghostty..."
-      brew install --cask ghostty 2>/dev/null || true
-      # brew may report success without installing if the cask is registered
-      # but the app was deleted. Reinstall to restore the actual .app bundle.
-      if [[ ! -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
-        info "  App not found after install, reinstalling..."
-        brew reinstall --cask ghostty || true
-      fi
-      if [[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
-        # Remove macOS quarantine attribute to prevent Gatekeeper block on first launch
-        xattr -d com.apple.quarantine /Applications/Ghostty.app 2>/dev/null || true
-        ok "Ghostty installed"
-        return 0
-      else
-        warn "Failed to install Ghostty. Install manually: https://ghostty.org/"
-        return 1
-      fi
-      ;;
-    MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*)
-      if command -v winget.exe &>/dev/null; then
-        info "Installing Ghostty via winget..."
-        if winget.exe install --id=com.mitchellh.ghostty --accept-package-agreements --accept-source-agreements 2>/dev/null; then
-          ok "Ghostty installed"
-          return 0
-        else
-          warn "Failed to install Ghostty via winget."
-          info "  Install manually: https://ghostty.org/download"
-          return 1
-        fi
-      else
-        warn "winget not available. Cannot install Ghostty."
-        info "  Install manually: https://ghostty.org/download"
-        return 1
-      fi
-      ;;
-    *)
-      warn "$STR_GHOSTTY_SKIP_PLATFORM"
-      return 1
-      ;;
-  esac
+  _ensure_homebrew
+  if ! _brew_is_usable 2>/dev/null; then
+    warn "Homebrew is not available. Cannot install Ghostty."
+    info "  Install manually: https://ghostty.org/"
+    return 1
+  fi
+  info "Installing Ghostty..."
+  brew install --cask ghostty 2>/dev/null || true
+  # brew may report success without installing if the cask is registered
+  # but the app was deleted. Reinstall to restore the actual .app bundle.
+  if [[ ! -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
+    info "  App not found after install, reinstalling..."
+    brew reinstall --cask ghostty || true
+  fi
+  if [[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
+    xattr -d com.apple.quarantine /Applications/Ghostty.app 2>/dev/null || true
+    ok "Ghostty installed"
+    return 0
+  fi
+  warn "Failed to install Ghostty. Install manually: https://ghostty.org/"
+  return 1
 }
-
-# install_hackgen_font removed in v0.22.2 — now uses install_hackgen_nf from lib/fonts.sh
 
 # ---------------------------------------------------------------------------
 # Deploy Ghostty config
@@ -124,17 +80,7 @@ deploy_ghostty_config() {
   mkdir -p "$config_dir"
   _backup_ghostty_config
 
-  local uname_s
-  uname_s="$(uname -s)"
-  case "$uname_s" in
-    MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*)
-      # Strip macOS-specific settings (macos-*)
-      grep -v '^macos-' "$template_file" > "$config_file"
-      ;;
-    *)
-      cp -a "$template_file" "$config_file"
-      ;;
-  esac
+  cp -a "$template_file" "$config_file"
 
   ok "$STR_GHOSTTY_CONFIG_DEPLOYED: $config_file"
 }

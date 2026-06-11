@@ -1,0 +1,8 @@
+{
+  "session_id": "fixture-session-bash-push",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git push origin HEAD"
+  }
+}

@@ -27,15 +27,12 @@ else
 fi
 
 _biome_cmd="$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$_biome_hooks")"
-if [[ "$_biome_cmd" == *'input=$(cat)'* ]] \
-  && [[ "$_biome_cmd" == *'\.(ts|tsx|js|jsx)$'* ]] \
-  && [[ "$_biome_cmd" == *"command -v biome"* ]] \
-  && [[ "$_biome_cmd" == *"biome check --write"* ]] \
-  && [[ "$_biome_cmd" == *"|| true"* ]] \
-  && [[ "$_biome_cmd" == *"printf '%s\\n' \"\$input\""* ]]; then
-  pass "biome-hooks: hook command preserves stdin, filters JS/TS files, and handles failures"
+if [[ "$_biome_cmd" == "__HOME__/.claude/hooks/biome-hooks/format-file.sh" ]] \
+  && grep -q "biome check --write" "$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh" \
+  && grep -q "|| true" "$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh"; then
+  pass "biome-hooks: hook command uses external script and handles failures"
 else
-  fail "biome-hooks: hook command is missing stdin passthrough, file filter, or graceful failure handling"
+  fail "biome-hooks: hook command should use external script with graceful failure handling"
 fi
 
 if jq -e '.permissions.allow | index("Bash(biome:*)") != null' "$_permissions" >/dev/null 2>&1; then
@@ -54,20 +51,16 @@ else
 fi
 
 if grep -q 'STR_HOOKS_BIOME=' "$PROJECT_DIR/i18n/en/strings.sh" \
-  && grep -q 'STR_HOOKS_BIOME=' "$PROJECT_DIR/i18n/ja/strings.sh" \
-  && grep -q 'STR_CONFIRM_BIOME=' "$PROJECT_DIR/i18n/en/strings.sh" \
-  && grep -q 'STR_CONFIRM_BIOME=' "$PROJECT_DIR/i18n/ja/strings.sh"; then
+  && grep -q 'STR_HOOKS_BIOME=' "$PROJECT_DIR/i18n/ja/strings.sh"; then
   pass "biome-hooks: i18n strings exist in both languages"
 else
   fail "biome-hooks: missing Biome i18n strings"
 fi
 
 _tmpdir="$(mktemp -d)"
-_script="$_tmpdir/hook.sh"
 _input='{"tool_input":{"file_path":"'"$_tmpdir"'/sample.ts"}}'
 printf 'const value=1\n' > "$_tmpdir/sample.ts"
-jq -r '.hooks.PostToolUse[0].hooks[0].command' "$_biome_hooks" > "$_script"
-chmod +x "$_script"
+_script="$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh"
 
 cat > "$_tmpdir/biome" <<'EOF'
 #!/bin/bash
@@ -76,11 +69,10 @@ EOF
 chmod +x "$_tmpdir/biome"
 _saved_path="$PATH"
 export PATH="$_tmpdir:$PATH"
-_stdout="$(printf '%s' "$_input" | bash "$_script")"
-if assert_equals "$_input" "$_stdout" "Hook should preserve stdin on successful biome run"; then
-  pass "biome-hooks: hook preserves stdin when biome succeeds"
+if printf '%s' "$_input" | bash "$_script" >/dev/null; then
+  pass "biome-hooks: hook succeeds when biome succeeds"
 else
-  fail "biome-hooks: hook did not preserve stdin when biome succeeded"
+  fail "biome-hooks: hook failed when biome succeeded"
 fi
 
 cat > "$_tmpdir/biome" <<'EOF'
@@ -88,11 +80,10 @@ cat > "$_tmpdir/biome" <<'EOF'
 exit 1
 EOF
 chmod +x "$_tmpdir/biome"
-_stdout="$(printf '%s' "$_input" | bash "$_script")"
-if assert_equals "$_input" "$_stdout" "Hook should preserve stdin on failing biome run"; then
-  pass "biome-hooks: hook preserves stdin when biome fails"
+if printf '%s' "$_input" | bash "$_script" >/dev/null; then
+  pass "biome-hooks: hook preserves success when biome fails"
 else
-  fail "biome-hooks: hook did not preserve stdin when biome failed"
+  fail "biome-hooks: hook should remain successful when biome fails"
 fi
 
 export PATH="$_saved_path"

@@ -55,21 +55,13 @@ Recommended minimum:
 Add `argument-hint` only when the skill actually takes parameters.
 Use `user-invocable: false` only when the skill should not appear in the `/` menu.
 
-## RPI Workflow (Research → Plan → Implement)
+## Research → Plan → Implement
 
-### Directory Structure
-```
-rpi/{feature-slug}/
-  REQUEST.md          # Initial spec
-  research/           # Feasibility + GO/NO-GO
-  plan/               # Product, UX, Engineering specs
-  implement/          # Execution records
-```
+Use the kit's existing commands for staged work:
 
-### Phases
-1. `/rpi:research` - Feasibility analysis, produces GO/NO-GO verdict
-2. `/rpi:plan` - User stories, UX flows, technical architecture
-3. `/rpi:implement` - Phase-by-phase development with validation
+1. `/research` - gather facts, constraints, and feasibility notes
+2. `/plan` - produce implementation steps, risks, and checks
+3. `/tdd` or direct implementation - execute with focused verification
 
 ## Agent SDK vs CLI
 - CLI: 110+ system prompt strings, auto-loads CLAUDE.md

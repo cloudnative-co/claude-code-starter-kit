@@ -9,11 +9,8 @@ argument-hint: <url>
 
 ## 手順
 
-1. **入力 URL を検証してから Defuddle で抽出する**。`$ARGUMENTS` は信頼できない入力として扱い、
-   **Bash コマンド文字列へそのまま展開しない**:
-   - `$ARGUMENTS` が単一の http(s) URL（`^https?://`、空白なし、シェル特殊文字
-     `` ` `` `"` `'` `;` `|` `&` `$` `()` `<>` 改行 を含まない）か確認。該当しなければ拒否。
-   - 検証済み URL を単一引数として渡す（`<検証済みURL>` を置換）:
+1. **web-content-extraction skill の URL 検証手順に従って抽出する**。`$ARGUMENTS` は信頼できない入力として扱い、
+   検証済みの単一 URL だけを単一引数で渡す:
    ```bash
    node ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs '<検証済みURL>'
    ```

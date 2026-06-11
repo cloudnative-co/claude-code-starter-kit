@@ -2,7 +2,7 @@
 # SessionStart Hook - Load previous context on new session
 #
 # Runs when a new Claude session starts. Checks for recent session
-# files and notifies Claude of available context to load.
+# files and emits available context on stdout.
 #
 # Hook config (in ~/.claude/settings.json):
 # {
@@ -25,13 +25,16 @@ recent_sessions=$(find "$SESSIONS_DIR" -name "*.tmp" -mtime -7 2>/dev/null | wc 
 
 if [ "$recent_sessions" -gt 0 ]; then
   latest=$(ls -t "$SESSIONS_DIR"/*.tmp 2>/dev/null | head -1)
-  echo "[SessionStart] Found $recent_sessions recent session(s)" >&2
-  echo "[SessionStart] Latest: $latest" >&2
+  {
+    echo "[SessionStart] Found $recent_sessions recent session note(s)."
+    echo "[SessionStart] Latest note: $latest"
+    sed -n '1,80p' "$latest"
+  }
 fi
 
 # Check for learned skills
 learned_count=$(find "$LEARNED_DIR" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
 
 if [ "$learned_count" -gt 0 ]; then
-  echo "[SessionStart] $learned_count learned skill(s) available in $LEARNED_DIR" >&2
+  echo "[SessionStart] $learned_count learned skill(s) available in $LEARNED_DIR"
 fi

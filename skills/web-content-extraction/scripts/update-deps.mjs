@@ -24,6 +24,7 @@ const SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
 const LOG_DIR = join(SKILL_DIR, 'logs')
 const LOG_FILE = join(LOG_DIR, 'update.log')
 const LOCK_FILE = join(LOG_DIR, '.update.lock')
+const IN_PROGRESS_FILE = join(LOG_DIR, '.update-in-progress')
 const STAMP_FILE = join(LOG_DIR, '.last-update-check')
 const PKG_JSON = join(SKILL_DIR, 'package.json')
 const LOCK_JSON = join(SKILL_DIR, 'package-lock.json')
@@ -119,6 +120,61 @@ function releaseLock() {
   }
 }
 
+function backupFiles() {
+  const backups = []
+  for (const f of [PKG_JSON, LOCK_JSON]) {
+    if (existsSync(f)) {
+      copyFileSync(f, f + '.bak')
+      backups.push(f)
+    }
+  }
+  return backups
+}
+
+function existingBackups() {
+  return [PKG_JSON, LOCK_JSON].filter((f) => existsSync(f + '.bak'))
+}
+
+function markUpdateInProgress(specs) {
+  ensureLogDir()
+  writeFileSync(IN_PROGRESS_FILE, JSON.stringify({ pid: process.pid, specs, startedAt: new Date().toISOString() }))
+}
+
+function clearUpdateInProgress() {
+  try {
+    rmSync(IN_PROGRESS_FILE, { force: true })
+  } catch {
+    /* ignore */
+  }
+}
+
+function runTestGate() {
+  execFileSync('npm', ['test'], {
+    cwd: SKILL_DIR,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 300000,
+  })
+}
+
+function recoverInterruptedUpdate() {
+  if (!existsSync(IN_PROGRESS_FILE)) return true
+  const backups = existingBackups()
+  log('found interrupted dependency update; re-running test gate')
+  try {
+    runTestGate()
+    for (const f of backups) rmSync(f + '.bak', { force: true })
+    clearUpdateInProgress()
+    log('interrupted update accepted: tests pass')
+    return true
+  } catch (error) {
+    log(`interrupted update failed tests — rolling back. (${error?.message ?? 'tests failed'})`)
+    rollback(backups)
+    clearUpdateInProgress()
+    return false
+  }
+}
+
 function throttled() {
   if (force) return false
   try {
@@ -146,6 +202,10 @@ function main() {
 
   let outcome = 'ok' // becomes 'failed' on any check/install/test failure -> short backoff
   try {
+    if (!recoverInterruptedUpdate()) {
+      outcome = 'failed'
+      return 1
+    }
     log('check start')
 
     const updates = []
@@ -177,16 +237,11 @@ function main() {
     }
 
     // Back up manifests before mutating.
-    const backups = []
-    for (const f of [PKG_JSON, LOCK_JSON]) {
-      if (existsSync(f)) {
-        copyFileSync(f, f + '.bak')
-        backups.push(f)
-      }
-    }
+    const backups = backupFiles()
 
     const specs = updates.map((u) => `${u.pkg}@${u.latest}`)
     log(`applying updates: ${specs.join(', ')}`)
+    markUpdateInProgress(specs)
     try {
       // --ignore-scripts: never run lifecycle scripts of newly resolved deps;
       // the test gate only catches broken behavior, not malicious install hooks.
@@ -200,21 +255,18 @@ function main() {
       log(`npm install 失敗: ${error?.message ?? error} — rolling back`)
       outcome = 'failed'
       rollback(backups)
+      clearUpdateInProgress()
       return 1
     }
 
     // Verify with the test suite.
     try {
-      execFileSync('npm', ['test'], {
-        cwd: SKILL_DIR,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 300000,
-      })
+      runTestGate()
     } catch (error) {
       log(`npm test FAIL after update — rolling back. (${error?.message ?? 'tests failed'})`)
       outcome = 'failed'
       rollback(backups)
+      clearUpdateInProgress()
       return 1
     }
 
@@ -226,6 +278,7 @@ function main() {
         /* ignore */
       }
     }
+    clearUpdateInProgress()
     const summary = updates.map((u) => `${u.pkg} ${u.installed}->${u.latest}`).join(', ')
     log(`DONE updated (tests pass): ${summary}`)
     return 0

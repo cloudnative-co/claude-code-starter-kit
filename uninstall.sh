@@ -74,6 +74,13 @@ _json_files() {
   fi
 }
 
+_json_cleanup_paths() {
+  local file="$1"
+  if command -v jq &>/dev/null; then
+    jq -r '.cleanup_paths[]? // empty' "$file" 2>/dev/null
+  fi
+}
+
 _json_file_count() {
   # Usage: _json_file_count <file>
   local file="$1"
@@ -82,6 +89,50 @@ _json_file_count() {
   else
     _json_files "$file" | wc -l | tr -d ' '
   fi
+}
+
+_safe_cleanup_path() {
+  local path="${1%/}"
+  [[ -z "$path" ]] && return 1
+  case "$path" in
+    "$CLAUDE_DIR"/*|"$HOME/.claude-starter-kit.conf") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_remove_cleanup_path() {
+  local path="$1"
+  [[ -n "$path" ]] || return 0
+  if [[ "$path" == *'*'* ]]; then
+    case "$path" in
+      "$CLAUDE_DIR/tmp/tool-count-"*) rm -f $path 2>/dev/null || true ;;
+      *) warn "Skipping unsupported cleanup glob: $path" ;;
+    esac
+    return 0
+  fi
+  if _safe_cleanup_path "$path"; then
+    rm -rf "$path" 2>/dev/null || true
+  else
+    warn "Skipping unsafe cleanup path: $path"
+  fi
+}
+
+_safe_install_dir() {
+  local dir="${1%/}"
+  [[ -z "$dir" ]] && return 1
+  [[ "$dir" == "$HOME" || "$dir" == "${HOME%/}" ]] && return 1
+  case "$dir" in
+    /|/bin|/bin/*|/sbin|/sbin/*|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/tmp|/tmp/*)
+      return 1 ;;
+    /home|/root|/opt|/Applications|/Applications/*|/Library|/Library/*)
+      return 1 ;;
+    /System|/System/*|/dev|/dev/*|/proc|/proc/*)
+      return 1 ;;
+  esac
+  local depth
+  depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
+  [[ "$depth" -lt 3 ]] && return 1
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -255,24 +306,42 @@ while IFS= read -r file; do
   fi
 done < <(_json_files "$MANIFEST")
 
-# Remove legacy AGENTS.md from older releases that deployed it into ~/.claude
+# Legacy cleanup for pre-manifest-v2 releases that deployed AGENTS.md.
 if [[ -f "$CLAUDE_DIR/AGENTS.md" ]]; then
   rm -f "$CLAUDE_DIR/AGENTS.md"
   removed=$((removed + 1))
 fi
 
-# Remove manifest itself
-rm -f "$MANIFEST"
+# ---------------------------------------------------------------------------
+# Remove manifest-declared runtime artifacts. Older manifests may not have this
+# list yet; the fallback below covers the legacy v2 transition.
+# ---------------------------------------------------------------------------
+_cleanup_paths_seen=false
+while IFS= read -r _cleanup_path; do
+  [[ -z "$_cleanup_path" ]] && continue
+  _cleanup_paths_seen=true
+  _remove_cleanup_path "$_cleanup_path"
+done < <(_json_cleanup_paths "$MANIFEST")
 
-# ---------------------------------------------------------------------------
-# Remove web-content-extraction skill runtime artifacts
-# node_modules/ and logs/ are created post-deploy (npm install / auto-update)
-# and are NOT tracked in the manifest, so remove the whole skill dir explicitly
-# for a clean uninstall. The directory is entirely kit-managed.
-# ---------------------------------------------------------------------------
-if [[ -d "$CLAUDE_DIR/skills/web-content-extraction" ]]; then
-  rm -rf "$CLAUDE_DIR/skills/web-content-extraction"
+if [[ "$_cleanup_paths_seen" != "true" ]]; then
+  for _cleanup_path in \
+    "$CLAUDE_DIR/skills/web-content-extraction" \
+    "$CLAUDE_DIR/.starter-kit-update.lock" \
+    "$CLAUDE_DIR/.starter-kit-update-status" \
+    "$CLAUDE_DIR/.starter-kit-update-cache" \
+    "$CLAUDE_DIR/.starter-kit-merge-prefs.json" \
+    "$CLAUDE_DIR/.starter-kit-pending-features.json" \
+    "$CLAUDE_DIR/sessions" \
+    "$CLAUDE_DIR/tmp/tool-count-*" \
+    "$CLAUDE_DIR/.starter-kit-snapshot" \
+    "$CLAUDE_DIR/.starter-kit-last-backup" \
+    "$HOME/.claude-starter-kit.conf"; do
+    _remove_cleanup_path "$_cleanup_path"
+  done
 fi
+
+# Remove manifest itself after reading manifest-declared cleanup paths.
+rm -f "$MANIFEST"
 
 # ---------------------------------------------------------------------------
 # Clean up empty directories
@@ -291,32 +360,7 @@ for dir in "$CLAUDE_DIR"/hooks/*/; do
   fi
 done
 
-# ---------------------------------------------------------------------------
-# Clean saved config
-# ---------------------------------------------------------------------------
-if [[ -f "$HOME/.claude-starter-kit.conf" ]]; then
-  rm -f "$HOME/.claude-starter-kit.conf"
-  ok "$STR_REMOVED_CONFIG"
-fi
-
-# Remove auto-update lock artifact
-rm -rf "$CLAUDE_DIR/.starter-kit-update.lock"
-rm -f "$CLAUDE_DIR/.starter-kit-update-status"
-rm -f "$CLAUDE_DIR/.starter-kit-update-cache"
-
-# Remove merge preferences (used by update conflict resolution)
-rm -f "$CLAUDE_DIR/.starter-kit-merge-prefs.json"
-
-# Remove pending features file (created by setup.sh --update for feature recommendation)
-rm -f "$CLAUDE_DIR/.starter-kit-pending-features.json"
-
-# Remove snapshot directory (used by update mechanism)
-if [[ -d "$CLAUDE_DIR/.starter-kit-snapshot" ]]; then
-  rm -rf "$CLAUDE_DIR/.starter-kit-snapshot"
-fi
-
-# Remove backup path marker (written by backup_existing)
-rm -f "$CLAUDE_DIR/.starter-kit-last-backup"
+[[ ! -f "$HOME/.claude-starter-kit.conf" ]] && ok "$STR_REMOVED_CONFIG"
 
 # ---------------------------------------------------------------------------
 # Summary
@@ -453,6 +497,29 @@ if command -v npm &>/dev/null && npm list -g cc-safety-net &>/dev/null; then
       fi
       ;;
   esac
+fi
+
+# Starter kit repository cleanup. Default to keeping it for non-interactive
+# runs, because this script may be executing from inside that directory.
+KIT_INSTALL_DIR="${STARTER_KIT_DIR:-$HOME/.claude-starter-kit}"
+if [[ -d "$KIT_INSTALL_DIR" ]]; then
+  printf "\n"
+  if [[ -t 0 ]]; then
+    read -r -p "Also remove starter kit repository $KIT_INSTALL_DIR? [y/N] " _kit_repo_confirm || _kit_repo_confirm="n"
+    case "$_kit_repo_confirm" in
+      y|Y|yes|YES)
+        if _safe_install_dir "$KIT_INSTALL_DIR"; then
+          rm -rf "$KIT_INSTALL_DIR"
+          ok "Starter kit repository removed"
+        else
+          warn "Skipped unsafe starter kit repository path: $KIT_INSTALL_DIR"
+        fi
+        ;;
+    esac
+  else
+    info "Starter kit repository remains: $KIT_INSTALL_DIR"
+    info "  Remove manually if desired: rm -rf \"$KIT_INSTALL_DIR\""
+  fi
 fi
 
 # Check if ~/.claude still has content

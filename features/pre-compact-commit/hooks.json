@@ -2,11 +2,11 @@
 	"hooks": {
 		"PreCompact": [
 			{
-				"matcher": "",
+				"matcher": "*",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cd \"$CLAUDE_PROJECT_DIR\" && git add -A && git diff --cached --quiet || git commit -m 'checkpoint: pre-compact auto-commit'"
+						"command": "if cd \"${CLAUDE_PROJECT_DIR:-}\" 2>/dev/null; then git add -A && { git diff --cached --quiet || git commit -m 'checkpoint: pre-compact auto-commit'; }; fi"
 					}
 				]
 			}

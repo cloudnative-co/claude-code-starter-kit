@@ -1,7 +1,7 @@
 {
 	"name": "statusline",
 	"displayName": "Status Line",
-	"description": "Show token usage, context remaining, and version in the Claude Code status line",
+	"description": "Model, context usage, and 5h/7d rate limits as a braille-bar status line",
 	"category": "settings",
 	"default": true,
 	"profiles": {

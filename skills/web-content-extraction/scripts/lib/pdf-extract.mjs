@@ -11,11 +11,15 @@
 // ("ٗ׃צע..."); with it, text is correct ("ゼロトラスト幻想を断つ...").
 
 import { fileURLToPath } from 'node:url'
-import { countChars, parsePositiveInt, withSilencedStdout } from './defuddle-core.mjs'
+import {
+  MIN_CONTENT_CHARS,
+  countChars,
+  parsePositiveInt,
+  withSilencedStdout,
+} from './defuddle-core.mjs'
 
 const CMAP_DIR = fileURLToPath(new URL('../../node_modules/pdfjs-dist/cmaps/', import.meta.url))
 const STANDARD_FONTS_DIR = fileURLToPath(new URL('../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url))
-const MIN_CONTENT_CHARS = 200
 // Read at call-time (not import-time) so callers/tests can override via env.
 // parsePositiveInt rejects non-numeric / zero / negative values so a bad
 // override cannot silently disable the page/char caps.

@@ -1,0 +1,13 @@
+{
+  "session_id": "fixture-session-pr",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "gh pr create --fill"
+  },
+  "tool_response": {
+    "stdout": "Created pull request: https://github.com/cloudnative-co/claude-code-starter-kit/pull/99",
+    "stderr": "",
+    "interrupted": false
+  }
+}

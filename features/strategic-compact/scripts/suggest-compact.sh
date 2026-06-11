@@ -15,7 +15,7 @@
 #       "matcher": "Edit|Write",
 #       "hooks": [{
 #         "type": "command",
-#         "command": "~/.claude/skills/strategic-compact/suggest-compact.sh"
+#         "command": "~/.claude/hooks/strategic-compact/suggest-compact.sh"
 #       }]
 #     }]
 #   }
@@ -27,10 +27,18 @@
 # - Transitioning from research/exploration to implementation
 # - Plan has been finalized
 
+# Read hook input first so the counter can be keyed by Claude session.
+input=$(cat)
+session_id="$(printf '%s' "$input" | jq -r '.session_id // "default"' 2>/dev/null || printf 'default')"
+if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
+  session_id="default"
+fi
+session_key="$(printf '%s' "$session_id" | tr -c 'A-Za-z0-9_.-' '_' | cut -c 1-80)"
+
 # Track tool call count in a user-private directory (avoid predictable /tmp paths)
 COUNTER_DIR="${XDG_RUNTIME_DIR:-$HOME/.claude/tmp}"
 mkdir -p "$COUNTER_DIR" 2>/dev/null || true
-COUNTER_FILE="$COUNTER_DIR/tool-count-$$"
+COUNTER_FILE="$COUNTER_DIR/tool-count-$session_key"
 
 # Clean up stale counter files from previous sessions (older than 1 day)
 find "$COUNTER_DIR" -maxdepth 1 -name 'tool-count-*' -mtime +0 -delete 2>/dev/null || true
@@ -45,9 +53,6 @@ else
   echo "1" > "$COUNTER_FILE"
   count=1
 fi
-
-# Read hook input and pass through
-input=$(cat)
 
 # Early FIC warning at ~50% estimated context usage (30 tool calls)
 FIC_THRESHOLD=$((THRESHOLD * 3 / 5))

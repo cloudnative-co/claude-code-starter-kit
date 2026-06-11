@@ -96,14 +96,13 @@ cd ~/.claude/skills/web-content-extraction && npm test   # node --test
 ```
 
 `test/url-guard.test.mjs`（SSRFガード）/ `test/defuddle-core.test.mjs`（charCount）/
-`test/extract-smoke.test.mjs`（**実抽出スモーク: HTML+PDF**）を実行。DNS非依存・オフラインの
+`test/extract-smoke.test.mjs`（**実抽出スモーク: HTML+PDF**）/
+`test/defuddle-url.test.mjs`（URL CLI exit code契約）を実行。DNS非依存・オフラインの
 決定的テストのみ。CIは `.github/workflows/skill-web-content-extraction.yml`（Node 22/24 マトリクス）。
 
 ## 自動アップデート
 
-Claude Code 起動毎に依存（defuddle/jsdom/pdfjs-dist）の最新を確認し、更新があれば適用→
-`npm test` 通過時のみ採用、失敗時は自動ロールバックする（SessionStartフック → `scripts/update-deps.mjs`、
-24h スロットル、ログは `logs/update.log`）。手動実行は `npm run update:deps`。詳細は README 参照。
+`web-content-update` feature が有効な場合のみ、SessionStart フックで依存（defuddle/jsdom/pdfjs-dist/undici）の更新を確認する。`npm test` 通過時のみ採用、失敗時は自動ロールバックする。手動実行は `npm run update:deps`。詳細は README 参照。
 
 ## Unsupported or Caution Cases
 

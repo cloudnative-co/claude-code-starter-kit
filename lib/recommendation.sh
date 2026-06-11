@@ -118,13 +118,13 @@ _detect_and_write_pending_features() {
   # Atomic write: mktemp + mv (cleanup on failure)
   local tmp_pending
   tmp_pending="$(mktemp "${pending_file}.XXXXXX")"
-  # shellcheck disable=SC2064
-  trap "rm -f '$tmp_pending'" EXIT
-  jq -n --argjson features "$features_json" \
+  if ! jq -n --argjson features "$features_json" \
     --arg kit_version "$kit_version" \
     '{ version: 1, kit_version: $kit_version, features: $features }' \
-    > "$tmp_pending"
+    > "$tmp_pending"; then
+    rm -f "$tmp_pending"
+    return 1
+  fi
   chmod 600 "$tmp_pending"
   mv "$tmp_pending" "$pending_file"
-  trap - EXIT
 }

@@ -4,60 +4,11 @@
 #
 # Requires: lib/colors.sh, lib/prerequisites.sh (_sed/_awk wrappers)
 # Uses globals: _SETUP_TMP_FILES[], LANGUAGE
-# Exports: process_template(), inject_feature(), remove_unresolved(),
-#          _has_kit_markers(), _extract_kit_section(), _extract_user_section(),
+# Exports: inject_feature(), remove_unresolved(),
+#          _has_kit_markers(), _extract_kit_section(),
 #          _replace_kit_section(), _user_section_heading()
 # Dry-run: transparent (operates on whatever file paths are given)
 set -euo pipefail
-
-# ---------------------------------------------------------------------------
-# process_template - Replace {{VAR}} placeholders with values from a config file
-#
-# Usage: process_template <template_file> <config_file> [output_file]
-#
-# Config file format (one per line):
-#   VAR_NAME=value
-#   ANOTHER_VAR=some other value
-#
-# If output_file is omitted, writes to stdout.
-# ---------------------------------------------------------------------------
-process_template() {
-  local template_file="$1"
-  local config_file="$2"
-  local output_file="${3:-}"
-
-  if [[ ! -f "$template_file" ]]; then
-    error "Template file not found: $template_file"
-    return 1
-  fi
-  if [[ ! -f "$config_file" ]]; then
-    error "Config file not found: $config_file"
-    return 1
-  fi
-
-  local content
-  content="$(< "$template_file")"
-
-  # Read each KEY=VALUE line from config, skipping comments and blank lines
-  while IFS='=' read -r key value; do
-    # Skip comments and empty lines
-    [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
-
-    # Trim whitespace from key
-    key="$(echo "$key" | xargs)"
-    # Value keeps everything after the first '='
-    value="${value:-}"
-
-    # Replace all occurrences of {{KEY}} in content
-    content="${content//\{\{${key}\}\}/${value}}"
-  done < "$config_file"
-
-  if [[ -n "$output_file" ]]; then
-    printf '%s\n' "$content" > "$output_file"
-  else
-    printf '%s\n' "$content"
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # inject_feature - Replace {{FEATURE:name}} markers with partial file content
@@ -165,22 +116,6 @@ _extract_kit_section() {
     $0 == begin { found = 1 }
     found { print }
     $0 == end && found { exit }
-  ' "$file"
-}
-
-# _extract_user_section <file>
-# Prints everything after the END marker line.
-# If no markers found, returns the entire file content.
-_extract_user_section() {
-  local file="$1"
-  if ! _has_kit_markers "$file"; then
-    cat "$file"
-    return
-  fi
-  _awk -v marker="$_KIT_MARKER_END" '
-    { sub(/\r$/, "") }
-    found { print; next }
-    $0 == marker { found = 1 }
   ' "$file"
 }
 

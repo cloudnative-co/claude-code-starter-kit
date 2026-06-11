@@ -10,9 +10,6 @@
 // ALLOW_PRIVATE_URLS=true to exercise the fetch pipeline itself; the block
 // cases run WITHOUT it to assert real SSRF rejection.
 //
-// Not covered here (needs a TLS server): the HTTPS->HTTP downgrade refusal in
-// fetchGuarded. Tracked as a follow-up.
-
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -128,6 +125,10 @@ test('exit 0: successful HTML extraction over loopback', async () => {
 
 test('exit 3: too many redirects', async () => {
   assert.equal(await runUrl(`${baseUrl}/redirect?n=0`, { ...PRIV, DEFUDDLE_MAX_REDIRECTS: '2' }), 3)
+})
+
+test('exit 3: invalid DEFUDDLE_MAX_REDIRECTS falls back to default instead of breaking all fetches', async () => {
+  assert.equal(await runUrl(`${baseUrl}/ok`, { ...PRIV, DEFUDDLE_MAX_REDIRECTS: 'unlimited' }), 0)
 })
 
 test('exit 3: streamed body exceeds size cap (truncated)', async () => {

@@ -388,9 +388,9 @@ _merge_object_3way() {
     [[ -z "$sub_key" ]] && continue
 
     local sv cv nv
-    sv="$(jq -n --argjson o "$s_val" --arg k "$sub_key" '$o[$k] // empty' 2>/dev/null || printf 'null')"
-    cv="$(jq -n --argjson o "$c_val" --arg k "$sub_key" '$o[$k] // empty' 2>/dev/null || printf 'null')"
-    nv="$(jq -n --argjson o "$n_val" --arg k "$sub_key" '$o[$k] // empty' 2>/dev/null || printf 'null')"
+    sv="$(jq -n --argjson o "$s_val" --arg k "$sub_key" 'if $o | has($k) then $o[$k] else null end' 2>/dev/null || printf 'null')"
+    cv="$(jq -n --argjson o "$c_val" --arg k "$sub_key" 'if $o | has($k) then $o[$k] else null end' 2>/dev/null || printf 'null')"
+    nv="$(jq -n --argjson o "$n_val" --arg k "$sub_key" 'if $o | has($k) then $o[$k] else null end' 2>/dev/null || printf 'null')"
 
     # Normalize missing values to null
     [[ -z "$sv" ]] && sv="null"
@@ -547,9 +547,9 @@ merge_settings_3way() {
     fi
 
     local sv cv nv
-    sv="$(jq -c --arg k "$key" '.[$k] // empty' "$snapshot" 2>/dev/null || printf '')"
-    cv="$(jq -c --arg k "$key" '.[$k] // empty' "$current"  2>/dev/null || printf '')"
-    nv="$(jq -c --arg k "$key" '.[$k] // empty' "$new_kit"  2>/dev/null || printf '')"
+    sv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$snapshot" 2>/dev/null || printf '')"
+    cv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$current"  2>/dev/null || printf '')"
+    nv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$new_kit"  2>/dev/null || printf '')"
 
     # Normalize missing values to null sentinel
     [[ -z "$sv" ]] && sv="null"
@@ -698,8 +698,8 @@ _merge_settings_bootstrap() {
     [[ "$key" == "\$schema" ]] && continue
 
     local cv nv
-    cv="$(jq -c --arg k "$key" '.[$k] // empty' "$current"  2>/dev/null || printf '')"
-    nv="$(jq -c --arg k "$key" '.[$k] // empty' "$new_kit"  2>/dev/null || printf '')"
+    cv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$current"  2>/dev/null || printf '')"
+    nv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$new_kit"  2>/dev/null || printf '')"
     [[ -z "$cv" ]] && cv="null"
     [[ -z "$nv" ]] && nv="null"
 

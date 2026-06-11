@@ -15,10 +15,7 @@
 //   The original intent ("no async external fetch") is enforced here
 //   structurally: synchronous core + a DOM that never fetches or runs scripts.
 
-import { JSDOM, VirtualConsole } from 'jsdom'
-import { Defuddle } from 'defuddle/node'
-
-const MIN_CONTENT_CHARS = 200 // below this we flag low-confidence extraction
+export const MIN_CONTENT_CHARS = 200 // below this we flag low-confidence extraction
 
 // CJK ranges: Hiragana, Katakana, CJK Unified Ideographs (+Ext A), Hangul,
 // CJK symbols/punctuation, fullwidth forms. Used for JP-friendly length metrics.
@@ -58,9 +55,10 @@ export function parsePositiveInt(value, fallback) {
  * Build a JSDOM instance that never fetches sub-resources and never runs scripts.
  * @param {string} html Raw HTML markup.
  * @param {string} url Absolute URL used for relative-link resolution.
- * @returns {JSDOM}
+ * @returns {Promise<import('jsdom').JSDOM>}
  */
-export function buildSafeDom(html, url) {
+export async function buildSafeDom(html, url) {
+  const { JSDOM, VirtualConsole } = await import('jsdom')
   const virtualConsole = new VirtualConsole() // swallow page-level console noise
   return new JSDOM(html, {
     url,
@@ -111,6 +109,7 @@ export async function withSilencedStdout(fn) {
  * @returns {Promise<import('defuddle').DefuddleResponse>}
  */
 async function parseWithSilencedStdout(dom, url) {
+  const { Defuddle } = await import('defuddle/node')
   // markdown: true => content is converted to Markdown by the node wrapper.
   return withSilencedStdout(() => Defuddle(dom, url, { markdown: true }))
 }
@@ -127,7 +126,7 @@ export async function extractRecord({ html, url, extra = {} }) {
   let result
   let dom
   try {
-    dom = buildSafeDom(html, url)
+    dom = await buildSafeDom(html, url)
     result = await parseWithSilencedStdout(dom, url)
   } catch (error) {
     return {

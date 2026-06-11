@@ -57,10 +57,12 @@
 |---|---|---|---|
 | `ENABLE_SAFETY_NET` | Safety Net | 危険なコマンドの遮断 | はい |
 | `ENABLE_AUTO_UPDATE` | Auto Update | セッション開始時の更新確認 | はい |
+| `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Web 取得スキル依存の更新確認 | はい |
 | `ENABLE_TMUX_HOOKS` | Tmux Reminder | 長時間処理を tmux に誘導 | はい |
 | `ENABLE_GIT_PUSH_REVIEW` | Git Push Review | push 前に差分確認 | はい |
 | `ENABLE_DOC_BLOCKER` | Doc Blocker | 不要な `.md` / `.txt` 作成を抑制 | はい |
 | `ENABLE_PRETTIER_HOOKS` | Prettier Auto-format | JS / TS 編集後の整形 | はい |
+| `ENABLE_BIOME_HOOKS` | Biome Auto-format | JS / TS 編集後の整形・lint | はい |
 | `ENABLE_CONSOLE_LOG_GUARD` | Console Log Guard | `console.log` の取り残し検知 | はい |
 | `ENABLE_MEMORY_PERSISTENCE` | Memory Persistence | 重要な知識の永続化補助 | はい |
 | `ENABLE_STRATEGIC_COMPACT` | Strategic Compact | compact 提案の補助 | はい |
@@ -68,6 +70,8 @@
 | `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Commit | compact 前のコミット補助 | はい |
 | `ENABLE_STATUSLINE` | Statusline | ステータスライン機能 | はい |
 | `ENABLE_DOC_SIZE_GUARD` | Doc Size Guard | 大きすぎる `CLAUDE.md` / `AGENTS.md` を警告 | はい |
+| `ENABLE_NO_FLICKER` | No Flicker | 表示のちらつき低減設定 | はい |
+| `ENABLE_FEATURE_RECOMMENDATION` | Feature Recommendation | 新機能候補の通知 | はい |
 
 ## よくある誤解
 

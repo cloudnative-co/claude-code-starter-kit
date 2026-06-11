@@ -45,15 +45,13 @@ replace_home_path() {
     return 1
   fi
 
-  local home_escaped
-  # Escape HOME for use in jq string (handle slashes)
-  home_escaped="$(printf '%s' "$HOME" | sed 's/\\/\\\\/g')"
-
   local tmp_file
   tmp_file="$(mktemp)"
   _register_tmp "$tmp_file"
 
-  jq --arg home "$home_escaped" '
+  # jq --arg passes HOME as a literal string; replacement-side escaping would
+  # corrupt Windows-style paths that contain backslashes.
+  jq --arg home "$HOME" '
     walk(
       if type == "string" then gsub("__HOME__"; $home)
       else .
@@ -132,4 +130,3 @@ build_settings_json() {
     return 1
   fi
 }
-

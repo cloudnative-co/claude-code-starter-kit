@@ -113,18 +113,13 @@ test('user can create a new market', async ({ page }) => {
 
 ## Mocking External Services
 
-### Supabase Mock
+### Database Client Mock
 ```typescript
-jest.mock('@/lib/supabase', () => ({
-  supabase: {
-    from: jest.fn(() => ({
-      select: jest.fn(() => ({
-        eq: jest.fn(() => Promise.resolve({
-          data: [{ id: 1, name: 'Test Market' }],
-          error: null
-        }))
-      }))
-    }))
+jest.mock('@/lib/db', () => ({
+  db: {
+    market: {
+      findMany: jest.fn(() => Promise.resolve([{ id: 1, name: 'Test Market' }]))
+    }
   }
 }))
 ```

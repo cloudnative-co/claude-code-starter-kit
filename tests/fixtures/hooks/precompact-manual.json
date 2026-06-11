@@ -1,0 +1,6 @@
+{
+  "session_id": "fixture-session-compact",
+  "hook_event_name": "PreCompact",
+  "trigger": "manual",
+  "custom_instructions": "Preserve the current implementation checklist."
+}

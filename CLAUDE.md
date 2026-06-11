@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh)"
 
 # Validate all shell scripts (matches CI severity)
-shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
+shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh
 
 # Run unit tests
 bash tests/run-unit-tests.sh
@@ -66,7 +66,9 @@ install.sh (macOS/Linux: clone repo + bootstrap)
   └── otherwise → interactive mode with /dev/tty redirect
 install.ps1 (Windows: WSL2 setup + clone repo via WSL + bootstrap)
   → setup.sh (orchestrator)
-      → wizard/wizard.sh (CLI parsing + interactive prompts)
+      → wizard/wizard.sh (globals/config + module loading)
+        → wizard/registry.sh (plugin/hook registry + CLI parsing)
+        → wizard/steps.sh (display helpers + interactive prompts)
       → lib/detect.sh (OS/WSL/MSYS detection)
       → lib/prerequisites.sh (dependency checks)
       → lib/deploy.sh (build + deploy functions)
@@ -80,7 +82,7 @@ install.ps1 (Windows: WSL2 setup + clone repo via WSL + bootstrap)
       → plugin marketplace registration + install (multi-marketplace)
       → Codex Plugin setup (if enabled)
 
-install.sh (re-run with manifest v2 + snapshot)
+install.sh (re-run with existing manifest)
   → setup.sh --update (update mode)
       → _restore_config_from_manifest() — reads settings from manifest
       → run_update() — 3-way merge settings.json, selective file updates
@@ -88,7 +90,7 @@ install.sh (re-run with manifest v2 + snapshot)
       → write_manifest() — updates manifest v2
 ```
 
-Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/features.sh`, `lib/recommendation.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`.
+Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/features.sh`, `lib/recommendation.sh`, `lib/progress.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`. `lib/codex-setup.sh` is sourced later only when Codex setup is reached; dry-run does not reach it.
 
 ### Profile System
 
@@ -103,10 +105,9 @@ Three profiles (`profiles/*.conf`) define feature toggles as `VAR=true/false`:
 
 ### Template Engine (`lib/template.sh`)
 
-`build_claude_md()` assembles the user's `~/.claude/CLAUDE.md` in three phases:
-1. `process_template()` — replaces `{{VAR}}` placeholders with values from a config file
-2. `inject_feature()` — replaces `{{FEATURE:name}}` markers with contents of partial files (feature-specific docs)
-3. `remove_unresolved()` — strips any remaining `{{...}}` markers for disabled features
+`build_claude_md()` assembles the user's `~/.claude/CLAUDE.md` in two phases:
+1. `inject_feature()` — replaces `{{FEATURE:name}}` markers with contents of partial files (feature-specific docs)
+2. `remove_unresolved()` — strips any remaining `{{...}}` markers for disabled features
 
 ### Plugin System
 
@@ -162,67 +163,15 @@ PowerShell entry point for Windows. Two modes:
 
 ### Manifest-Based Uninstall
 
-`write_manifest()` records all deployed file paths in `~/.claude/.starter-kit-manifest.json`. `uninstall.sh` reads this manifest and removes only tracked files, preserving user-added content. Uninstall is self-contained (inline platform detection, jq with grep/sed fallback).
-
-In addition to manifest-tracked files, `uninstall.sh` explicitly removes:
-- `~/.claude/.starter-kit-update.lock/` — auto-update lock directory
-- `~/.claude/.starter-kit-update-status` — deferred auto-update failure message
-- `~/.claude/.starter-kit-snapshot/` — update mechanism snapshot directory
-
-When adding features that create files outside `~/.claude/{agents,rules,commands,skills,memory,hooks}/`, add explicit cleanup to `uninstall.sh`'s "Clean saved config" section.
+`write_manifest()` records deployed files plus `cleanup_paths` in `~/.claude/.starter-kit-manifest.json`. `uninstall.sh` is self-contained and removes manifest-declared kit files/artifacts while preserving user-added content. Features that create runtime artifacts outside the standard managed trees must add those paths to `cleanup_paths_json()`.
 
 ### Update Mechanism
 
-When `install.sh` detects an existing installation with manifest v2 + snapshot, it automatically switches to update mode (`setup.sh --update`). This preserves user-customized settings while applying kit updates.
+If `install.sh` sees an existing manifest, it always adds `setup.sh --update`. With manifest v2 + snapshot it runs the normal update; otherwise it bootstraps a snapshot/migration update. Updates compare snapshot/current/new-kit for kit-managed files, preserve user-added settings, and apply saved merge preferences from `~/.claude/.starter-kit-merge-prefs.json`.
 
-**Three-way comparison:** For each kit-managed file, the system compares:
-- **Snapshot** (what kit deployed last time)
-- **Current** (what's on disk now, possibly user-modified)
-- **New kit** (what the updated kit would deploy)
+Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and saved config reuse for any new `ENABLE_*`; do not overwrite explicit user choices. Legacy `~/.claude/AGENTS.md` is removed during update/uninstall because the kit no longer deploys it.
 
-**Decision matrix:**
-| Snapshot vs Current | Snapshot vs New Kit | Action |
-|---|---|---|
-| Same | Different | Overwrite with new kit |
-| Different | Same | Keep current (no kit changes) |
-| Different | Different | Interactive prompt |
-
-**settings.json merge:** Uses jq-based 3-way merge at the key level. Scalar conflicts and array conflicts prompt the user at the whole-key/whole-array level with `[K]eep yours / [U]se kit's` options. User-added keys (e.g., `mcpServers`) are preserved.
-
-**Merge preference persistence:** When resolving a conflict, users can choose `[RK] Keep & Remember` or `[RU] Use kit's & Remember`. Decisions are stored in `~/.claude/.starter-kit-merge-prefs.json` and applied automatically on subsequent updates. Use `setup.sh --update --reset-prefs` to clear saved decisions, or delete `~/.claude/.starter-kit-merge-prefs.json` manually.
-
-**Update backup:** `setup.sh --update` creates a full backup of `~/.claude` to `~/.claude.backup.<timestamp>` before any merge operations.
-
-**Non-interactive update:** `--non-interactive` skips all prompts, keeping user-modified files and only updating unchanged ones. Saved merge preferences are still applied.
-
-**New feature adoption rule:** When adding a new setting or `ENABLE_*` flag, treat fresh install and update as separate paths. `setup.sh --update` and `/update-kit` must adopt the new feature for existing installs when the key is missing, but must not overwrite an explicit user choice that is already present in saved config or deployed files.
-
-**Update verification rule:** For any new feature, verify all three paths: fresh install, `setup.sh --update` (the same path used by `/update-kit`), and saved config reuse in `wizard/wizard.sh`.
-
-**Snapshot directory:** `~/.claude/.starter-kit-snapshot/` mirrors the structure of `~/.claude/` for kit-managed files only.
-
-**Fresh install with existing files:** When `~/.claude/settings.json` exists but no `.starter-kit-manifest.json` is found, the fresh install path uses `_deploy_fresh_with_existing()` instead of the standard overwrite flow. This calls `_merge_settings_bootstrap()` for settings.json (same merge logic as update mode), and offers per-directory `[O]verwrite all / [N]ew files only / [S]kip` prompts for content directories and hook scripts. Non-interactive mode merges settings.json (adopting kit-only keys, preserving user values) and copies only new files for other directories.
-
-**CLAUDE.md section separation:** The deployed `~/.claude/CLAUDE.md` is divided into two sections by HTML comment markers:
-- `<!-- BEGIN STARTER-KIT-MANAGED -->` ... `<!-- END STARTER-KIT-MANAGED -->`: Kit-managed content. Updated by the kit on install/update. Users should not edit this section (edits are treated as conflicts on update).
-- Everything after the END marker: User section. Kit never touches this content. Users are free to add any custom instructions here.
-
-Section-aware behavior:
-- **Snapshot**: Only the kit section is stored in the snapshot (not the full file). This prevents user section edits from triggering false conflicts.
-- **Update**: `_update_claude_md()` in `lib/update.sh` compares kit sections only. User section is always preserved.
-- **Migration**: If an existing CLAUDE.md has no markers, the entire content is treated as user content and wrapped into the user section, with the kit section prepended. Non-interactive mode skips migration (structural change requires consent).
-- **Uninstall**: Kit section is removed; user section is preserved. If the user section is empty/whitespace-only, the whole file is deleted.
-- **Manifest**: `CLAUDE.md` remains a managed file, but kit ownership applies only to the marker section.
-
-Helper functions in `lib/template.sh`: `_has_kit_markers()`, `_extract_kit_section()`, `_extract_user_section()`, `_replace_kit_section()`.
-
-**Dry-run mode:** `--dry-run` previews what install/update would change without deploying any files. Light prerequisites (git, jq, curl) may be installed with user consent in interactive mode; `--non-interactive --dry-run` installs nothing. Heavy tools (Homebrew, Node, etc.) are never installed during dry-run. Implementation in `lib/dryrun.sh`:
-- `_dryrun_init()` copies real `~/.claude` into a temp sim dir, then `CLAUDE_DIR` is redirected so the normal flow executes against it
-- `_MERGE_INTERACTIVE=false` ensures no prompts are shown
-- Sim dir snapshot/manifest are temporary artifacts — discarded after report generation
-- Diff/summary comparison basis is always "real `~/.claude` (current) vs sim dir (simulated)"
-- External side effects (Ghostty, fonts, shell RC, plugins, Codex Plugin, Claude CLI) are individually guarded and logged as `[WOULD RUN]` entries via `_dryrun_log()`
-- After the deploy flow completes in sim dir, `_dryrun_collect_file_changes()` walks the sim dir to find CREATE/MODIFY entries, then `_dryrun_show_results()` displays the grouped summary + settings.json unified diff
+`CLAUDE.md` is marker-managed: only the kit section between `BEGIN/END STARTER-KIT-MANAGED` is snapshotted/updated, while the user section is preserved. `--dry-run` redirects `CLAUDE_DIR` to a temp simulation dir, disables merge prompts, logs external side effects as `[WOULD RUN]`, and compares real `~/.claude` with the simulated result.
 
 ### Deploy Targets
 
@@ -237,7 +186,6 @@ Helper functions in `lib/template.sh`: `_has_kit_markers()`, `_extract_kit_secti
 | `memory/` | `~/.claude/memory/` | `INSTALL_MEMORY=true` |
 | `features/*/scripts/` | `~/.claude/hooks/<feature>/` | feature-specific |
 | assembled CLAUDE.md | `~/.claude/CLAUDE.md` | always |
-| `config/AGENTS.md.template` | `~/.claude/AGENTS.md` | always |
 | assembled settings.json | `~/.claude/settings.json` | always |
 
 ## Key Conventions
@@ -249,7 +197,7 @@ Helper functions in `lib/template.sh`: `_has_kit_markers()`, `_extract_kit_secti
 - **Ghostty detection**: Use `[[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]` to detect Ghostty. Never use `-d "/Applications/Ghostty.app"` or `command -v ghostty` (both produce false positives).
 - **Platform guards for Ghostty**: Use `[[ "$(uname -s)" == "Darwin" ]]`, not `is_wsl`/`is_msys` (WSL detection can be unreliable).
 - **Font install fallback pattern**: Always try brew first, then fall back to direct download (`curl` + `unzip`) so installs succeed without Homebrew.
-- **Keg-only brew formulas**: `brew install node@XX` etc. are keg-only (not symlinked into PATH). After install, resolve the bin dir via `brew --prefix <formula>`, export it to `PATH` for the current session, and persist it to the user's shell RC file via `_persist_node_path()`. See `lib/prerequisites.sh`.
+- **Keg-only brew formulas**: `brew install node@XX` etc. are keg-only (not symlinked into PATH). After install, resolve the bin dir via `brew --prefix <formula>` and persist it with `_add_to_path_now_and_persist()`.
 - **Homebrew PATH resolution**: Use `_ensure_homebrew` from `lib/prerequisites.sh` (not bare `command -v brew`) when brew is needed. It resolves `/opt/homebrew/bin/brew` and `/usr/local/bin/brew` paths that may not be in PATH during pipe execution (`curl | bash`). After calling `_ensure_homebrew`, always verify with `_brew_is_usable` before running `brew` commands.
 - **Windows interop from WSL/MSYS**: Use `powershell.exe -NoProfile -Command '...'` for Windows-side operations (font install, WT config). Always `tr -d '\r'` on output to strip CRLF.
 - **Codex Plugin scope**: Always use `claude plugin install codex --scope user` (user scope, not project scope).
@@ -260,45 +208,13 @@ Helper functions in `lib/template.sh`: `_has_kit_markers()`, `_extract_kit_secti
 - **Safe config loading**: Never source config files with `. "$file"`. Use `_safe_source_config()` which validates keys against `_CONFIG_ALLOWED_KEYS` allowlist and sanitizes values via `_sanitize_config_value()`.
 - **RC file modification**: When modifying shell RC files (`.bashrc`, `.zshrc`), preserve original permissions with `stat` + `chmod` after `mktemp` + `mv` operations (since `umask 077` would change them to 0600).
 - **sed delimiter choice**: When using `sed` with `|` delimiter (`s|...|...|`), escape `&`, `\`, and `|` in replacement strings — do NOT escape `/`.
-- **Top-level scope in setup.sh**: The plugin install section (after line ~430) runs in global scope, not inside a function. Use `_` prefixed variables (e.g., `_p`, `_p_name`, `_registered_mps`) instead of `local`.
+- **Top-level scope in setup.sh**: The plugin install section (search for `_registered_mps`) runs in global scope, not inside a function. Use `_` prefixed variables (e.g., `_p`, `_p_name`, `_registered_mps`) instead of `local`.
 - **NONINTERACTIVE env var**: `install.sh` supports `NONINTERACTIVE=1` (Homebrew convention) to auto-add `--non-interactive` flag for setup.sh.
 - **DRY_RUN variable**: `--dry-run` sets `DRY_RUN="true"`. In dry-run mode, `CLAUDE_DIR` is redirected to a temp sim dir so the normal deploy/update flow runs without touching real files. External operations (Ghostty, fonts, shell RC, plugins, Codex Plugin, Claude CLI) are individually guarded and logged as `[WOULD RUN]`. Light prerequisites (git, jq, curl) may be installed with user consent in interactive mode; `--non-interactive --dry-run` installs nothing and aborts if tools are missing. Sim dir snapshot/manifest are temporary artifacts discarded after the summary report. The comparison basis is always "real `~/.claude` vs sim dir result".
 
 ## Security Hardening
 
-### Permission Design (config/permissions.json)
-
-The permissions file implements a defense-in-depth strategy against prompt injection and credential exfiltration:
-
-**Removed from permissions.allow (require user confirmation per invocation):**
-- `python3 *`, `node *` — Arbitrary code execution enables data exfiltration even when `curl` is denied (CVE context: indirect prompt injection via print/console.log in "example code")
-- `curl *`, `wget *` — Direct network exfiltration vectors
-- `cat *`, `head *`, `tail *` — Can bypass `Read(.env)` deny rules; use the Read tool instead
-- `source *`, `env *`, `export *` — Environment variable access/manipulation
-
-**permissions.deny categories:**
-- **Network exfiltration**: curl, wget, nc, ncat, telnet, ssh, scp
-- **System escalation**: sudo, su, osascript, security
-- **Destructive git**: push --force, push -f, reset --hard, clean -f
-- **Credential file access**: `.env*`, `~/.ssh/*`, `~/.aws/*`, `~/.config/gh/*`, `~/.git-credentials`, `~/.netrc`, `~/.npmrc`
-- **RC file tampering**: `~/.zshrc`, `~/.bashrc` (Edit/Write denied)
-- **Clipboard exfiltration**: pbcopy, pbpaste
-
-**Top-level settings:**
-- `enableAllProjectMcpServers: false` — Prevents auto-approval of MCP servers from cloned repos (CVE-2025-59536)
-- `disableBypassPermissionsMode: "disable"` — Blocks `--dangerously-skip-permissions`
-
-**Known limitations:**
-- Absolute paths (`/Users/xxx/.ssh/`) or variable expansion (`$(echo ~/.ssh/id_rsa)`) can bypass pattern-based deny rules
-- MCP Tool Poisoning requires source code review, not just permissions
-- Package managers (`npm:*`, `pnpm:*`) remain broadly allowed for development workflow; `npm exec` could theoretically execute arbitrary code
-
-### References
-
-- CVE-2025-59536: Project `.claude/settings.json` MCP server approval bypass
-- CVE-2026-21852: `ANTHROPIC_BASE_URL` rewrite for API key theft
-- CVE-2025-6514: `mcp-remote` RCE vulnerability
-- Qiita: print-based indirect exfiltration via CI/CD logs (no network deny trigger)
+`config/permissions.json` keeps high-risk tools out of `permissions.allow` so code execution, network fetches, environment reads, and raw file dumps require confirmation. Deny rules cover network exfiltration, escalation, destructive git, credential files, shell RC edits, and clipboard exfiltration. Top-level settings keep project MCP auto-approval off and disable bypass-permissions mode. Treat permissions as a guardrail, not a substitute for reviewing MCP/tool code.
 
 ## Versioning
 
@@ -312,19 +228,20 @@ The permissions file implements a defense-in-depth strategy against prompt injec
 
 1. Create `features/new-feature/feature.json` (metadata) and `hooks.json` (hook fragments and/or top-level settings). **Hook types MUST be nested inside `"hooks": {}`** — see "Hook Fragment Assembly" above
 2. Add `ENABLE_NEW_FEATURE=true/false` to each `profiles/*.conf`
-3. In `wizard/wizard.sh`: add variable initialization (`ENABLE_NEW_FEATURE="${ENABLE_NEW_FEATURE:-}"`), add to `_CONFIG_ALLOWED_KEYS`, add to `save_config()`, add confirmation display in `_step_confirm`, add default in `_fill_noninteractive_defaults()`
+3. In `wizard/wizard.sh`: add variable initialization (`ENABLE_NEW_FEATURE="${ENABLE_NEW_FEATURE:-}"`), add to `_CONFIG_ALLOWED_KEYS`, and add to `save_config()`
 4. Add `STR_CONFIRM_*` strings in both `i18n/en/strings.sh` and `i18n/ja/strings.sh`
-5. If the feature is a hook, add to `HOOK_KEYS` array and `_apply_hooks_csv()` case in `wizard/wizard.sh`, and add `STR_HOOKS_*` strings in both i18n files. Add the hook label to `HOOK_LABELS` arrays in both `_step_hooks()` and `_step_confirm()`
-6. Features are auto-collected by `build_settings_file()` in `lib/deploy.sh` via `_FEATURE_ORDER` / `_FEATURE_FLAGS` registry — no manual merge code needed
-7. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
-8. If the feature creates files outside the standard manifest-tracked directories, add explicit cleanup to `uninstall.sh`
-9. Verify update-path adoption. A new key must be checked in all of these paths:
+5. In `wizard/steps.sh`: add confirmation display in `_step_confirm()` and the non-interactive default in `_fill_noninteractive_defaults()`
+6. If the feature is a hook, add to `HOOK_KEYS` / `HOOK_TOKENS` in `wizard/registry.sh`, add `STR_HOOKS_*` strings in both i18n files, and add the hook label to `HOOK_LABELS`
+7. Features are auto-collected by `build_settings_file()` in `lib/deploy.sh` via `_FEATURE_ORDER` / `_FEATURE_FLAGS` registry — no manual merge code needed
+8. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
+9. If the feature creates files outside the standard manifest-tracked directories, add explicit cleanup to `uninstall.sh`
+10. Verify update-path adoption. A new key must be checked in all of these paths:
    - fresh install
    - `setup.sh --update` / `/update-kit`
    - saved config reuse in `wizard/wizard.sh`
    Missing keys on older installs should receive the intended default for that profile, but existing explicit user choices must win.
-10. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Write the entry directly under the version heading (`## [x.y.z]`) that will be tagged on merge — do not use an `[Unreleased]` section. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
-11. **Feature recommendation**: Ensure `feature.json` has `displayName` and `description` fields for the notification display. If the feature should NOT be recommended (special-case features), verify it is excluded from `_FEATURE_FLAGS` or is handled by `_detect_and_write_pending_features()` exclusion logic.
+11. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Write the entry directly under the version heading (`## [x.y.z]`) that will be tagged on merge — do not use an `[Unreleased]` section. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
+12. **Feature recommendation**: Ensure `feature.json` has `displayName` and `description` fields for the notification display. If the feature should NOT be recommended (special-case features), verify it is excluded from `_FEATURE_FLAGS` or is handled by `_detect_and_write_pending_features()` exclusion logic.
 
 Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
 
@@ -341,31 +258,17 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCo
 
 ## Notable Features
 
-### Safety Net (`features/safety-net/`)
-
-PreToolUse hook via [cc-safety-net](https://github.com/kenryu42/cc-safety-net). Blocks destructive commands (`git reset --hard`, `rm -rf`, etc.) before execution by emitting a `permissionDecision: deny` JSON response (not exit code 2). Sets both `CC_SAFETY_NET_STRICT=1` (canonical, read by 1.x binaries) and `SAFETY_NET_STRICT=1` (legacy alias, the only name pre-1.0 binaries recognize) for fail-closed on unparseable commands — keep both: setup skips install when a binary already exists, so old binaries would silently lose strict mode with the canonical name alone. The `env` key in `hooks.json` is deep-merged into `settings.json` top-level. `setup.sh` auto-installs the binary when the feature is enabled and `cc-safety-net` is missing: `maybe_install_cc_safety_net()` → `check_cc_safety_net()` in `lib/prerequisites.sh` (`npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net`, npm-only, requires a writable npm prefix, warn-and-continue on failure). Dry-run logs `[WOULD RUN]` only; `SAFETY_NET_SKIP_NPM_INSTALL=1` skips the install (test harness opt-out, checked after the dry-run guard like Biome/WCE). `uninstall.sh` offers a prompted `npm uninstall -g cc-safety-net`.
-
-### Auto Update (`features/auto-update/`)
-
-SessionStart + SessionEnd hooks that check GitHub for new kit versions on each session boundary. Uses hook-level `async: true` instead of shell `( ... ) &`, and a lock directory at `~/.claude/.starter-kit-update.lock/` to prevent concurrent runs. Only activates for one-liner installs (`~/.claude-starter-kit/.git` must exist). Calls `setup.sh --update` for 3-way merge. `SessionEnd` is best-effort and re-spawns itself detached so end-of-session teardown is less likely to interrupt the update. This flow is verified on Claude Code `2.1.89`; older detected versions fall back to a legacy SessionStart + 24h cache hook. Failed background updates are persisted to `~/.claude/.starter-kit-update-status` and surfaced once on the next hook run.
-
-### Status Line (`features/statusline/`)
-
-Braille Dots pattern status line implemented in Python. Displays model name, context window usage, 5-hour and 7-day rate limits in a single line using braille characters (`⣀⣄⣤⣦⣶⣷⣿`) with green→red gradient coloring based on usage percentage. The `hooks.json` uses `statusLine` top-level key (not a hook type). Script deployed to `~/.claude/hooks/statusline/statusline-command.py`. Requires `python3` in PATH.
-
-### Doc Size Guard (`features/doc-size-guard/`)
-
-PostToolUse hook that validates CLAUDE.md/AGENTS.md file size when the Write tool targets these files. External script at `scripts/check-doc-size.sh`. Thresholds: AGENTS.md warns at 60 lines / errors at 100; CLAUDE.md warns at 150 / errors at 300. Also checks for broken path references in backtick-quoted strings.
-
-### Feature Recommendation (`features/feature-recommendation/`)
-
-SessionStart hook that notifies users about new features available for their profile. Three-state management: enabled (conf `ENABLE_X=true/false`), dismissed (`DISMISSED_FEATURES` CSV in conf), pending (implicit: not in either). `lib/recommendation.sh` provides helpers (`_is_feature_dismissed`, `_add_dismissed_feature`, `_validate_dismissed_features`, `_detect_and_write_pending_features`). Pending features are written to `~/.claude/.starter-kit-pending-features.json` (atomic write, name-only). `check-pending.sh` is self-contained (no `lib/` deps, Bash 3.2 compatible), reads pending JSON and resolves displayName/description from kit repo's `feature.json`. The `/update-kit` command handles interactive review (Claude-side, not shell wizard). Full profile auto-enables all features (no pending). Minimal generates pending but has no SessionStart notification (hook not deployed).
+- **Safety Net**: `cc-safety-net` PreToolUse hook blocks destructive shell/git operations and sets both canonical and legacy strict env names for fail-closed compatibility.
+- **Auto Update**: async SessionStart/SessionEnd update checks with lock/status files; older Claude versions use the legacy cache hook.
+- **Status Line**: Python statusLine command showing model, context usage, and 5h/7d rate limits.
+- **Doc Size Guard**: validates CLAUDE.md/AGENTS.md line counts and broken path references after Write.
+- **Feature Recommendation**: writes pending feature names and notifies via SessionStart for enabled profiles.
 
 ## Platform Detection
 
-`lib/detect.sh` exports: `OS`, `ARCH`, `DISTRO`, `DISTRO_FAMILY`, `IS_WSL`, `WSL_BUILD`, `WIN_BUILD`.
+`lib/detect.sh` exports: `OS`, `ARCH`, `DISTRO`, `DISTRO_FAMILY`, `IS_WSL`, `WSL_BUILD`.
 
-Helpers: `is_macos()`, `is_linux()`, `is_wsl()`, `is_msys()`, `is_windows()`, `is_apple_silicon()`.
+Helpers: `is_macos()`, `is_linux()`, `is_wsl()`, `is_msys()`.
 
 MSYS pattern covers: `MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*`. WSL detection uses `/proc/version` + `WSL_DISTRO_NAME` + `WSLENV` + `WSLInterop` fallbacks.
 

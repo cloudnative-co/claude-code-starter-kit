@@ -13,6 +13,11 @@ is_true() { [[ "${1:-false}" == "true" ]]; }
 is_msys() { return 1; }
 _get_shell_rc_file() { printf '%s\n' "$HOME/.bashrc"; }
 
+# shellcheck source=lib/prerequisites.sh
+source "$PROJECT_DIR/lib/prerequisites.sh"
+
+_get_shell_rc_file() { printf '%s\n' "$HOME/.bashrc"; }
+
 # shellcheck disable=SC2034  # globals are consumed by sourced codex-setup.sh
 STR_CODEX_SETUP_INCOMPLETE="Codex setup incomplete"
 STR_CODEX_PLUGIN_ALREADY="Codex plugin already configured"
@@ -27,6 +32,23 @@ STR_CODEX_MIGRATE_DONE="Migration complete"
 STR_CODEX_MIGRATE_KEEP_MCP="Plugin setup incomplete. Keeping MCP."
 STR_CODEX_MIGRATE_SKIP_NONINTERACTIVE="Migration needs interactive mode"
 STR_CODEX_AUTH_NONINTERACTIVE_REQUIRED="Auth still needs interactive setup"
+STR_CODEX_SETUP_TITLE="Codex setup"
+STR_CODEX_SETUP_NOTE="Codex setup note"
+STR_CODEX_CLI_ALREADY="Codex CLI already installed"
+STR_CODEX_LOGIN_ALREADY="Codex login already complete"
+STR_CODEX_AUTH_CHECKING="Checking Codex auth"
+STR_CODEX_AUTH_REQUIRED="Codex auth required"
+STR_CODEX_AUTH_CHATGPT="ChatGPT login"
+STR_CODEX_AUTH_DEVICE="Device login"
+STR_CODEX_API_KEY_PROMPT="API key login"
+STR_CODEX_AUTH_SKIP="Skip"
+STR_CODEX_AUTH_SKIPPED="Codex auth skipped"
+STR_CODEX_AUTH_NOT_LOGGED_IN="Codex not logged in"
+STR_CODEX_LOGIN_FAILED="Codex login failed"
+STR_CODEX_LOGIN_RUNNING="Running Codex login"
+STR_CODEX_LOGIN_DONE="Codex login done"
+STR_CODEX_RESTART_HINT="Restart shell"
+STR_CHOICE="Choice"
 
 MOCK_HAS_PLUGIN=false
 MOCK_HAS_MCP=false
@@ -43,6 +65,13 @@ MOCK_REMOVE_MCP_CALLS=0
 
 # shellcheck source=lib/codex-setup.sh
 source "$PROJECT_DIR/lib/codex-setup.sh"
+
+if _claude_plugin_list_has $'code-reviewer\ncodex@openai' "codex" \
+  && ! _claude_plugin_list_has $'code-reviewer\ncodex-companion' "codex"; then
+  pass "codex-setup: plugin list matching uses exact plugin names"
+else
+  fail "codex-setup: plugin list matching should not use substring matches"
+fi
 
 reset_codex_mocks() {
   # shellcheck disable=SC2034  # globals are consumed by sourced codex-setup.sh
@@ -74,6 +103,10 @@ if [[ "${1:-}" == "mcp" && "${2:-}" == "list" ]]; then
   printf '%s' "${MOCK_CLAUDE_LIST_OUTPUT:-}"
   exit 0
 fi
+if [[ "${1:-}" == "plugin" && "${2:-}" == "list" ]]; then
+  printf '%s' "${MOCK_CLAUDE_PLUGIN_LIST_OUTPUT:-}"
+  exit 0
+fi
 if [[ "${1:-}" == "mcp" && "${2:-}" == "remove" ]]; then
   printf '%s' "${MOCK_CLAUDE_REMOVE_OUTPUT:-}"
   exit "${MOCK_CLAUDE_REMOVE_RC:-0}"
@@ -96,6 +129,10 @@ setup_fake_codex() {
 #!/bin/bash
 if [[ "${1:-}" == "login" && "${2:-}" == "status" ]]; then
   printf 'Logged in using ChatGPT\n' >&2
+  exit 0
+fi
+if [[ "${1:-}" == "login" && "${2:-}" == "--with-api-key" ]]; then
+  cat >/dev/null
   exit 0
 fi
 exit 1
@@ -131,6 +168,55 @@ else
   fail "codex-setup: _remove_legacy_mcp should not hardcode -s user"
 fi
 teardown_fake_claude
+
+# Codex plugin detection should not match substrings such as codex-companion
+setup_fake_claude
+export MOCK_CLAUDE_PLUGIN_LIST_OUTPUT=$'codex-companion\n'
+if ! _has_codex_plugin; then
+  pass "codex-setup: _has_codex_plugin does not match codex-companion"
+else
+  fail "codex-setup: _has_codex_plugin should require exact codex plugin name"
+fi
+teardown_fake_claude
+
+command() {
+  if [[ "$1" == "-v" && "$2" == "codex" ]]; then
+    return 1
+  fi
+  builtin command "$@"
+}
+_install_codex_cli() { return 1; }
+run_func _setup_codex_plugin
+unset -f command
+if assert_equals "1" "$_RF_RC" \
+  && assert_matches "Codex setup incomplete" "$_RF_STDERR"; then
+  pass "codex-setup: _setup_codex_plugin returns non-zero when CLI install fails"
+else
+  fail "codex-setup: _setup_codex_plugin should fail when CLI install fails"
+fi
+
+_ensure_openai_key_for_codex() {
+  export OPENAI_API_KEY="test-key"
+  return 0
+}
+_run_with_timeout() { return 0; }
+_confirm_api_key_auth_ready() { return 1; }
+set +e
+run_func _prompt_codex_auth "$HOME/.bashrc" <<< $'3\n4\n'
+set -e
+if assert_equals "1" "$_RF_RC" \
+  && assert_matches "Codex setup incomplete" "$_RF_STDERR" \
+  && ! [[ "$_RF_STDERR" =~ Codex\ login\ failed ]]; then
+  pass "codex-setup: API key smoke-test failure does not report login failure"
+else
+  fail "codex-setup: smoke-test failure after login success should not be reported as login failure"
+fi
+
+# Restore real helpers after the focused interactive-auth stubs above.
+# shellcheck source=lib/prerequisites.sh
+source "$PROJECT_DIR/lib/prerequisites.sh"
+# shellcheck source=lib/codex-setup.sh
+source "$PROJECT_DIR/lib/codex-setup.sh"
 
 _has_codex_plugin() { [[ "$MOCK_HAS_PLUGIN" == "true" ]]; }
 _has_legacy_mcp() { [[ "$MOCK_HAS_MCP" == "true" ]]; }

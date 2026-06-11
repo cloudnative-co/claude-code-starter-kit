@@ -3,7 +3,7 @@
 **Tech Stack:**
 - **Frontend**: Next.js 15 (App Router), TypeScript, React
 - **Backend**: FastAPI (Python), Pydantic models
-- **Database**: Supabase (PostgreSQL)
+- **Database**: PostgreSQL
 - **AI**: Claude API with tool calling and structured output
 - **Deployment**: Google Cloud Run
 - **Testing**: Playwright (E2E), pytest (backend), React Testing Library
@@ -26,7 +26,7 @@
               ┌───────────────┼───────────────┐
               ▼               ▼               ▼
         ┌──────────┐   ┌──────────┐   ┌──────────┐
-        │ Supabase │   │  Claude  │   │  Redis   │
+        │PostgreSQL│   │  Claude  │   │  Redis   │
         │ Database │   │   API    │   │  Cache   │
         └──────────┘   └──────────┘   └──────────┘
 ```

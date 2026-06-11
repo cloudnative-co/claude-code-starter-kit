@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "#!/bin/bash\ninput=$(cat)\ncmd=$(printf '%s' \"$input\" | jq -r '.tool_input.command')\nif printf '%s' \"$cmd\" | grep -qE 'gh pr create'; then\n  output=$(printf '%s' \"$input\" | jq -r '.tool_output.output // \"\"')\n  pr_url=$(printf '%s' \"$output\" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)\n  if [ -n \"$pr_url\" ]; then\n    echo \"[Hook] PR created: $pr_url\" >&2\n  fi\nfi\nprintf '%s\\n' \"$input\""
+						"command": "PR_CREATION_LOG_LEGACY=1 __HOME__/.claude/hooks/pr-creation-log/log-pr.sh"
 					}
 				]
 			}

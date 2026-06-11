@@ -43,6 +43,7 @@ trap _cleanup_tmp EXIT INT TERM
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 1: Bash 3.2-compatible bootstrap (wizard, detect, prerequisites)
 # ═══════════════════════════════════════════════════════════════════════════
+setup_stage1() {
 
 # ---------------------------------------------------------------------------
 # Source wizard first, parse CLI args
@@ -78,10 +79,12 @@ check_bash4 || {
   fi
   exit 1
 }
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 2: Bash 4+ required from this point (template, json, merge, etc.)
 # ═══════════════════════════════════════════════════════════════════════════
+setup_source_stage2() {
 
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/features.sh"
@@ -108,10 +111,14 @@ check_bash4 || {
 . "$PROJECT_DIR/lib/ghostty.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/fonts.sh"
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/codex-setup.sh"
+}
 
 # ---------------------------------------------------------------------------
 # Wizard
 # ---------------------------------------------------------------------------
+setup_run_wizard() {
 run_wizard
 
 case "${WIZARD_RESULT:-cancel}" in
@@ -131,6 +138,7 @@ case "${WIZARD_RESULT:-cancel}" in
     exit 1
     ;;
 esac
+}
 
 ensure_dirs() {
   mkdir -p "$CLAUDE_DIR"/{agents,rules,commands,skills,memory,hooks}
@@ -240,6 +248,17 @@ deploy_hook_scripts() {
       fi
     fi
   done
+
+  if is_true "${ENABLE_GIT_PUSH_REVIEW:-false}"; then
+    local src="$PROJECT_DIR/features/git-push-review/scripts"
+    local dest="$CLAUDE_DIR/hooks/git-push-review"
+    if [[ -d "$src" ]]; then
+      mkdir -p "$dest"
+      cp -a "$src"/. "$dest"/
+      _make_hooks_executable "$dest"
+      ok "Installed git-push-review hooks"
+    fi
+  fi
 }
 
 # Make all script files in a directory executable
@@ -252,6 +271,7 @@ _make_hooks_executable() {
 # ---------------------------------------------------------------------------
 # Dry-run: redirect CLAUDE_DIR to simulation directory
 # ---------------------------------------------------------------------------
+setup_prepare_runtime() {
 _ORIG_CLAUDE_DIR=""
 if [[ "${DRY_RUN:-false}" == "true" ]]; then
   _ORIG_CLAUDE_DIR="$CLAUDE_DIR"
@@ -263,10 +283,12 @@ fi
 
 maybe_install_biome
 maybe_install_cc_safety_net
+}
 
 # ---------------------------------------------------------------------------
 # Deploy
 # ---------------------------------------------------------------------------
+setup_deploy() {
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
   # Remove legacy 24h update cache so the old auto-update.sh (pre-v0.39.0)
   # won't skip the next check. Once the new hook scripts are deployed by this
@@ -335,10 +357,229 @@ fi
 # Placed after the deploy branch so it covers update / fresh / fresh-with-existing.
 # ---------------------------------------------------------------------------
 maybe_install_web_content_deps
+}
+
+_need_claude_cli_install() {
+  if [[ -x "$HOME/.local/bin/claude" ]]; then
+    return 1
+  fi
+  if is_wsl; then
+    return 0
+  fi
+  ! command -v claude &>/dev/null
+}
+
+_claude_cli_install_command() {
+  if is_msys; then
+    printf '%s\n' 'powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"'
+  else
+    printf '%s\n' 'curl -fsSL https://claude.ai/install.sh | bash'
+  fi
+}
+
+_ensure_windows_claude_path() {
+  is_msys || return 0
+  local win_dir
+  for win_dir in \
+    "$(cygpath -u "${LOCALAPPDATA:-}/Programs/claude" 2>/dev/null)" \
+    "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
+    "$HOME/.local/bin"; do
+    [[ -n "$win_dir" ]] && export PATH="$win_dir:$PATH"
+  done
+}
+
+_install_claude_cli() {
+  if is_msys; then
+    if powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"; then
+      _ensure_windows_claude_path
+      _add_to_path_now_and_persist "$HOME/.local/bin"
+      command -v claude &>/dev/null && ok "$STR_CLI_INSTALLED" || warn "$STR_CLI_PATH_WARN"
+      return 0
+    fi
+    warn "$STR_CLI_INSTALL_FAILED"
+    info "  powershell -c 'irm https://claude.ai/install.ps1 | iex'"
+    return 1
+  fi
+
+  if curl -fsSL https://claude.ai/install.sh | bash; then
+    _add_to_path_now_and_persist "$HOME/.local/bin"
+    command -v claude &>/dev/null && ok "$STR_CLI_INSTALLED" || warn "$STR_CLI_PATH_WARN"
+    return 0
+  fi
+  warn "$STR_CLI_INSTALL_FAILED"
+  info "  curl -fsSL https://claude.ai/install.sh | bash"
+  return 1
+}
+
+install_claude_cli_if_needed() {
+  local mode="${1:-normal}"
+  if ! _need_claude_cli_install; then
+    [[ "$mode" == "quiet" || "$mode" == "safety" ]] || ok "$STR_CLI_ALREADY"
+    _add_to_path_now_and_persist "$HOME/.local/bin"
+    return 0
+  fi
+
+  printf "\n"
+  if [[ "$mode" == "safety" ]]; then
+    warn "Claude CLI not found after setup. Running installer..."
+  else
+    info "$STR_CLI_INSTALLING"
+  fi
+  _install_claude_cli || true
+  _add_to_path_now_and_persist "$HOME/.local/bin"
+}
+
+install_selected_plugins() {
+  [[ -n "${SELECTED_PLUGINS:-}" ]] || return 0
+  printf "\n"
+  local plugins
+  IFS=',' read -r -a plugins <<< "$SELECTED_PLUGINS"
+  if ! command -v claude &>/dev/null; then
+    warn "$STR_DEPLOY_PLUGINS_SKIP"
+    info "$STR_DEPLOY_PLUGINS_HINT"
+    local p p_name
+    for p in "${plugins[@]}"; do
+      p_name="${p%%@*}"
+      [[ -n "$p_name" ]] && printf "  /install %s\n" "$p_name"
+    done
+    return 0
+  fi
+
+  local installed_plugins need_install=false
+  installed_plugins="$(claude plugin list 2>/dev/null || true)"
+  if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+    need_install=true
+  else
+    local p p_name
+    for p in "${plugins[@]}"; do
+      p_name="${p%%@*}"
+      if [[ -n "$p_name" ]] && ! _claude_plugin_list_has "$installed_plugins" "$p_name"; then
+        need_install=true
+        break
+      fi
+    done
+  fi
+
+  if [[ "$need_install" == "true" ]]; then
+    local registered_mps="" p p_mp mp_repo mp_output
+    for p in "${plugins[@]}"; do
+      [[ -z "$p" ]] && continue
+      [[ "$p" == *"@"* ]] && p_mp="${p#*@}" || p_mp="claude-plugins-official"
+      [[ ",$registered_mps," == *",$p_mp,"* ]] && continue
+      mp_repo="$(jq -r --arg mp "$p_mp" '.marketplaces[$mp] // empty' "$PROJECT_DIR/config/plugins.json")"
+      if [[ -n "$mp_repo" ]]; then
+        mp_output=""
+        if ! _run_capture mp_output claude plugin marketplace add "$mp_repo"; then
+          warn "${STR_DEPLOY_PLUGINS_MARKETPLACE_FAILED:-Failed to add plugin marketplace} $p_mp"
+          [[ -n "$mp_output" ]] && info "  $mp_output"
+        fi
+      fi
+      registered_mps="${registered_mps:+${registered_mps},}${p_mp}"
+    done
+    info "$STR_DEPLOY_PLUGINS_INSTALLING"
+  fi
+
+  local p p_name plugin_output
+  for p in "${plugins[@]}"; do
+    p_name="${p%%@*}"
+    [[ -z "$p_name" ]] && continue
+    if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+      plugin_output=""
+      if _run_capture plugin_output claude plugin install "$p_name" --scope user; then
+        ok "${STR_DEPLOY_PLUGINS_UPDATED:-Updated} $p_name"
+      else
+        warn "$STR_DEPLOY_PLUGINS_FAILED $p_name"
+        [[ -n "$plugin_output" ]] && info "  $plugin_output"
+      fi
+    elif _claude_plugin_list_has "$installed_plugins" "$p_name"; then
+      ok "$STR_DEPLOY_PLUGINS_ALREADY $p_name"
+    else
+      plugin_output=""
+      if _run_capture plugin_output claude plugin install "$p_name" --scope user; then
+        ok "$STR_DEPLOY_PLUGINS_INSTALLED $p_name"
+      else
+        warn "$STR_DEPLOY_PLUGINS_FAILED $p_name"
+        [[ -n "$plugin_output" ]] && info "  $plugin_output"
+      fi
+    fi
+  done
+}
+
+print_final_message() {
+  printf "\n"
+  if [[ "${#GHOSTTY_INCOMPLETE[@]}" -gt 0 ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+    section "$STR_FINAL_INCOMPLETE_TITLE"
+    warn "$STR_FINAL_INCOMPLETE_GHOSTTY"
+    local item
+    for item in "${GHOSTTY_INCOMPLETE[@]}"; do
+      warn "  - $item"
+    done
+    printf "\n"
+    info "$STR_FINAL_INCOMPLETE_HINT"
+    info "  $STR_FINAL_INCOMPLETE_BREW"
+    info "    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    info ""
+    info "  $STR_FINAL_INCOMPLETE_RERUN"
+    info "    ~/.claude-starter-kit/setup.sh"
+    printf "\n"
+    info "$STR_FINAL_NEXT"
+    info "  $STR_FINAL_STEP1"
+    info "  $STR_FINAL_STEP2"
+    info "  $STR_FINAL_STEP3"
+    printf "\n"
+    return 0
+  fi
+
+  section "$STR_FINAL_TITLE"
+  local ghostty_found=false
+  if [[ "$(uname -s)" == "Darwin" && -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
+    ghostty_found=true
+  fi
+
+  if [[ "$ghostty_found" == "true" ]]; then
+    info "$STR_FINAL_GHOSTTY_NEXT"
+    info "  $STR_FINAL_GHOSTTY_STEP1"
+    info "  $STR_FINAL_GHOSTTY_STEP2"
+    info "  $STR_FINAL_GHOSTTY_STEP3"
+    printf "\n"
+    ok "$STR_FINAL_GHOSTTY_FONT"
+  elif is_wsl; then
+    info "$STR_FINAL_WSL_NEXT"
+    info "  $STR_FINAL_WSL_STEP1"
+    info "  $STR_FINAL_WSL_STEP2"
+    info "  $STR_FINAL_WSL_STEP3"
+  elif is_msys; then
+    info "$STR_FINAL_MSYS_NEXT"
+    info "  $STR_FINAL_MSYS_STEP1"
+    info "  ${STR_FINAL_MSYS_STEP1_HINT:-}"
+    info "  $STR_FINAL_MSYS_STEP2"
+    info "  $STR_FINAL_MSYS_STEP3"
+  else
+    info "$STR_FINAL_NEXT"
+    info "  $STR_FINAL_STEP1"
+    info "  $STR_FINAL_STEP2"
+    info "  $STR_FINAL_STEP3"
+  fi
+  if [[ "${#FONTS_INCOMPLETE[@]}" -gt 0 ]]; then
+    printf "\n"
+    warn "$STR_FINAL_INCOMPLETE_FONTS"
+    local item
+    for item in "${FONTS_INCOMPLETE[@]}"; do
+      warn "  - $item"
+    done
+  fi
+  printf "\n"
+  warn "${STR_FINAL_RESTART_WARN:-Important: Restart your terminal for settings to take effect.}"
+  info "${STR_FINAL_RESTART_HINT:-Close this terminal and open a new one before running claude.}"
+  printf "\n"
+  ok "$STR_FINAL_ENJOY"
+  printf "\n"
+}
 
 # ---------------------------------------------------------------------------
 # Dry-run: collect file changes, log external operations, show results, exit
 # ---------------------------------------------------------------------------
+setup_finish_dryrun() {
 if [[ "${DRY_RUN:-false}" == "true" ]]; then
   _dryrun_collect_file_changes "$_ORIG_CLAUDE_DIR"
 
@@ -349,21 +590,8 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
   if is_true "${ENABLE_FONTS_SETUP:-false}"; then
     _dryrun_log "EXTERNAL" "Fonts" "IBM Plex Mono + HackGen NF"
   fi
-  # Match the real install logic: WSL always installs local Linux binary
-  _dr_need_cli=false
-  if [[ -x "$HOME/.local/bin/claude" ]]; then
-    _dr_need_cli=false
-  elif is_wsl; then
-    _dr_need_cli=true
-  elif ! command -v claude &>/dev/null; then
-    _dr_need_cli=true
-  fi
-  if $_dr_need_cli; then
-    _dr_cli_cmd="curl -fsSL https://claude.ai/install.sh | bash"
-    if is_msys; then
-      _dr_cli_cmd='powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"'
-    fi
-    _dryrun_log "EXTERNAL" "Claude CLI" "$_dr_cli_cmd"
+  if _need_claude_cli_install; then
+    _dryrun_log "EXTERNAL" "Claude CLI" "$(_claude_cli_install_command)"
   fi
   if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
     IFS=',' read -r -a _dr_plugins <<< "$SELECTED_PLUGINS"
@@ -391,10 +619,12 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
   _dryrun_show_results "$_ORIG_CLAUDE_DIR"
   exit 0
 fi
+}
 
 # ---------------------------------------------------------------------------
 # Ghostty terminal setup (macOS only)
 # ---------------------------------------------------------------------------
+setup_finalize() {
 if [[ "$(uname -s)" != "Darwin" ]]; then
   ENABLE_GHOSTTY_SETUP="false"
 fi
@@ -422,165 +652,20 @@ ok "Deployed to $CLAUDE_DIR"
 
 # _ensure_local_bin_in_path is now _add_to_path_now_and_persist in lib/prerequisites.sh
 
-# ---------------------------------------------------------------------------
-# Install Claude Code CLI if not present
-# In WSL, Windows PATH can leak (e.g. /mnt/c/.../npm/claude) causing false
-# positives for 'command -v claude'. Check for the actual Linux binary first.
-# ---------------------------------------------------------------------------
-_need_cli_install=false
-if [[ -x "$HOME/.local/bin/claude" ]]; then
-  _need_cli_install=false
-elif is_wsl; then
-  # In WSL, ignore Windows PATH — require local Linux binary
-  _need_cli_install=true
-elif ! command -v claude &>/dev/null; then
-  _need_cli_install=true
-fi
+install_claude_cli_if_needed
 
-if $_need_cli_install; then
-  printf "\n"
-  info "$STR_CLI_INSTALLING"
-  if is_msys; then
-    # Native Windows: use PowerShell installer
-    if powershell.exe -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"; then
-      # Probe common install locations (PowerShell installer, npm, etc.)
-      for _win_dir in \
-        "$(cygpath -u "${LOCALAPPDATA:-}/Programs/claude" 2>/dev/null)" \
-        "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
-        "$HOME/.local/bin"; do
-        [[ -n "$_win_dir" ]] && export PATH="$_win_dir:$PATH"
-      done
-      _add_to_path_now_and_persist "$HOME/.local/bin"
-      if command -v claude &>/dev/null; then
-        ok "$STR_CLI_INSTALLED"
-      else
-        warn "$STR_CLI_PATH_WARN"
-      fi
-    else
-      warn "$STR_CLI_INSTALL_FAILED"
-      info "  powershell -c 'irm https://claude.ai/install.ps1 | iex'"
-    fi
-  else
-    # Unix (macOS/Linux/WSL): use bash installer
-    if curl -fsSL https://claude.ai/install.sh | bash; then
-      _add_to_path_now_and_persist "$HOME/.local/bin"
-      if command -v claude &>/dev/null; then
-        ok "$STR_CLI_INSTALLED"
-      else
-        warn "$STR_CLI_PATH_WARN"
-      fi
-    else
-      warn "$STR_CLI_INSTALL_FAILED"
-      info "  curl -fsSL https://claude.ai/install.sh | bash"
-    fi
-  fi
-else
-  ok "$STR_CLI_ALREADY"
-fi
-
-# Always ensure ~/.local/bin is in PATH config (even if CLI was found via
-# inherited PATH from another user or transient session)
-_add_to_path_now_and_persist "$HOME/.local/bin"
-
-# ---------------------------------------------------------------------------
-# Install plugins
-# ---------------------------------------------------------------------------
-if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
-  printf "\n"
-  IFS=',' read -r -a _plugins <<< "$SELECTED_PLUGINS"
-  if command -v claude &>/dev/null; then
-    # Get list of already installed plugins
-    _installed_plugins="$(claude plugin list 2>/dev/null || true)"
-
-    # Check if any plugins need installing (update mode always proceeds)
-    _need_install=false
-    if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
-      _need_install=true
-    else
-      for _p in "${_plugins[@]}"; do
-        _p_name="${_p%%@*}"
-        if [[ -n "$_p_name" ]] && ! echo "$_installed_plugins" | grep -q "$_p_name" 2>/dev/null; then
-          _need_install=true
-          break
-        fi
-      done
-    fi
-
-    if [[ "$_need_install" == "true" ]]; then
-      # Register required marketplaces (deduplicated)
-      _registered_mps=""
-      for _p in "${_plugins[@]}"; do
-        [[ -z "$_p" ]] && continue
-        if [[ "$_p" == *"@"* ]]; then
-          _p_mp="${_p#*@}"
-        else
-          _p_mp="claude-plugins-official"
-        fi
-        # Skip if already registered in this run
-        if [[ ",$_registered_mps," == *",$_p_mp,"* ]]; then
-          continue
-        fi
-        # Resolve GitHub repo from plugins.json marketplaces map
-        _mp_repo="$(jq -r --arg mp "$_p_mp" '.marketplaces[$mp] // empty' "$PROJECT_DIR/config/plugins.json")"
-        if [[ -n "$_mp_repo" ]]; then
-          claude plugin marketplace add "$_mp_repo" 2>/dev/null || true
-        fi
-        _registered_mps="${_registered_mps:+${_registered_mps},}${_p_mp}"
-      done
-      info "$STR_DEPLOY_PLUGINS_INSTALLING"
-    fi
-
-    for _p in "${_plugins[@]}"; do
-      _p_name="${_p%%@*}"
-      if [[ -n "$_p_name" ]]; then
-        if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
-          # Update mode: always re-install to pick up latest versions
-          if claude plugin install "$_p_name" --scope user 2>/dev/null; then
-            ok "${STR_DEPLOY_PLUGINS_UPDATED:-Updated} $_p_name"
-          else
-            warn "$STR_DEPLOY_PLUGINS_FAILED $_p_name"
-          fi
-        elif echo "$_installed_plugins" | grep -q "$_p_name" 2>/dev/null; then
-          ok "$STR_DEPLOY_PLUGINS_ALREADY $_p_name"
-        elif claude plugin install "$_p_name" --scope user; then
-          ok "$STR_DEPLOY_PLUGINS_INSTALLED $_p_name"
-        else
-          warn "$STR_DEPLOY_PLUGINS_FAILED $_p_name"
-        fi
-      fi
-    done
-  else
-    warn "$STR_DEPLOY_PLUGINS_SKIP"
-    info "$STR_DEPLOY_PLUGINS_HINT"
-    for _p in "${_plugins[@]}"; do
-      _p_name="${_p%%@*}"
-      [[ -n "$_p_name" ]] && printf "  /install %s\n" "$_p_name"
-    done
-  fi
-fi
+install_selected_plugins
 
 # ---------------------------------------------------------------------------
 # Codex Plugin setup (sourced from lib/codex-setup.sh)
 # ---------------------------------------------------------------------------
-# shellcheck source=/dev/null
-. "$PROJECT_DIR/lib/codex-setup.sh"
 run_codex_setup
 
 # ---------------------------------------------------------------------------
 # Final safety net: ensure Claude CLI is actually installed
 # (catches edge cases where the earlier installation was skipped or failed)
 # ---------------------------------------------------------------------------
-if [[ ! -x "$HOME/.local/bin/claude" ]] && ! command -v claude &>/dev/null; then
-  printf "\n"
-  warn "Claude CLI not found after setup. Running installer..."
-  if curl -fsSL https://claude.ai/install.sh | bash; then
-    _add_to_path_now_and_persist "$HOME/.local/bin"
-    ok "$STR_CLI_INSTALLED"
-  else
-    warn "$STR_CLI_INSTALL_FAILED"
-    info "  curl -fsSL https://claude.ai/install.sh | bash"
-  fi
-fi
+install_claude_cli_if_needed "safety"
 
 # ---------------------------------------------------------------------------
 # Auto-update health check (fresh install path — update path runs inside run_update)
@@ -592,84 +677,17 @@ fi
 # ---------------------------------------------------------------------------
 # Final message
 # ---------------------------------------------------------------------------
-printf "\n"
-# Ghostty incomplete message is only relevant on macOS
-if [[ "${#GHOSTTY_INCOMPLETE[@]}" -gt 0 ]] && [[ "$(uname -s)" == "Darwin" ]]; then
-  section "$STR_FINAL_INCOMPLETE_TITLE"
-  warn "$STR_FINAL_INCOMPLETE_GHOSTTY"
-  for _item in "${GHOSTTY_INCOMPLETE[@]}"; do
-    warn "  - $_item"
-  done
-  printf "\n"
-  info "$STR_FINAL_INCOMPLETE_HINT"
-  info "  $STR_FINAL_INCOMPLETE_BREW"
-  info "    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-  info ""
-  info "  $STR_FINAL_INCOMPLETE_RERUN"
-  info "    ~/.claude-starter-kit/setup.sh"
-  printf "\n"
-  info "$STR_FINAL_NEXT"
-  info "  $STR_FINAL_STEP1"
-  info "  $STR_FINAL_STEP2"
-  info "  $STR_FINAL_STEP3"
-else
-  section "$STR_FINAL_TITLE"
-  _ghostty_found=false
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    if [[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]; then
-      _ghostty_found=true
-    fi
-  fi
-  # Detect platform for final message (inline — don't rely on is_wsl/is_msys)
-  _uname_final="$(uname -s)"
-  _is_wsl_final=false
-  if [[ -f /proc/version ]] && grep -qi "microsoft" /proc/version 2>/dev/null; then
-    _is_wsl_final=true
-  elif [[ -n "${WSL_DISTRO_NAME:-}" ]] || [[ -n "${WSLENV:-}" ]]; then
-    _is_wsl_final=true
-  fi
-  _is_msys_final=false
-  case "$_uname_final" in
-    MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*) _is_msys_final=true ;;
-  esac
+print_final_message
+}
 
-  if [[ "$_ghostty_found" == "true" ]]; then
-    # Ghostty is installed - guide user to launch it
-    info "$STR_FINAL_GHOSTTY_NEXT"
-    info "  $STR_FINAL_GHOSTTY_STEP1"
-    info "  $STR_FINAL_GHOSTTY_STEP2"
-    info "  $STR_FINAL_GHOSTTY_STEP3"
-    printf "\n"
-    ok "$STR_FINAL_GHOSTTY_FONT"
-  elif [[ "$_is_wsl_final" == "true" ]]; then
-    info "$STR_FINAL_WSL_NEXT"
-    info "  $STR_FINAL_WSL_STEP1"
-    info "  $STR_FINAL_WSL_STEP2"
-    info "  $STR_FINAL_WSL_STEP3"
-  elif [[ "$_is_msys_final" == "true" ]]; then
-    info "$STR_FINAL_MSYS_NEXT"
-    info "  $STR_FINAL_MSYS_STEP1"
-    info "  ${STR_FINAL_MSYS_STEP1_HINT:-}"
-    info "  $STR_FINAL_MSYS_STEP2"
-    info "  $STR_FINAL_MSYS_STEP3"
-  else
-    info "$STR_FINAL_NEXT"
-    info "  $STR_FINAL_STEP1"
-    info "  $STR_FINAL_STEP2"
-    info "  $STR_FINAL_STEP3"
-  fi
-  # Font incomplete warning
-  if [[ "${#FONTS_INCOMPLETE[@]}" -gt 0 ]]; then
-    printf "\n"
-    warn "$STR_FINAL_INCOMPLETE_FONTS"
-    for _item in "${FONTS_INCOMPLETE[@]}"; do
-      warn "  - $_item"
-    done
-  fi
-  printf "\n"
-  warn "${STR_FINAL_RESTART_WARN:-Important: Restart your terminal for settings to take effect.}"
-  info "${STR_FINAL_RESTART_HINT:-Close this terminal and open a new one before running claude.}"
-  printf "\n"
-  ok "$STR_FINAL_ENJOY"
-fi
-printf "\n"
+setup_main() {
+  setup_stage1 "$@"
+  setup_source_stage2
+  setup_run_wizard
+  setup_prepare_runtime
+  setup_deploy
+  setup_finish_dryrun
+  setup_finalize
+}
+
+setup_main "$@"

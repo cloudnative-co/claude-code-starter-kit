@@ -1,0 +1,10 @@
+{
+  "session_id": "fixture-session-edit",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/tmp/example.ts",
+    "old_string": "const value = 1",
+    "new_string": "const value = 2"
+  }
+}

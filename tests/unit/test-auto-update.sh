@@ -97,6 +97,7 @@ EOF
     MOCK_GIT_PULL_RC="${MOCK_GIT_PULL_RC:-0}" \
     MOCK_SETUP_RC="${MOCK_SETUP_RC:-0}" \
     MOCK_CLAUDE_VERSION_SCRIPT="${MOCK_CLAUDE_VERSION_SCRIPT:-2.1.89 (Claude Code)}" \
+    AUTO_UPDATE_LEGACY="${AUTO_UPDATE_LEGACY:-0}" \
     "$REAL_BASH_BIN" "$AUTO_UPDATE_SCRIPT"
 }
 
@@ -201,6 +202,7 @@ fi
 rm -f "$_au_tmp/home/.claude/.starter-kit-update-cache"
 : > "$_au_tmp/git.log"
 MOCK_CLAUDE_VERSION_SCRIPT="2.1.88 (Claude Code)"
+AUTO_UPDATE_LEGACY=1
 MOCK_LOCAL_VER="v0.1.0"
 MOCK_REMOTE_VER="v0.1.0"
 run_auto_update_with_mocks "$_au_tmp" >/dev/null 2>&1 || true
@@ -214,10 +216,11 @@ else
   fail "auto-update: legacy Claude Code should skip repeated checks within cache TTL"
 fi
 unset MOCK_CLAUDE_VERSION_SCRIPT
+AUTO_UPDATE_LEGACY=0
 
 # Hook fragment should expose both async session-boundary hooks.
 if jq -e '
-  any(.hooks.SessionStart[]?.hooks[]?; .async == true and .asyncTimeout == 300000 and (.command | contains("auto-update.sh"))) and
+  any(.hooks.SessionStart[]?; .matcher == "startup" and any(.hooks[]?; .async == true and .asyncTimeout == 300000 and (.command | contains("auto-update.sh")))) and
   any(.hooks.SessionEnd[]?.hooks[]?; .async == true and .asyncTimeout == 300000 and (.command | contains("auto-update.sh")))
 ' "$PROJECT_DIR/features/auto-update/hooks.json" >/dev/null 2>&1; then
   pass "auto-update: hooks.json registers async SessionStart and SessionEnd with timeout"
@@ -235,9 +238,11 @@ if [[ "${1:-}" == "--version" ]]; then
 fi
 EOF
 chmod +x "$_au_tmp/claude-current-bin/claude"
+_CLAUDE_SEMVER_CACHE=""
+_CLAUDE_SEMVER_CACHE_SET=false
 PATH="$_au_tmp/claude-current-bin:$PATH" build_settings_file "$_au_settings" >/dev/null
 if jq -e '
-  any(.hooks.SessionStart[]?.hooks[]?; .async == true and .asyncTimeout == 300000 and (.command | contains("auto-update.sh"))) and
+  any(.hooks.SessionStart[]?; .matcher == "startup" and any(.hooks[]?; .async == true and .asyncTimeout == 300000 and (.command | contains("auto-update.sh")))) and
   any(.hooks.SessionEnd[]?.hooks[]?; .async == true and .asyncTimeout == 300000 and (.command | contains("auto-update.sh")))
 ' "$_au_settings" >/dev/null 2>&1; then
   pass "auto-update: merged settings include async SessionStart and SessionEnd hooks with timeout"
@@ -255,10 +260,12 @@ if [[ "${1:-}" == "--version" ]]; then
 fi
 EOF
 chmod +x "$_au_tmp/claude-legacy-bin/claude"
+_CLAUDE_SEMVER_CACHE=""
+_CLAUDE_SEMVER_CACHE_SET=false
 PATH="$_au_tmp/claude-legacy-bin:$PATH" build_settings_file "$_au_legacy_settings" >/dev/null
 if jq -e '
-  any(.hooks.SessionStart[]?.hooks[]?; (.command | contains("auto-update.sh"))) and
-  ((.hooks.SessionEnd // []) | length == 0) and
+  any(.hooks.SessionStart[]?; .matcher == "startup" and any(.hooks[]?; (.command | contains("AUTO_UPDATE_LEGACY=1")) and (.command | contains("auto-update.sh")))) and
+  (any(.hooks.SessionEnd[]?.hooks[]?; ((.command? // "") | contains("auto-update.sh"))) | not) and
   (any(.hooks.SessionStart[]?.hooks[]?; .async == true) | not)
 ' "$_au_legacy_settings" >/dev/null 2>&1; then
   pass "auto-update: legacy Claude Code falls back to SessionStart without async"

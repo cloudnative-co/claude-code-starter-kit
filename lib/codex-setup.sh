@@ -1,47 +1,17 @@
 #!/bin/bash
 # lib/codex-setup.sh - Codex Plugin setup (CLI install, auth, plugin registration)
-# Requires: lib/colors.sh, lib/detect.sh, lib/prerequisites.sh (_get_shell_rc_file),
+# Requires: lib/colors.sh, lib/detect.sh, lib/prerequisites.sh (_get_shell_rc_file, _run_with_timeout),
 #           wizard/wizard.sh (is_true)
 # Uses globals: ENABLE_CODEX_PLUGIN, WIZARD_NONINTERACTIVE, _SETUP_TMP_FILES[],
 #               STR_CODEX_*, STR_CHOICE
 # Exports: run_codex_setup(), _setup_codex_plugin(), _install_codex_cli(),
-#          _run_with_timeout(), _verify_openai_key(), _save_openai_key()
+#          _verify_openai_key(), _save_openai_key()
 # Dry-run: guarded externally (setup.sh logs EXTERNAL, does not call run_codex_setup)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Codex Plugin helpers
 # ---------------------------------------------------------------------------
-
-# Portable timeout wrapper (macOS lacks `timeout` from coreutils)
-_run_with_timeout() {
-  local secs="$1"; shift
-  if command -v timeout &>/dev/null; then
-    timeout "$secs" "$@"
-  else
-    local _stdout_file _stderr_file
-    _stdout_file="$(mktemp)"
-    _stderr_file="$(mktemp)"
-    _SETUP_TMP_FILES+=("$_stdout_file" "$_stderr_file")
-
-    # Background the command and capture its output so command substitution
-    # still works on macOS where `timeout` is unavailable.
-    "$@" >"$_stdout_file" 2>"$_stderr_file" &
-    local pid=$!
-    ( sleep "$secs" && kill "$pid" 2>/dev/null ) &
-    local watcher=$!
-    # Capture exit code safely under set -e (bare wait would abort on non-zero)
-    local rc=0
-    wait "$pid" 2>/dev/null || rc=$?
-    # Kill the watcher subshell and its sleep child to avoid orphan processes
-    kill "$watcher" 2>/dev/null || true
-    wait "$watcher" 2>/dev/null || true
-
-    cat "$_stdout_file"
-    cat "$_stderr_file" >&2
-    return "$rc"
-  fi
-}
 
 _verify_openai_key() {
   local key="$1"
@@ -61,6 +31,24 @@ _run_capture() {
   _output="$("$@" 2>&1)" || _rc=$?
   printf -v "$__outvar" '%s' "$_output"
   return "$_rc"
+}
+
+_claude_plugin_list_has() {
+  local _list="$1"
+  local _name="$2"
+  awk -v name="$_name" '
+    {
+      candidate = $1
+      if (candidate == "-" || candidate == "*" || candidate == "+") {
+        candidate = $2
+      }
+      sub(/@.*/, "", candidate)
+      if (candidate == name) {
+        found = 1
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' <<< "$_list"
 }
 
 _save_openai_key() {
@@ -208,12 +196,8 @@ _install_codex_cli() {
     fi
   fi
 
-  if [[ "$_codex_installed" == "true" ]] && ! command -v codex &>/dev/null && is_msys; then
-    for _npm_dir in \
-      "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
-      "$(npm config get prefix 2>/dev/null)/bin"; do
-      [[ -n "$_npm_dir" ]] && [[ -d "$_npm_dir" ]] && export PATH="$_npm_dir:$PATH"
-    done
+  if [[ "$_codex_installed" == "true" ]] && ! command -v codex &>/dev/null; then
+    _ensure_msys_npm_path
   fi
 
   if command -v codex &>/dev/null; then
@@ -228,6 +212,26 @@ _install_codex_cli() {
   fi
   info "  npm install -g @openai/codex"
   return 1
+}
+
+_ensure_msys_npm_path() {
+  is_msys || return 0
+  local _npm_dir
+  for _npm_dir in \
+    "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
+    "$(npm config get prefix 2>/dev/null)/bin"; do
+    [[ -n "$_npm_dir" ]] && [[ -d "$_npm_dir" ]] && export PATH="$_npm_dir:$PATH"
+  done
+}
+
+_cleanup_legacy_mcp_with_report() {
+  local success_message="${1:-${STR_CODEX_MCP_DRIFT_DONE:-Codex MCP duplicate registration removed}}"
+  info "${STR_CODEX_MCP_DRIFT_CLEANUP:-Removing duplicate Codex MCP registration...}"
+  if _remove_legacy_mcp; then
+    ok "$success_message"
+  else
+    warn "${STR_CODEX_MCP_DRIFT_KEEPING:-Keeping legacy Codex MCP because cleanup did not complete.}"
+  fi
 }
 
 _prompt_codex_auth() {
@@ -273,6 +277,7 @@ _prompt_codex_auth() {
               return 0
             fi
             warn "$STR_CODEX_SETUP_INCOMPLETE"
+            continue
           fi
           warn "$STR_CODEX_LOGIN_FAILED"
           info "  printenv OPENAI_API_KEY | codex login --with-api-key"
@@ -358,7 +363,10 @@ _codex_fully_ready() {
 }
 
 _has_codex_plugin() {
-  command -v claude &>/dev/null && claude plugin list 2>/dev/null | grep -qw "codex" 2>/dev/null
+  local _plugin_list=""
+  command -v claude &>/dev/null \
+    && _plugin_list="$(claude plugin list 2>/dev/null)" \
+    && _claude_plugin_list_has "$_plugin_list" "codex"
 }
 
 _has_legacy_mcp() {
@@ -408,14 +416,7 @@ _setup_codex_plugin() {
   printf "\n"
   section "$STR_CODEX_SETUP_TITLE"
 
-  # On MSYS/Git Bash, ensure npm global bin is in PATH
-  if is_msys; then
-    for _npm_dir in \
-      "$(cygpath -u "${APPDATA:-}/npm" 2>/dev/null)" \
-      "$(npm config get prefix 2>/dev/null)/bin"; do
-      [[ -n "$_npm_dir" ]] && [[ -d "$_npm_dir" ]] && export PATH="$_npm_dir:$PATH"
-    done
-  fi
+  _ensure_msys_npm_path
 
   # Fast path: if everything is already configured, skip all slow checks
   if command -v codex &>/dev/null \
@@ -434,7 +435,7 @@ _setup_codex_plugin() {
   if ! _install_codex_cli; then
     printf "\n"
     warn "$STR_CODEX_SETUP_INCOMPLETE"
-    return
+    return 1
   fi
 
   local _rc_file
@@ -517,12 +518,7 @@ run_codex_setup() {
   # State B: both present
   if [[ "$_plugin_present" == "true" ]] && [[ "$_mcp_present" == "true" ]]; then
     if _codex_fully_ready; then
-      info "${STR_CODEX_MCP_DRIFT_CLEANUP:-Removing duplicate Codex MCP registration...}"
-      if _remove_legacy_mcp; then
-        ok "${STR_CODEX_MCP_DRIFT_DONE:-Codex MCP duplicate registration removed}"
-      else
-        warn "${STR_CODEX_MCP_DRIFT_KEEPING:-Keeping legacy Codex MCP because cleanup did not complete.}"
-      fi
+      _cleanup_legacy_mcp_with_report "${STR_CODEX_MCP_DRIFT_DONE:-Codex MCP duplicate registration removed}"
       return 0
     fi
     warn "${STR_CODEX_MCP_KEEP_UNTIL_READY:-Keeping legacy Codex MCP until Codex Plugin setup is fully ready.}"
@@ -531,12 +527,7 @@ run_codex_setup() {
       return 0
     fi
     if _setup_codex_plugin; then
-      info "${STR_CODEX_MCP_DRIFT_CLEANUP:-Removing duplicate Codex MCP registration...}"
-      if _remove_legacy_mcp; then
-        ok "${STR_CODEX_MCP_DRIFT_DONE:-Codex MCP duplicate registration removed}"
-      else
-        warn "${STR_CODEX_MCP_DRIFT_KEEPING:-Keeping legacy Codex MCP because cleanup did not complete.}"
-      fi
+      _cleanup_legacy_mcp_with_report "${STR_CODEX_MCP_DRIFT_DONE:-Codex MCP duplicate registration removed}"
     fi
     return 0
   fi
@@ -558,11 +549,7 @@ run_codex_setup() {
       1)
         # Remove MCP only after plugin + auth are both verified
         if _setup_codex_plugin; then
-          if _remove_legacy_mcp; then
-            ok "${STR_CODEX_MIGRATE_DONE:-Codex MCP → Plugin migration complete}"
-          else
-            warn "${STR_CODEX_MCP_DRIFT_KEEPING:-Keeping legacy Codex MCP because cleanup did not complete.}"
-          fi
+          _cleanup_legacy_mcp_with_report "${STR_CODEX_MIGRATE_DONE:-Codex MCP to Plugin migration complete}"
         else
           warn "${STR_CODEX_MIGRATE_KEEP_MCP:-Codex Plugin setup is incomplete. Keeping MCP.}"
         fi

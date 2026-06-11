@@ -258,6 +258,23 @@ if ! _safe_install_dir "$INSTALL_DIR"; then
     exit 1
 fi
 
+_clone_to_temp_and_swap() {
+    local target="$1"
+    local parent
+    parent="$(dirname "$target")"
+    mkdir -p "$parent"
+    local tmp_dir
+    tmp_dir="$(mktemp -d "$parent/.claude-starter-kit.clone.XXXXXX")"
+    if git clone --depth 1 "$REPO_URL" "$tmp_dir/repo"; then
+        rm -rf "$target"
+        mv "$tmp_dir/repo" "$target"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+    rm -rf "$tmp_dir"
+    return 1
+}
+
 # Install only missing tools (skip sudo if everything is present)
 _missing=()
 command -v git &>/dev/null      || _missing+=(git)
@@ -271,13 +288,6 @@ if [[ ${#_missing[@]} -gt 0 ]] && command -v apt-get &>/dev/null; then
     sudo apt-get install -y "${_missing[@]}" 2>/dev/null || true
 fi
 
-# Install Node.js if not present (needed for Codex CLI / npm plugins)
-if ! command -v node &>/dev/null && command -v apt-get &>/dev/null; then
-    echo "[INFO] Installing Node.js..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x 2>/dev/null | sudo -E bash - 2>/dev/null || true
-    sudo apt-get install -y nodejs 2>/dev/null || true
-fi
-
 # Clone or update the repo
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     # Dirty check: abort if local changes exist
@@ -288,13 +298,11 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     fi
     echo "[INFO] Updating existing installation..."
     git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
-        rm -rf "$INSTALL_DIR"
-        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+        _clone_to_temp_and_swap "$INSTALL_DIR"
     }
 else
-    [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR"
     echo "[INFO] Cloning Claude Code Starter Kit..."
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    _clone_to_temp_and_swap "$INSTALL_DIR"
 fi
 
 # Fix line endings for WSL
@@ -438,6 +446,23 @@ if ! _safe_install_dir "$INSTALL_DIR"; then
     exit 1
 fi
 
+_clone_to_temp_and_swap() {
+    local target="$1"
+    local parent
+    parent="$(dirname "$target")"
+    mkdir -p "$parent"
+    local tmp_dir
+    tmp_dir="$(mktemp -d "$parent/.claude-starter-kit.clone.XXXXXX")"
+    if git clone --depth 1 "$REPO_URL" "$tmp_dir/repo"; then
+        rm -rf "$target"
+        mv "$tmp_dir/repo" "$target"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+    rm -rf "$tmp_dir"
+    return 1
+}
+
 # Clone or update the repo
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     # Dirty check: abort if local changes exist
@@ -448,13 +473,11 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     fi
     echo "[INFO] Updating existing installation..."
     git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
-        rm -rf "$INSTALL_DIR"
-        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+        _clone_to_temp_and_swap "$INSTALL_DIR"
     }
 else
-    [[ -d "$INSTALL_DIR" ]] && rm -rf "$INSTALL_DIR"
     echo "[INFO] Cloning Claude Code Starter Kit..."
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    _clone_to_temp_and_swap "$INSTALL_DIR"
 fi
 
 chmod +x "$INSTALL_DIR/setup.sh"

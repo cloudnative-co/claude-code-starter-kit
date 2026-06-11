@@ -5,9 +5,9 @@
 # whether they have deploy scripts. Replaces 12+ hardcoded is_true checks.
 #
 # IMPORTANT: This file MUST be sourced AFTER Bash 4+ re-exec is confirmed.
-# Uses: declare -A (Bash 4+ only)
+# Uses: declare -g/-A (Bash 4+ only)
 #
-# Requires: wizard/wizard.sh (is_true, ENABLE_* globals)
+# Requires: ENABLE_* globals. is_true is provided later by lib/deploy.sh.
 # Sets globals: _FEATURE_FLAGS[], _FEATURE_HAS_SCRIPTS[], _FEATURE_ORDER[]
 # Exports: (associative arrays only, no functions)
 # Dry-run: transparent (data-only, no side effects)
@@ -16,7 +16,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Feature registry: maps feature name → ENABLE_* variable name
 # ---------------------------------------------------------------------------
-declare -A _FEATURE_FLAGS=(
+declare -g -A _FEATURE_FLAGS=(
   [safety-net]=ENABLE_SAFETY_NET
   [tmux-hooks]=ENABLE_TMUX_HOOKS
   [doc-blocker]=ENABLE_DOC_BLOCKER
@@ -38,7 +38,13 @@ declare -A _FEATURE_FLAGS=(
 # ---------------------------------------------------------------------------
 # Features that have deploy scripts in features/<name>/scripts/
 # ---------------------------------------------------------------------------
-declare -A _FEATURE_HAS_SCRIPTS=(
+declare -g -A _FEATURE_HAS_SCRIPTS=(
+  [doc-blocker]=true
+  [tmux-hooks]=true
+  [prettier-hooks]=true
+  [biome-hooks]=true
+  [console-log-guard]=true
+  [pr-creation-log]=true
   [memory-persistence]=true
   [strategic-compact]=true
   [auto-update]=true
@@ -51,7 +57,7 @@ declare -A _FEATURE_HAS_SCRIPTS=(
 # Ordered feature list (determines hook fragment merge order)
 # CRITICAL: safety-net MUST be first (PreToolUse runs in array order)
 # ---------------------------------------------------------------------------
-_FEATURE_ORDER=(
+declare -g -a _FEATURE_ORDER=(
   safety-net tmux-hooks doc-blocker prettier-hooks biome-hooks console-log-guard
   memory-persistence strategic-compact pr-creation-log pre-compact-commit
   auto-update web-content-update statusline doc-size-guard no-flicker

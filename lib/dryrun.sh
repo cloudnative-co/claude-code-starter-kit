@@ -12,18 +12,38 @@ set -euo pipefail
 # Dry-run log storage (indexed arrays — Bash 3.2 compatible)
 #
 # Each log entry is stored as "ACTION|TARGET|DETAIL" in _DRYRUN_LOG[].
-# Actions: CREATE, MODIFY, MERGE, SKIP, EXTERNAL
+# Actions: CREATE, MODIFY, DELETE, SKIP, EXTERNAL
 # ---------------------------------------------------------------------------
 _DRYRUN_LOG=()
 _DRYRUN_DIR=""
 
 # ---------------------------------------------------------------------------
-# _dryrun_init - Create simulation directory and copy existing ~/.claude
+# _dryrun_copy_path - Copy a path relative to the real Claude dir if present
+#
+# Usage: _dryrun_copy_path <real_dir> <relative_path>
+# ---------------------------------------------------------------------------
+_dryrun_copy_path() {
+  local real_dir="$1"
+  local rel_path="$2"
+  local src="${real_dir}/${rel_path}"
+  local dest="${_DRYRUN_DIR}/${rel_path}"
+
+  if [[ -f "$src" ]]; then
+    mkdir -p "$(dirname "$dest")"
+    cp -p "$src" "$dest"
+  elif [[ -d "$src" ]]; then
+    mkdir -p "$dest"
+    cp -a "$src"/. "$dest"/
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _dryrun_init - Create simulation directory and copy kit-relevant state
 #
 # Usage: _dryrun_init <real_claude_dir>
 #
-# Copies the real ~/.claude into a temp directory so the normal flow can
-# execute against it without touching the real filesystem.
+# Copies only files needed for install/update simulation. Runtime-heavy user
+# state such as projects/ session transcripts is intentionally excluded.
 # ---------------------------------------------------------------------------
 _dryrun_init() {
   local real_dir="$1"
@@ -31,9 +51,31 @@ _dryrun_init() {
   _DRYRUN_DIR="$(mktemp -d)"
   _SETUP_TMP_FILES+=("$_DRYRUN_DIR")
 
-  if [[ -d "$real_dir" ]]; then
-    # Copy existing state for accurate simulation
-    cp -a "$real_dir"/. "$_DRYRUN_DIR"/
+  [[ -d "$real_dir" ]] || return 0
+
+  local rel
+  for rel in \
+    settings.json \
+    CLAUDE.md \
+    AGENTS.md \
+    .starter-kit-manifest.json \
+    .starter-kit-merge-prefs.json \
+    .starter-kit-pending-features.json \
+    .starter-kit-update-status \
+    .starter-kit-update-cache \
+    .starter-kit-last-backup \
+    .starter-kit-snapshot; do
+    _dryrun_copy_path "$real_dir" "$rel"
+  done
+
+  local manifest="${real_dir}/.starter-kit-manifest.json"
+  if [[ -f "$manifest" ]]; then
+    while IFS= read -r managed_file; do
+      [[ -z "$managed_file" ]] && continue
+      case "$managed_file" in
+        "$real_dir"/*) _dryrun_copy_path "$real_dir" "${managed_file#"$real_dir"/}" ;;
+      esac
+    done < <(jq -r '.files[]? // empty' "$manifest" 2>/dev/null)
   fi
 }
 
@@ -42,7 +84,7 @@ _dryrun_init() {
 #
 # Usage: _dryrun_log <action> <target> [detail]
 #
-# Actions: CREATE, MODIFY, MERGE, SKIP, EXTERNAL
+# Actions: CREATE, MODIFY, DELETE, SKIP, EXTERNAL
 # ---------------------------------------------------------------------------
 _dryrun_log() {
   local action="$1"
@@ -68,7 +110,7 @@ _dryrun_show_results() {
   printf "\n"
 
   # Group log entries by action
-  local creates="" modifies="" merges="" deletes="" skips="" externals=""
+  local creates="" modifies="" deletes="" skips="" externals=""
   local entry action target detail
   for entry in "${_DRYRUN_LOG[@]+"${_DRYRUN_LOG[@]}"}"; do
     action="${entry%%|*}"
@@ -79,7 +121,6 @@ _dryrun_show_results() {
     case "$action" in
       CREATE)   creates="${creates}  ${target}${detail:+ ($detail)}\n" ;;
       MODIFY)   modifies="${modifies}  ${target}${detail:+ ($detail)}\n" ;;
-      MERGE)    merges="${merges}  ${target}\n    ${detail}\n" ;;
       DELETE)   deletes="${deletes}  ${target}${detail:+ ($detail)}\n" ;;
       SKIP)     skips="${skips}  ${target}${detail:+ ($detail)}\n" ;;
       EXTERNAL) externals="${externals}  [WOULD RUN] ${target}${detail:+: $detail}\n" ;;
@@ -95,12 +136,6 @@ _dryrun_show_results() {
   if [[ -n "$modifies" ]]; then
     info "${STR_DRYRUN_MODIFIED:-Files to modify:}"
     printf '%b' "$modifies"
-    printf "\n"
-  fi
-
-  if [[ -n "$merges" ]]; then
-    info "${STR_DRYRUN_MERGED:-Files to merge:}"
-    printf '%b' "$merges"
     printf "\n"
   fi
 

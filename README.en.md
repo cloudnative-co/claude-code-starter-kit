@@ -54,7 +54,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **10 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide
 - **22 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **13 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
-- **13 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard (Full only), web content update (opt-in, Full only)
+- **15 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, git push review, doc blocker, Prettier or Biome formatting, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, statusline, doc size guard, feature recommendation
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
@@ -194,6 +194,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | Git Push Review | Pauses before git push for code review |
 | Doc Blocker | Prevents creation of unnecessary .md/.txt files |
 | Prettier Auto-format | Formats JS/TS files after edits |
+| Biome Auto-format | Formats and lints JS/TS files after edits (Full uses Biome instead of Prettier) |
 | Console.log Guard | Warns about console.log statements left in code |
 | Memory Persistence | Saves/restores session state across sessions |
 | Strategic Compact | Suggests /compact at logical intervals |
@@ -201,6 +202,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | Pre-compact Auto-commit | Auto-commits changes before context compaction |
 | Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds recommended line count (Full only) |
 | Web Content Update | Auto-updates the web-content-extraction skill's deps on session start (opt-in; default in Full only) |
+| Feature Recommendation | Notifies about newly available features for the selected profile |
 
 #### Safety Net
 
@@ -381,7 +383,9 @@ claude-code-starter-kit/
 │   ├── template.sh         # Text template engine
 │   └── json-builder.sh     # JSON builder (jq-based)
 ├── wizard/                 # Interactive wizard
-│   ├── wizard.sh           # 8-step wizard logic
+│   ├── wizard.sh           # Wizard entrypoint and config restore
+│   ├── registry.sh         # Hook/plugin registries and CLI parsing
+│   ├── steps.sh            # Display helpers and interactive steps
 │   └── defaults.conf       # Default values
 ├── config/                 # Configuration templates
 │   ├── settings-base.json  # Base settings.json structure
@@ -459,7 +463,7 @@ Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manif
 Shell scripts are statically analyzed with [ShellCheck](https://www.shellcheck.net/). It runs automatically via GitHub Actions on PRs. To run locally:
 
 ```bash
-shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
+shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh
 ```
 
 ## Changelog

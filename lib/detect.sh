@@ -3,9 +3,8 @@
 # lib/detect.sh - OS, architecture, and WSL detection
 #
 # Requires: nothing (self-contained)
-# Sets globals: OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD, WIN_BUILD
-# Exports: detect_os(), is_macos(), is_linux(), is_wsl(), is_msys(), is_windows(),
-#          is_apple_silicon()
+# Sets globals: OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD
+# Exports: detect_os(), is_macos(), is_linux(), is_wsl(), is_msys()
 # Dry-run: transparent (no special behavior)
 set -euo pipefail
 
@@ -18,7 +17,6 @@ DISTRO="unknown"
 DISTRO_FAMILY="unknown"
 IS_WSL=false
 WSL_BUILD=0
-WIN_BUILD=0
 
 # ---------------------------------------------------------------------------
 # detect_os - Populate OS, ARCH, DISTRO, DISTRO_FAMILY, IS_WSL, WSL_BUILD
@@ -45,11 +43,6 @@ detect_os() {
       ARCH="$(uname -m)"
       DISTRO="msys"
       DISTRO_FAMILY="msys"
-      # Extract Windows build number (e.g. MSYS_NT-10.0-19045 → 19045)
-      # Stored in WIN_BUILD (not WSL_BUILD — this is native Windows, not WSL)
-      if [[ "$uname_s" =~ [0-9]+\.[0-9]+-([0-9]+) ]]; then
-        WIN_BUILD="${BASH_REMATCH[1]}"
-      fi
       ;;
     *)
       OS="unsupported"
@@ -159,9 +152,3 @@ is_wsl() { [[ "$IS_WSL" == "true" ]]; }
 
 # Returns 0 (true) if running in Git Bash (MSYS/MINGW) on native Windows
 is_msys() { [[ "$OS" == "windows" ]]; }
-
-# Returns 0 (true) if running on Windows (either WSL or native Git Bash)
-is_windows() { is_wsl || is_msys; }
-
-# Returns 0 (true) if Apple Silicon
-is_apple_silicon() { [[ "$OS" == "macos" && "$ARCH" == "arm64" ]]; }

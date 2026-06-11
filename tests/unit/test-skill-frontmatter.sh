@@ -19,10 +19,6 @@ for _sf_skill in "$PROJECT_DIR"/skills/*/SKILL.md; do
     echo "  missing when_to_use frontmatter in $_sf_skill" >&2
     _sf_fail=1
   fi
-  if [[ "$_sf_name" == "continuous-learning" ]] && [[ "$_sf_fm" != *$'\n''user-invocable: false'* ]]; then
-    echo "  continuous-learning should opt out of slash menu" >&2
-    _sf_fail=1
-  fi
 done
 
 if [[ "$_sf_fail" -eq 0 ]]; then

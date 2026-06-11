@@ -304,7 +304,51 @@ _write_json() {
 }
 
 # ---------------------------------------------------------------------------
-# 12. merge_settings_3way: full three-way merge
+# 12. merge_settings_3way: false is a real kit value, not a missing key
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: kit false values are preserved instead of treated as missing"
+  snapshot="$(_write_json '{"flag": true}')"
+  current="$(_write_json '{"flag": true}')"
+  new_kit="$(_write_json '{"flag": false, "newFalse": false}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.flag == false' "$output" >/dev/null \
+    && jq -e '.newFalse == false' "$output" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# 13. _merge_object_3way: false sub-key values are preserved
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: nested kit false values are preserved"
+  snapshot="$(_write_json '{"features": {"enabled": true}}')"
+  current="$(_write_json '{"features": {"enabled": true}}')"
+  new_kit="$(_write_json '{"features": {"enabled": false, "newFlag": false}}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.features.enabled == false' "$output" >/dev/null \
+    && jq -e '.features.newFlag == false' "$output" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# 14. merge_settings_3way: full three-way merge
 # ---------------------------------------------------------------------------
 {
   test_name="3way: user-untouched key updated, user-changed key kept"
@@ -332,7 +376,7 @@ _write_json() {
 }
 
 # ---------------------------------------------------------------------------
-# 13. _merge_object_3way: kit-removed sub-key + use-kit pref deletes the key
+# 15. _merge_object_3way: kit-removed sub-key + use-kit pref deletes the key
 #     (regression: literal JSON null used to be written instead)
 # ---------------------------------------------------------------------------
 {
@@ -365,7 +409,7 @@ _write_json() {
 }
 
 # ---------------------------------------------------------------------------
-# 14. _merge_object_3way: user-deleted sub-key stays deleted
+# 16. _merge_object_3way: user-deleted sub-key stays deleted
 #     (regression: kit-unchanged sub-key was resurrected as literal null)
 # ---------------------------------------------------------------------------
 {
@@ -389,7 +433,7 @@ _write_json() {
 }
 
 # ---------------------------------------------------------------------------
-# 15. merge_settings_3way: kit-removed top-level key + use-kit pref deletes it
+# 17. merge_settings_3way: kit-removed top-level key + use-kit pref deletes it
 #     (regression: literal JSON null used to be written instead)
 # ---------------------------------------------------------------------------
 {

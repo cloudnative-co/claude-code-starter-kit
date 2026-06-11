@@ -30,6 +30,8 @@ source "$PROJECT_DIR/lib/merge.sh"
 source "$PROJECT_DIR/lib/dryrun.sh"
 # shellcheck source=lib/deploy.sh
 source "$PROJECT_DIR/lib/deploy.sh"
+# shellcheck source=lib/update.sh
+source "$PROJECT_DIR/lib/update.sh"
 
 # Reset every hook/feature flag to false so build_* output is deterministic
 # regardless of flags leaked by previously sourced unit tests.
@@ -102,12 +104,12 @@ fi
 # --- 5. hooks.json registers async SessionStart calling update-deps.mjs ---
 if jq -e '
   any(.hooks.SessionStart[]?.hooks[]?;
-      .async == true and (.command | contains("update-deps.mjs"))) and
+      .async == true and .asyncTimeout == 720000 and (.command | contains("update-deps.mjs"))) and
   ((.hooks.SessionEnd // []) | length == 0)
 ' "$PROJECT_DIR/features/web-content-update/hooks.json" >/dev/null 2>&1; then
-  pass "web-content-update: hooks.json registers async SessionStart (update-deps.mjs)"
+  pass "web-content-update: hooks.json registers async SessionStart with sufficient timeout"
 else
-  fail "web-content-update: hooks.json should register async SessionStart only"
+  fail "web-content-update: hooks.json should register async SessionStart with sufficient timeout"
 fi
 
 # --- 6. build_settings_file hook gating: present iff ENABLE_WEB_CONTENT_UPDATE=true AND INSTALL_SKILLS=true ---
@@ -155,9 +157,67 @@ if command -v node >/dev/null 2>&1; then
   else
     fail "web-content-extraction: node --check failed on a skill script"
   fi
+  if grep -q '.update-in-progress' "$WCE_DIR/scripts/update-deps.mjs" \
+    && grep -q 'recoverInterruptedUpdate' "$WCE_DIR/scripts/update-deps.mjs"; then
+    pass "web-content-update: interrupted updates rerun the test gate"
+  else
+    fail "web-content-update: interrupted update recovery is missing"
+  fi
 else
   skip "web-content-extraction: node --check" "node not available"
 fi
 
+# --- 9. Deploy/update hygiene excludes local dependency and log artifacts ---
+_wce_dist_src="$_wce_tmp/dist-src"
+_wce_dist_dest="$_wce_tmp/dist-dest"
+mkdir -p "$_wce_dist_src/node_modules/pkg" "$_wce_dist_src/logs" "$_wce_dist_src/scripts"
+printf 'real\n' > "$_wce_dist_src/scripts/defuddle-url.mjs"
+printf 'dep\n' > "$_wce_dist_src/node_modules/pkg/index.js"
+printf 'log\n' > "$_wce_dist_src/logs/update.log"
+printf 'bak\n' > "$_wce_dist_src/package.json.bak"
+_copy_distribution_tree "$_wce_dist_src" "$_wce_dist_dest" "overwrite"
+if [[ -f "$_wce_dist_dest/scripts/defuddle-url.mjs" ]] \
+  && [[ ! -e "$_wce_dist_dest/node_modules" ]] \
+  && [[ ! -e "$_wce_dist_dest/logs" ]] \
+  && [[ ! -e "$_wce_dist_dest/package.json.bak" ]]; then
+  pass "web-content-extraction: deploy copy excludes node_modules/logs/*.bak"
+else
+  fail "web-content-extraction: deploy copy should exclude node_modules/logs/*.bak"
+fi
+
+_MANAGED_TARGET_FILES=()
+_add_managed_tree_targets "$_wce_dist_src" "$_wce_dist_dest"
+_wce_managed="$(printf '%s\n' "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}")"
+if [[ "$_wce_managed" == *"scripts/defuddle-url.mjs"* ]] \
+  && [[ "$_wce_managed" != *"node_modules"* ]] \
+  && [[ "$_wce_managed" != *"logs/"* ]] \
+  && [[ "$_wce_managed" != *".bak"* ]]; then
+  pass "web-content-extraction: manifest excludes node_modules/logs/*.bak"
+else
+  fail "web-content-extraction: manifest should exclude node_modules/logs/*.bak"
+fi
+
+if [[ "$(_count_update_files_in_dir "$_wce_dist_src")" == "1" ]]; then
+  pass "web-content-extraction: update scan excludes node_modules/logs/*.bak"
+else
+  fail "web-content-extraction: update scan should exclude node_modules/logs/*.bak"
+fi
+
+# --- 10. Auto-managed package files do not trigger interactive merge conflicts ---
+_wce_pkg_cur="$_wce_tmp/home/.claude/skills/web-content-extraction/package.json"
+_wce_pkg_snap="$_wce_tmp/snapshot/skills/web-content-extraction/package.json"
+_wce_pkg_new="$_wce_tmp/new/skills/web-content-extraction/package.json"
+mkdir -p "$(dirname "$_wce_pkg_cur")" "$(dirname "$_wce_pkg_snap")" "$(dirname "$_wce_pkg_new")"
+printf '{"dependencies":{"defuddle":"1.0.0"}}\n' > "$_wce_pkg_snap"
+printf '{"dependencies":{"defuddle":"1.1.0"}}\n' > "$_wce_pkg_cur"
+printf '{"dependencies":{"defuddle":"1.2.0"}}\n' > "$_wce_pkg_new"
+_MERGE_INTERACTIVE="true"
+if _update_file "$_wce_pkg_cur" "$_wce_pkg_snap" "$_wce_pkg_new" \
+  && grep -q '1.1.0' "$_wce_pkg_cur"; then
+  pass "web-content-extraction: auto-managed package conflict resolves without prompt"
+else
+  fail "web-content-extraction: auto-managed package conflict should keep runtime-updated package"
+fi
+
 rm -rf "$_wce_tmp"
-unset WCE_DIR _wce_tmp _wce_missing _wce_check_ok _wce_tracked
+unset WCE_DIR _wce_tmp _wce_missing _wce_check_ok _wce_tracked _wce_dist_src _wce_dist_dest _wce_managed _wce_pkg_cur _wce_pkg_snap _wce_pkg_new
