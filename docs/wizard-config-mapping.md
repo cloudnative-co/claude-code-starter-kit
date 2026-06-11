@@ -18,7 +18,7 @@
 | プロファイル | `PROFILE` / `--profile` | 個別フラグの初期値セットを決める | `wizard` の初期化, manifest | いいえ |
 | Codex Plugin | `ENABLE_CODEX_PLUGIN` / `--codex-plugin` | Codex プラグインのインストールと認証を行うか | `setup.sh` の Codex Plugin セットアップ | いいえ |
 | 新しい `/init` | `ENABLE_NEW_INIT` / `--new-init` | Claude Code の対話型 `/init` を有効にする | `settings.json` の `env.CLAUDE_CODE_NEW_INIT` | はい |
-| エディタ | `EDITOR_CHOICE` / `--editor` | git push review hook で使うエディタ差分表示コマンド | `hooks.json` の差し込み, manifest | 間接的 |
+| エディタ | `EDITOR_CHOICE` / `--editor` | git push review hook を有効にするかどうか（`none` で hook フラグメント自体をスキップ） | hook フラグメントの合成可否, manifest | 間接的 |
 | Ghostty | `ENABLE_GHOSTTY_SETUP` / `--ghostty` | Ghostty の追加セットアップ | Ghostty 設定処理 | いいえ |
 | フック | `ENABLE_*` / `--hooks` | 有効化するフックを選ぶ | `settings.json` の hooks 合成 | はい |
 | プラグイン | `SELECTED_PLUGINS` / `--plugins` | Claude Code セッション内で有効化する推奨プラグイン | プラグイン導入処理, manifest | いいえ |
@@ -32,7 +32,7 @@
 | `LANGUAGE` | UI 表示言語と生成物の言語 | `settings.json`, `CLAUDE.md`, i18n | 現在は `日本語` / `English` を設定 |
 | `PROFILE` | Minimal / Standard / Full / Custom の初期値選択 | `wizard` のデフォルト展開, manifest | 実際の挙動は個別フラグへ展開される |
 | `ENABLE_NEW_INIT` | Claude Code の新しい `/init` 対話モード | `settings.json` の `env.CLAUDE_CODE_NEW_INIT` | Minimal / Standard / Full は既定 `true`、Custom では選択式 |
-| `EDITOR_CHOICE` | git push review hook のエディタコマンド | `features/git-push-review/hooks.json` | エディタを使わない場合は `none` |
+| `EDITOR_CHOICE` | git push review hook の有効化判定 | `features/git-push-review/hooks.json` の合成可否 | `none` のときは hook フラグメント自体をスキップ。hook は push 前に stderr へレビューリマインダーを表示するだけで、エディタ起動や差分表示は行わない |
 | `COMMIT_ATTRIBUTION` | Claude Code 帰属の表示有無 | `settings.json` の `attribution.commit`, `attribution.pr` | `false` で commit / PR 両方の帰属表示を空文字にする |
 | `ENABLE_CODEX_PLUGIN` | Codex Plugin セットアップ実行可否 | Codex CLI 認証と plugin install | 反映は `settings.json` ではなく外部セットアップ |
 | `ENABLE_GHOSTTY_SETUP` | Ghostty の追加セットアップ | macOS 向け Ghostty 設定 | macOS 以外では無効化される |

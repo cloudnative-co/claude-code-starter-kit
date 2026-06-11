@@ -90,7 +90,7 @@ install.sh (re-run with existing manifest)
       → write_manifest() — updates manifest v2
 ```
 
-Libraries sourced by `setup.sh` (in `setup_source_stage2()`) in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/features.sh`, `lib/recommendation.sh`, `lib/progress.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`, `lib/codex-setup.sh` (always sourced — `install_selected_plugins()` uses its helpers even in dry-run).
+Libraries sourced by `setup.sh` in two stages. `setup_stage1()` (Bash 3.2 compatible) sources in order: `wizard/wizard.sh` (then `parse_cli_args`), `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, and re-execs into Bash 4+ if needed. `setup_source_stage2()` (Bash 4+ required) then sources in order: `lib/features.sh`, `lib/recommendation.sh`, `lib/progress.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`, `lib/codex-setup.sh` (always sourced — `install_selected_plugins()` uses its helpers even in dry-run).
 
 ### Profile System
 
@@ -113,7 +113,7 @@ Three profiles (`profiles/*.conf`) define feature toggles as `VAR=true/false`:
 
 `config/plugins.json` defines available plugins with profile assignments and a `marketplaces` mapping. Each plugin has a `name`, `marketplace` (defaults to `claude-plugins-official`), `description`, and `profiles` array. The top-level `marketplaces` object maps marketplace short names to GitHub repos (e.g., `"claude-plugins-official": "anthropics/claude-plugins-official"`).
 
-**Multi-marketplace support**: When the same plugin name exists in multiple marketplaces (e.g., `pr-review-toolkit` in both `claude-plugins-official` and `claude-code-plugins`), `_plugin_has_collision()` detects the conflict and `_compute_selected_plugins()` produces qualified `name@marketplace` entries in `SELECTED_PLUGINS`. Bare names without collision remain unqualified for backward compatibility. `_apply_plugins_from_csv()` handles both `name@marketplace` (exact match) and bare names (collision → defaults to `claude-plugins-official`).
+**Multi-marketplace support**: When the same plugin name exists in multiple marketplaces, `_plugin_has_collision()` detects the conflict and `_compute_selected_plugins()` produces qualified `name@marketplace` entries in `SELECTED_PLUGINS`. The marketplaces currently defined in `config/plugins.json` are `claude-plugins-official` and `anthropic-agent-skills`; no default plugin names collide today. Bare names without collision remain unqualified for backward compatibility. `_apply_plugins_from_csv()` handles both `name@marketplace` (exact match) and bare names (collision → defaults to `claude-plugins-official`).
 
 Wizard flow: `_load_plugins()` reads the JSON (including `PLUGIN_MARKETPLACES[]` parallel array) → `_init_plugins_for_profile()` pre-selects plugins based on the chosen profile → user can customize in interactive mode (colliding names show `[marketplace]` suffix) → `_compute_selected_plugins()` produces the final `SELECTED_PLUGINS` CSV → `setup.sh` parses `name@marketplace`, registers required marketplaces via `claude plugin marketplace add`, and installs via `claude plugin install`.
 

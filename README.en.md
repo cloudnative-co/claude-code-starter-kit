@@ -52,8 +52,8 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **3 profiles**: Minimal, Standard (recommended), Full
 - **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
 - **10 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide
-- **22 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
-- **13 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
+- **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
+- **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
 - **15 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, git push review, doc blocker, Prettier or Biome formatting, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, statusline, doc size guard, feature recommendation
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
 - **i18n**: English & Japanese
@@ -146,7 +146,7 @@ Language → Profile → Codex Plugin → New /init → Editor → Hooks → Plu
 
 Each step shows numbered options with descriptions. Recommended choices are marked.
 
-> **About the Editor step**: The wizard asks which code editor you use. This is for the git push review hook (opens a diff view in your editor before pushing code). **If you don't have an editor installed or aren't sure, choose "None"** — Claude Code works entirely in the terminal and does not require an editor.
+> **About the Editor step**: The wizard asks which code editor you use. This decides whether the git push review hook is enabled (it prints a review reminder before `git push`; it does not launch an editor or show a diff). Choosing "None" skips the hook entirely. **If you don't have an editor installed or aren't sure, choose "None"** — Claude Code works entirely in the terminal and does not require an editor.
 
 > **Want to know where each choice is applied?** See [Wizard Config Mapping](docs/wizard-config-mapping.en.md). It explains which values are written to `settings.json`, which are used only during setup, and which act as presets.
 >
@@ -245,7 +245,6 @@ After restarting your terminal, start `claude` in your project directory. The in
 ```bash
 /plan            # Structured planning
 /tdd             # Test-driven development flow
-/code-review     # Code review mode
 /build-fix       # Fix build errors
 /e2e             # End-to-end testing
 /verify          # Final verification
@@ -333,13 +332,13 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --codex-plugin=false \
   --commit-attribution=false \
   --hooks=safety-net,auto-update,tmux,git-push,prettier,console,memory,compact,pr-log,pre-commit \
-  --plugins=security-guidance,commit-commands,pr-review-toolkit@claude-plugins-official,pr-review-toolkit@claude-code-plugins
+  --plugins=security-guidance,commit-commands,pr-review-toolkit,document-skills@anthropic-agent-skills
 
 # Reuse a saved config
 ./setup.sh --non-interactive --config=./my-config.conf
 ```
 
-> **Plugin naming**: When the same plugin name exists in multiple marketplaces, use `name@marketplace` format (e.g., `pr-review-toolkit@claude-code-plugins`). Plugins without name conflicts can be specified by name alone.
+> **Plugin naming**: When the same plugin name exists in multiple marketplaces, use `name@marketplace` format. Plugins without name conflicts can be specified by name alone, and the qualified form also works without a conflict (e.g., `document-skills@anthropic-agent-skills`). The current default plugins have no name collisions; the registered marketplaces are `claude-plugins-official` and `anthropic-agent-skills`.
 >
 > **Notes**:
 > - `--profile` selects a preset bundle of lower-level flags rather than a single final runtime key
@@ -403,8 +402,8 @@ claude-code-starter-kit/
 │   └── ja/                 # Japanese templates & strings
 ├── agents/                 # Agent definitions (9 files)
 ├── rules/                  # Rule files (10 files)
-├── commands/               # Slash commands (20 files)
-├── skills/                 # Skill modules (13 dirs)
+├── commands/               # Slash commands (21 files)
+├── skills/                 # Skill modules (12 dirs)
 └── memory/                 # Best practice memory (5 files)
 ```
 
