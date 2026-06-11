@@ -237,10 +237,20 @@ REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
 INSTALL_DIR="$HOME/.claude-starter-kit"
 
 # Safety guard: prevent rm -rf on dangerous paths
+# NOTE: copy of _safe_install_dir in install.sh — keep all 4 copies in sync
+# (CI compares normalized bodies in tests/unit/test-install-bootstrap.sh).
 _safe_install_dir() {
-    local dir="${1%/}"
+    # Normalize: strip ALL trailing slashes (so "$HOME//" cannot bypass checks)
+    local dir="$1"
+    while [[ "$dir" == */ ]]; do
+        dir="${dir%/}"
+    done
     [[ -z "$dir" ]] && return 1
+    # Require an absolute path
+    [[ "$dir" != /* ]] && return 1
+    # Block $HOME itself
     [[ "$dir" == "$HOME" || "$dir" == "${HOME%/}" ]] && return 1
+    # Block system directories and their subtrees
     case "$dir" in
         /|/bin|/bin/*|/sbin|/sbin/*|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/tmp|/tmp/*)
             return 1 ;;
@@ -249,7 +259,9 @@ _safe_install_dir() {
         /System|/System/*|/dev|/dev/*|/proc|/proc/*)
             return 1 ;;
     esac
-    local depth; depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
+    # Require at least 3 path components (e.g. /home/user/dir)
+    local depth
+    depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
     [[ "$depth" -lt 3 ]] && return 1
     return 0
 }
@@ -426,10 +438,20 @@ REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
 INSTALL_DIR="$HOME/.claude-starter-kit"
 
 # Safety guard: prevent rm -rf on dangerous paths
+# NOTE: copy of _safe_install_dir in install.sh — keep all 4 copies in sync
+# (CI compares normalized bodies in tests/unit/test-install-bootstrap.sh).
 _safe_install_dir() {
-    local dir="${1%/}"
+    # Normalize: strip ALL trailing slashes (so "$HOME//" cannot bypass checks)
+    local dir="$1"
+    while [[ "$dir" == */ ]]; do
+        dir="${dir%/}"
+    done
     [[ -z "$dir" ]] && return 1
+    # Require an absolute path
+    [[ "$dir" != /* ]] && return 1
+    # Block $HOME itself
     [[ "$dir" == "$HOME" || "$dir" == "${HOME%/}" ]] && return 1
+    # Block system directories and their subtrees
     case "$dir" in
         /|/bin|/bin/*|/sbin|/sbin/*|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/tmp|/tmp/*)
             return 1 ;;
@@ -438,7 +460,9 @@ _safe_install_dir() {
         /System|/System/*|/dev|/dev/*|/proc|/proc/*)
             return 1 ;;
     esac
-    local depth; depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
+    # Require at least 3 path components (e.g. /home/user/dir)
+    local depth
+    depth="$(printf '%s' "$dir" | tr -cd '/' | wc -c | tr -d ' ')"
     [[ "$depth" -lt 3 ]] && return 1
     return 0
 }
