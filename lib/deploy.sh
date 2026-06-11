@@ -396,6 +396,7 @@ copy_if_enabled() {
 # Like copy_if_enabled but checks for existing files in <dest>.
 # Interactive: asks [O]verwrite all / [N]ew files only / [S]kip
 # Non-interactive: new files only (safe default)
+# Prompt replies are read from ${_TTY_INPUT:-/dev/tty} (tests may inject a file).
 _copy_dir_safe() {
   local flag="$1"
   local src="$2"
@@ -429,7 +430,7 @@ _copy_dir_safe() {
     warn "$STR_FRESH_DIR_EXISTS $label/"
     printf "  %s " "$STR_FRESH_DIR_PROMPT" >&2
     local reply=""
-    if read -r reply < /dev/tty 2>/dev/null; then
+    if read -r reply < "${_TTY_INPUT:-/dev/tty}" 2>/dev/null; then
       true
     else
       reply="n"
@@ -630,6 +631,49 @@ _compose_migrated_claude_md() {
   printf '\n'
 }
 
+# _claude_md_migration_prompt <new_claude_md> <target>
+#
+# Interactive [M]erge / [D]iff / [S]kip loop for migrating a marker-less
+# CLAUDE.md. Replies are read from ${_TTY_INPUT:-/dev/tty} (tests may inject
+# a file). Default (no tty / unrecognized reply) is skip, which registers
+# <target> in _FRESH_SKIPPED_FILES.
+_claude_md_migration_prompt() {
+  local new_claude_md="$1"
+  local target="$2"
+
+  while true; do
+    printf "  %s " "$STR_CLAUDEMD_MIGRATION_PROMPT" >&2
+    local reply=""
+    if read -r reply < "${_TTY_INPUT:-/dev/tty}" 2>/dev/null; then true; else reply="s"; fi
+    case "$reply" in
+      [Mm]*)
+        local merged
+        merged="$(mktemp)"
+        _SETUP_TMP_FILES+=("$merged")
+        _compose_migrated_claude_md "$new_claude_md" "$target" > "$merged"
+        mv "$merged" "$target"
+        ok "CLAUDE.md upgraded — your content preserved in user section"
+        return
+        ;;
+      [Dd]*)
+        # Show what the merged result would look like
+        local preview
+        preview="$(mktemp)"
+        _SETUP_TMP_FILES+=("$preview")
+        _compose_migrated_claude_md "$new_claude_md" "$target" > "$preview"
+        diff -u "$target" "$preview" 2>/dev/null >&2 || true
+        printf "\n" >&2
+        continue
+        ;;
+      *)
+        _FRESH_SKIPPED_FILES+=("$target")
+        ok "CLAUDE.md: $STR_FRESH_SKIPPED"
+        return
+        ;;
+    esac
+  done
+}
+
 # ---------------------------------------------------------------------------
 # Section-aware CLAUDE.md deployment for fresh install with existing file
 # ---------------------------------------------------------------------------
@@ -697,37 +741,7 @@ _build_claude_md_safe() {
   diff -u "$old_kit_output" "$target" 2>/dev/null >&2 || true
   printf "\n" >&2
 
-  while true; do
-    printf "  %s " "$STR_CLAUDEMD_MIGRATION_PROMPT" >&2
-    local reply=""
-    if read -r reply < /dev/tty 2>/dev/null; then true; else reply="s"; fi
-    case "$reply" in
-      [Mm]*)
-        local merged
-        merged="$(mktemp)"
-        _SETUP_TMP_FILES+=("$merged")
-        _compose_migrated_claude_md "$new_claude_md" "$target" > "$merged"
-        mv "$merged" "$target"
-        ok "CLAUDE.md upgraded — your content preserved in user section"
-        return
-        ;;
-      [Dd]*)
-        # Show what the merged result would look like
-        local preview
-        preview="$(mktemp)"
-        _SETUP_TMP_FILES+=("$preview")
-        _compose_migrated_claude_md "$new_claude_md" "$target" > "$preview"
-        diff -u "$target" "$preview" 2>/dev/null >&2 || true
-        printf "\n" >&2
-        continue
-        ;;
-      *)
-        _FRESH_SKIPPED_FILES+=("$target")
-        ok "CLAUDE.md: $STR_FRESH_SKIPPED"
-        return
-        ;;
-    esac
-  done
+  _claude_md_migration_prompt "$new_claude_md" "$target"
 }
 
 # _build_settings_safe
