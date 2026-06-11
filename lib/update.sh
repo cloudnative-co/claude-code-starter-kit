@@ -211,7 +211,10 @@ _update_claude_md() {
 
   # Both changed → conflict on kit section
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
-    # Non-interactive: keep current (non-destructive)
+    # Non-interactive: keep current (non-destructive). Without this warning the
+    # caller's fallback message reads "no kit changes", hiding that a kit
+    # update was actually skipped because the user edited the kit section.
+    warn "${STR_CLAUDEMD_KIT_CONFLICT_KEPT:-CLAUDE.md kit section has updates, but your local edits were kept. Re-run interactively to choose.}"
     return 1
   fi
 

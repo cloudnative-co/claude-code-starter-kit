@@ -346,6 +346,7 @@ STR_CLAUDEMD_KIT_UPDATED="CLAUDE.md の kit セクションを更新しました
 STR_CLAUDEMD_KIT_UNCHANGED="CLAUDE.md の kit セクションに変更なし"
 STR_CLAUDEMD_KIT_CONFLICT="CLAUDE.md の kit セクション: ユーザーと kit の両方に変更があります"
 STR_CLAUDEMD_KIT_CONFLICT_PROMPT="[U] 新しい kit を使用 / [K] 現在のまま / [D] 差分表示 ?"
+STR_CLAUDEMD_KIT_CONFLICT_KEPT="CLAUDE.md の kit セクションに更新がありますが、ユーザー編集があるため現状を保持しました（対話モードで再実行すると取り込みを選択できます）"
 STR_CLAUDEMD_USER_PRESERVED="CLAUDE.md のユーザーセクションを保持しました"
 
 STR_EXISTING_CLAUDE_WARN="starter kit の更新モードではない既存の Claude Code 設定を検出しました。"

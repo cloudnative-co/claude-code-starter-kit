@@ -348,6 +348,7 @@ STR_CLAUDEMD_KIT_UPDATED="CLAUDE.md kit section updated"
 STR_CLAUDEMD_KIT_UNCHANGED="CLAUDE.md kit section unchanged"
 STR_CLAUDEMD_KIT_CONFLICT="CLAUDE.md kit section: both you and kit have changes"
 STR_CLAUDEMD_KIT_CONFLICT_PROMPT="[U]se new kit / [K]eep yours / [D]iff ?"
+STR_CLAUDEMD_KIT_CONFLICT_KEPT="CLAUDE.md kit section has updates, but your local edits were kept (re-run interactively to choose whether to adopt them)"
 STR_CLAUDEMD_USER_PRESERVED="CLAUDE.md user section preserved"
 
 STR_EXISTING_CLAUDE_WARN="Existing Claude Code configuration detected outside starter-kit update mode."
