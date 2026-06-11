@@ -196,6 +196,7 @@ DISMISSED_FEATURES=""
 
 _rec_tmp="$(mktemp -d)"
 _SETUP_TMP_FILES+=("$_rec_tmp")
+# shellcheck disable=SC2034  # consumed by sourced features.sh
 PROFILE="minimal"
 PROJECT_DIR="$PROJECT_DIR"
 DISMISSED_FEATURES=""

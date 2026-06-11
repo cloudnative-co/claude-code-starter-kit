@@ -13,7 +13,9 @@ declare -a _SETUP_TMP_FILES=()
 CLAUDE_DIR="$(mktemp -d)"
 _SETUP_TMP_FILES+=("$CLAUDE_DIR")
 LANGUAGE="en"
+# shellcheck disable=SC2034  # globals are consumed by sourced deploy.sh
 INSTALL_SKILLS="false"
+# shellcheck disable=SC2034  # globals are consumed by sourced deploy.sh
 ENABLE_CODEX_PLUGIN="false"
 
 source "$PROJECT_DIR/lib/deploy.sh"
