@@ -199,7 +199,9 @@ _ensure_openai_key_for_codex() {
   export OPENAI_API_KEY="test-key"
   return 0
 }
-_run_with_timeout() { return 0; }
+# stdin を読み捨てる: 即 return すると `printf | _run_with_timeout` の writer が
+# SIGPIPE になり、pipefail 下でログイン失敗扱いになるレースがある（macOS CI で顕在化）
+_run_with_timeout() { cat >/dev/null; return 0; }
 _confirm_api_key_auth_ready() { return 1; }
 set +e
 run_func _prompt_codex_auth "$HOME/.bashrc" <<< $'3\n4\n'
