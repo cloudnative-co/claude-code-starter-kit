@@ -528,6 +528,17 @@ _resolve_conflict_by_type() {
   local nv="$5"
   local origin="$6"
 
+  # Identical values are never a conflict — short-circuit before any prompt.
+  # Reachable when the snapshot lacks the key but current == new-kit (e.g.
+  # nested sub-keys under a snapshot-missing object recursed from top mode).
+  if [[ "$(_json_equal "$cv" "$nv")" == "true" ]]; then
+    _RK_CLASS="identical"
+    if [[ "$mode" == "nested" ]]; then
+      _rk_apply_chosen "$cv"
+    fi
+    return 0
+  fi
+
   local cv_type nv_type chosen
   cv_type="$(_json_type "$cv")"
   nv_type="$(_json_type "$nv")"

@@ -727,3 +727,38 @@ _write_json() {
   fi
   unset doc got_f got_z got_e got_n got_missing
 }
+
+# ---------------------------------------------------------------------------
+# Interactive: identical values must never prompt (snapshot-missing object
+# recursion — PR #106 review finding)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: identical sub-keys under snapshot-missing object never prompt"
+  snapshot="$(_write_json '{}')"
+  current="$(_write_json '{"permissions": {"allow": ["a", "b"], "deny": ["x"]}}')"
+  new_kit="$(_write_json '{"permissions": {"allow": ["a", "b"], "deny": ["x"], "ask": ["q"]}}')"
+  output="$(mktemp)"
+
+  _prev_interactive="${_MERGE_INTERACTIVE:-}"
+  _MERGE_INTERACTIVE=true
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+  if [[ -n "$_prev_interactive" ]]; then
+    _MERGE_INTERACTIVE="$_prev_interactive"
+  else
+    unset _MERGE_INTERACTIVE
+  fi
+
+  # Identical allow/deny must merge silently (no conflict prompt on stderr);
+  # the kit-only "ask" is adopted.
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.permissions.allow == ["a", "b"]' "$output" >/dev/null \
+    && jq -e '.permissions.deny == ["x"]' "$output" >/dev/null \
+    && jq -e '.permissions.ask == ["q"]' "$output" >/dev/null \
+    && ! grep -Eq 'conflict.*(allow|deny)' <<< "$_RF_STDERR"; then
+    pass "$test_name"
+  else
+    fail "$test_name (stderr=$_RF_STDERR)"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+  unset _prev_interactive
+}
