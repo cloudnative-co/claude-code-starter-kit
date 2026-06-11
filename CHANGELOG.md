@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.55.0] - 2026-06-12
+
+リファクタリング Issue #78〜#103 の一括対応。12 領域の並列監査（130 件の検証済み findings）に基づき、壊れていた hook の修正・update 経路の堅牢化・常時コンテキストの削減・大規模な dead code 整理・テスト基盤の刷新を行った。
+
+### Fixed
+- **codex-setup / plugin インストールの正確性を修正（#78）**: `claude plugin list` の判定を非アンカー `grep -qw "codex"` から行頭トークンを正確にパースする `_claude_plugin_list_has()`（`name@version` 形式・bullet プレフィックス対応）へ変更し、別 plugin 名への部分一致誤判定を解消。legacy Codex MCP の削除は plugin インストール成功を確認した後にのみ実行（CLI インストール失敗時に bare `return`（=0）で成功扱いになり MCP だけ消える事故を防止）。plugin install / marketplace add の失敗時は捕捉した CLI 出力を表示して警告（無音失敗の解消）。API キー検証失敗時の再入力ループの `continue` 漏れも修正
+- **strategic-compact のカウンタが一度も累積しない問題を修正（#79）**: カウンタファイル名が hook 呼び出しごとに変わる `$$`（PID）キーだったため毎回 1 にリセットされ、compact 提案が一度も発火しなかった。stdin の `session_id` をサニタイズしてキーにする方式へ変更
+- **pr-creation-log の hook スキーマ不一致を修正（#79, #103）**: 存在しない `tool_output.output` を参照していたため PR URL を一度も抽出できなかった。実スキーマの `tool_response.stdout` / `tool_response.stderr` を読む外部スクリプト `log-pr.sh` へ移行（legacy 経路は `PR_CREATION_LOG_LEGACY=1` で共用）。捏造スキーマ前提だったテストは実 hook 入力 fixture ベースに是正
+- **memory-persistence の Stop hook 誤用を再設計（#80）**: 応答完了ごとに発火する `Stop` で session-end 処理を行っていたため空のセッションノートが毎ターン量産されていた。`SessionEnd` へ移行し、session-end は既存ノートの更新と 30 日超 `.tmp` の掃除のみ。session-start はノート先頭 80 行を stdout（コンテキスト）へ出力
+- **3-way merge が JSON の `false` 値を「キー欠落」と同一視するバグを修正（#81）**: `jq` の `.[$k] // empty` は `false`/`null` でも empty になるため、`false` 設定キーの競合解決が破壊されていた（keep-mine でキー消失等）。`merge_settings_3way()` / `_merge_object_3way()` / `_merge_settings_bootstrap()` を `has($k)` 判定へ修正し、user 変更・両方変更・bootstrap の各分岐の回帰テストを追加（修正前コードで FAIL することを確認済み）
+- **dry-run が実 `~/.claude` 全体を temp へ丸ごとコピーする問題を解消（#82）**: `projects/` のセッション履歴等までコピーしていたため遅く、プライバシー面でも不要だった。キット関連ファイル＋manifest 記載ファイルの選択コピーへ変更（manifest 不在の fresh-with-existing 経路では既存の agents/ 等キット関連ツリーもコピーし、merge-aware 配備のプレビュー精度を維持）
+- **wizard の `--hooks` CLI 指定が保存 config に上書きされる問題を修正（#83）**: トークン表の不一致で `safety-net` / `pre-commit` の CLI 指定が override として記録されなかった。`HOOK_KEYS` / `HOOK_TOKENS` レジストリ駆動に一元化
+- **フォント直接ダウンロード経路を修復（#84）**: IBM Plex Mono の URL（`fonts.google.com/download`）が HTML を返すようになり展開が必ず失敗していた。GitHub Releases の固定 zip へ変更し、zip マジックバイト検証を追加。`lib/fonts.sh` の素の `timeout` は `_run_with_timeout` へ修正
+- **install.sh の再 clone フォールバックが既存インストールを消失させる問題を修正（#85）**: pull 失敗時に `rm -rf` → `git clone` の順だったため、ネットワーク断で削除だけ成功していた。temp clone 成功後に入れ替える `_clone_to_temp_and_swap()` へ変更（`install.ps1` の WSL / Git Bash 埋め込みも同一修正、中断残骸の自己修復掃除付き）。`.gitattributes` で Git Bash の CRLF 破損も防止
+- **doc-blocker がキット自身の機能をブロックする内部矛盾を解消（#86）**: 同梱 agents / commands / skills が出力を指示する正規パス（`HANDOVER.md`、`docs/CODEMAPS/` 等）を許可リスト化した外部スクリプトへ移行
+- **web-content-extraction の exit code 分類をエラーコードベースに修正（#88）**: 日本語エラーメッセージの部分文字列マッチではなく url-guard の `error.code` で判定。`DEFUDDLE_MAX_REDIRECTS` の検証追加、`__HOME__` 置換の Windows パス破壊も修正
+- **pre-compact-commit の `CLAUDE_PROJECT_DIR` 未設定ガードを追加（#89）**: `cd` 失敗時にカレントディレクトリで `git add -A` が走らないよう条件ガードを追加し、matcher を仕様準拠の `"*"` へ修正
+
+### Changed
+- **hook ランタイムコストを削減（#89）**: tmux-hooks の PreToolUse 2 連 spawn を単一スクリプトへ統合、SessionStart 系 hook の matcher を `"startup"` に変更（resume / compact 時の不要起動を抑止）、console-log-guard の毎ターン git 走査を `SessionEnd` へ移行、settings.json 埋め込みの inline hook 7 種をすべて `~/.claude/hooks/<feature>/` の外部スクリプトへ移行、auto-update の legacy 判定をビルド時環境変数へ変更（hook 実行ごとの `claude --version` を排除）
+- **update 経路の堅牢化**: kit が配布を終了したファイルを update 時に掃除する retired-file sweep を追加。掃除は保護付き — kit が今も配布しているファイルのユーザー削除は retire と区別して snapshot baseline を保持（削除保護フローを維持）、ローカル変更のある retired ファイルは警告して温存、空になったディレクトリは削除。manifest に `claude_dir` を記録し dry-run プレビューでも削除を正しく報告。git-push-review の hook スクリプトを `_FEATURE_SCRIPT_ORDER` レジストリ経由で update 配備・manifest 追跡の対象化（従来は fresh install のみ配備され、update 後の settings.json が存在しないスクリプトを参照し得た）。manifest v1 旧インストールの statusLine が retired な bash 実装を指したままになるケースは現行実装へ自動移行
+- **Node.js の既定インストールメジャーを 20（EOL）→ 24 に引き上げ（#87）**: `check_node()` が既存 node のメジャーを検証し 22 未満は再インストールを試行。nvm installer を v0.40.5 へ更新、`install.ps1` の Node 直接インストールを setup.sh 検証へ一本化
+- **standard プロファイルの既定 plugin を削減（#90）**: 常時コンテキスト負荷の大きい `pr-review-toolkit` / `claude-md-management` / `superpowers` / `document-skills` / `example-skills` を full のみの既定に変更（standard では明示選択で導入可能）。README のプラグイン表・個数も同期
+- **web-content-extraction の配備・更新コストを削減（#91）**: `node_modules/` / `logs/` / `*.bak` を配布対象から除外、runtime 自動更新が書き換える `package.json` / `package-lock.json` は競合扱いせず snapshot には kit 版を保存（baseline 汚染による翌 update の巻き戻りを防止）、`jsdom` / `defuddle` の import 遅延化、自動更新に中断検出＋再開時のテストゲートを追加
+- **rules/ を全面刷新（#92, #90）**: 常時注入される全 11 ファイル約 493 行を、陳腐化したモデル名・実装と乖離した hook 記述を排した簡潔な構成へ縮減。`config/permissions.json` から廃止ツール名（`MultiEdit` / `LS` / `TodoRead`）を削除
+- **agents/ を全面刷新（#93）**: 上流プロジェクト残骸の除去と大幅スリム化（9 agent 合計約 3,300 行削減）、6 agent の model を `opus` → `sonnet` に変更
+- **commands / skills / memory を整理（#94）**: 例示肥大の削減（計約 1,500 行）、memory/ ドキュメントの実態同期
+- **uninstall を manifest 駆動化（#99）**: ランタイム生成物の削除を manifest の `cleanup_paths` 読み取りへ変更（旧 manifest 向けフォールバック維持）、削除前に `_safe_cleanup_path()` で検証、glob 掃除を空白を含むパスでも安全な実装へ
+- **CI を分割・高速化（#103）**: unit と scenario を別ジョブ化し、scenario を `core` / `update` / `features` の 3 shard で並列実行（`SCENARIO_GROUP` は allowlist 検証付き — 未知値は fail-open せず即エラー）
+- **内部リファクタ（ユーザー動作不変）**: setup.sh 後半約 280 行を `setup_main()` 等へ関数化（#95）、lib/deploy.sh の `build_claude_md` 二重実装統合と semver 判定共通化（#96）、lib/merge.sh / lib/update.sh の重複統合・`eval` 排除（#97）、wizard.sh（1,307 行）を registry / steps に 3 分割（#98）、install.sh / install.ps1 の bootstrap 重複統合（#99）、prerequisites / fonts の重複統合（#100）
+
+### Removed
+- **dead code を一掃（#101）**: 旧 bash 版ステータスライン `statusline-command.sh`（Python 版が正）、`skills/strategic-compact/suggest-compact.sh`（重複コピー）、`skills/continuous-learning`（未参照 skill）、実装済み計画書 `docs/superpowers/`、`lib/template.sh` の参照ゼロ関数、未使用 i18n 文字列、profiles の廃止キー `AGENTS_MD` を削除
+- **`commands/code-review.md` を削除（#94）**: 公式 `code-review` plugin と機能重複のため
+
+### Added
+- **hook 実スキーマ fixture によるテスト基盤（#103）**: Claude Code が実際に渡す hook 入力 JSON を `tests/fixtures/hooks/` として固定化し、全 hook スクリプトを実入力で検証する `test-hook-fixtures.sh` を追加。日本語経路のシナリオテスト（`fresh-install-ja`）も追加
+- **回帰テストを大幅追加**: retired-file sweep / git-push-review update 配備 / statusline 移行 / merge false 値の全分岐 / fonts / install-bootstrap / codex-setup / wizard / setup / deploy / update / dryrun / i18n ほか（unit テスト計 298 件 Pass）
+
+### Docs
+- **ドキュメントと実態を同期（#102）**: CLAUDE.md を現行アーキテクチャ（wizard 分割 / `setup_main` / `_FEATURE_SCRIPT_ORDER` / `install_selected_plugins`）へ更新、README（ja/en）のフック数・プラグイン構成を同期、`docs/wizard-config-mapping`（ja/en）を更新
+
 ## [0.54.0] - 2026-06-11
 
 ### Changed
