@@ -25,7 +25,7 @@ INSTALL_AGENTS="${INSTALL_AGENTS:-}"
 INSTALL_RULES="${INSTALL_RULES:-}"
 INSTALL_COMMANDS="${INSTALL_COMMANDS:-}"
 INSTALL_SKILLS="${INSTALL_SKILLS:-}"
-INSTALL_MEMORY="${INSTALL_MEMORY:-}"
+INSTALL_MEMORY="${INSTALL_MEMORY:-}"  # legacy compat (read-only, seed memory no longer shipped)
 
 ENABLE_CODEX_PLUGIN="${ENABLE_CODEX_PLUGIN:-}"
 ENABLE_CODEX_MCP="${ENABLE_CODEX_MCP:-}"  # legacy compat (read-only, migrated by _normalize_codex_state)

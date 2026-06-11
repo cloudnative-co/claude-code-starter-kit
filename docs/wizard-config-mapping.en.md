@@ -47,7 +47,7 @@ Not every saved value is supposed to appear in `settings.json`. In particular, `
 | `INSTALL_RULES` | `~/.claude/rules/` | Initial copy, update | Same |
 | `INSTALL_COMMANDS` | `~/.claude/commands/` | Initial copy, update | Same |
 | `INSTALL_SKILLS` | `~/.claude/skills/` | Initial copy, update | Same |
-| `INSTALL_MEMORY` | `~/.claude/memory/` | Initial copy, update | Same |
+| `INSTALL_MEMORY` | (retired) seed memory is no longer shipped | None | Read as a legacy key and ignored; update removes previously shipped kit files |
 
 ## Hook Flag Mapping
 

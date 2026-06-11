@@ -74,14 +74,14 @@ different and do not interfere with each other.
 Brief the user on the StarterKit ↔ Spec Kit responsibility split before
 they start writing a constitution:
 
-1. **`~/.claude/memory/` (cn-memory)** holds organization-wide and personal
-   context (e.g., "ゼロトラスト前提", "TS strict default", "Okta SSO 標準").
-   It applies to every project.
+1. **User-level global rules (`~/.claude/CLAUDE.md` and `~/.claude/rules/`)**
+   hold organization-wide and personal context (e.g., "ゼロトラスト前提",
+   "TS strict default", "Okta SSO 標準"). They apply to every project.
 2. **`<project>/.specify/memory/constitution.md`** holds project-specific
    principles, SLAs, and compliance requirements (e.g., "this Lambda's
    audit log retention ≥ 397 days", "this project's test branch coverage ≥ 80%").
-   It applies only inside that project, and **overrides** cn-memory rules
-   when the two conflict.
+   It applies only inside that project, and **overrides** the user-level
+   global rules when the two conflict.
 3. Each PR description MUST contain a line:
    `Constitution Check: Compliant` (or `Deviations: ...` with justification).
 4. Constitution amendments require an explicit Sync Impact Report at the
