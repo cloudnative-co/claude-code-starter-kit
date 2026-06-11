@@ -1,7 +1,59 @@
 #!/bin/bash
-# wizard/registry.sh - Plugin/hook registries and CLI parsing helpers.
+# wizard/registry.sh - Config key/plugin/hook registries and CLI parsing helpers.
 # Sourced by wizard.sh.
 # shellcheck disable=SC2034 # This module sets globals consumed after sourcing.
+
+# ---------------------------------------------------------------------------
+# Config key registry (single source of truth)
+# ---------------------------------------------------------------------------
+# All wizard config keys in allowlist/save order. Empty string entries mark
+# blank-line separators in the saved config file. To add a new key, append it
+# here (and initialize the matching global in wizard.sh); the derived lists
+# below are generated automatically.
+_CONFIG_KEYS=(
+  LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT
+  ""
+  INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY
+  ""
+  ENABLE_CODEX_PLUGIN ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW
+  ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_BIOME_HOOKS ENABLE_CONSOLE_LOG_GUARD
+  ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG
+  ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_WEB_CONTENT_UPDATE
+  ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD
+  ENABLE_NO_FLICKER ENABLE_FEATURE_RECOMMENDATION
+  ""
+  DISMISSED_FEATURES
+  ""
+  SELECTED_PLUGINS
+)
+
+# Legacy keys: accepted when loading saved config (kept in the allowlist) but
+# never written back by save_config (e.g., ENABLE_CODEX_MCP is migrated to
+# ENABLE_CODEX_PLUGIN by _normalize_codex_state).
+_CONFIG_LEGACY_KEYS="ENABLE_CODEX_MCP"
+
+# Generated lists (do not edit by hand — extend _CONFIG_KEYS instead):
+#   _CONFIG_ALLOWED_KEYS — space-separated allowlist for _safe_source_config
+#   _CONFIG_SAVE_KEYS    — array of keys to save ("" = blank line separator)
+_CONFIG_ALLOWED_KEYS=""
+_CONFIG_SAVE_KEYS=()
+_build_config_key_lists() {
+  local _key
+  _CONFIG_ALLOWED_KEYS=""
+  _CONFIG_SAVE_KEYS=()
+  for _key in "${_CONFIG_KEYS[@]}"; do
+    if [[ -z "$_key" ]]; then
+      _CONFIG_SAVE_KEYS+=("")
+      continue
+    fi
+    _CONFIG_ALLOWED_KEYS="${_CONFIG_ALLOWED_KEYS:+${_CONFIG_ALLOWED_KEYS} }${_key}"
+    if [[ " $_CONFIG_LEGACY_KEYS " == *" $_key "* ]]; then
+      continue
+    fi
+    _CONFIG_SAVE_KEYS+=("$_key")
+  done
+}
+_build_config_key_lists
 
 PLUGIN_NAMES=()
 PLUGIN_PROFILES=()

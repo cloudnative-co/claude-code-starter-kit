@@ -146,8 +146,9 @@ _language_label() {
 # Defaults, profiles, config persistence
 # ---------------------------------------------------------------------------
 
-# Allowed config variable names (used by _safe_source_config for allowlist validation)
-_CONFIG_ALLOWED_KEYS="LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY ENABLE_CODEX_PLUGIN ENABLE_CODEX_MCP ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS ENABLE_BIOME_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_WEB_CONTENT_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_NO_FLICKER ENABLE_FEATURE_RECOMMENDATION DISMISSED_FEATURES SELECTED_PLUGINS"
+# _CONFIG_ALLOWED_KEYS (allowlist for _safe_source_config) and _CONFIG_SAVE_KEYS
+# (save order for save_config) are generated from the _CONFIG_KEYS registry in
+# wizard/registry.sh (sourced below, before any of these functions run).
 
 # Keys where empty string is a valid saved value (e.g., "" = "no plugins selected").
 # All other keys: empty values in saved config are skipped so profile defaults are preserved.
@@ -256,17 +257,18 @@ _normalize_codex_state() {
   fi
 }
 
-fill_missing_profile_defaults() {
+# Load profile defaults while preserving already-set (non-empty) config values,
+# including legacy formatter state (saved configs that predate ENABLE_BIOME_HOOKS
+# must not have Biome silently enabled by a profile default).
+# Sets _PROFILE_FILL_FORMATTER_PREFER ("biome" or "prettier") for the caller to
+# pass to _normalize_formatter_hooks once its remaining overrides are applied.
+_PROFILE_FILL_FORMATTER_PREFER="biome"
+_load_profile_preserving_values() {
   local profile="$1"
-  case "$profile" in
-    minimal|standard|full|custom) ;;
-    *) return 1 ;;
-  esac
-
   local _saved_pairs=()
   local _var _val _pair _restore_key _restore_val
-  local _formatter_prefer="biome"
   local _legacy_formatter_state=false
+  _PROFILE_FILL_FORMATTER_PREFER="biome"
   for _var in $_CONFIG_ALLOWED_KEYS; do
     _val="${!_var:-}"
     if [[ -n "$_val" ]]; then
@@ -274,7 +276,7 @@ fill_missing_profile_defaults() {
     fi
   done
   if [[ "${ENABLE_PRETTIER_HOOKS:-}" == "true" ]] && [[ -z "${ENABLE_BIOME_HOOKS:-}" ]]; then
-    _formatter_prefer="prettier"
+    _PROFILE_FILL_FORMATTER_PREFER="prettier"
   fi
   if [[ -n "${ENABLE_PRETTIER_HOOKS:-}" ]] && [[ -z "${ENABLE_BIOME_HOOKS:-}" ]]; then
     _legacy_formatter_state=true
@@ -289,7 +291,17 @@ fill_missing_profile_defaults() {
   if [[ "$_legacy_formatter_state" == "true" ]]; then
     ENABLE_BIOME_HOOKS="false"
   fi
-  _normalize_formatter_hooks "$_formatter_prefer"
+}
+
+fill_missing_profile_defaults() {
+  local profile="$1"
+  case "$profile" in
+    minimal|standard|full|custom) ;;
+    *) return 1 ;;
+  esac
+
+  _load_profile_preserving_values "$profile"
+  _normalize_formatter_hooks "$_PROFILE_FILL_FORMATTER_PREFER"
 }
 
 # Sanitize a value for safe inclusion in a key=value config file.
@@ -297,24 +309,6 @@ fill_missing_profile_defaults() {
 _sanitize_config_value() {
   printf '%s' "$1" | tr -cd 'a-zA-Z0-9_,.:@/ -'
 }
-
-# Keys to save in config file, in order. Empty string = blank line separator.
-_CONFIG_SAVE_KEYS=(
-  LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT
-  ""
-  INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY
-  ""
-  ENABLE_CODEX_PLUGIN ENABLE_TMUX_HOOKS ENABLE_GIT_PUSH_REVIEW ENABLE_DOC_BLOCKER
-  ENABLE_PRETTIER_HOOKS ENABLE_BIOME_HOOKS ENABLE_CONSOLE_LOG_GUARD ENABLE_MEMORY_PERSISTENCE
-  ENABLE_STRATEGIC_COMPACT ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT
-  ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_WEB_CONTENT_UPDATE ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP
-  ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_NO_FLICKER
-  ENABLE_FEATURE_RECOMMENDATION
-  ""
-  DISMISSED_FEATURES
-  ""
-  SELECTED_PLUGINS
-)
 
 save_config() {
   local file="${1:-$HOME/.claude-starter-kit.conf}"
@@ -445,6 +439,18 @@ _load_config_preserving_cli_overrides() {
   _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
 }
 
+# Clear all wizard-prompted choices so the interactive flow asks again.
+_reset_user_choices() {
+  LANGUAGE=""
+  PROFILE=""
+  EDITOR_CHOICE=""
+  COMMIT_ATTRIBUTION=""
+  ENABLE_NEW_INIT=""
+  ENABLE_CODEX_PLUGIN=""
+  ENABLE_GHOSTTY_SETUP=""
+  ENABLE_FONTS_SETUP=""
+}
+
 # ---------------------------------------------------------------------------
 # i18n
 # ---------------------------------------------------------------------------
@@ -532,14 +538,7 @@ run_wizard() {
       # User chose to edit - fall through to full wizard
     fi
     # Reset for fresh start (all user choices cleared so wizard asks again)
-    LANGUAGE=""
-    PROFILE=""
-    EDITOR_CHOICE=""
-    COMMIT_ATTRIBUTION=""
-    ENABLE_NEW_INIT=""
-    ENABLE_CODEX_PLUGIN=""
-    ENABLE_GHOSTTY_SETUP=""
-    ENABLE_FONTS_SETUP=""
+    _reset_user_choices
   fi
 
   # Interactive wizard loop
@@ -563,14 +562,7 @@ run_wizard() {
 
     if [[ "$WIZARD_RESULT" == "edit" ]]; then
       # Reset for re-run (all user choices cleared so wizard asks again)
-      LANGUAGE=""
-      PROFILE=""
-      EDITOR_CHOICE=""
-      COMMIT_ATTRIBUTION=""
-      ENABLE_NEW_INIT=""
-      ENABLE_CODEX_PLUGIN=""
-      ENABLE_GHOSTTY_SETUP=""
-      ENABLE_FONTS_SETUP=""
+      _reset_user_choices
       continue
     fi
     break
