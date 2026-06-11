@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "if cd \"${CLAUDE_PROJECT_DIR:-}\" 2>/dev/null; then git add -A && { git diff --cached --quiet || git commit -m 'checkpoint: pre-compact auto-commit'; }; fi"
+						"command": "if [ -n \"${CLAUDE_PROJECT_DIR:-}\" ] && cd \"${CLAUDE_PROJECT_DIR}\" 2>/dev/null; then git add -A && { git diff --cached --quiet || git commit -m 'checkpoint: pre-compact auto-commit'; }; fi"
 					}
 				]
 			}
