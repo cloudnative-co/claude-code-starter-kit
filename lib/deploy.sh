@@ -266,7 +266,7 @@ collect_managed_target_files() {
   _add_managed_tree_targets "$PROJECT_DIR/memory" "$CLAUDE_DIR/memory"
   # Registry-driven: hook script paths from _FEATURE_HAS_SCRIPTS
   local _feat_name
-  for _feat_name in "${_FEATURE_ORDER[@]}"; do
+  for _feat_name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$_feat_name]+set}" ]] || continue
     _add_managed_tree_targets "$PROJECT_DIR/features/$_feat_name/scripts" "$CLAUDE_DIR/hooks/$_feat_name"
   done
@@ -552,6 +552,11 @@ build_settings_file() {
   local hook_fragments=()
   local tmp_files=()
 
+  # Prime the semver cache in THIS shell: the fragment helpers below run in
+  # $(...) subshells, so cache writes made there never persist and `claude
+  # --version` would otherwise be spawned once per fragment.
+  _claude_cli_semver >/dev/null 2>&1 || true
+
   # Assertion: safety-net must be first in _FEATURE_ORDER
   if [[ "${_FEATURE_ORDER[0]}" != "safety-net" ]]; then
     error "FATAL: safety-net must be first in _FEATURE_ORDER (got: ${_FEATURE_ORDER[0]:-empty})"
@@ -802,6 +807,7 @@ write_manifest() {
     --argjson files "$files_json" \
     --argjson cleanup_paths "$cleanup_paths" \
     --arg snapshot_dir "$CLAUDE_DIR/.starter-kit-snapshot" \
+    --arg claude_dir "$CLAUDE_DIR" \
     '{
       version: $version,
       timestamp: $ts,
@@ -816,7 +822,8 @@ write_manifest() {
       codex_plugin: $codex_plugin,
       files: $files,
       cleanup_paths: $cleanup_paths,
-      snapshot_dir: $snapshot_dir
+      snapshot_dir: $snapshot_dir,
+      claude_dir: $claude_dir
     }' > "$manifest"
 }
 

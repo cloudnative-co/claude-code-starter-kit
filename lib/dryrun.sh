@@ -76,6 +76,16 @@ _dryrun_init() {
         "$real_dir"/*) _dryrun_copy_path "$real_dir" "${managed_file#"$real_dir"/}" ;;
       esac
     done < <(jq -r '.files[]? // empty' "$manifest" 2>/dev/null)
+  else
+    # No manifest → fresh-install-with-existing path. The merge-aware deploy
+    # decides per file based on what already exists, so the preview needs the
+    # user's existing kit-relevant trees in the sim dir — otherwise the sim
+    # overwrites everything and the summary over-reports MODIFY for files the
+    # real run would preserve. projects/ and other runtime-heavy state stay
+    # excluded.
+    for rel in agents rules commands skills memory hooks; do
+      _dryrun_copy_path "$real_dir" "$rel"
+    done
   fi
 }
 

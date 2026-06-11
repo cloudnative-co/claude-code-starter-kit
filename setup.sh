@@ -189,12 +189,12 @@ maybe_install_cc_safety_net() {
 #   mode=simple (default): overwrite all scripts unconditionally
 #   mode=merge-aware: check for existing hooks, offer O/N/S prompt (fresh install with existing)
 #
-# Uses _FEATURE_ORDER + _FEATURE_HAS_SCRIPTS from lib/features.sh.
+# Uses _FEATURE_SCRIPT_ORDER + _FEATURE_HAS_SCRIPTS from lib/features.sh.
 # ---------------------------------------------------------------------------
 deploy_hook_scripts() {
   local mode="${1:-simple}"
   local name flag
-  for name in "${_FEATURE_ORDER[@]}"; do
+  for name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$name]+set}" ]] || continue
 
     flag="${_FEATURE_FLAGS[$name]}"
@@ -248,17 +248,6 @@ deploy_hook_scripts() {
       fi
     fi
   done
-
-  if is_true "${ENABLE_GIT_PUSH_REVIEW:-false}"; then
-    local src="$PROJECT_DIR/features/git-push-review/scripts"
-    local dest="$CLAUDE_DIR/hooks/git-push-review"
-    if [[ -d "$src" ]]; then
-      mkdir -p "$dest"
-      cp -a "$src"/. "$dest"/
-      _make_hooks_executable "$dest"
-      ok "Installed git-push-review hooks"
-    fi
-  fi
 }
 
 # Make all script files in a directory executable

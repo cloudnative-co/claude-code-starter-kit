@@ -3,7 +3,7 @@
 
 {
   test_name="update-refactor: hook script updates are registry driven"
-  if grep -q 'for feature_name in "${_FEATURE_ORDER' "$PROJECT_DIR/lib/update.sh" \
+  if grep -q 'for feature_name in "${_FEATURE_SCRIPT_ORDER' "$PROJECT_DIR/lib/update.sh" \
     && grep -q '_FEATURE_HAS_SCRIPTS' "$PROJECT_DIR/lib/update.sh" \
     && ! grep -q '_update_hook_feature "memory-persistence"' "$PROJECT_DIR/lib/update.sh" \
     && ! grep -q '_update_hook_feature "strategic-compact"' "$PROJECT_DIR/lib/update.sh"; then

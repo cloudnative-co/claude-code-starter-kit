@@ -90,7 +90,7 @@ install.sh (re-run with existing manifest)
       → write_manifest() — updates manifest v2
 ```
 
-Libraries sourced by `setup.sh` in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/features.sh`, `lib/recommendation.sh`, `lib/progress.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`. `lib/codex-setup.sh` is sourced later only when Codex setup is reached; dry-run does not reach it.
+Libraries sourced by `setup.sh` (in `setup_source_stage2()`) in order: `wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`, `lib/features.sh`, `lib/recommendation.sh`, `lib/progress.sh`, `lib/template.sh`, `lib/json-builder.sh`, `lib/snapshot.sh`, `lib/merge.sh`, `lib/update.sh`, `lib/dryrun.sh`, `lib/deploy.sh`, `lib/ghostty.sh`, `lib/fonts.sh`, `lib/codex-setup.sh` (always sourced — `install_selected_plugins()` uses its helpers even in dry-run).
 
 ### Profile System
 
@@ -208,7 +208,7 @@ Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and 
 - **Safe config loading**: Never source config files with `. "$file"`. Use `_safe_source_config()` which validates keys against `_CONFIG_ALLOWED_KEYS` allowlist and sanitizes values via `_sanitize_config_value()`.
 - **RC file modification**: When modifying shell RC files (`.bashrc`, `.zshrc`), preserve original permissions with `stat` + `chmod` after `mktemp` + `mv` operations (since `umask 077` would change them to 0600).
 - **sed delimiter choice**: When using `sed` with `|` delimiter (`s|...|...|`), escape `&`, `\`, and `|` in replacement strings — do NOT escape `/`.
-- **Top-level scope in setup.sh**: The plugin install section (search for `_registered_mps`) runs in global scope, not inside a function. Use `_` prefixed variables (e.g., `_p`, `_p_name`, `_registered_mps`) instead of `local`.
+- **Plugin install in setup.sh**: Plugin marketplace registration + install live in `install_selected_plugins()` (a normal function — use `local` variables). Failures must surface the captured CLI output via `warn`, never fail silently.
 - **NONINTERACTIVE env var**: `install.sh` supports `NONINTERACTIVE=1` (Homebrew convention) to auto-add `--non-interactive` flag for setup.sh.
 - **DRY_RUN variable**: `--dry-run` sets `DRY_RUN="true"`. In dry-run mode, `CLAUDE_DIR` is redirected to a temp sim dir so the normal deploy/update flow runs without touching real files. External operations (Ghostty, fonts, shell RC, plugins, Codex Plugin, Claude CLI) are individually guarded and logged as `[WOULD RUN]`. Light prerequisites (git, jq, curl) may be installed with user consent in interactive mode; `--non-interactive --dry-run` installs nothing and aborts if tools are missing. Sim dir snapshot/manifest are temporary artifacts discarded after the summary report. The comparison basis is always "real `~/.claude` vs sim dir result".
 
@@ -233,7 +233,7 @@ Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and 
 5. In `wizard/steps.sh`: add confirmation display in `_step_confirm()` and the non-interactive default in `_fill_noninteractive_defaults()`
 6. If the feature is a hook, add to `HOOK_KEYS` / `HOOK_TOKENS` in `wizard/registry.sh`, add `STR_HOOKS_*` strings in both i18n files, and add the hook label to `HOOK_LABELS`
 7. Features are auto-collected by `build_settings_file()` in `lib/deploy.sh` via `_FEATURE_ORDER` / `_FEATURE_FLAGS` registry — no manual merge code needed
-8. If external scripts needed: add to `deploy_hook_scripts()` in `setup.sh`
+8. If external scripts needed: add `[name]=true` to `_FEATURE_HAS_SCRIPTS` in `lib/features.sh` — fresh deploy (`deploy_hook_scripts()`), update deploy (`_update_hook_scripts()`), and manifest/snapshot tracking (`collect_managed_target_files()`) all iterate `_FEATURE_SCRIPT_ORDER` × `_FEATURE_HAS_SCRIPTS`. A feature excluded from `_FEATURE_ORDER` (settings fragment special-cased, like `git-push-review`) must be appended to `_FEATURE_SCRIPT_ORDER` so its scripts still flow through all three paths
 9. If the feature creates files outside the standard manifest-tracked directories, add explicit cleanup to `uninstall.sh`
 10. Verify update-path adoption. A new key must be checked in all of these paths:
    - fresh install

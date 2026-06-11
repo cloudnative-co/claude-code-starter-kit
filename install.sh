@@ -65,6 +65,9 @@ _clone_to_temp_and_swap() {
   parent="$(dirname "$target")"
   mkdir -p "$parent"
 
+  # 過去の中断実行が残した一時 clone ディレクトリを掃除（自己修復）
+  rm -rf "$parent"/.claude-starter-kit.clone.* 2>/dev/null || true
+
   local tmp_dir
   tmp_dir="$(mktemp -d "$parent/.claude-starter-kit.clone.XXXXXX")"
   if git clone --depth 1 "$REPO_URL" "$tmp_dir/repo"; then
@@ -231,6 +234,9 @@ else
 fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+# curl|bash / bash -c では BASH_SOURCE[0] が unset のため、set -u 下で
+# ${BASH_SOURCE[0]} を直接参照すると即死してワンライナーインストールが壊れる。
+# unset（パイプ実行）または $0 一致（ファイル実行）で main を呼び、source 時のみスキップ。
+if [[ "${BASH_SOURCE[0]:-}" == "" || "${BASH_SOURCE[0]:-}" == "$0" ]]; then
   install_main "$@"
 fi

@@ -263,6 +263,7 @@ _clone_to_temp_and_swap() {
     local parent
     parent="$(dirname "$target")"
     mkdir -p "$parent"
+    rm -rf "$parent"/.claude-starter-kit.clone.* 2>/dev/null || true
     local tmp_dir
     tmp_dir="$(mktemp -d "$parent/.claude-starter-kit.clone.XXXXXX")"
     if git clone --depth 1 "$REPO_URL" "$tmp_dir/repo"; then
@@ -451,6 +452,7 @@ _clone_to_temp_and_swap() {
     local parent
     parent="$(dirname "$target")"
     mkdir -p "$parent"
+    rm -rf "$parent"/.claude-starter-kit.clone.* 2>/dev/null || true
     local tmp_dir
     tmp_dir="$(mktemp -d "$parent/.claude-starter-kit.clone.XXXXXX")"
     if git clone --depth 1 "$REPO_URL" "$tmp_dir/repo"; then

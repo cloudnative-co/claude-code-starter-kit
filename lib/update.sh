@@ -498,7 +498,7 @@ _update_hook_scripts() {
   _UPDATE_SKIPPED_FILES=()
 
   local feature_name flag src_dir
-  for feature_name in "${_FEATURE_ORDER[@]}"; do
+  for feature_name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$feature_name]+set}" ]] || continue
     flag="${_FEATURE_FLAGS[$feature_name]:-}"
     [[ -n "$flag" ]] || continue
@@ -508,31 +508,118 @@ _update_hook_scripts() {
   done
 }
 
+# _migrate_statusline_command - Rewrite a statusLine that still points at the
+# retired bash implementation (statusline-command.sh) to the current kit
+# fragment. The bootstrap settings merge ("adopt kit-only sub-keys, keep
+# existing sub-keys") preserves the old command value, which would otherwise
+# reference a script the kit no longer ships.
+_migrate_statusline_command() {
+  local settings_file="$1"
+  [[ -f "$settings_file" ]] || return 0
+  is_true "${ENABLE_STATUSLINE:-false}" || return 0
+
+  local current_cmd
+  current_cmd="$(jq -r '.statusLine.command // empty' "$settings_file" 2>/dev/null)" || return 0
+  [[ "$current_cmd" == *statusline-command.sh* ]] || return 0
+
+  local fragment="$PROJECT_DIR/features/statusline/hooks.json"
+  [[ -f "$fragment" ]] || return 0
+  local new_status
+  new_status="$(jq -c '.statusLine // empty' "$fragment" 2>/dev/null)" || return 0
+  [[ -n "$new_status" ]] || return 0
+
+  local tmp
+  tmp="$(mktemp)"
+  if jq --argjson sl "$new_status" '.statusLine = $sl' "$settings_file" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$settings_file"
+    replace_home_path "$settings_file"
+    ok "Migrated statusLine to the current kit implementation"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 _remove_retired_managed_files() {
   local claude_dir="$1"
   local snapshot_dir="$2"
   local manifest="${claude_dir}/.starter-kit-manifest.json"
   [[ -f "$manifest" ]] || return 0
 
-  local current_files_json
-  current_files_json="$(managed_files_json)"
+  # Retired = the CURRENT KIT no longer ships the path. Compare against the
+  # full kit enumeration, NOT the on-disk-filtered managed_files_json():
+  # a kit-shipped file the user deleted must keep its snapshot baseline so
+  # _update_file's restore/skip protection keeps working on later updates.
+  collect_managed_target_files
+  local kit_rel_json
+  kit_rel_json="$({
+    local kit_file
+    for kit_file in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
+      printf '%s\n' "${kit_file#"$claude_dir"/}"
+    done
+    true
+  } | jq -R -s 'split("\n")[:-1]')"
 
-  local old_file rel_file
+  # Manifest entries are absolute paths recorded at install time. Under
+  # --dry-run, claude_dir points at the sim dir while the copied manifest
+  # still holds real-home paths, so resolve relative paths against every
+  # known root before giving up.
+  local manifest_root
+  manifest_root="$(jq -r '.claude_dir // empty' "$manifest" 2>/dev/null)"
+
+  local old_file rel_file target baseline
   while IFS= read -r old_file; do
     [[ -n "$old_file" ]] || continue
-    if jq -e --arg file "$old_file" 'index($file) != null' <<< "$current_files_json" >/dev/null 2>&1; then
+    rel_file=""
+    if [[ -n "$manifest_root" && "$old_file" == "$manifest_root"/* ]]; then
+      rel_file="${old_file#"$manifest_root"/}"
+    elif [[ "$old_file" == "$claude_dir"/* ]]; then
+      rel_file="${old_file#"$claude_dir"/}"
+    elif [[ "$old_file" == "$HOME/.claude"/* ]]; then
+      rel_file="${old_file#"$HOME"/.claude/}"
+    fi
+    [[ -n "$rel_file" ]] || continue
+    case "$rel_file" in
+      settings.json|CLAUDE.md) continue ;;
+    esac
+    if jq -e --arg file "$rel_file" 'index($file) != null' <<< "$kit_rel_json" >/dev/null 2>&1; then
       continue
     fi
-    case "$old_file" in
-      "$claude_dir/settings.json"|"$claude_dir/CLAUDE.md") continue ;;
-      "$claude_dir"/*)
-        rel_file="${old_file#"$claude_dir"/}"
-        rm -f "$old_file"
-        rm -f "$snapshot_dir/$rel_file"
-        ok "Removed retired managed file: $rel_file"
-        ;;
-    esac
+    target="$claude_dir/$rel_file"
+    baseline="$snapshot_dir/$rel_file"
+    if [[ -f "$target" ]]; then
+      # Same protection policy as _update_file: never silently delete a file
+      # the user customized; without a baseline we can't prove it's pristine.
+      if [[ ! -f "$baseline" ]]; then
+        warn "Keeping retired kit file (no baseline to verify local changes): $rel_file"
+        continue
+      fi
+      if _file_changed "$baseline" "$target"; then
+        warn "Keeping retired kit file with local changes: $rel_file"
+        continue
+      fi
+      rm -f "$target"
+      rm -f "$baseline"
+      ok "Removed retired managed file: $rel_file"
+      _prune_empty_dirs "$(dirname "$target")" "$claude_dir"
+      _prune_empty_dirs "$(dirname "$baseline")" "$snapshot_dir"
+    else
+      # Already absent on disk — drop only the stale baseline.
+      rm -f "$baseline"
+      _prune_empty_dirs "$(dirname "$baseline")" "$snapshot_dir"
+    fi
   done < <(jq -r '.files[]? // empty' "$manifest" 2>/dev/null)
+}
+
+# Remove now-empty directories from dir upward, stopping at (and never
+# removing) the stop directory itself. rmdir fails on non-empty dirs, which
+# ends the walk — only genuinely empty parents are pruned.
+_prune_empty_dirs() {
+  local dir="$1"
+  local stop="$2"
+  while [[ "$dir" == "$stop"/* ]]; do
+    rmdir "$dir" 2>/dev/null || break
+    dir="$(dirname "$dir")"
+  done
 }
 
 _count_update_content_files() {
@@ -552,7 +639,7 @@ _count_update_content_files() {
 _count_update_hook_files() {
   local total=0
   local feature_name flag src_dir
-  for feature_name in "${_FEATURE_ORDER[@]}"; do
+  for feature_name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$feature_name]+set}" ]] || continue
     flag="${_FEATURE_FLAGS[$feature_name]:-}"
     [[ -n "$flag" ]] || continue
@@ -672,6 +759,11 @@ run_update() {
   # write_manifest() and save_config() record the actual deployed values.
   _sync_settings_metadata "$current_settings"
 
+  # Bootstrap merges keep existing sub-key values, so a manifest-v1 install
+  # can come out of Phase 1 still pointing statusLine at the retired bash
+  # implementation. Rewrite it to the current kit fragment.
+  _migrate_statusline_command "$current_settings"
+
   # --- Phase 2: CLAUDE.md (section-aware) ---
   _progress_step 2 5 "$STR_UPDATE_CLAUDEMD"
 
@@ -783,6 +875,16 @@ run_update() {
       cp "$new_settings" "$_snap_dest"
       if [[ "$_dr" != "true" ]]; then
         info "Snapshot updated: settings.json (kit baseline)"
+      fi
+    elif _is_auto_managed_web_content_package "$file"; then
+      # Runtime auto-update rewrites these files. Snapshot the KIT version so
+      # the baseline stays kit-owned (same invariant as settings.json above) —
+      # a current-content baseline would make the next update read "user
+      # unchanged" and silently roll runtime updates back to the kit state.
+      local _wc_rel="${file#"$claude_dir"/}"
+      if [[ -f "${PROJECT_DIR}/${_wc_rel}" ]]; then
+        mkdir -p "$(dirname "${snapshot_dir}/${_wc_rel}")"
+        cp -a "${PROJECT_DIR}/${_wc_rel}" "${snapshot_dir}/${_wc_rel}"
       fi
     else
       _update_snapshot_file "$claude_dir" "$file"
