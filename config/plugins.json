@@ -26,7 +26,7 @@
 			"name": "pr-review-toolkit",
 			"marketplace": "claude-plugins-official",
 			"description": "Comprehensive PR review with specialized agents",
-			"profiles": ["standard", "full"]
+			"profiles": ["full"]
 		},
 		{
 			"name": "feature-dev",
@@ -44,7 +44,7 @@
 			"name": "claude-md-management",
 			"marketplace": "claude-plugins-official",
 			"description": "Audit and improve CLAUDE.md files",
-			"profiles": ["standard", "full"]
+			"profiles": ["full"]
 		},
 		{
 			"name": "gopls-lsp",
@@ -68,7 +68,7 @@
 			"name": "superpowers",
 			"marketplace": "claude-plugins-official",
 			"description": "Skill system for brainstorming, TDD, debugging, and development workflows",
-			"profiles": ["standard", "full"]
+			"profiles": ["full"]
 		},
 		{
 			"name": "code-simplifier",
@@ -80,13 +80,13 @@
 			"name": "document-skills",
 			"marketplace": "anthropic-agent-skills",
 			"description": "Document creation and editing skills (DOCX, PDF, PPTX, XLSX)",
-			"profiles": ["standard", "full"]
+			"profiles": ["full"]
 		},
 		{
 			"name": "example-skills",
 			"marketplace": "anthropic-agent-skills",
 			"description": "Creative, technical, and enterprise skill examples from Anthropic",
-			"profiles": ["standard", "full"]
+			"profiles": ["full"]
 		}
 	]
 }

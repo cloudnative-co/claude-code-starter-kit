@@ -28,6 +28,12 @@ function auditBypass(detail) {
   process.stderr.write(`[url-guard] ALLOW_PRIVATE_URLS=true bypass: ${detail}\n`)
 }
 
+function guardError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
 /** Convert an IPv4 string to a 32-bit unsigned integer. */
 function ipv4ToInt(ip) {
   return ip.split('.').reduce((acc, oct) => (acc << 8) + Number(oct), 0) >>> 0
@@ -150,16 +156,16 @@ export async function assertPublicUrl(rawUrl) {
   try {
     parsed = new URL(rawUrl)
   } catch {
-    throw new Error(`不正なURL: ${rawUrl}`)
+    throw guardError('MALFORMED_URL', `不正なURL: ${rawUrl}`)
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`許可されていないプロトコル: ${parsed.protocol} (http/https のみ許可)`)
+    throw guardError('BLOCKED_PROTOCOL', `許可されていないプロトコル: ${parsed.protocol} (http/https のみ許可)`)
   }
 
   // Reject embedded credentials: they leak into output/logs and enable abuse.
   if (parsed.username || parsed.password) {
-    throw new Error('認証情報付きURL(user:pass@)は拒否')
+    throw guardError('BLOCKED_CREDENTIALS', '認証情報付きURL(user:pass@)は拒否')
   }
 
   const allowPrivate = envAllowsPrivate()
@@ -168,7 +174,7 @@ export async function assertPublicUrl(rawUrl) {
   if (net.isIP(hostname)) {
     if (isPrivateIp(hostname)) {
       if (!allowPrivate) {
-        throw new Error(`プライベート/内部IPは拒否: ${hostname} (開発用途なら ALLOW_PRIVATE_URLS=true)`)
+        throw guardError('BLOCKED_IP', `プライベート/内部IPは拒否: ${hostname} (開発用途なら ALLOW_PRIVATE_URLS=true)`)
       }
       auditBypass(`private IP ${hostname}`)
     }
@@ -177,7 +183,7 @@ export async function assertPublicUrl(rawUrl) {
 
   if (isInternalHostname(hostname)) {
     if (!allowPrivate) {
-      throw new Error(`内部ホスト名らしきURLは拒否: ${hostname} (開発用途なら ALLOW_PRIVATE_URLS=true)`)
+      throw guardError('BLOCKED_HOSTNAME', `内部ホスト名らしきURLは拒否: ${hostname} (開発用途なら ALLOW_PRIVATE_URLS=true)`)
     }
     auditBypass(`internal hostname ${hostname}`)
     return parsed
@@ -189,11 +195,11 @@ export async function assertPublicUrl(rawUrl) {
     try {
       addrs = await dns.lookup(hostname, { all: true })
     } catch (error) {
-      throw new Error(`DNS解決に失敗: ${hostname} (${error?.code ?? error?.message ?? 'unknown'})`)
+      throw guardError('DNS_FAIL', `DNS解決に失敗: ${hostname} (${error?.code ?? error?.message ?? 'unknown'})`)
     }
     const privateHit = addrs.find((a) => isPrivateIp(a.address))
     if (privateHit) {
-      throw new Error(`ホスト名がプライベートIPに解決されたため拒否: ${hostname} -> ${privateHit.address} (開発用途なら ALLOW_PRIVATE_URLS=true)`)
+      throw guardError('BLOCKED_DNS_IP', `ホスト名がプライベートIPに解決されたため拒否: ${hostname} -> ${privateHit.address} (開発用途なら ALLOW_PRIVATE_URLS=true)`)
     }
   } else {
     auditBypass(`DNS guard skipped for ${hostname}`)
@@ -219,13 +225,13 @@ export function createGuardedLookup() {
     dns.lookup(hostname, { ...options, all: true, verbatim: true }).then(
       (addrs) => {
         if (!Array.isArray(addrs) || addrs.length === 0) {
-          callback(new Error(`接続拒否: ${hostname} の名前解決結果が空`))
+          callback(guardError('DNS_EMPTY', `接続拒否: ${hostname} の名前解決結果が空`))
           return
         }
         if (!allowPrivate) {
           const bad = addrs.find((a) => isPrivateIp(a.address))
           if (bad) {
-            callback(new Error(`接続拒否: ${hostname} がプライベートIP ${bad.address} に解決`))
+            callback(guardError('BLOCKED_DNS_IP', `接続拒否: ${hostname} がプライベートIP ${bad.address} に解決`))
             return
           }
         }

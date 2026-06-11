@@ -1,13 +1,13 @@
 #!/bin/bash
-# Stop Hook (Session End) - Persist learnings when session ends
+# SessionEnd Hook - finalize existing session notes
 #
-# Runs when Claude session ends. Creates/updates session log file
-# with timestamp for continuity tracking.
+# Runs when Claude session ends. Updates existing notes only; it does not
+# create empty templates.
 #
 # Hook config (in ~/.claude/settings.json):
 # {
 #   "hooks": {
-#     "Stop": [{
+#     "SessionEnd": [{
 #       "matcher": "*",
 #       "hooks": [{
 #         "type": "command",
@@ -18,44 +18,21 @@
 # }
 
 SESSIONS_DIR="${HOME}/.claude/sessions"
-TODAY=$(date '+%Y-%m-%d')
-SESSION_FILE="${SESSIONS_DIR}/${TODAY}-session.tmp"
 
-mkdir -p "$SESSIONS_DIR"
-
-# If session file exists for today, update the end time
-if [ -f "$SESSION_FILE" ]; then
-  # Update Last Updated timestamp
-  sed -i '' "s/\*\*Last Updated:\*\*.*/\*\*Last Updated:\*\* $(date '+%H:%M')/" "$SESSION_FILE" 2>/dev/null || \
-  sed -i "s/\*\*Last Updated:\*\*.*/\*\*Last Updated:\*\* $(date '+%H:%M')/" "$SESSION_FILE" 2>/dev/null
-  echo "[SessionEnd] Updated session file: $SESSION_FILE" >&2
-else
-  # Create new session file with template
-  cat > "$SESSION_FILE" << EOF
-# Session: $(date '+%Y-%m-%d')
-**Date:** $TODAY
-**Started:** $(date '+%H:%M')
-**Last Updated:** $(date '+%H:%M')
-
----
-
-## Current State
-
-[Session context goes here]
-
-### Completed
-- [ ]
-
-### In Progress
-- [ ]
-
-### Notes for Next Session
--
-
-### Context to Load
-\`\`\`
-[relevant files]
-\`\`\`
-EOF
-  echo "[SessionEnd] Created session file: $SESSION_FILE" >&2
+if [ ! -d "$SESSIONS_DIR" ]; then
+  exit 0
 fi
+
+latest="$(ls -t "$SESSIONS_DIR"/*.tmp 2>/dev/null | head -1 || true)"
+if [ -n "$latest" ] && [ -f "$latest" ]; then
+  tmp_file="$(mktemp)"
+  awk -v updated="$(date '+%H:%M')" '
+    /^\*\*Last Updated:\*\*/ { print "**Last Updated:** " updated; seen=1; next }
+    { print }
+    END { if (!seen) print "**Last Updated:** " updated }
+  ' "$latest" > "$tmp_file" && mv "$tmp_file" "$latest"
+  echo "[SessionEnd] Updated session file: $latest" >&2
+fi
+
+# Remove stale transient notes after 30 days.
+find "$SESSIONS_DIR" -maxdepth 1 -name "*.tmp" -mtime +30 -delete 2>/dev/null || true

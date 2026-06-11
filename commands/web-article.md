@@ -9,15 +9,11 @@ argument-hint: <url>
 
 ## 手順
 
-1. **入力 URL を検証してから Defuddle で抽出する**（生HTMLを直接読まない）。
-   `$ARGUMENTS` は信頼できない入力として扱うこと。**Bash コマンド文字列へそのまま展開してはならない**:
-   - まず `$ARGUMENTS` が **単一の http(s) URL**（`^https?://` で始まり空白を含まない）であることを確認。
-     複数引数・空白・シェル特殊文字（`` ` ``, `"`, `'`, `;`, `|`, `&`, `$`, `()`, `<>`, 改行）を含むなら拒否。
-   - 検証済み URL を **単一の引数**としてスクリプトに渡す（下の `<検証済みURL>` を置換して実行）:
+1. **web-content-extraction skill の URL 検証手順に従って抽出する**（生HTMLを直接読まない）。
+   `$ARGUMENTS` は信頼できない入力として扱い、検証済みの単一 URL だけを単一引数で渡す:
    ```bash
    node ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs '<検証済みURL>'
    ```
-   （スクリプト側でも SSRF ガードと http(s) 限定・認証情報付き URL 拒否を行う。）
 2. **PDF URL は自動でフォールバック抽出される**（`content-type: application/pdf` か `.pdf`、
    または先頭が `%PDF-`）。その場合 `extractorEngine:"pdf"` となり、`content` はMarkdownでなく
    プレーンテキスト、`pageCount` を含む。日本語PDFも文字化けせず抽出する（CMap対応済み）。

@@ -38,11 +38,11 @@ Based on [shanraisshan/claude-code-best-practice](https://github.com/shanraissha
 ### Settings Priority (high→low)
 1. CLI args → 2. `.claude/settings.local.json` → 3. `.claude/settings.json` → 4. `~/.claude/settings.json` → 5. managed-settings
 
-### RPI Workflow
+### Planning Workflow
 Research → Plan → Implement with validation checkpoints
-- `/rpi:research` → feasibility analysis + GO/NO-GO
-- `/rpi:plan` → user stories, UX, architecture
-- `/rpi:implement` → phase-by-phase execution
+- `/research` → gather context and feasibility notes
+- `/plan` → implementation plan, risks, and checks
+- `/tdd` or normal implementation → focused execution with verification
 
 ### Debugging
 - Use `/doctor` for diagnostics

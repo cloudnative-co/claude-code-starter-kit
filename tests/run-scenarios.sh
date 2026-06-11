@@ -1,11 +1,10 @@
 #!/bin/bash
 # tests/run-scenarios.sh - Scenario test runner for Claude Code Starter Kit
-# Runs 34 scenarios covering fresh install, update, migration, and edge cases.
+# Runs scenario coverage for fresh install, update, migration, and edge cases.
 #
 # Usage: bash tests/run-scenarios.sh
 #
-# Expected results (PR-8+9+): 27 PASS + 1 SKIP
-# SKIP: bash4-noninteractive-unavailable (always SKIP on Bash 4+ CI)
+# Expected: all scenarios pass; Bash 4+ CI may skip bash4-noninteractive-unavailable.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,9 +12,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
 
 printf "\n── Claude Code Starter Kit: Scenario Tests ──\n\n"
+SCENARIO_GROUP="${SCENARIO_GROUP:-all}"
+
+case "$SCENARIO_GROUP" in
+  all|core|update|features) ;;
+  *)
+    printf "ERROR: invalid SCENARIO_GROUP '%s' (expected: all, core, update, features)\n" "$SCENARIO_GROUP" >&2
+    exit 1
+    ;;
+esac
+
+run_scenario() {
+  local group="$1"
+  local name="$2"
+  if [[ "$SCENARIO_GROUP" == "all" || "$SCENARIO_GROUP" == "$group" ]]; then
+    "$name"
+  fi
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Basic scenarios (14)
+# Basic scenarios
 # ═══════════════════════════════════════════════════════════════════════════
 
 # --- 1. fresh-install-clean ---
@@ -35,6 +51,24 @@ test_fresh_install_clean() {
     pass "fresh-install-clean"
   else
     fail "fresh-install-clean"
+  fi
+
+  teardown_test_env
+}
+
+# --- 1b. fresh-install-ja ---
+test_fresh_install_ja() {
+  setup_test_env
+  local rc=0
+  run_setup --profile=minimal --language=ja >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && assert_file_exists "$CLAUDE_DIR/CLAUDE.md" \
+    && assert_file_contains "$CLAUDE_DIR/CLAUDE.md" "# グローバル設定" \
+    && assert_file_contains "$CLAUDE_DIR/CLAUDE.md" "# ユーザー設定"; then
+    pass "fresh-install-ja"
+  else
+    fail "fresh-install-ja"
   fi
 
   teardown_test_env
@@ -148,7 +182,7 @@ test_auto_update_legacy_claude_fallback() {
 
   if jq -e '
     any(.hooks.SessionStart[]?.hooks[]?; ((.command? // "") | contains("auto-update")) and ((has("async") | not) or (.async != true))) and
-    ((.hooks.SessionEnd // []) | length == 0)
+    (any(.hooks.SessionEnd[]?.hooks[]?; ((.command? // "") | contains("auto-update"))) | not)
   ' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
     pass "auto-update-legacy-claude-fallback"
   else
@@ -833,8 +867,8 @@ test_biome_hooks_full_profile() {
   run_setup --profile=full >/dev/null 2>&1 || rc=$?
 
   if [[ $rc -eq 0 ]] \
-    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
-    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome-hooks/format-file.sh"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier-hooks/format-file.sh"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
     pass "biome-hooks-full-profile"
   else
     fail "biome-hooks-full-profile"
@@ -850,8 +884,8 @@ test_biome_hooks_standard_profile() {
   run_setup --profile=standard >/dev/null 2>&1 || rc=$?
 
   if [[ $rc -eq 0 ]] \
-    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
-    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier-hooks/format-file.sh"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome-hooks/format-file.sh"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
     pass "biome-hooks-standard-profile"
   else
     fail "biome-hooks-standard-profile"
@@ -867,7 +901,7 @@ test_biome_hooks_minimal_profile() {
   run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
 
   if [[ $rc -eq 0 ]] \
-    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write") or contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier-hooks/format-file.sh") or contains("biome-hooks/format-file.sh"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
     pass "biome-hooks-minimal-profile"
   else
     fail "biome-hooks-minimal-profile"
@@ -1000,8 +1034,8 @@ EOF
 
   if [[ $rc -eq 0 ]] \
     && [[ ! -x "$stub_dir/biome" ]] \
-    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
-    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    && jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier-hooks/format-file.sh"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("biome-hooks/format-file.sh"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
     pass "biome-auto-install-respects-saved-prettier-on-full"
   else
     fail "biome-auto-install-respects-saved-prettier-on-full"
@@ -1026,7 +1060,7 @@ EOF
 
   if [[ $rc -eq 0 ]] \
     && [[ ! -x "$stub_dir/biome" ]] \
-    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier --write") or contains("biome check --write"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+    && ! jq -e 'any(.hooks.PostToolUse[]?; (.hooks[0].command? // "") | contains("prettier-hooks/format-file.sh") or contains("biome-hooks/format-file.sh"))' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
     pass "biome-auto-install-respects-legacy-disable-on-full"
   else
     fail "biome-auto-install-respects-legacy-disable-on-full"
@@ -1039,49 +1073,52 @@ EOF
 # Run all tests
 # ---------------------------------------------------------------------------
 
-test_fresh_install_clean
-test_fresh_install_existing
-test_update_no_changes
-test_update_kit_changed
-test_update_user_changed
-test_update_feature_toggle
-test_claudemd_migration
-test_claudemd_section_preserve
-test_claudemd_kit_edit_conflict
-test_dry_run_no_mutation
-test_uninstall_preserve_user
-test_snapshot_baseline
-test_merge_prefs_persist
-test_settings_array_merge
-test_safety_net_first
-test_registry_consistency
-test_update_from_v019
-test_update_from_v020
-test_update_from_v020_customized
-test_update_from_no_manifest
-test_update_noninteractive_safe
-test_bash_version_check
-test_bash_reexec
-test_update_v019_to_latest_direct
-test_snapshot_format_v019_to_latest
-test_snapshot_format_v020_compat
-test_update_partial_failure_recovery
-test_bash4_noninteractive_unavailable
-test_snapshot_double_marker_repair
-test_update_progress_output
-test_auto_update_session_hooks
-test_auto_update_legacy_claude_fallback
-test_dry_run_progress_output
-test_dry_run_quiet_merge_summary
-test_update_kit_command_paths
-test_biome_hooks_full_profile
-test_biome_hooks_standard_profile
-test_biome_hooks_minimal_profile
-test_biome_auto_install_full_profile
-test_biome_auto_install_opt_in
-test_biome_auto_install_disabled_standard
-test_biome_auto_install_disabled_minimal
-test_biome_auto_install_respects_saved_prettier_on_full
-test_biome_auto_install_respects_legacy_disable_on_full
+run_scenario core test_fresh_install_clean
+run_scenario core test_fresh_install_ja
+run_scenario core test_fresh_install_existing
+run_scenario core test_dry_run_no_mutation
+run_scenario core test_uninstall_preserve_user
+run_scenario core test_snapshot_baseline
+run_scenario core test_merge_prefs_persist
+run_scenario core test_settings_array_merge
+run_scenario core test_safety_net_first
+run_scenario core test_registry_consistency
+run_scenario core test_bash_version_check
+run_scenario core test_bash_reexec
+run_scenario core test_bash4_noninteractive_unavailable
+run_scenario core test_dry_run_progress_output
+run_scenario core test_dry_run_quiet_merge_summary
+
+run_scenario update test_update_no_changes
+run_scenario update test_update_kit_changed
+run_scenario update test_update_user_changed
+run_scenario update test_update_feature_toggle
+run_scenario update test_claudemd_migration
+run_scenario update test_claudemd_section_preserve
+run_scenario update test_claudemd_kit_edit_conflict
+run_scenario update test_update_from_v019
+run_scenario update test_update_from_v020
+run_scenario update test_update_from_v020_customized
+run_scenario update test_update_from_no_manifest
+run_scenario update test_update_noninteractive_safe
+run_scenario update test_update_v019_to_latest_direct
+run_scenario update test_snapshot_format_v019_to_latest
+run_scenario update test_snapshot_format_v020_compat
+run_scenario update test_update_partial_failure_recovery
+run_scenario update test_snapshot_double_marker_repair
+run_scenario update test_update_progress_output
+run_scenario update test_auto_update_session_hooks
+run_scenario update test_auto_update_legacy_claude_fallback
+run_scenario update test_update_kit_command_paths
+
+run_scenario features test_biome_hooks_full_profile
+run_scenario features test_biome_hooks_standard_profile
+run_scenario features test_biome_hooks_minimal_profile
+run_scenario features test_biome_auto_install_full_profile
+run_scenario features test_biome_auto_install_opt_in
+run_scenario features test_biome_auto_install_disabled_standard
+run_scenario features test_biome_auto_install_disabled_minimal
+run_scenario features test_biome_auto_install_respects_saved_prettier_on_full
+run_scenario features test_biome_auto_install_respects_legacy_disable_on_full
 
 print_summary

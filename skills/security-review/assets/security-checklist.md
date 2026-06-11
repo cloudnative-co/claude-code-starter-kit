@@ -23,13 +23,13 @@ Complete checklist for security reviews. Use this as a systematic walkthrough.
 - [ ] All database queries use parameterized queries
 - [ ] No string concatenation in SQL
 - [ ] ORM/query builder used correctly
-- [ ] Supabase queries properly sanitized
+- [ ] Database queries properly sanitized
 
 ## 4. Authentication & Authorization
 
 - [ ] Tokens stored in httpOnly cookies (not localStorage)
 - [ ] Authorization checks before sensitive operations
-- [ ] Row Level Security enabled in Supabase
+- [ ] Row-level or object-level authorization enforced where needed
 - [ ] Role-based access control implemented
 - [ ] Session management secure
 
@@ -60,12 +60,12 @@ Complete checklist for security reviews. Use this as a systematic walkthrough.
 - [ ] Detailed errors only in server logs
 - [ ] No stack traces exposed to users
 
-## 9. Blockchain Security (Solana)
+## 9. High-Risk Integrations
 
-- [ ] Wallet signatures verified
-- [ ] Transaction details validated
-- [ ] Balance checks before transactions
-- [ ] No blind transaction signing
+- [ ] Payment, wallet, or webhook signatures verified when applicable
+- [ ] Transaction details validated before execution
+- [ ] Limits, ownership, and balance/entitlement checks applied where applicable
+- [ ] No blind signing or blind trust of third-party callbacks
 
 ## 10. Dependency Security
 
@@ -92,7 +92,7 @@ Before ANY production deployment:
 - [ ] **Error Handling**: No sensitive data in errors
 - [ ] **Logging**: No sensitive data logged
 - [ ] **Dependencies**: Up to date, no vulnerabilities
-- [ ] **Row Level Security**: Enabled in Supabase
+- [ ] **Row-Level Authorization**: Enforced where tenant/user scoped data exists
 - [ ] **CORS**: Properly configured
 - [ ] **File Uploads**: Validated (size, type)
-- [ ] **Wallet Signatures**: Verified (if blockchain)
+- [ ] **External Signatures**: Verified for wallets, payments, or webhooks when applicable

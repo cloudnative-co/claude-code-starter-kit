@@ -3,13 +3,17 @@ name: Tests
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'LICENSE'
   pull_request:
+    paths-ignore:
+      - 'LICENSE'
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  unit-tests:
     strategy:
       fail-fast: false
       matrix:
@@ -48,14 +52,6 @@ jobs:
             bash tests/run-unit-tests.sh
           fi
 
-      - name: Run scenario tests
-        run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            "$(brew --prefix)/bin/bash" tests/run-scenarios.sh
-          else
-            bash tests/run-scenarios.sh
-          fi
-
       # ── macOS-specific: Bash 3.2 re-exec test ──
       - name: Verify Bash 3.2 re-exec to Bash 4+
         if: runner.os == 'macOS'
@@ -68,3 +64,43 @@ jobs:
             exit 1
           fi
           echo "PASS: Bash 3.2 re-exec works correctly"
+
+  scenario-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        scenario-group: [core, update, features]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # ── Linux prerequisites ──
+      - name: Install prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq gawk
+
+      # ── macOS prerequisites ──
+      - name: Cache Homebrew downloads
+        if: runner.os == 'macOS'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: brew-${{ runner.os }}-
+
+      - name: Install prerequisites (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash gnu-sed gawk jq
+
+      # ── Tests ──
+      - name: Run scenario tests
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            SCENARIO_GROUP="${{ matrix.scenario-group }}" "$(brew --prefix)/bin/bash" tests/run-scenarios.sh
+          else
+            SCENARIO_GROUP="${{ matrix.scenario-group }}" bash tests/run-scenarios.sh
+          fi

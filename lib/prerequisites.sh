@@ -13,8 +13,37 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-# Node.js major version to install when missing
-NODE_MAJOR="${NODE_MAJOR:-20}"
+# Node.js major version to install when missing or too old
+NODE_MAJOR="${NODE_MAJOR:-24}"
+NODE_MIN_MAJOR="${NODE_MIN_MAJOR:-22}"
+
+# Portable timeout wrapper (macOS lacks `timeout` from coreutils)
+_run_with_timeout() {
+  local secs="$1"; shift
+  if command -v timeout &>/dev/null; then
+    timeout "$secs" "$@"
+  else
+    local _stdout_file _stderr_file
+    _stdout_file="$(mktemp)"
+    _stderr_file="$(mktemp)"
+    if declare -p _SETUP_TMP_FILES &>/dev/null; then
+      _SETUP_TMP_FILES+=("$_stdout_file" "$_stderr_file")
+    fi
+
+    "$@" >"$_stdout_file" 2>"$_stderr_file" &
+    local pid=$!
+    ( sleep "$secs" && kill "$pid" 2>/dev/null ) &
+    local watcher=$!
+    local rc=0
+    wait "$pid" 2>/dev/null || rc=$?
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+
+    cat "$_stdout_file"
+    cat "$_stderr_file" >&2
+    return "$rc"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # Homebrew (macOS only)
@@ -306,13 +335,32 @@ _tmux_install_hint() {
 
 check_node() {
   if command -v node &>/dev/null; then
-    ok "node $(node --version)"
-    return 0
+    local node_version node_major
+    node_version="$(node --version 2>/dev/null || true)"
+    node_major="${node_version#v}"
+    node_major="${node_major%%.*}"
+    if [[ "$node_major" =~ ^[0-9]+$ ]] && [[ "$node_major" -ge "$NODE_MIN_MAJOR" ]]; then
+      ok "node $node_version"
+      return 0
+    fi
+    warn "Node.js $node_version is below required major ${NODE_MIN_MAJOR}+."
   fi
-  warn "Node.js not found."
+  if ! command -v node &>/dev/null; then
+    warn "Node.js not found."
+  fi
   info "Installing Node.js ${NODE_MAJOR}.x..."
   if _install_node && command -v node &>/dev/null; then
-    ok "node $(node --version) installed"
+    local installed_version installed_major
+    installed_version="$(node --version 2>/dev/null || true)"
+    installed_major="${installed_version#v}"
+    installed_major="${installed_major%%.*}"
+    if [[ "$installed_major" =~ ^[0-9]+$ ]] && [[ "$installed_major" -ge "$NODE_MIN_MAJOR" ]]; then
+      ok "node $installed_version installed"
+      return 0
+    fi
+    warn "Installed Node.js $installed_version is still below required major ${NODE_MIN_MAJOR}+."
+    _show_node_manual_instructions
+    return 1
   else
     warn "Could not install Node.js automatically."
     _show_node_manual_instructions
@@ -324,7 +372,7 @@ _install_node_via_nvm() {
   info "Installing Node.js via nvm (no admin required)..."
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   mkdir -p "$NVM_DIR"
-  if curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash; then
+  if curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash; then
     # Load nvm into current session
     # shellcheck source=/dev/null
     [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -359,18 +407,6 @@ export NVM_DIR="$HOME/.nvm"
 ZSHRC
 }
 
-_persist_node_path() {
-  local node_bin="$1"
-  local rc_file
-  _get_shell_rc_files | while IFS= read -r rc_file; do
-    [[ -n "$rc_file" ]] || continue
-    [[ -f "$rc_file" ]] || touch "$rc_file"
-    if ! grep -q "$node_bin" "$rc_file" 2>/dev/null; then
-      printf '\n# Node.js (brew keg-only, added by claude-code-starter-kit)\nexport PATH="%s:$PATH"\n' "$node_bin" >> "$rc_file"
-    fi
-  done
-}
-
 _install_node() {
   case "$DISTRO_FAMILY" in
     macos)
@@ -381,8 +417,7 @@ _install_node() {
         local node_prefix
         node_prefix="$(brew --prefix "node@${NODE_MAJOR}" 2>/dev/null || true)"
         if [[ -n "$node_prefix" && -d "$node_prefix/bin" ]]; then
-          export PATH="$node_prefix/bin:$PATH"
-          _persist_node_path "$node_prefix/bin"
+          _add_to_path_now_and_persist "$node_prefix/bin" "Node.js (brew keg-only, added by claude-code-starter-kit)"
         fi
       fi
       # Fall back to nvm if brew is not usable or brew install didn't work
@@ -478,6 +513,25 @@ check_gh() {
   return 1
 }
 
+_npm_global_install() {
+  local executable="$1"
+  local package="$2"
+  shift 2
+  command -v npm &>/dev/null || return 1
+
+  local npm_prefix=""
+  npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
+  [[ -n "$npm_prefix" ]] || return 1
+  export PATH="${npm_prefix}/bin:$PATH"
+
+  if [[ -w "$npm_prefix" || -w "${npm_prefix}/lib" ]]; then
+    if npm install -g "$@" "$package" 2>/dev/null && command -v "$executable" &>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 check_biome() {
   if command -v biome &>/dev/null; then
     ok "biome $(biome --version 2>/dev/null | head -1)"
@@ -493,23 +547,9 @@ check_biome() {
     fi
   fi
 
-  if command -v npm &>/dev/null; then
-    local npm_prefix=""
-    npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
-    if [[ -n "$npm_prefix" ]]; then
-      export PATH="${npm_prefix}/bin:$PATH"
-    fi
-    if [[ -n "$npm_prefix" ]] && [[ -w "$npm_prefix" ]]; then
-      if npm install -g @biomejs/biome 2>/dev/null && command -v biome &>/dev/null; then
-        ok "biome installed via npm"
-        return 0
-      fi
-    elif [[ -n "$npm_prefix" ]] && [[ -w "${npm_prefix}/lib" ]]; then
-      if npm install -g @biomejs/biome 2>/dev/null && command -v biome &>/dev/null; then
-        ok "biome installed via npm"
-        return 0
-      fi
-    fi
+  if _npm_global_install biome @biomejs/biome; then
+    ok "biome installed via npm"
+    return 0
   fi
 
   warn "Failed to install Biome automatically."
@@ -528,23 +568,9 @@ check_cc_safety_net() {
 
   info "Installing cc-safety-net..."
 
-  if command -v npm &>/dev/null; then
-    local npm_prefix=""
-    npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
-    if [[ -n "$npm_prefix" ]]; then
-      export PATH="${npm_prefix}/bin:$PATH"
-    fi
-    if [[ -n "$npm_prefix" ]] && [[ -w "$npm_prefix" ]]; then
-      if npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net 2>/dev/null && command -v cc-safety-net &>/dev/null; then
-        ok "cc-safety-net installed via npm"
-        return 0
-      fi
-    elif [[ -n "$npm_prefix" ]] && [[ -w "${npm_prefix}/lib" ]]; then
-      if npm install -g --ignore-scripts --no-audit --no-fund cc-safety-net 2>/dev/null && command -v cc-safety-net &>/dev/null; then
-        ok "cc-safety-net installed via npm"
-        return 0
-      fi
-    fi
+  if _npm_global_install cc-safety-net cc-safety-net --ignore-scripts --no-audit --no-fund; then
+    ok "cc-safety-net installed via npm"
+    return 0
   fi
 
   warn "Failed to install cc-safety-net automatically."
@@ -686,13 +712,14 @@ _bash_profile_sources_bashrc() {
 # ---------------------------------------------------------------------------
 # _add_to_path_now_and_persist - Add a directory to PATH immediately + persist
 #
-# Usage: _add_to_path_now_and_persist <dir>
+# Usage: _add_to_path_now_and_persist <dir> [comment]
 #
 # 1. Immediate: export PATH="<dir>:$PATH" (current session)
 # 2. Persist: append to shell RC file if not already present
 # ---------------------------------------------------------------------------
 _add_to_path_now_and_persist() {
   local dir="$1"
+  local comment="${2:-Claude Code CLI}"
 
   # Immediate export for current session
   case ":${PATH}:" in
@@ -708,7 +735,7 @@ _add_to_path_now_and_persist() {
     [[ -f "$rc_file" ]] || touch "$rc_file"
 
     if ! grep -q "$dir" "$rc_file" 2>/dev/null; then
-      printf '\n# Claude Code CLI\nexport PATH="%s:$PATH"\n' "$dir" >> "$rc_file"
+      printf '\n# %s\nexport PATH="%s:$PATH"\n' "$comment" "$dir" >> "$rc_file"
     fi
   done
 }

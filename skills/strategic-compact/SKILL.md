@@ -22,7 +22,9 @@ Strategic compaction at logical boundaries:
 
 ## How It Works
 
-The `suggest-compact.sh` script runs on PreToolUse (Edit/Write) and:
+When `ENABLE_STRATEGIC_COMPACT` is enabled, the kit deploys the hook script from
+`features/strategic-compact/scripts/` into `~/.claude/hooks/strategic-compact/`.
+That deployed script runs on PreToolUse (Edit/Write) and:
 
 1. **Tracks tool calls** - Counts tool invocations in session
 2. **Threshold detection** - Suggests at configurable threshold (default: 50 calls)
@@ -30,21 +32,9 @@ The `suggest-compact.sh` script runs on PreToolUse (Edit/Write) and:
 
 ## Hook Setup
 
-Add to your `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [{
-      "matcher": "Edit|Write",
-      "hooks": [{
-        "type": "command",
-        "command": "~/.claude/skills/strategic-compact/suggest-compact.sh"
-      }]
-    }]
-  }
-}
-```
+No manual hook setup is needed when this starter kit manages your Claude Code
+configuration. Enable or disable it through the starter kit feature flag rather
+than registering another copy of the hook.
 
 ## Configuration
 

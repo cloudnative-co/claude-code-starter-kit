@@ -2,11 +2,11 @@
 	"hooks": {
 		"SessionStart": [
 			{
-				"matcher": "*",
+				"matcher": "startup",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "AUTO_UPDATE_HOOK=SessionStart __HOME__/.claude/hooks/auto-update/auto-update.sh"
+						"command": "AUTO_UPDATE_LEGACY=1 AUTO_UPDATE_HOOK=SessionStart __HOME__/.claude/hooks/auto-update/auto-update.sh"
 					}
 				]
 			}

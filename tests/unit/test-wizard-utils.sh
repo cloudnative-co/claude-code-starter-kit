@@ -299,6 +299,29 @@ else
   fail "wizard: _apply_hooks_csv did not normalize prettier,biome"
 fi
 
+if assert_equals "${#HOOK_KEYS[@]}" "${#HOOK_TOKENS[@]}"; then
+  pass "wizard: hook key/token registry lengths match"
+else
+  fail "wizard: hook key/token registry lengths should match"
+fi
+
+_all_pass=true
+for _idx in "${!HOOK_TOKENS[@]}"; do
+  for _key in "${HOOK_KEYS[@]}"; do
+    printf -v "$_key" '%s' "false"
+  done
+  run_func _apply_hooks_csv "${HOOK_TOKENS[$_idx]}"
+  _key="${HOOK_KEYS[$_idx]}"
+  if ! assert_equals "true" "${!_key}" "_apply_hooks_csv should enable ${HOOK_TOKENS[$_idx]}"; then
+    _all_pass=false
+  fi
+done
+if [[ "$_all_pass" == "true" ]]; then
+  pass "wizard: _apply_hooks_csv covers every registered hook token"
+else
+  fail "wizard: _apply_hooks_csv should cover every registered hook token"
+fi
+
 ENABLE_PRETTIER_HOOKS="false"
 ENABLE_BIOME_HOOKS="false"
 run_func _apply_hooks_csv "prettier"
@@ -307,6 +330,65 @@ if assert_equals "true" "$ENABLE_PRETTIER_HOOKS" \
   pass "wizard: _apply_hooks_csv preserves prettier-only selection"
 else
   fail "wizard: _apply_hooks_csv did not preserve prettier-only selection"
+fi
+
+_tmp_cfg="$(mktemp)"
+printf 'ENABLE_SAFETY_NET="false"\nENABLE_PRE_COMPACT_COMMIT="false"\nENABLE_AUTO_UPDATE="true"\n' > "$_tmp_cfg"
+_CLI_OVERRIDES=()
+ENABLE_SAFETY_NET=""
+ENABLE_PRE_COMPACT_COMMIT=""
+ENABLE_AUTO_UPDATE=""
+parse_cli_args --hooks=safety-net,pre-commit
+mapfile -t _saved_hook_overrides < <(_capture_cli_overrides)
+load_config "$_tmp_cfg"
+_restore_cli_overrides "${_saved_hook_overrides[@]+"${_saved_hook_overrides[@]}"}"
+if assert_equals "true" "$ENABLE_SAFETY_NET" \
+  && assert_equals "true" "$ENABLE_PRE_COMPACT_COMMIT" \
+  && assert_equals "false" "$ENABLE_AUTO_UPDATE"; then
+  pass "wizard: --hooks safety-net/pre-commit override saved config and disable omitted hooks"
+else
+  fail "wizard: --hooks CLI overrides should win over saved config for all hook keys"
+fi
+rm -f "$_tmp_cfg"
+
+_tmp_cfg="$(mktemp)"
+printf 'ENABLE_SAFETY_NET="false"\nENABLE_PRE_COMPACT_COMMIT="false"\nENABLE_AUTO_UPDATE="true"\n' > "$_tmp_cfg"
+_CLI_OVERRIDES=()
+ENABLE_SAFETY_NET=""
+ENABLE_PRE_COMPACT_COMMIT=""
+ENABLE_AUTO_UPDATE=""
+parse_cli_args --hooks=safety-net,pre-commit --config "$_tmp_cfg"
+if assert_equals "true" "$ENABLE_SAFETY_NET" \
+  && assert_equals "true" "$ENABLE_PRE_COMPACT_COMMIT" \
+  && assert_equals "false" "$ENABLE_AUTO_UPDATE"; then
+  pass "wizard: parse_cli_args keeps --hooks overrides across --config load"
+else
+  fail "wizard: parse_cli_args should keep --hooks overrides across --config load"
+fi
+rm -f "$_tmp_cfg"
+
+if ! grep -Rqs '^AGENTS_MD=' "$PROJECT_DIR/profiles"; then
+  pass "wizard: profiles omit retired AGENTS_MD setting"
+else
+  fail "wizard: profiles should not save retired AGENTS_MD setting"
+fi
+
+_wizard_lines="$(wc -l < "$PROJECT_DIR/wizard/wizard.sh" | tr -d ' ')"
+if [[ "$_wizard_lines" -le 800 ]] \
+  && grep -q 'wizard/registry.sh' "$PROJECT_DIR/wizard/wizard.sh" \
+  && grep -q 'wizard/steps.sh' "$PROJECT_DIR/wizard/wizard.sh" \
+  && [[ -f "$PROJECT_DIR/wizard/registry.sh" ]] \
+  && [[ -f "$PROJECT_DIR/wizard/steps.sh" ]]; then
+  pass "wizard: main file delegates registry and step responsibilities"
+else
+  fail "wizard: wizard.sh should stay split below 800 lines"
+fi
+
+if ! grep -Fq "jq '.plugins | length'" "$PROJECT_DIR/wizard/wizard.sh" \
+  && ! grep -Fq 'plugins[$i]' "$PROJECT_DIR/wizard/wizard.sh"; then
+  pass "wizard: _load_plugins reads plugin metadata in one jq stream"
+else
+  fail "wizard: _load_plugins should not loop over repeated jq index lookups"
 fi
 
 _tmp_cfg="$(mktemp)"

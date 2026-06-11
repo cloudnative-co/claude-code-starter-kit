@@ -59,10 +59,27 @@ _safe_install_dir() {
   return 0
 }
 
-if ! _safe_install_dir "$INSTALL_DIR"; then
-  error "Refusing to use INSTALL_DIR='$INSTALL_DIR' (dangerous path)"
-  exit 1
-fi
+_clone_to_temp_and_swap() {
+  local target="$1"
+  local parent
+  parent="$(dirname "$target")"
+  mkdir -p "$parent"
+
+  # 過去の中断実行が残した一時 clone ディレクトリを掃除（自己修復）
+  rm -rf "$parent"/.claude-starter-kit.clone.* 2>/dev/null || true
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d "$parent/.claude-starter-kit.clone.XXXXXX")"
+  if git clone --depth 1 "$REPO_URL" "$tmp_dir/repo"; then
+    rm -rf "$target"
+    mv "$tmp_dir/repo" "$target"
+    rm -rf "$tmp_dir"
+    return 0
+  fi
+
+  rm -rf "$tmp_dir"
+  return 1
+}
 
 # ---------------------------------------------------------------------------
 # Prerequisites
@@ -126,25 +143,26 @@ clone_or_update() {
     info "Updating existing installation..."
     git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
       warn "Could not fast-forward. Re-cloning..."
-      rm -rf "$INSTALL_DIR"
-      git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+      _clone_to_temp_and_swap "$INSTALL_DIR"
     }
     ok "Updated"
   else
     info "Cloning Claude Code Starter Kit..."
     if [[ -d "$INSTALL_DIR" ]]; then
-      warn "Directory $INSTALL_DIR exists but is not a git repo. Removing..."
-      rm -rf "$INSTALL_DIR"
+      warn "Directory $INSTALL_DIR exists but is not a git repo. Replacing after clone succeeds..."
     fi
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    _clone_to_temp_and_swap "$INSTALL_DIR"
     ok "Cloned to $INSTALL_DIR"
   fi
 }
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+install_main() {
 printf "\n${BOLD}Claude Code Starter Kit - Bootstrap${NC}\n\n"
+
+if ! _safe_install_dir "$INSTALL_DIR"; then
+  error "Refusing to use INSTALL_DIR='$INSTALL_DIR' (dangerous path)"
+  exit 1
+fi
 
 check_required
 clone_or_update
@@ -213,4 +231,12 @@ else
   # When run via 'curl | bash', stdin is the pipe, not the terminal.
   # Redirect stdin from /dev/tty so the interactive wizard can read input.
   exec bash "$INSTALL_DIR/setup.sh" ${_setup_args[@]+"${_setup_args[@]}"} </dev/tty
+fi
+}
+
+# curl|bash / bash -c では BASH_SOURCE[0] が unset のため、set -u 下で
+# ${BASH_SOURCE[0]} を直接参照すると即死してワンライナーインストールが壊れる。
+# unset（パイプ実行）または $0 一致（ファイル実行）で main を呼び、source 時のみスキップ。
+if [[ "${BASH_SOURCE[0]:-}" == "" || "${BASH_SOURCE[0]:-}" == "$0" ]]; then
+  install_main "$@"
 fi

@@ -46,9 +46,10 @@
 5. `managed-settings.json` (organizational, read-only, lowest)
 
 ## Hook Events Used in This Kit
-SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse,
-PostToolUseFailure, PermissionRequest, Notification, Stop,
-SubagentStart, SubagentStop, PreCompact, PostCompact, Setup
+
+The starter kit currently deploys hooks for these event families:
+
+SessionStart, SessionEnd, PreToolUse, PostToolUse, PreCompact, PostCompact
 
 ### Compaction Flow
 - `PreCompact`: Save notes before context is summarized

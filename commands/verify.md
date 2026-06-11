@@ -1,59 +1,27 @@
-# Verification Command
+---
+description: Run repository verification using the verification-loop skill.
+argument-hint: "[quick|full|pre-commit|pre-pr]"
+---
 
-Run comprehensive verification on current codebase state.
+# /verify
 
-## Instructions
+Mode: `$ARGUMENTS`
 
-Execute verification in this exact order:
+Use the `verification-loop` skill as the source of truth for phases and reporting.
 
-1. **Build Check**
-   - Run the build command for this project
-   - If it fails, report errors and STOP
+## Behavior
 
-2. **Type Check**
-   - Run TypeScript/type checker
-   - Report all errors with file:line
-
-3. **Lint Check**
-   - Run linter
-   - Report warnings and errors
-
-4. **Test Suite**
-   - Run all tests
-   - Report pass/fail count
-   - Report coverage percentage
-
-5. **Console.log Audit**
-   - Search for console.log in source files
-   - Report locations
-
-6. **Git Status**
-   - Show uncommitted changes
-   - Show files modified since last commit
+- `quick`: run the smallest build/type checks that fit the repository.
+- `full` or empty: run build, type/lint, tests, security/log scan, and diff review where available.
+- `pre-commit`: run checks relevant before committing.
+- `pre-pr`: run full verification plus any PR readiness checks available in the repo.
 
 ## Output
 
-Produce a concise verification report:
+Report:
 
-```
-VERIFICATION: [PASS/FAIL]
-
-Build:    [OK/FAIL]
-Types:    [OK/X errors]
-Lint:     [OK/X issues]
-Tests:    [X/Y passed, Z% coverage]
-Secrets:  [OK/X found]
-Logs:     [OK/X console.logs]
-
-Ready for PR: [YES/NO]
-```
-
-If any critical issues, list them with fix suggestions.
-
-## Arguments
-
-$ARGUMENTS can be:
-- `quick` - Only build + types
-- `full` - All checks (default)
-- `pre-commit` - Checks relevant for commits
-- `pre-pr` - Full checks plus security scan
+- Overall PASS/FAIL
+- Commands run
+- Failures with file/line when available
+- Skipped checks with reasons
+- Residual risk before handoff

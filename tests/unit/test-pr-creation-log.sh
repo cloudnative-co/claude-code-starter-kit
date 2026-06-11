@@ -36,10 +36,12 @@ else
 fi
 
 _pr_command="$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$_pr_hooks")"
-if [[ "$_pr_command" != *"grep -qE 'gh pr create'"* ]]; then
-  pass "pr-creation-log: shell command no longer re-checks gh pr create"
+if [[ "$_pr_command" == "__HOME__/.claude/hooks/pr-creation-log/log-pr.sh" ]] \
+  && grep -q "tool_response.stdout" "$PROJECT_DIR/features/pr-creation-log/scripts/log-pr.sh" \
+  && ! grep -q "tool_output" "$PROJECT_DIR/features/pr-creation-log/scripts/log-pr.sh"; then
+  pass "pr-creation-log: hook uses external script and real tool_response schema"
 else
-  fail "pr-creation-log: shell command should not re-check gh pr create"
+  fail "pr-creation-log: hook should use external script with tool_response schema"
 fi
 
 build_settings_json \
@@ -64,6 +66,8 @@ if [[ "${1:-}" == "--version" ]]; then
 fi
 EOF
 chmod +x "$_pr_tmp/claude-current-bin/claude"
+_CLAUDE_SEMVER_CACHE=""
+_CLAUDE_SEMVER_CACHE_SET=false
 PATH="$_pr_tmp/claude-current-bin:$PATH" build_settings_file "$_pr_supported_settings" >/dev/null
 
 if jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0].if == "Bash(gh pr create *)"' "$_pr_supported_settings" >/dev/null 2>&1 \
@@ -82,6 +86,8 @@ if [[ "${1:-}" == "--version" ]]; then
 fi
 EOF
 chmod +x "$_pr_tmp/claude-legacy-bin/claude"
+_CLAUDE_SEMVER_CACHE=""
+_CLAUDE_SEMVER_CACHE_SET=false
 PATH="$_pr_tmp/claude-legacy-bin:$PATH" build_settings_file "$_pr_legacy_settings" >/dev/null
 
 if jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[0] | has("if") | not' "$_pr_legacy_settings" >/dev/null 2>&1 \
@@ -96,23 +102,24 @@ _pr_input="$_pr_tmp/input.json"
 _pr_out="$_pr_tmp/out.json"
 _pr_err="$_pr_tmp/err.log"
 
-jq -r '.hooks.PostToolUse[0].hooks[0].command' "$_pr_hooks" >"$_pr_script"
+cp "$PROJECT_DIR/features/pr-creation-log/scripts/log-pr.sh" "$_pr_script"
 cat >"$_pr_input" <<'EOF'
 {
   "tool_input": {
     "command": "gh pr create --fill"
   },
-  "tool_output": {
-    "output": "Created pull request: https://github.com/cloudnative-co/claude-code-starter-kit/pull/99"
+  "tool_response": {
+    "stdout": "Created pull request: https://github.com/cloudnative-co/claude-code-starter-kit/pull/99",
+    "stderr": ""
   }
 }
 EOF
 
 bash "$_pr_script" <"$_pr_input" >"$_pr_out" 2>"$_pr_err"
 
-if assert_equals "$(cat "$_pr_input")" "$(cat "$_pr_out")" \
+if assert_empty "$(cat "$_pr_out")" \
   && assert_matches "\\[Hook\\] PR created: https://github.com/cloudnative-co/claude-code-starter-kit/pull/99" "$(cat "$_pr_err")"; then
-  pass "pr-creation-log: command extracts PR URL and passes input through"
+  pass "pr-creation-log: command extracts PR URL without stdin passthrough"
 else
-  fail "pr-creation-log: command should extract PR URL and pass input through"
+  fail "pr-creation-log: command should extract PR URL without stdin passthrough"
 fi

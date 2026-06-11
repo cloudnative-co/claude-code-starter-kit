@@ -18,7 +18,7 @@ Not every saved value is supposed to appear in `settings.json`. In particular, `
 | Profile | `PROFILE` / `--profile` | Preset bundle for other defaults | wizard initialization, manifest | No |
 | Codex Plugin | `ENABLE_CODEX_PLUGIN` / `--codex-plugin` | Whether to install Codex Plugin and run CLI auth | Codex Plugin setup in `setup.sh` | No |
 | New `/init` | `ENABLE_NEW_INIT` / `--new-init` | Enable Claude Code's interactive `/init` flow | `settings.json` `env.CLAUDE_CODE_NEW_INIT` | Yes |
-| Editor | `EDITOR_CHOICE` / `--editor` | Editor command for the git push review hook | Hook template substitution, manifest | Indirectly |
+| Editor | `EDITOR_CHOICE` / `--editor` | Whether the git push review hook is enabled (`none` skips the hook fragment entirely) | Hook fragment inclusion, manifest | Indirectly |
 | Ghostty | `ENABLE_GHOSTTY_SETUP` / `--ghostty` | Extra Ghostty setup | Ghostty setup flow | No |
 | Hooks | `ENABLE_*` / `--hooks` | Which hooks are enabled | Hook fragments merged into `settings.json` | Yes |
 | Plugins | `SELECTED_PLUGINS` / `--plugins` | Recommended Claude Code plugins to install | Plugin install flow, manifest | No |
@@ -32,7 +32,7 @@ Not every saved value is supposed to appear in `settings.json`. In particular, `
 | `LANGUAGE` | UI and generated file language | `settings.json`, `CLAUDE.md`, i18n | Currently written as `English` or `日本語` |
 | `PROFILE` | Minimal / Standard / Full / Custom preset | Wizard defaults, manifest | Expanded into lower-level flags during setup |
 | `ENABLE_NEW_INIT` | Claude Code's new interactive `/init` mode | `settings.json` `env.CLAUDE_CODE_NEW_INIT` | Defaults to `true` for Minimal, Standard, and Full; Custom asks explicitly |
-| `EDITOR_CHOICE` | Editor command for git push review | `features/git-push-review/hooks.json` | Use `none` if you do not want editor integration |
+| `EDITOR_CHOICE` | Gates the git push review hook | Inclusion of `features/git-push-review/hooks.json` | `none` skips the hook fragment entirely. The hook only prints a review reminder to stderr before `git push`; it does not launch an editor or show a diff |
 | `COMMIT_ATTRIBUTION` | Claude Code attribution on or off | `settings.json` `attribution.commit`, `attribution.pr` | `false` clears both commit and PR attribution |
 | `ENABLE_CODEX_PLUGIN` | Run Codex Plugin setup or skip it | Codex CLI auth and plugin install | A setup action, not a JSON setting |
 | `ENABLE_GHOSTTY_SETUP` | Optional Ghostty setup | Ghostty install/config flow | Disabled automatically outside macOS |
@@ -57,10 +57,12 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 |---|---|---|---|
 | `ENABLE_SAFETY_NET` | Safety Net | Block destructive commands | Yes |
 | `ENABLE_AUTO_UPDATE` | Auto Update | Check for starter kit updates on session start | Yes |
+| `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Check web extraction skill dependency updates | Yes |
 | `ENABLE_TMUX_HOOKS` | Tmux Reminder | Encourage tmux for long-running work | Yes |
 | `ENABLE_GIT_PUSH_REVIEW` | Git Push Review | Pause before push and open a diff | Yes |
 | `ENABLE_DOC_BLOCKER` | Doc Blocker | Prevent unnecessary `.md` / `.txt` files | Yes |
 | `ENABLE_PRETTIER_HOOKS` | Prettier Auto-format | Format JS / TS edits | Yes |
+| `ENABLE_BIOME_HOOKS` | Biome Auto-format | Format and lint JS / TS edits | Yes |
 | `ENABLE_CONSOLE_LOG_GUARD` | Console Log Guard | Warn on leftover `console.log` | Yes |
 | `ENABLE_MEMORY_PERSISTENCE` | Memory Persistence | Persist important knowledge | Yes |
 | `ENABLE_STRATEGIC_COMPACT` | Strategic Compact | Compact suggestion support | Yes |
@@ -68,6 +70,8 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 | `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Commit | Commit helper before compact | Yes |
 | `ENABLE_STATUSLINE` | Statusline | Statusline feature toggle | Yes |
 | `ENABLE_DOC_SIZE_GUARD` | Doc Size Guard | Warn when `CLAUDE.md` / `AGENTS.md` is too large | Yes |
+| `ENABLE_NO_FLICKER` | No Flicker | Reduce display flicker | Yes |
+| `ENABLE_FEATURE_RECOMMENDATION` | Feature Recommendation | Notify about newly available features | Yes |
 
 ## Common Misunderstandings
 

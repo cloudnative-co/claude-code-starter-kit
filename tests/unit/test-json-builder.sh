@@ -73,6 +73,21 @@ else
 fi
 rm -f "$_tmp"
 
+# Test: replace_home_path preserves backslashes in HOME literally
+_tmp="$(mktemp)"
+_saved_home="$HOME"
+export HOME='C:\Users\okash1n'
+printf '{"path": "__HOME__\\\\.claude\\\\hooks\\\\test.sh"}' > "$_tmp"
+run_func replace_home_path "$_tmp"
+_actual="$(jq -r '.path' "$_tmp")"
+if assert_equals 'C:\Users\okash1n\.claude\hooks\test.sh' "$_actual"; then
+  pass "replace_home_path: preserves Windows-style HOME backslashes"
+else
+  fail "replace_home_path: preserves Windows-style HOME backslashes"
+fi
+export HOME="$_saved_home"
+rm -f "$_tmp"
+
 # Test: replace_home_path returns 1 for missing file
 run_func replace_home_path "/nonexistent/file.json"
 if assert_exit_code 1 "$_RF_RC" "replace_home_path should fail for missing file"; then

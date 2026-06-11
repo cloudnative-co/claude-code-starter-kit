@@ -26,14 +26,6 @@ is_true() {
   esac
 }
 
-# language_name - returns display name for UI messages
-language_name() {
-  case "${LANGUAGE:-en}" in
-    ja) printf "日本語" ;;
-    *)  printf "English" ;;
-  esac
-}
-
 # language_code - returns the code Claude Code expects in settings.json
 language_code() {
   case "${LANGUAGE:-en}" in
@@ -67,19 +59,35 @@ _version_ge() {
   (( lhs_c >= rhs_c ))
 }
 
+_CLAUDE_SEMVER_CACHE="${_CLAUDE_SEMVER_CACHE-}"
+_CLAUDE_SEMVER_CACHE_SET="${_CLAUDE_SEMVER_CACHE_SET:-false}"
+
 _claude_cli_semver() {
   local raw version
   command -v claude &>/dev/null || return 1
+  if [[ "$_CLAUDE_SEMVER_CACHE_SET" == "true" ]]; then
+    [[ -n "$_CLAUDE_SEMVER_CACHE" ]] || return 1
+    printf '%s\n' "$_CLAUDE_SEMVER_CACHE"
+    return 0
+  fi
+  _CLAUDE_SEMVER_CACHE_SET=true
   raw="$(claude --version 2>/dev/null | head -1)"
-  [[ "$raw" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
+  if ! [[ "$raw" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    _CLAUDE_SEMVER_CACHE=""
+    return 1
+  fi
   version="${BASH_REMATCH[1]}"
+  _CLAUDE_SEMVER_CACHE="$version"
   printf '%s\n' "$version"
 }
 
-_auto_update_supports_session_end_async() {
-  local min_version="2.1.89"
+_claude_supports_async_hooks() {
+  local min_version="${1:-2.1.89}"
   local current_version=""
 
+  # Fail open when Claude is absent so generated config stays forward-looking
+  # during offline tests or first install. Fail closed when a present CLI has an
+  # unparsable version because we cannot prove async hook support.
   if ! command -v claude &>/dev/null; then
     return 0
   fi
@@ -87,43 +95,26 @@ _auto_update_supports_session_end_async() {
   current_version="$(_claude_cli_semver 2>/dev/null || true)"
   [[ -n "$current_version" ]] || return 1
   _version_ge "$current_version" "$min_version"
+}
+
+_versioned_hooks_fragment() {
+  local feature="$1"
+  local src="$PROJECT_DIR/features/${feature}/hooks.json"
+  local legacy_src="$PROJECT_DIR/features/${feature}/hooks.legacy.json"
+
+  if _claude_supports_async_hooks "2.1.89"; then
+    printf '%s\n' "$src"
+  else
+    printf '%s\n' "$legacy_src"
+  fi
 }
 
 _auto_update_hooks_fragment() {
-  local src="$PROJECT_DIR/features/auto-update/hooks.json"
-  local legacy_src="$PROJECT_DIR/features/auto-update/hooks.legacy.json"
-
-  if _auto_update_supports_session_end_async; then
-    printf '%s\n' "$src"
-    return 0
-  fi
-
-  printf '%s\n' "$legacy_src"
-}
-
-_pr_creation_log_supports_if_async() {
-  local min_version="2.1.89"
-  local current_version=""
-
-  if ! command -v claude &>/dev/null; then
-    return 0
-  fi
-
-  current_version="$(_claude_cli_semver 2>/dev/null || true)"
-  [[ -n "$current_version" ]] || return 1
-  _version_ge "$current_version" "$min_version"
+  _versioned_hooks_fragment "auto-update"
 }
 
 _pr_creation_log_hooks_fragment() {
-  local src="$PROJECT_DIR/features/pr-creation-log/hooks.json"
-  local legacy_src="$PROJECT_DIR/features/pr-creation-log/hooks.legacy.json"
-
-  if _pr_creation_log_supports_if_async; then
-    printf '%s\n' "$src"
-    return 0
-  fi
-
-  printf '%s\n' "$legacy_src"
+  _versioned_hooks_fragment "pr-creation-log"
 }
 
 apply_settings_preferences() {
@@ -186,6 +177,51 @@ backup_existing() {
 # ---------------------------------------------------------------------------
 _MANAGED_TARGET_FILES=()
 
+_is_distribution_excluded_relpath() {
+  local rel_path="$1"
+  case "$rel_path" in
+    node_modules|node_modules/*|logs|logs/*|*.bak)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+_find_distribution_files() {
+  local src_root="$1"
+  [[ -d "$src_root" ]] || return 0
+
+  local src_file rel_path
+  while IFS= read -r -d '' src_file; do
+    rel_path="${src_file#"$src_root"/}"
+    _is_distribution_excluded_relpath "$rel_path" && continue
+    printf '%s\0' "$src_file"
+  done < <(find "$src_root" \
+    \( -type d \( -name node_modules -o -name logs \) -prune \) -o \
+    \( -type f -name '*.bak' -prune \) -o \
+    -type f -print0 2>/dev/null)
+}
+
+_copy_distribution_tree() {
+  local src_root="$1"
+  local dest_root="$2"
+  local mode="${3:-overwrite}"
+
+  [[ -d "$src_root" ]] || return 0
+  mkdir -p "$dest_root"
+
+  local src_file rel_path dest_file
+  while IFS= read -r -d '' src_file; do
+    rel_path="${src_file#"$src_root"/}"
+    dest_file="${dest_root}/${rel_path}"
+    [[ "$mode" == "new" && -e "$dest_file" ]] && continue
+    mkdir -p "$(dirname "$dest_file")"
+    cp -p "$src_file" "$dest_file"
+  done < <(_find_distribution_files "$src_root")
+}
+
 _add_managed_tree_targets() {
   local src_root="$1"
   local dest_root="$2"
@@ -195,7 +231,7 @@ _add_managed_tree_targets() {
   while IFS= read -r -d '' src_file; do
     rel_path="${src_file#"$src_root"/}"
     _MANAGED_TARGET_FILES+=("${dest_root}/${rel_path}")
-  done < <(find "$src_root" -type f -print0 2>/dev/null)
+  done < <(_find_distribution_files "$src_root")
 }
 
 # Files preserved (skipped) during fresh install with existing user data.
@@ -230,7 +266,7 @@ collect_managed_target_files() {
   _add_managed_tree_targets "$PROJECT_DIR/memory" "$CLAUDE_DIR/memory"
   # Registry-driven: hook script paths from _FEATURE_HAS_SCRIPTS
   local _feat_name
-  for _feat_name in "${_FEATURE_ORDER[@]}"; do
+  for _feat_name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$_feat_name]+set}" ]] || continue
     _add_managed_tree_targets "$PROJECT_DIR/features/$_feat_name/scripts" "$CLAUDE_DIR/hooks/$_feat_name"
   done
@@ -258,6 +294,25 @@ managed_files_json() {
     done
     true  # Ensure non-zero from last [[ -f ]] miss doesn't trigger pipefail
   } | sort -u | jq -R -s 'split("\n")[:-1]'
+}
+
+cleanup_paths_json() {
+  jq -n \
+    --arg claude_dir "$CLAUDE_DIR" \
+    --arg config "$HOME/.claude-starter-kit.conf" \
+    '[
+      ($claude_dir + "/skills/web-content-extraction"),
+      ($claude_dir + "/.starter-kit-update.lock"),
+      ($claude_dir + "/.starter-kit-update-status"),
+      ($claude_dir + "/.starter-kit-update-cache"),
+      ($claude_dir + "/.starter-kit-merge-prefs.json"),
+      ($claude_dir + "/.starter-kit-pending-features.json"),
+      ($claude_dir + "/sessions"),
+      ($claude_dir + "/tmp/tool-count-*"),
+      ($claude_dir + "/.starter-kit-snapshot"),
+      ($claude_dir + "/.starter-kit-last-backup"),
+      $config
+    ]'
 }
 
 write_managed_snapshot() {
@@ -329,7 +384,7 @@ copy_if_enabled() {
   local dest="$3"
 
   if is_true "$flag"; then
-    cp -a "$src"/. "$dest"/
+    _copy_distribution_tree "$src" "$dest" "overwrite"
     ok "Installed $(basename "$dest")"
   else
     info "Skipped $(basename "$dest")"
@@ -362,7 +417,7 @@ _copy_dir_safe() {
   fi
 
   if [[ "$has_existing" == "false" ]]; then
-    cp -a "$src"/. "$dest"/
+    _copy_distribution_tree "$src" "$dest" "overwrite"
     ok "Installed $label"
     return
   fi
@@ -388,7 +443,7 @@ _copy_dir_safe() {
 
   case "$action" in
     overwrite)
-      cp -a "$src"/. "$dest"/
+      _copy_distribution_tree "$src" "$dest" "overwrite"
       ok "Installed $label (overwrite)"
       ;;
     skip)
@@ -396,10 +451,7 @@ _copy_dir_safe() {
       ok "$label: $STR_FRESH_SKIPPED"
       ;;
     new)
-      # Copy only entries (files/directories) that do not exist in dest
-      # -a : archive (recursive, preserve attributes)
-      # -n : no-clobber (do not overwrite existing files)
-      cp -an "$src"/. "$dest"/
+      _copy_distribution_tree "$src" "$dest" "new"
       ok "$label: $STR_FRESH_NEW_ONLY"
       ;;
   esac
@@ -455,24 +507,8 @@ maybe_install_web_content_deps() {
 # Build CLAUDE.md
 # ---------------------------------------------------------------------------
 build_claude_md() {
-  local lang="${LANGUAGE:-en}"
-  local base="$PROJECT_DIR/i18n/${lang}/CLAUDE.md.base"
   local out="$CLAUDE_DIR/CLAUDE.md"
-
-  cp -a "$base" "$out"
-
-  # Web content extraction standard rule — only when the skill is installed
-  if is_true "${INSTALL_SKILLS:-false}"; then
-    local wce_partial="$PROJECT_DIR/i18n/${lang}/partials/web-content-extraction.md"
-    inject_feature "$out" "web-content-extraction" "$wce_partial"
-  fi
-
-  if is_true "$ENABLE_CODEX_PLUGIN"; then
-    local partial="$PROJECT_DIR/features/codex-plugin/CLAUDE.md.partial.${lang}"
-    inject_feature "$out" "codex-plugin" "$partial"
-  fi
-
-  remove_unresolved "$out"
+  build_claude_md_to_file "$out"
   ok "Built CLAUDE.md"
 }
 
@@ -515,6 +551,11 @@ build_settings_file() {
 
   local hook_fragments=()
   local tmp_files=()
+
+  # Prime the semver cache in THIS shell: the fragment helpers below run in
+  # $(...) subshells, so cache writes made there never persist and `claude
+  # --version` would otherwise be spawned once per fragment.
+  _claude_cli_semver >/dev/null 2>&1 || true
 
   # Assertion: safety-net must be first in _FEATURE_ORDER
   if [[ "${_FEATURE_ORDER[0]}" != "safety-net" ]]; then
@@ -575,6 +616,18 @@ build_settings_file() {
   if [[ ${#tmp_files[@]} -gt 0 ]]; then
     rm -f "${tmp_files[@]}"
   fi
+}
+
+_compose_migrated_claude_md() {
+  local new_kit_file="$1"
+  local existing_file="$2"
+  local kit_section user_heading
+  kit_section="$(_extract_kit_section "$new_kit_file")"
+  user_heading="$(_user_section_heading)"
+  printf '%s\n' "$kit_section"
+  printf '\n%s\n\n' "$user_heading"
+  cat "$existing_file"
+  printf '\n'
 }
 
 # ---------------------------------------------------------------------------
@@ -650,16 +703,11 @@ _build_claude_md_safe() {
     if read -r reply < /dev/tty 2>/dev/null; then true; else reply="s"; fi
     case "$reply" in
       [Mm]*)
-        # Keep the entire current content as user section
-        local kit_section existing_content user_heading
-        kit_section="$(_extract_kit_section "$new_claude_md")"
-        existing_content="$(< "$target")"
-        user_heading="$(_user_section_heading)"
-        {
-          printf '%s\n' "$kit_section"
-          printf '\n%s\n\n' "$user_heading"
-          printf '%s\n' "$existing_content"
-        } > "$target"
+        local merged
+        merged="$(mktemp)"
+        _SETUP_TMP_FILES+=("$merged")
+        _compose_migrated_claude_md "$new_claude_md" "$target" > "$merged"
+        mv "$merged" "$target"
         ok "CLAUDE.md upgraded — your content preserved in user section"
         return
         ;;
@@ -668,15 +716,7 @@ _build_claude_md_safe() {
         local preview
         preview="$(mktemp)"
         _SETUP_TMP_FILES+=("$preview")
-        local kit_section_p existing_content_p user_heading_p
-        kit_section_p="$(_extract_kit_section "$new_claude_md")"
-        existing_content_p="$(< "$target")"
-        user_heading_p="$(_user_section_heading)"
-        {
-          printf '%s\n' "$kit_section_p"
-          printf '\n%s\n\n' "$user_heading_p"
-          printf '%s\n' "$existing_content_p"
-        } > "$preview"
+        _compose_migrated_claude_md "$new_claude_md" "$target" > "$preview"
         diff -u "$target" "$preview" 2>/dev/null >&2 || true
         printf "\n" >&2
         continue
@@ -749,6 +789,8 @@ write_manifest() {
   # Only track files that the starter kit itself manages.
   local files_json
   files_json="$(managed_files_json)"
+  local cleanup_paths
+  cleanup_paths="$(cleanup_paths_json)"
 
   jq -n \
     --arg version "2" \
@@ -763,7 +805,9 @@ write_manifest() {
     --arg plugins "${SELECTED_PLUGINS:-}" \
     --arg codex_plugin "${ENABLE_CODEX_PLUGIN:-false}" \
     --argjson files "$files_json" \
+    --argjson cleanup_paths "$cleanup_paths" \
     --arg snapshot_dir "$CLAUDE_DIR/.starter-kit-snapshot" \
+    --arg claude_dir "$CLAUDE_DIR" \
     '{
       version: $version,
       timestamp: $ts,
@@ -777,7 +821,9 @@ write_manifest() {
       plugins: $plugins,
       codex_plugin: $codex_plugin,
       files: $files,
-      snapshot_dir: $snapshot_dir
+      cleanup_paths: $cleanup_paths,
+      snapshot_dir: $snapshot_dir,
+      claude_dir: $claude_dir
     }' > "$manifest"
 }
 

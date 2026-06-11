@@ -52,9 +52,9 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **3 profiles**: Minimal, Standard (recommended), Full
 - **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
 - **10 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide
-- **22 slash commands**: /plan, /tdd, /build-fix, /code-review, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
-- **13 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
-- **13 optional hooks**: safety net (cc-safety-net), auto update, tmux reminder, git push review, doc blocker, prettier, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, doc size guard (Full only), web content update (opt-in, Full only)
+- **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
+- **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
+- **15 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, git push review, doc blocker, Prettier or Biome formatting, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, statusline, doc size guard, feature recommendation
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
@@ -141,12 +141,12 @@ cd claude-code-starter-kit
 ## Wizard Flow
 
 ```
-Language → Profile → Codex Plugin → New /init → Editor → Hooks → Plugins → Claude Code Attribution → Confirm & Deploy
+Language → Profile → Codex Plugin → New /init → Editor → Ghostty → Fonts → Hooks → Plugins → Claude Code Attribution → Confirm & Deploy
 ```
 
 Each step shows numbered options with descriptions. Recommended choices are marked.
 
-> **About the Editor step**: The wizard asks which code editor you use. This is for the git push review hook (opens a diff view in your editor before pushing code). **If you don't have an editor installed or aren't sure, choose "None"** — Claude Code works entirely in the terminal and does not require an editor.
+> **About the Editor step**: The wizard asks which code editor you use. This decides whether the git push review hook is enabled (it prints a review reminder before `git push`; it does not launch an editor or show a diff). Choosing "None" skips the hook entirely. **If you don't have an editor installed or aren't sure, choose "None"** — Claude Code works entirely in the terminal and does not require an editor.
 
 > **Want to know where each choice is applied?** See [Wizard Config Mapping](docs/wizard-config-mapping.en.md). It explains which values are written to `settings.json`, which are used only during setup, and which act as presets.
 >
@@ -167,7 +167,7 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 | Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Plugins | Codex Plugin | Ghostty |
 |---------|--------|-------|----------|--------|-------|--------|---------|-----------|---------|
 | Minimal | Yes | Yes | - | - | - | - | - | - | - |
-| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | 10 | Optional | - |
+| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | 5 | Optional | - |
 | Full | Yes | Yes | Yes | Yes | All | Yes | 14 | Yes | macOS only |
 
 - **Minimal**: Lightweight start with just agents and rules
@@ -194,6 +194,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | Git Push Review | Pauses before git push for code review |
 | Doc Blocker | Prevents creation of unnecessary .md/.txt files |
 | Prettier Auto-format | Formats JS/TS files after edits |
+| Biome Auto-format | Formats and lints JS/TS files after edits (Full uses Biome instead of Prettier) |
 | Console.log Guard | Warns about console.log statements left in code |
 | Memory Persistence | Saves/restores session state across sessions |
 | Strategic Compact | Suggests /compact at logical intervals |
@@ -201,6 +202,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | Pre-compact Auto-commit | Auto-commits changes before context compaction |
 | Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds recommended line count (Full only) |
 | Web Content Update | Auto-updates the web-content-extraction skill's deps on session start (opt-in; default in Full only) |
+| Feature Recommendation | Notifies about newly available features for the selected profile |
 
 #### Safety Net
 
@@ -243,7 +245,6 @@ After restarting your terminal, start `claude` in your project directory. The in
 ```bash
 /plan            # Structured planning
 /tdd             # Test-driven development flow
-/code-review     # Code review mode
 /build-fix       # Fix build errors
 /e2e             # End-to-end testing
 /verify          # Final verification
@@ -331,13 +332,13 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --codex-plugin=false \
   --commit-attribution=false \
   --hooks=safety-net,auto-update,tmux,git-push,prettier,console,memory,compact,pr-log,pre-commit \
-  --plugins=security-guidance,commit-commands,pr-review-toolkit@claude-plugins-official,pr-review-toolkit@claude-code-plugins
+  --plugins=security-guidance,commit-commands,pr-review-toolkit,document-skills@anthropic-agent-skills
 
 # Reuse a saved config
 ./setup.sh --non-interactive --config=./my-config.conf
 ```
 
-> **Plugin naming**: When the same plugin name exists in multiple marketplaces, use `name@marketplace` format (e.g., `pr-review-toolkit@claude-code-plugins`). Plugins without name conflicts can be specified by name alone.
+> **Plugin naming**: When the same plugin name exists in multiple marketplaces, use `name@marketplace` format. Plugins without name conflicts can be specified by name alone, and the qualified form also works without a conflict (e.g., `document-skills@anthropic-agent-skills`). The current default plugins have no name collisions; the registered marketplaces are `claude-plugins-official` and `anthropic-agent-skills`.
 >
 > **Notes**:
 > - `--profile` selects a preset bundle of lower-level flags rather than a single final runtime key
@@ -374,14 +375,11 @@ claude-code-starter-kit/
 ├── install.ps1             # Windows PowerShell bootstrap
 ├── setup.sh                # Main setup script (wizard + deploy)
 ├── uninstall.sh            # Manifest-based clean uninstall
-├── lib/                    # Shell libraries
-│   ├── colors.sh           # Terminal color helpers
-│   ├── detect.sh           # OS/WSL detection
-│   ├── prerequisites.sh    # Dependency checks
-│   ├── template.sh         # Text template engine
-│   └── json-builder.sh     # JSON builder (jq-based)
+├── lib/                    # Shared shell libraries (detect, deploy, update, merge, etc.)
 ├── wizard/                 # Interactive wizard
-│   ├── wizard.sh           # 8-step wizard logic
+│   ├── wizard.sh           # Wizard entrypoint and config restore
+│   ├── registry.sh         # Hook/plugin registries and CLI parsing
+│   ├── steps.sh            # Display helpers and interactive steps
 │   └── defaults.conf       # Default values
 ├── config/                 # Configuration templates
 │   ├── settings-base.json  # Base settings.json structure
@@ -399,8 +397,8 @@ claude-code-starter-kit/
 │   └── ja/                 # Japanese templates & strings
 ├── agents/                 # Agent definitions (9 files)
 ├── rules/                  # Rule files (10 files)
-├── commands/               # Slash commands (20 files)
-├── skills/                 # Skill modules (13 dirs)
+├── commands/               # Slash commands (21 files)
+├── skills/                 # Skill modules (12 dirs)
 └── memory/                 # Best practice memory (5 files)
 ```
 
@@ -459,7 +457,7 @@ Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manif
 Shell scripts are statically analyzed with [ShellCheck](https://www.shellcheck.net/). It runs automatically via GitHub Actions on PRs. To run locally:
 
 ```bash
-shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/wizard.sh
+shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh
 ```
 
 ## Changelog

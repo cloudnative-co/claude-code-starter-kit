@@ -9,8 +9,8 @@ cd ~/.claude/skills/web-content-extraction
 npm install   # defuddle + jsdom
 ```
 
-依存: `defuddle`, `jsdom`（`defuddle/node` 用）, `pdfjs-dist`（PDF抽出）。
-バージョンは**自動アップデート**で最新追従する（後述。`package.json` の値は随時更新される）。
+依存: `defuddle`, `jsdom`（`defuddle/node` 用）, `pdfjs-dist`（PDF抽出）, `undici`（SSRF ガード付き fetch）。
+バージョン自動追従は opt-in の `web-content-update` feature が有効な場合のみ動く（Full は既定 ON）。
 
 ## テスト
 
@@ -21,10 +21,10 @@ npm test   # node --test
 - `test/url-guard.test.mjs` — SSRFガード（IP分類・IPv4-mapped IPv6・userinfo・guarded lookup 等）
 - `test/defuddle-core.test.mjs` — charCount/cjkCharCount
 - `test/extract-smoke.test.mjs` — **実抽出スモーク（HTML: defuddle+jsdom / PDF: pdfjs）**
+- `test/defuddle-url.test.mjs` — URL 抽出 CLI の exit code 契約
 
 DNS非依存・オフラインの決定的テストのみ。
-CI は `.github/workflows/skill-web-content-extraction.yml`（Node 22/24 マトリクス）。**注: `~/.claude` は git repo
-ではないため、このディレクトリをリポジトリ化するまで CI は起動しない。**
+CI はキットリポジトリの `.github/workflows/skill-web-content-extraction.yml`（Node 22/24 マトリクス）で、`skills/web-content-extraction/**` 変更時に起動する。`~/.claude` へ deploy されたコピーでは CI は走らない。
 
 ## 使い方
 
@@ -89,9 +89,7 @@ node ~/.claude/skills/web-content-extraction/scripts/defuddle-file.mjs ./page.ht
 
 ## 自動アップデート
 
-**Claude Code を起動するたび**に、依存（`defuddle` / `jsdom` / `pdfjs-dist`）の最新リリースを
-確認し、更新があれば自動適用する（`~/.claude/settings.json` の SessionStart フックが
-`scripts/update-deps.mjs` を `async` で起動）。
+この機構は opt-in の `web-content-update` feature（Full のみ既定 ON）。有効な場合、Claude Code 起動時の SessionStart フックが依存（`defuddle` / `jsdom` / `pdfjs-dist` / `undici`）の最新リリースを確認し、更新があれば自動適用する。無効時は手動 `npm run update:deps` のみ。
 
 - **検出元**: `npm view <pkg> version`（npm `latest` = 公開済みリリース。GitHubリリースに追従）。
 - **安全策**: 更新後に `npm test`（**実抽出スモーク含む**）を実行し、**失敗したら

@@ -37,8 +37,16 @@ const USER_AGENT =
   'Claude-Code-Defuddle/1.0 (+https://github.com/kepano/defuddle; web-content-extraction skill)'
 const TIMEOUT_MS = parsePositiveInt(process.env.DEFUDDLE_TIMEOUT_MS, 20000)
 const MAX_BYTES = parsePositiveInt(process.env.DEFUDDLE_MAX_BYTES, 10 * 1024 * 1024) // 10 MB
-const MAX_REDIRECTS = Number(process.env.DEFUDDLE_MAX_REDIRECTS ?? 5)
+const MAX_REDIRECTS = parsePositiveInt(process.env.DEFUDDLE_MAX_REDIRECTS, 5)
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+const BLOCKED_URL_CODES = new Set([
+  'MALFORMED_URL',
+  'BLOCKED_PROTOCOL',
+  'BLOCKED_CREDENTIALS',
+  'BLOCKED_IP',
+  'BLOCKED_HOSTNAME',
+  'BLOCKED_DNS_IP',
+])
 
 function fail(exitCode, record) {
   printJson(record)
@@ -62,7 +70,9 @@ async function fetchGuarded(startUrl, { dispatcher, signal, headers }) {
       const next = new URL(location, currentUrl)
       // Refuse HTTPS -> HTTP downgrade (content could be tampered in transit).
       if (startSecure && next.protocol === 'http:') {
-        throw new Error('HTTPSからHTTPへのリダイレクト(プロトコルダウングレード)は拒否')
+        const err = new Error('HTTPSからHTTPへのリダイレクト(プロトコルダウングレード)は拒否')
+        err.code = 'BLOCKED_PROTOCOL_DOWNGRADE'
+        throw err
       }
       currentUrl = next.href
       continue
@@ -72,6 +82,11 @@ async function fetchGuarded(startUrl, { dispatcher, signal, headers }) {
   const err = new Error(`リダイレクトが多すぎる (>${MAX_REDIRECTS})`)
   err.code = 'TOO_MANY_REDIRECTS'
   throw err
+}
+
+function exitCodeForFetchError(error) {
+  if (BLOCKED_URL_CODES.has(error?.code) || error?.code === 'BLOCKED_PROTOCOL_DOWNGRADE') return 4
+  return 3
 }
 
 /** Read a response body into a Buffer, capped at MAX_BYTES (streamed). */
@@ -107,7 +122,7 @@ async function main() {
   try {
     await assertPublicUrl(rawUrl)
   } catch (error) {
-    fail(4, { success: false, error: error.message, url: rawUrl, fetchedAt })
+    fail(exitCodeForFetchError(error), { success: false, error: error.message, url: rawUrl, fetchedAt })
   }
 
   // 2. Fetch with a guarded dispatcher + manual redirect validation.
@@ -165,14 +180,7 @@ async function main() {
     }
   } catch (error) {
     const aborted = error?.name === 'AbortError'
-    const code =
-      error?.message?.includes('プロトコル') ||
-      error?.message?.includes('IP') ||
-      error?.message?.includes('ホスト名') ||
-      error?.message?.includes('認証情報') ||
-      error?.message?.includes('不正なURL')
-        ? 4
-        : 3
+    const code = exitCodeForFetchError(error)
     fail(code, {
       success: false,
       error: aborted ? `取得タイムアウト (${TIMEOUT_MS}ms)` : `fetch失敗: ${error?.message ?? String(error)}`,
@@ -198,21 +206,25 @@ async function main() {
     /%PDF-/.test(buf.subarray(0, 8).toString('latin1')) ||
     /\.pdf(?:[?#]|$)/i.test(new URL(finalUrl).pathname)
 
-  const sharedExtra = {
-    requestedUrl: rawUrl,
-    finalUrl,
-    fetchedAt,
-    contentType,
-    ...(warnings.length ? { fetchWarnings: warnings } : {}),
-  }
-
   let record
   if (isPdf) {
+    const sharedExtra = {
+      requestedUrl: rawUrl,
+      finalUrl,
+      fetchedAt,
+      contentType,
+    }
     record = await extractPdfRecord({ data: new Uint8Array(buf), url: finalUrl, extra: sharedExtra })
   } else {
     if (!/(text\/html|application\/xhtml|text\/xml|application\/xml)/i.test(contentType)) {
       warnings.push(`Content-Typeが非HTML (${contentType || '不明'})。HTMLとして解析を試行。`)
-      sharedExtra.fetchWarnings = warnings
+    }
+    const sharedExtra = {
+      requestedUrl: rawUrl,
+      finalUrl,
+      fetchedAt,
+      contentType,
+      ...(warnings.length ? { fetchWarnings: warnings } : {}),
     }
     record = await extractRecord({ html: buf.toString('utf8'), url: finalUrl, extra: sharedExtra })
   }

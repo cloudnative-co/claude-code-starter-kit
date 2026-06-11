@@ -1,0 +1,14 @@
+{
+  "session_id": "fixture-session-post-write",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/tmp/CLAUDE.md",
+    "content": "# CLAUDE"
+  },
+  "tool_response": {
+    "stdout": "",
+    "stderr": "",
+    "interrupted": false
+  }
+}

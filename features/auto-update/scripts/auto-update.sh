@@ -10,40 +10,12 @@ LEGACY_CACHE_FILE="${LEGACY_CACHE_FILE:-$HOME/.claude/.starter-kit-update-cache}
 LEGACY_CACHE_TTL="${LEGACY_CACHE_TTL:-86400}"
 MIN_ASYNC_VERSION="${MIN_ASYNC_VERSION:-2.1.89}"
 AUTO_UPDATE_HOOK="${AUTO_UPDATE_HOOK:-SessionStart}"
+AUTO_UPDATE_LEGACY="${AUTO_UPDATE_LEGACY:-0}"
 
 _LOCK_HELD=false
 
 _auto_update_now() {
   date +%s
-}
-
-_auto_update_version_ge() {
-  local lhs="${1:-0}" rhs="${2:-0}"
-  local lhs_a lhs_b lhs_c rhs_a rhs_b rhs_c _
-  IFS='.' read -r lhs_a lhs_b lhs_c _ <<< "$lhs"
-  IFS='.' read -r rhs_a rhs_b rhs_c _ <<< "$rhs"
-  lhs_a="${lhs_a:-0}"; lhs_b="${lhs_b:-0}"; lhs_c="${lhs_c:-0}"
-  rhs_a="${rhs_a:-0}"; rhs_b="${rhs_b:-0}"; rhs_c="${rhs_c:-0}"
-  (( lhs_a > rhs_a )) && return 0
-  (( lhs_a < rhs_a )) && return 1
-  (( lhs_b > rhs_b )) && return 0
-  (( lhs_b < rhs_b )) && return 1
-  (( lhs_c >= rhs_c ))
-}
-
-_auto_update_claude_semver() {
-  local raw=""
-  command -v claude >/dev/null 2>&1 || return 1
-  raw="$(claude --version 2>/dev/null | head -1)"
-  [[ "$raw" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
-  printf '%s\n' "${BASH_REMATCH[1]}"
-}
-
-_auto_update_supports_async_hooks() {
-  local current=""
-  current="$(_auto_update_claude_semver 2>/dev/null || true)"
-  [[ -n "$current" ]] || return 1
-  _auto_update_version_ge "$current" "$MIN_ASYNC_VERSION"
 }
 
 _auto_update_log() {
@@ -110,6 +82,7 @@ _auto_update_maybe_detach() {
       LEGACY_CACHE_FILE="$LEGACY_CACHE_FILE" \
       LEGACY_CACHE_TTL="$LEGACY_CACHE_TTL" \
       MIN_ASYNC_VERSION="$MIN_ASYNC_VERSION" \
+      AUTO_UPDATE_LEGACY="$AUTO_UPDATE_LEGACY" \
       "$0" >/dev/null 2>&1 &
     return 0
   fi
@@ -167,7 +140,7 @@ _auto_update_run() {
   _auto_update_emit_previous_failure
   _auto_update_repo_exists || return 0
 
-  if ! _auto_update_supports_async_hooks; then
+  if [[ "$AUTO_UPDATE_LEGACY" == "1" || "$AUTO_UPDATE_LEGACY" == "true" ]]; then
     if _auto_update_legacy_cache_fresh; then
       return 0
     fi

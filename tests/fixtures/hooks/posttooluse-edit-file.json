@@ -1,0 +1,15 @@
+{
+  "session_id": "fixture-session-post-edit",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/tmp/example.ts",
+    "old_string": "console.log('old')",
+    "new_string": "console.log('new')"
+  },
+  "tool_response": {
+    "stdout": "",
+    "stderr": "",
+    "interrupted": false
+  }
+}

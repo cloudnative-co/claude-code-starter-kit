@@ -9,7 +9,7 @@
 | `opusplan` | Opus for planning, Sonnet for execution |
 | `sonnet[1m]` | Sonnet with 1M token context |
 
-## Opus 4.6 Effort Levels
+## Opus Effort Levels
 - **High** (default): Full reasoning depth
 - **Medium**: Balanced
 - **Low**: Minimal reasoning, fastest

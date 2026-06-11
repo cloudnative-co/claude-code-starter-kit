@@ -306,7 +306,7 @@ OS="$_saved_os"
 PATH="${PATH//:$_test_dir:/:}"; PATH="${PATH/#$_test_dir:/}"; PATH="${PATH/%:$_test_dir/}"; export PATH
 rm -rf "$_tmpdir"
 
-# ── _persist_node_path follows macOS bash rc selection ───────────────────
+# ── Node path persistence reuses generic PATH helper ─────────────────────
 
 _saved_home="$HOME"
 _saved_shell="$SHELL"
@@ -319,16 +319,16 @@ touch "$_tmpdir/.bash_profile" "$_tmpdir/.bashrc"
 
 _node_bin="$_tmpdir/node-bin"
 mkdir -p "$_node_bin"
-_persist_node_path "$_node_bin"
-_persist_node_path "$_node_bin"
+_add_to_path_now_and_persist "$_node_bin" "Node.js (brew keg-only, added by claude-code-starter-kit)"
+_add_to_path_now_and_persist "$_node_bin" "Node.js (brew keg-only, added by claude-code-starter-kit)"
 
 _node_profile_count="$(grep -c "$_node_bin" "$_tmpdir/.bash_profile")"
 _node_bashrc_count="$(grep -c "$_node_bin" "$_tmpdir/.bashrc")"
 if assert_equals "1" "$_node_profile_count" "bash_profile should contain node path once" \
   && assert_equals "1" "$_node_bashrc_count" "bashrc should contain node path once"; then
-  pass "prerequisites: _persist_node_path writes macOS bash rc files idempotently"
+  pass "prerequisites: Node path persistence reuses generic PATH helper"
 else
-  fail "prerequisites: _persist_node_path did not write macOS bash rc files idempotently"
+  fail "prerequisites: Node path persistence did not use generic PATH helper"
 fi
 
 export HOME="$_saved_home"
@@ -353,7 +353,7 @@ mkdir -p "$HOME" "$_tmpdir/prefix/bin"
 touch "$HOME/.bash_profile" "$HOME/.bashrc"
 cat > "$_tmpdir/prefix/bin/node" <<'EOF'
 #!/bin/bash
-echo v20.0.0
+echo v24.0.0
 EOF
 chmod +x "$_tmpdir/prefix/bin/node"
 
@@ -465,6 +465,46 @@ else
 fi
 unset -f command
 eval "$_orig_install_node"
+
+# ── check_node upgrades existing Node.js below minimum ───────────────────
+
+_saved_path="$PATH"
+_tmpdir="$(mktemp -d)"
+export PATH="$_tmpdir:/usr/bin:/bin"
+cat > "$_tmpdir/node" <<'EOF'
+#!/bin/bash
+echo v20.19.0
+EOF
+chmod +x "$_tmpdir/node"
+_orig_install_node="$(declare -f _install_node)"
+_install_node() {
+  cat > "$_tmpdir/node" <<'EOF'
+#!/bin/bash
+echo v24.3.0
+EOF
+  chmod +x "$_tmpdir/node"
+}
+run_func check_node
+if assert_exit_code 0 "$_RF_RC" \
+  && assert_matches "below required major 22" "$_RF_STDERR" \
+  && assert_matches "node v24.3.0 installed" "$_RF_STDOUT"; then
+  pass "prerequisites: check_node upgrades Node.js below minimum major"
+else
+  fail "prerequisites: check_node did not upgrade old Node.js"
+fi
+eval "$_orig_install_node"
+export PATH="$_saved_path"
+rm -rf "$_tmpdir"
+
+{
+  test_name="prerequisites: default Node.js install major is 24 and minimum is 22"
+  if [[ "$NODE_MAJOR" == "24" && "$NODE_MIN_MAJOR" == "22" ]] \
+    && grep -q 'nvm/v0.40.5/install.sh' "$PROJECT_DIR/lib/prerequisites.sh"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
 
 # ── check_gh auto-installs when missing ──────────────────────────────────
 

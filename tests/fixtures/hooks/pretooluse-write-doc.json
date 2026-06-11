@@ -1,0 +1,9 @@
+{
+  "session_id": "fixture-session-doc",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/tmp/notes.md",
+    "content": "# Notes"
+  }
+}
