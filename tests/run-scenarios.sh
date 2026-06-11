@@ -15,9 +15,9 @@ printf "\n── Claude Code Starter Kit: Scenario Tests ──\n\n"
 SCENARIO_GROUP="${SCENARIO_GROUP:-all}"
 
 case "$SCENARIO_GROUP" in
-  all|core|update|features) ;;
+  all|core|update|update-merge|features) ;;
   *)
-    printf "ERROR: invalid SCENARIO_GROUP '%s' (expected: all, core, update, features)\n" "$SCENARIO_GROUP" >&2
+    printf "ERROR: invalid SCENARIO_GROUP '%s' (expected: all, core, update, update-merge, features)\n" "$SCENARIO_GROUP" >&2
     exit 1
     ;;
 esac
@@ -1089,27 +1089,30 @@ run_scenario core test_bash4_noninteractive_unavailable
 run_scenario core test_dry_run_progress_output
 run_scenario core test_dry_run_quiet_merge_summary
 
+# update: update execution flow (version migrations, recovery, hooks, output)
 run_scenario update test_update_no_changes
-run_scenario update test_update_kit_changed
-run_scenario update test_update_user_changed
 run_scenario update test_update_feature_toggle
-run_scenario update test_claudemd_migration
-run_scenario update test_claudemd_section_preserve
-run_scenario update test_claudemd_kit_edit_conflict
 run_scenario update test_update_from_v019
 run_scenario update test_update_from_v020
-run_scenario update test_update_from_v020_customized
 run_scenario update test_update_from_no_manifest
-run_scenario update test_update_noninteractive_safe
 run_scenario update test_update_v019_to_latest_direct
-run_scenario update test_snapshot_format_v019_to_latest
-run_scenario update test_snapshot_format_v020_compat
 run_scenario update test_update_partial_failure_recovery
-run_scenario update test_snapshot_double_marker_repair
 run_scenario update test_update_progress_output
 run_scenario update test_auto_update_session_hooks
 run_scenario update test_auto_update_legacy_claude_fallback
 run_scenario update test_update_kit_command_paths
+
+# update-merge: 3-way merge decisions, CLAUDE.md sections, snapshot handling
+run_scenario update-merge test_update_kit_changed
+run_scenario update-merge test_update_user_changed
+run_scenario update-merge test_claudemd_migration
+run_scenario update-merge test_claudemd_section_preserve
+run_scenario update-merge test_claudemd_kit_edit_conflict
+run_scenario update-merge test_update_from_v020_customized
+run_scenario update-merge test_update_noninteractive_safe
+run_scenario update-merge test_snapshot_format_v019_to_latest
+run_scenario update-merge test_snapshot_format_v020_compat
+run_scenario update-merge test_snapshot_double_marker_repair
 
 run_scenario features test_biome_hooks_full_profile
 run_scenario features test_biome_hooks_standard_profile

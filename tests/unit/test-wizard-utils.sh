@@ -384,11 +384,68 @@ else
   fail "wizard: wizard.sh should stay split below 800 lines"
 fi
 
-if ! grep -Fq "jq '.plugins | length'" "$PROJECT_DIR/wizard/wizard.sh" \
-  && ! grep -Fq 'plugins[$i]' "$PROJECT_DIR/wizard/wizard.sh"; then
+if ! grep -Fq "jq '.plugins | length'" "$PROJECT_DIR/wizard/registry.sh" \
+  && ! grep -Fq 'plugins[$i]' "$PROJECT_DIR/wizard/registry.sh"; then
   pass "wizard: _load_plugins reads plugin metadata in one jq stream"
 else
   fail "wizard: _load_plugins should not loop over repeated jq index lookups"
+fi
+
+# ── config key registry (generated lists) ─────────────────────────────────
+
+# Test: every saved key (non-separator) is allowlisted (ALLOWED ⊇ SAVE)
+_all_pass=true
+for _key in "${_CONFIG_SAVE_KEYS[@]}"; do
+  [[ -z "$_key" ]] && continue
+  if [[ " $_CONFIG_ALLOWED_KEYS " != *" $_key "* ]]; then
+    _all_pass=false
+  fi
+done
+if [[ "$_all_pass" == "true" ]]; then
+  pass "wizard: config registry keeps ALLOWED a superset of SAVE keys"
+else
+  fail "wizard: _CONFIG_SAVE_KEYS contains keys missing from _CONFIG_ALLOWED_KEYS"
+fi
+
+# Test: legacy keys stay loadable (allowlisted) but are never saved
+_all_pass=true
+for _key in $_CONFIG_LEGACY_KEYS; do
+  if [[ " $_CONFIG_ALLOWED_KEYS " != *" $_key "* ]]; then
+    _all_pass=false
+  fi
+  for _save_key in "${_CONFIG_SAVE_KEYS[@]}"; do
+    if [[ "$_save_key" == "$_key" ]]; then
+      _all_pass=false
+    fi
+  done
+done
+if [[ "$_all_pass" == "true" ]]; then
+  pass "wizard: legacy config keys are allowlisted for load but excluded from save"
+else
+  fail "wizard: legacy config keys should be allowlisted but never saved"
+fi
+
+# Test: every registry key has a matching env-preserving initialization in
+# wizard.sh (KEY="${KEY:-...}" at column 0), so the registry and the globals
+# section cannot drift apart.
+_all_pass=true
+for _key in $_CONFIG_ALLOWED_KEYS; do
+  if ! grep -q "^${_key}=\"\${${_key}:-" "$PROJECT_DIR/wizard/wizard.sh"; then
+    _all_pass=false
+    fail "wizard: registry key '$_key' lacks initialization in wizard.sh"
+  fi
+done
+if [[ "$_all_pass" == "true" ]]; then
+  pass "wizard: every config registry key is initialized in wizard.sh"
+fi
+
+# Test: generated lists are non-empty and contain sentinel first/last keys
+if [[ "$_CONFIG_ALLOWED_KEYS" == LANGUAGE\ * ]] \
+  && [[ "$_CONFIG_ALLOWED_KEYS" == *\ SELECTED_PLUGINS ]] \
+  && [[ "${#_CONFIG_SAVE_KEYS[@]}" -gt 0 ]]; then
+  pass "wizard: generated config key lists preserve registry order endpoints"
+else
+  fail "wizard: generated config key lists lost expected order endpoints"
 fi
 
 _tmp_cfg="$(mktemp)"

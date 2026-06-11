@@ -562,3 +562,203 @@ _write_json() {
   fi
   rm -f "$current" "$new_kit" "$output"
 }
+
+# ---------------------------------------------------------------------------
+# 22. unified core: empty-snapshot 3way matches bootstrap for
+#     kit-only / user-only / identical / differing-scalar keys
+#     (issue #97: both entry points must resolve through _resolve_key_3way)
+# ---------------------------------------------------------------------------
+{
+  test_name="unified: empty-snapshot 3way equals bootstrap (kit-only/user-only/scalar)"
+  snapshot="$(_write_json '{}')"
+  current="$(_write_json '{"userOnly": "u", "same": 1, "diff": "mine"}')"
+  new_kit="$(_write_json '{"kitOnly": false, "same": 1, "diff": "kit"}')"
+  out_3way="$(mktemp)"
+  out_boot="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$out_3way"
+  rc_3way="$_RF_RC"
+  run_func _merge_settings_bootstrap "$current" "$new_kit" "$out_boot"
+  rc_boot="$_RF_RC"
+
+  same_doc="$(jq -n --slurpfile a "$out_3way" --slurpfile b "$out_boot" '$a[0] == $b[0]')"
+
+  if [[ "$rc_3way" -eq 0 ]] && [[ "$rc_boot" -eq 0 ]] \
+    && [[ "$same_doc" == "true" ]] \
+    && jq -e '.kitOnly == false' "$out_3way" >/dev/null \
+    && jq -e '.userOnly == "u"' "$out_3way" >/dev/null \
+    && jq -e '.diff == "mine"' "$out_3way" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$out_3way" "$out_boot"
+}
+
+# ---------------------------------------------------------------------------
+# 23. unified core: empty-snapshot 3way matches bootstrap for array conflicts
+#     (drift fix #97: independent top-level array additions now element-merge
+#      instead of falling into the raw-JSON scalar prompt)
+# ---------------------------------------------------------------------------
+{
+  test_name="unified: empty-snapshot 3way equals bootstrap for array conflicts"
+  snapshot="$(_write_json '{}')"
+  current="$(_write_json '{"list": ["a", "user-item"]}')"
+  new_kit="$(_write_json '{"list": ["a", "kit-item"]}')"
+  out_3way="$(mktemp)"
+  out_boot="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$out_3way"
+  rc_3way="$_RF_RC"
+  run_func _merge_settings_bootstrap "$current" "$new_kit" "$out_boot"
+  rc_boot="$_RF_RC"
+
+  same_doc="$(jq -n --slurpfile a "$out_3way" --slurpfile b "$out_boot" '$a[0] == $b[0]')"
+
+  if [[ "$rc_3way" -eq 0 ]] && [[ "$rc_boot" -eq 0 ]] \
+    && [[ "$same_doc" == "true" ]] \
+    && jq -e '.list | index("user-item") != null' "$out_3way" >/dev/null \
+    && jq -e '.list | index("kit-item") != null' "$out_3way" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$out_3way" "$out_boot"
+}
+
+# ---------------------------------------------------------------------------
+# 24. drift fix #97: independent top-level object additions recurse into
+#     sub-key resolution (kit-only sub-keys adopted, user sub-keys kept,
+#     array sub-keys element-merged) instead of one raw-JSON scalar prompt
+#     — mirrors a real v020→latest upgrade where the kit newly ships
+#     "permissions" while the user already has their own
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: independent object additions merge per sub-key (drift fix)"
+  snapshot="$(_write_json '{"language": "en"}')"
+  current="$(_write_json '{"language": "en", "permissions": {"allow": ["Bash(npm run *)"], "custom": true}}')"
+  new_kit="$(_write_json '{"language": "en", "permissions": {"allow": ["Read(**)"], "deny": ["rm"]}}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.permissions.allow | index("Bash(npm run *)") != null' "$output" >/dev/null \
+    && jq -e '.permissions.allow | index("Read(**)") != null' "$output" >/dev/null \
+    && jq -e '.permissions.deny == ["rm"]' "$output" >/dev/null \
+    && jq -e '.permissions.custom == true' "$output" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# 25. _merge_object_3way wrapper: direct call regression
+#     (kit-update / kit-remove / kit-add / user-added in one pass)
+# ---------------------------------------------------------------------------
+{
+  test_name="object_3way: direct call resolves update/remove/add/user-added"
+  merged='{"env": {"A": "1", "B": "2", "USER": "u"}}'
+  s_val='{"A": "1", "B": "2"}'
+  c_val='{"A": "1", "B": "2", "USER": "u"}'
+  n_val='{"A": "9", "C": "3"}'
+
+  run_func _merge_object_3way "env" "$s_val" "$c_val" "$n_val" merged
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -ne --argjson m "$merged" '$m.env.A == "9"' >/dev/null \
+    && jq -ne --argjson m "$merged" '$m.env | has("B") | not' >/dev/null \
+    && jq -ne --argjson m "$merged" '$m.env.C == "3"' >/dev/null \
+    && jq -ne --argjson m "$merged" '$m.env.USER == "u"' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  unset merged s_val c_val n_val
+}
+
+# ---------------------------------------------------------------------------
+# 26. retained drift pin: nested both-changed object (depth 2) → kit wins
+#     (documented in _resolve_key_3way; no recursion below depth 2)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: depth-2 both-changed object resolves kit-wins (pinned)"
+  snapshot="$(_write_json '{"parent": {"child": {"x": 1}}}')"
+  current="$(_write_json '{"parent": {"child": {"x": 2}, "u": "keep"}}')"
+  new_kit="$(_write_json '{"parent": {"child": {"x": 3}}}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.parent.child.x == 3' "$output" >/dev/null \
+    && jq -e '.parent.u == "keep"' "$output" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# 27. _json_key_or_null: false is a real value; missing and literal null
+#     both map to the "null" sentinel (single home for the has($k) guard)
+# ---------------------------------------------------------------------------
+{
+  test_name="json_key_or_null: false kept, missing/literal-null → sentinel"
+  doc='{"f": false, "z": 0, "e": "", "n": null}'
+
+  got_f="$(_json_key_or_null "$doc" "f")"
+  got_z="$(_json_key_or_null "$doc" "z")"
+  got_e="$(_json_key_or_null "$doc" "e")"
+  got_n="$(_json_key_or_null "$doc" "n")"
+  got_missing="$(_json_key_or_null "$doc" "missing")"
+
+  if [[ "$got_f" == "false" ]] \
+    && [[ "$got_z" == "0" ]] \
+    && [[ "$got_e" == '""' ]] \
+    && [[ "$got_n" == "null" ]] \
+    && [[ "$got_missing" == "null" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  unset doc got_f got_z got_e got_n got_missing
+}
+
+# ---------------------------------------------------------------------------
+# Interactive: identical values must never prompt (snapshot-missing object
+# recursion — PR #106 review finding)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: identical sub-keys under snapshot-missing object never prompt"
+  snapshot="$(_write_json '{}')"
+  current="$(_write_json '{"permissions": {"allow": ["a", "b"], "deny": ["x"]}}')"
+  new_kit="$(_write_json '{"permissions": {"allow": ["a", "b"], "deny": ["x"], "ask": ["q"]}}')"
+  output="$(mktemp)"
+
+  _prev_interactive="${_MERGE_INTERACTIVE:-}"
+  _MERGE_INTERACTIVE=true
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+  if [[ -n "$_prev_interactive" ]]; then
+    _MERGE_INTERACTIVE="$_prev_interactive"
+  else
+    unset _MERGE_INTERACTIVE
+  fi
+
+  # Identical allow/deny must merge silently (no conflict prompt on stderr);
+  # the kit-only "ask" is adopted.
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.permissions.allow == ["a", "b"]' "$output" >/dev/null \
+    && jq -e '.permissions.deny == ["x"]' "$output" >/dev/null \
+    && jq -e '.permissions.ask == ["q"]' "$output" >/dev/null \
+    && ! grep -Eq 'conflict.*(allow|deny)' <<< "$_RF_STDERR"; then
+    pass "$test_name"
+  else
+    fail "$test_name (stderr=$_RF_STDERR)"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+  unset _prev_interactive
+}

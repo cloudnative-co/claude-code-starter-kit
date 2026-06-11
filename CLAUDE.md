@@ -153,7 +153,7 @@ Windows Terminal font configuration (`_configure_windows_terminal_font()`) runs 
 
 ### Bootstrap Safety (`install.sh`)
 
-`install.sh` validates `INSTALL_DIR` via `_safe_install_dir()` before any `rm -rf` operations. Blocks dangerous paths (`/`, `/home`, `/root`, `$HOME`, system dirs, `/Applications/*`, `/Library/*`) and requires minimum depth of 3 path components. Both `install.sh` and `install.ps1` (WSL + Git Bash embedded scripts) contain identical copies of `_safe_install_dir()` — keep them in sync when modifying.
+`install.sh` validates `INSTALL_DIR` via `_safe_install_dir()` before any `rm -rf` operations. Requires an absolute path, strips ALL trailing slashes (so `$HOME//` cannot bypass the `$HOME` check), blocks dangerous paths (`/`, `/home`, `/root`, `$HOME`, system dirs, `/Applications/*`, `/Library/*`), and requires minimum depth of 3 path components. Four copies exist — `install.sh`, `install.ps1` (WSL + Git Bash embedded scripts), and `uninstall.sh` — and `_clone_to_temp_and_swap()` has three (`install.sh` + both `install.ps1` embeds). All copies MUST stay normalized-identical: `tests/unit/test-install-bootstrap.sh` extracts and compares the function bodies in CI, so a one-sided edit fails the build.
 
 ### Windows Bootstrap (`install.ps1`)
 
@@ -228,7 +228,7 @@ Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and 
 
 1. Create `features/new-feature/feature.json` (metadata) and `hooks.json` (hook fragments and/or top-level settings). **Hook types MUST be nested inside `"hooks": {}`** — see "Hook Fragment Assembly" above
 2. Add `ENABLE_NEW_FEATURE=true/false` to each `profiles/*.conf`
-3. In `wizard/wizard.sh`: add variable initialization (`ENABLE_NEW_FEATURE="${ENABLE_NEW_FEATURE:-}"`), add to `_CONFIG_ALLOWED_KEYS`, and add to `save_config()`
+3. Add variable initialization in `wizard/wizard.sh` (`ENABLE_NEW_FEATURE="${ENABLE_NEW_FEATURE:-}"`) and append the key to `_CONFIG_KEYS` in `wizard/registry.sh` — `_CONFIG_ALLOWED_KEYS` / `_CONFIG_SAVE_KEYS` are generated from that registry (no manual `save_config()` edit). Read-only legacy keys go in `_CONFIG_LEGACY_KEYS`
 4. Add `STR_CONFIRM_*` strings in both `i18n/en/strings.sh` and `i18n/ja/strings.sh`
 5. In `wizard/steps.sh`: add confirmation display in `_step_confirm()` and the non-interactive default in `_fill_noninteractive_defaults()`
 6. If the feature is a hook, add to `HOOK_KEYS` / `HOOK_TOKENS` in `wizard/registry.sh`, add `STR_HOOKS_*` strings in both i18n files, and add the hook label to `HOOK_LABELS`

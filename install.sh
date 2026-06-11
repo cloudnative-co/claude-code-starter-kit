@@ -36,11 +36,18 @@ error() { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; }
 # ---------------------------------------------------------------------------
 # Safety guard: prevent rm -rf on dangerous paths
 # ---------------------------------------------------------------------------
+# NOTE: This function is copied into install.ps1 (WSL + Git Bash here-strings)
+# and uninstall.sh. Keep all 4 copies functionally identical — CI compares the
+# normalized function bodies (tests/unit/test-install-bootstrap.sh).
 _safe_install_dir() {
+  # Normalize: strip ALL trailing slashes (so "$HOME//" cannot bypass checks)
   local dir="$1"
-  # Normalize: strip trailing slashes
-  dir="${dir%/}"
+  while [[ "$dir" == */ ]]; do
+    dir="${dir%/}"
+  done
   [[ -z "$dir" ]] && return 1
+  # Require an absolute path
+  [[ "$dir" != /* ]] && return 1
   # Block $HOME itself
   [[ "$dir" == "$HOME" || "$dir" == "${HOME%/}" ]] && return 1
   # Block system directories and their subtrees
@@ -156,6 +163,63 @@ clone_or_update() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Resolve the final setup.sh argument list (pure logic, testable offline):
+#   - NONINTERACTIVE env var handling (same convention as Homebrew)
+#   - Auto-detect update mode via manifest (~/.claude/.starter-kit-manifest.json)
+# Sets globals: _setup_args[], _update_mode, _is_noninteractive
+# ---------------------------------------------------------------------------
+_resolve_setup_args() {
+  _setup_args=("$@")
+  _update_mode=false
+  _is_noninteractive=false
+  local _arg
+
+  # Support NONINTERACTIVE env var (same convention as Homebrew)
+  if [[ -n "${NONINTERACTIVE:-}" ]]; then
+    local _has_ni=false
+    for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
+      [[ "$_arg" == "--non-interactive" ]] && _has_ni=true
+    done
+    if [[ "$_has_ni" == "false" ]]; then
+      _setup_args+=("--non-interactive")
+    fi
+  fi
+
+  # Auto-detect update mode via manifest
+  local _manifest="$HOME/.claude/.starter-kit-manifest.json"
+  local _snapshot_dir="$HOME/.claude/.starter-kit-snapshot"
+
+  if [[ -f "$_manifest" ]]; then
+    local _manifest_version=""
+    if command -v jq &>/dev/null; then
+      _manifest_version="$(jq -r '.version // "1"' "$_manifest" 2>/dev/null || echo "1")"
+    fi
+
+    _update_mode=true
+    if [[ "$_manifest_version" == "2" ]] && [[ -d "$_snapshot_dir" ]]; then
+      info "Existing installation detected (manifest v2). Running update mode."
+    else
+      info "Existing starter-kit installation detected without a usable snapshot."
+      info "Bootstrapping a snapshot from the current ~/.claude state, then running migration update."
+    fi
+
+    local _has_update=false
+    for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
+      [[ "$_arg" == "--update" ]] && _has_update=true
+    done
+    if [[ "$_has_update" == "false" ]]; then
+      _setup_args+=("--update")
+    fi
+  fi
+
+  # Non-interactive when --non-interactive or --update is requested
+  for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
+    [[ "$_arg" == "--non-interactive" || "$_arg" == "--update" ]] && _is_noninteractive=true
+  done
+  return 0
+}
+
 install_main() {
 printf "\n${BOLD}Claude Code Starter Kit - Bootstrap${NC}\n\n"
 
@@ -170,54 +234,7 @@ clone_or_update
 chmod +x "$INSTALL_DIR/setup.sh"
 chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
 
-# Support NONINTERACTIVE env var (same convention as Homebrew)
-_setup_args=("$@")
-if [[ -n "${NONINTERACTIVE:-}" ]]; then
-  _has_ni=false
-  for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
-    [[ "$_arg" == "--non-interactive" ]] && _has_ni=true
-  done
-  if [[ "$_has_ni" == "false" ]]; then
-    _setup_args+=("--non-interactive")
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# Auto-detect update mode via manifest
-# ---------------------------------------------------------------------------
-_manifest="$HOME/.claude/.starter-kit-manifest.json"
-_snapshot_dir="$HOME/.claude/.starter-kit-snapshot"
-_update_mode=false
-
-if [[ -f "$_manifest" ]]; then
-  _manifest_version=""
-  if command -v jq &>/dev/null; then
-    _manifest_version="$(jq -r '.version // "1"' "$_manifest" 2>/dev/null || echo "1")"
-  fi
-
-  if [[ "$_manifest_version" == "2" ]] && [[ -d "$_snapshot_dir" ]]; then
-    _update_mode=true
-    info "Existing installation detected (manifest v2). Running update mode."
-  else
-    _update_mode=true
-    info "Existing starter-kit installation detected without a usable snapshot."
-    info "Bootstrapping a snapshot from the current ~/.claude state, then running migration update."
-  fi
-
-  _has_update=false
-  for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
-    [[ "$_arg" == "--update" ]] && _has_update=true
-  done
-  if [[ "$_has_update" == "false" ]]; then
-    _setup_args+=("--update")
-  fi
-fi
-
-# Check if non-interactive mode is requested
-_is_noninteractive=false
-for _arg in "${_setup_args[@]+"${_setup_args[@]}"}"; do
-  [[ "$_arg" == "--non-interactive" || "$_arg" == "--update" ]] && _is_noninteractive=true
-done
+_resolve_setup_args "$@"
 
 if [[ "$_is_noninteractive" == "true" ]]; then
   if [[ "$_update_mode" == "true" ]]; then

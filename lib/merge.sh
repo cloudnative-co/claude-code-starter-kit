@@ -1,10 +1,14 @@
 #!/bin/bash
 # lib/merge.sh - Three-way merge for settings.json during kit upgrades
 #
-# Merge strategies (3 systems):
-#   1. Scalar 3-way: snapshot vs current vs new-kit → keep/overwrite/prompt
-#   2. Array 3-way: _merge_arrays_3way() preserves both user and kit additions
-#   3. Bootstrap merge: _merge_settings_bootstrap() for first migration (no snapshot)
+# Architecture: all per-key decisions live in one core, _resolve_key_3way(),
+# shared by the three public entry points (thin wrappers):
+#   1. merge_settings_3way()      — top-level 3-way (mode=top)
+#   2. _merge_object_3way()       — one level deep (mode=nested)
+#   3. _merge_settings_bootstrap()— first migration, no snapshot (mode=bootstrap)
+# Array conflicts use _merge_arrays_3way() (element-level, preserves both
+# user and kit additions); value extraction goes through _json_key_or_null()
+# so false/0/"" are never misread as missing keys.
 #
 # Requires: jq, lib/colors.sh
 # Uses globals: _MERGE_INTERACTIVE, _MERGE_PREFS, _MERGE_PREFS_FILE,
@@ -92,6 +96,38 @@ _save_merge_pref() {
   _load_merge_prefs
   _MERGE_PREFS="$(printf '%s' "$_MERGE_PREFS" | jq --arg k "$key" --arg v "$value" '.[$k] = $v')"
   printf '%s\n' "$_MERGE_PREFS" > "$_MERGE_PREFS_FILE"
+}
+
+# ---------------------------------------------------------------------------
+# Shared JSON helpers
+#
+# Single home for the has($k)-aware value extraction that was previously
+# duplicated 8 times across the three merge implementations (regression #81:
+# `// null` style extraction misread real false values as missing keys).
+# ---------------------------------------------------------------------------
+
+# _json_key_or_null <json_object_doc> <key>
+# Prints the key's value as compact JSON, or the "null" sentinel when the key
+# is absent (or the doc is not an object). false/0/"" are real values — only
+# a missing key (or a literal JSON null value) maps to "null".
+_json_key_or_null() {
+  local doc="$1"
+  local key="$2"
+  local v
+  v="$(jq -cn --argjson o "$doc" --arg k "$key" \
+    'if ($o | has($k)) then $o[$k] else null end' 2>/dev/null || printf '')"
+  [[ -z "$v" ]] && v="null"
+  printf '%s' "$v"
+}
+
+# _json_equal <a> <b> — prints "true"/"false" (jq semantic equality)
+_json_equal() {
+  jq -n --argjson a "$1" --argjson b "$2" '$a == $b' 2>/dev/null || printf 'false'
+}
+
+# _json_type <v> — prints jq type name (object/array/string/number/boolean/null)
+_json_type() {
+  jq -rn --argjson v "$1" '$v | type' 2>/dev/null || printf 'null'
 }
 
 # ---------------------------------------------------------------------------
@@ -346,21 +382,222 @@ _prompt_scalar_conflict() {
 }
 
 # ---------------------------------------------------------------------------
+# _resolve_key_3way - Single-key resolution core for all merge entry points
+#
+# Usage: _resolve_key_3way <mode> <key_label> <sv> <cv> <nv>
+#   mode      — top | nested | bootstrap
+#   key_label — key name used for prompts/prefs ("permissions" or "env.KEY")
+#   sv/cv/nv  — compact JSON values; "null" = key absent (_json_key_or_null)
+#               bootstrap mode has no snapshot: callers pass sv="null"
+#
+# Sets globals (read by the wrapper after each call):
+#   _RK_ACTION — keep   : leave merged untouched (merged starts from current)
+#                set    : assign _RK_VALUE to the key
+#                delete : remove the key from merged
+#                object : both-changed object — caller recurses (top mode)
+#   _RK_VALUE  — JSON value for "set"
+#   _RK_CLASS  — classification for the wrapper's counters/log details:
+#                user-added | kit-add | identical | keep-user | kit-update |
+#                kit-remove | conflict-array | conflict-scalar |
+#                merge-object | object-kit-wins
+#
+# Intentional mode differences (see issue #97 behavior matrix):
+#   bootstrap — no baseline: current wins by default; object conflicts use a
+#               shallow union (current sub-keys win, kit-only sub-keys
+#               adopted) without prompting; keys are never deleted
+#   top       — both-changed objects recurse via _merge_object_3way
+#   nested    — both-changed objects: kit wins (no recursion below depth 2)
+# ---------------------------------------------------------------------------
+_RK_ACTION=""
+_RK_VALUE=""
+_RK_CLASS=""
+
+# "null" chosen by a prompt means the winning side does not have the key →
+# delete it; assigning would write a literal JSON null into settings.json (#75)
+_rk_apply_chosen() {
+  local chosen="$1"
+  if [[ "$chosen" == "null" ]]; then
+    _RK_ACTION="delete"
+  else
+    _RK_ACTION="set"
+    _RK_VALUE="$chosen"
+  fi
+}
+
+# Bootstrap arm of _resolve_key_3way (no snapshot baseline; sv is ignored)
+_resolve_key_bootstrap() {
+  local key="$1"
+  local cv="$2"
+  local nv="$3"
+
+  if [[ "$cv" == "null" && "$nv" != "null" ]]; then
+    # Kit-only key → adopt
+    _RK_ACTION="set"; _RK_VALUE="$nv"; _RK_CLASS="kit-add"
+    return 0
+  fi
+  if [[ "$nv" == "null" ]]; then
+    # User-only key → keep
+    _RK_CLASS="user-added"
+    return 0
+  fi
+  if [[ "$cv" == "$nv" ]]; then
+    # Same value → keep
+    _RK_CLASS="identical"
+    return 0
+  fi
+  _resolve_conflict_by_type "bootstrap" "$key" "null" "$cv" "$nv" "bootstrap"
+}
+
+_resolve_key_3way() {
+  local mode="$1"
+  local key="$2"
+  local sv="$3"
+  local cv="$4"
+  local nv="$5"
+  _RK_ACTION="keep"
+  _RK_VALUE=""
+  _RK_CLASS=""
+
+  if [[ "$mode" == "bootstrap" ]]; then
+    _resolve_key_bootstrap "$key" "$cv" "$nv"
+    return 0
+  fi
+
+  # --- top | nested: full 3-way against the snapshot baseline ---
+  if [[ "$sv" == "null" && "$nv" == "null" ]]; then
+    # User added the key → keep it.
+    # nested historically materializes cv (a literal null user value is
+    # dropped via _rk_apply_chosen); top leaves merged (== current) as-is.
+    _RK_CLASS="user-added"
+    if [[ "$mode" == "nested" ]]; then
+      _rk_apply_chosen "$cv"
+    fi
+    return 0
+  fi
+  if [[ "$sv" == "null" && "$cv" == "null" ]]; then
+    # Kit added the key → adopt
+    _RK_ACTION="set"; _RK_VALUE="$nv"; _RK_CLASS="kit-add"
+    return 0
+  fi
+
+  if [[ "$mode" == "top" && "$sv" == "null" ]]; then
+    # Key in both current and new_kit but not snapshot: independent additions
+    if [[ "$cv" == "$nv" ]]; then
+      _RK_CLASS="identical"
+      return 0
+    fi
+    _resolve_conflict_by_type "$mode" "$key" "$sv" "$cv" "$nv" "independent"
+    return 0
+  fi
+
+  local s_eq_c s_eq_n
+  s_eq_c="$(_json_equal "$sv" "$cv")"
+  s_eq_n="$(_json_equal "$sv" "$nv")"
+
+  if [[ "$s_eq_c" == "true" ]]; then
+    # User didn't change → adopt kit's new value
+    if [[ "$nv" == "null" ]]; then
+      # Kit removed the key
+      _RK_ACTION="delete"; _RK_CLASS="kit-remove"
+      return 0
+    fi
+    _RK_ACTION="set"; _RK_VALUE="$nv"; _RK_CLASS="kit-update"
+    return 0
+  fi
+  if [[ "$s_eq_n" == "true" ]]; then
+    # Kit didn't change → keep user's current value.
+    # nested historically materializes cv (cv="null" → delete via guard).
+    _RK_CLASS="keep-user"
+    if [[ "$mode" == "nested" ]]; then
+      _rk_apply_chosen "$cv"
+    fi
+    return 0
+  fi
+
+  _resolve_conflict_by_type "$mode" "$key" "$sv" "$cv" "$nv" "both-changed"
+}
+
+# _resolve_conflict_by_type <mode> <key_label> <sv> <cv> <nv> <origin>
+#   origin: both-changed | independent | bootstrap (controls warn text and
+#   the array-conflict snapshot argument; bootstrap passes an empty array)
+_resolve_conflict_by_type() {
+  local mode="$1"
+  local key="$2"
+  local sv="$3"
+  local cv="$4"
+  local nv="$5"
+  local origin="$6"
+
+  # Identical values are never a conflict — short-circuit before any prompt.
+  # Reachable when the snapshot lacks the key but current == new-kit (e.g.
+  # nested sub-keys under a snapshot-missing object recursed from top mode).
+  if [[ "$(_json_equal "$cv" "$nv")" == "true" ]]; then
+    _RK_CLASS="identical"
+    if [[ "$mode" == "nested" ]]; then
+      _rk_apply_chosen "$cv"
+    fi
+    return 0
+  fi
+
+  local cv_type nv_type chosen
+  cv_type="$(_json_type "$cv")"
+  nv_type="$(_json_type "$nv")"
+
+  if [[ "$cv_type" == "array" && "$nv_type" == "array" ]]; then
+    local arr_sv="$sv"
+    [[ "$origin" == "bootstrap" ]] && arr_sv="[]"
+    chosen="$(_prompt_array_conflict "$key" "$arr_sv" "$cv" "$nv")"
+    _RK_CLASS="conflict-array"
+    _rk_apply_chosen "$chosen"
+    return 0
+  fi
+
+  if [[ "$cv_type" == "object" && "$nv_type" == "object" ]]; then
+    case "$mode" in
+      top)
+        # Caller recurses via _merge_object_3way
+        _RK_ACTION="object"; _RK_CLASS="merge-object"
+        ;;
+      bootstrap)
+        # Shallow union: current sub-keys win, kit-only sub-keys adopted
+        _RK_ACTION="set"
+        _RK_VALUE="$(jq -cn --argjson c "$cv" --argjson n "$nv" '
+          $c + ($n | to_entries | map(select(.key as $k | $c | has($k) | not)) | from_entries)
+        ')"
+        _RK_CLASS="merge-object"
+        ;;
+      *)
+        # nested: kit wins below depth 2 (no further recursion)
+        warn "$STR_MERGE_SCALAR_CONFLICT ${key} $STR_MERGE_OBJECT_CONFLICT_KIT_WINS"
+        _RK_ACTION="set"; _RK_VALUE="$nv"; _RK_CLASS="object-kit-wins"
+        ;;
+    esac
+    return 0
+  fi
+
+  if [[ "$mode" == "top" && "$origin" == "both-changed" ]]; then
+    warn "  [conflict] $key — prompting for resolution"
+  fi
+  chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
+  _RK_CLASS="conflict-scalar"
+  _rk_apply_chosen "$chosen"
+}
+
+# ---------------------------------------------------------------------------
 # _merge_object_3way - Merge a JSON object one level deep using 3-way logic
 #
 # Usage: _merge_object_3way <parent_key> <s_val> <c_val> <n_val> <merged_var>
 #
-# Applies 3-way logic to sub-keys within a parent object.
-# Handles nested arrays via _merge_arrays_3way.
-# Writes the updated top-level merged JSON to the variable named <merged_var>
-# (passed by name; uses printf -v for Bash 3.2 compatibility).
+# Thin wrapper: iterates sub-keys and applies _resolve_key_3way (mode=nested)
+# to each. Writes the updated top-level merged JSON to the variable named
+# <merged_var> (passed by name; uses printf -v for Bash 3.2 compatibility).
 #
 # Rules mirror merge_settings_3way but operate one level deeper:
 #   snapshot == current → use newkit sub-value
 #   snapshot == newkit  → keep current sub-value
 #   user added sub-key  → keep it
 #   both changed:
-#     arrays   → _merge_arrays_3way
+#     arrays   → _prompt_array_conflict (element merge when non-interactive)
 #     objects  → replace with newkit (no further recursion at this depth)
 #     scalars  → _prompt_scalar_conflict
 # ---------------------------------------------------------------------------
@@ -388,74 +625,30 @@ _merge_object_3way() {
     [[ -z "$sub_key" ]] && continue
 
     local sv cv nv
-    sv="$(jq -n --argjson o "$s_val" --arg k "$sub_key" 'if $o | has($k) then $o[$k] else null end' 2>/dev/null || printf 'null')"
-    cv="$(jq -n --argjson o "$c_val" --arg k "$sub_key" 'if $o | has($k) then $o[$k] else null end' 2>/dev/null || printf 'null')"
-    nv="$(jq -n --argjson o "$n_val" --arg k "$sub_key" 'if $o | has($k) then $o[$k] else null end' 2>/dev/null || printf 'null')"
+    sv="$(_json_key_or_null "$s_val" "$sub_key")"
+    cv="$(_json_key_or_null "$c_val" "$sub_key")"
+    nv="$(_json_key_or_null "$n_val" "$sub_key")"
 
-    # Normalize missing values to null
-    [[ -z "$sv" ]] && sv="null"
-    [[ -z "$cv" ]] && cv="null"
-    [[ -z "$nv" ]] && nv="null"
+    _resolve_key_3way "nested" "${parent_key}.${sub_key}" "$sv" "$cv" "$nv"
 
-    local s_eq_c s_eq_n
-    s_eq_c="$(jq -n --argjson a "$sv" --argjson b "$cv" '$a == $b' 2>/dev/null || printf 'false')"
-    s_eq_n="$(jq -n --argjson a "$sv" --argjson b "$nv" '$a == $b' 2>/dev/null || printf 'false')"
-
-    local chosen
-
-    if [[ "$sv" == "null" && "$nv" == "null" ]]; then
-      # User added sub-key: keep it
-      chosen="$cv"
-    elif [[ "$sv" == "null" && "$cv" == "null" ]]; then
-      # Kit added sub-key: use it
-      chosen="$nv"
-    elif [[ "$s_eq_c" == "true" ]]; then
-      # User didn't change → use newkit value
-      if [[ "$nv" == "null" ]]; then
-        # Kit removed sub-key → delete it
+    case "$_RK_ACTION" in
+      keep)
+        continue
+        ;;
+      delete)
         obj_merged="$(jq -n \
           --argjson obj "$obj_merged" \
           --arg k "$sub_key" \
           '$obj | del(.[$k])')"
-        continue
-      fi
-      chosen="$nv"
-    elif [[ "$s_eq_n" == "true" ]]; then
-      # Kit didn't change → keep current value
-      chosen="$cv"
-    else
-      # Both changed: type-specific handling
-      local cv_type nv_type
-      cv_type="$(jq -n --argjson v "$cv" '$v | type')"
-      nv_type="$(jq -n --argjson v "$nv" '$v | type')"
-
-      if [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
-        chosen="$(_prompt_array_conflict "${parent_key}.${sub_key}" "$sv" "$cv" "$nv")"
-      elif [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
-        # Shallow conflict at object level: kit wins (no deeper recursion)
-        warn "$STR_MERGE_SCALAR_CONFLICT ${parent_key}.${sub_key} $STR_MERGE_OBJECT_CONFLICT_KIT_WINS"
-        chosen="$nv"
-      else
-        chosen="$(_prompt_scalar_conflict "${parent_key}.${sub_key}" "$cv" "$nv")"
-      fi
-    fi
-
-    # "null" means the resolution chose a side where the sub-key does not
-    # exist (kit removed it, or the user deleted it) → delete the key;
-    # assigning would write a literal JSON null into settings.json
-    if [[ "$chosen" == "null" ]]; then
-      obj_merged="$(jq -n \
-        --argjson obj "$obj_merged" \
-        --arg k "$sub_key" \
-        '$obj | del(.[$k])')"
-      continue
-    fi
-
-    obj_merged="$(jq -n \
-      --argjson obj "$obj_merged" \
-      --arg k "$sub_key" \
-      --argjson v "$chosen" \
-      '$obj | .[$k] = $v')"
+        ;;
+      *)
+        obj_merged="$(jq -n \
+          --argjson obj "$obj_merged" \
+          --arg k "$sub_key" \
+          --argjson v "$_RK_VALUE" \
+          '$obj | .[$k] = $v')"
+        ;;
+    esac
   done <<EOF
 $all_keys
 EOF
@@ -485,10 +678,14 @@ EOF
 #   key in current only → user added         → keep it
 #   key in new_kit only → kit added          → add it
 #   both changed:
-#     arrays   → _merge_arrays_3way
+#     arrays   → _prompt_array_conflict (element merge when non-interactive)
 #     objects  → _merge_object_3way
 #     scalars  → _prompt_scalar_conflict
 #   $schema is always skipped (taken from new_kit unchanged)
+#
+# Thin wrapper: per-key resolution lives in _resolve_key_3way (mode=top);
+# this function handles validation, counters/log details, and applying the
+# resolved actions to the merged document.
 # ---------------------------------------------------------------------------
 merge_settings_3way() {
   local snapshot="$1"
@@ -497,6 +694,7 @@ merge_settings_3way() {
   local output="$4"
 
   # Input validation
+  local f
   for f in "$snapshot" "$current" "$new_kit"; do
     if [[ ! -f "$f" ]]; then
       error "File not found: $f"
@@ -513,19 +711,24 @@ merge_settings_3way() {
   _merge_progress_detail "  current  : $current"
   _merge_progress_detail "  new_kit  : $new_kit"
 
+  local s_doc c_doc n_doc
+  s_doc="$(< "$snapshot")"
+  c_doc="$(< "$current")"
+  n_doc="$(< "$new_kit")"
+
   # Collect all top-level keys from all three files
   local all_keys
   all_keys="$(jq -rn \
-    --slurpfile s "$snapshot" \
-    --slurpfile c "$current" \
-    --slurpfile n "$new_kit" \
-    '(($s[0] | keys) + ($c[0] | keys) + ($n[0] | keys)) | unique[]')"
+    --argjson s "$s_doc" \
+    --argjson c "$c_doc" \
+    --argjson n "$n_doc" \
+    '(($s | keys) + ($c | keys) + ($n | keys)) | unique[]')"
   local total_keys=0 current_key=0
   total_keys="$(printf '%s\n' "$all_keys" | sed '/^$/d' | wc -l | tr -d ' ')"
 
   # Start merged from current (preserves everything by default)
   local merged
-  merged="$(< "$current")"
+  merged="$c_doc"
   local keep_user_count=0 kit_add_count=0 kit_update_count=0 kit_remove_count=0 merge_object_count=0 conflict_count=0
 
   local key
@@ -537,7 +740,7 @@ merge_settings_3way() {
     # Always take $schema from new_kit unchanged
     if [[ "$key" == "\$schema" ]]; then
       local schema_val
-      schema_val="$(jq -r '.["$schema"] // empty' "$new_kit")"
+      schema_val="$(jq -rn --argjson n "$n_doc" '$n["$schema"] // empty')"
       if [[ -n "$schema_val" ]]; then
         merged="$(printf '%s' "$merged" | jq \
           --arg v "$schema_val" \
@@ -547,100 +750,61 @@ merge_settings_3way() {
     fi
 
     local sv cv nv
-    sv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$snapshot" 2>/dev/null || printf '')"
-    cv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$current"  2>/dev/null || printf '')"
-    nv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$new_kit"  2>/dev/null || printf '')"
+    sv="$(_json_key_or_null "$s_doc" "$key")"
+    cv="$(_json_key_or_null "$c_doc" "$key")"
+    nv="$(_json_key_or_null "$n_doc" "$key")"
 
-    # Normalize missing values to null sentinel
-    [[ -z "$sv" ]] && sv="null"
-    [[ -z "$cv" ]] && cv="null"
-    [[ -z "$nv" ]] && nv="null"
+    _resolve_key_3way "top" "$key" "$sv" "$cv" "$nv"
 
-    local s_eq_c s_eq_n
-    s_eq_c="$(jq -n --argjson a "$sv" --argjson b "$cv" '$a == $b' 2>/dev/null || printf 'false')"
-    s_eq_n="$(jq -n --argjson a "$sv" --argjson b "$nv" '$a == $b' 2>/dev/null || printf 'false')"
-
-    local chosen
-
-    if [[ "$sv" == "null" && "$nv" == "null" ]]; then
-      # Key exists only in current: user added → keep it
-      keep_user_count=$((keep_user_count + 1))
-      _merge_progress_detail "  [keep-user] $key (user-added)"
-      continue
-
-    elif [[ "$sv" == "null" && "$cv" == "null" ]]; then
-      # Key exists only in new_kit: kit added → adopt it
-      kit_add_count=$((kit_add_count + 1))
-      _merge_progress_detail "  [kit-add]   $key"
-      chosen="$nv"
-
-    elif [[ "$sv" == "null" ]]; then
-      # Key in both current and new_kit but not snapshot
-      # Treat as independent additions; new_kit wins (conservative)
-      if [[ "$cv" == "$nv" ]]; then
-        continue  # identical, no change needed
-      fi
-      # Both independently added with different values: prompt
-      conflict_count=$((conflict_count + 1))
-      chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
-
-    elif [[ "$s_eq_c" == "true" ]]; then
-      # User didn't touch it → adopt kit's new value
-      if [[ "$nv" == "null" ]]; then
-        # Kit removed the key
+    case "$_RK_CLASS" in
+      user-added)
+        keep_user_count=$((keep_user_count + 1))
+        _merge_progress_detail "  [keep-user] $key (user-added)"
+        ;;
+      keep-user)
+        keep_user_count=$((keep_user_count + 1))
+        _merge_progress_detail "  [keep-user] $key"
+        ;;
+      kit-add)
+        kit_add_count=$((kit_add_count + 1))
+        _merge_progress_detail "  [kit-add]   $key"
+        ;;
+      kit-update)
+        kit_update_count=$((kit_update_count + 1))
+        _merge_progress_detail "  [kit-update] $key"
+        ;;
+      kit-remove)
         kit_remove_count=$((kit_remove_count + 1))
         _merge_progress_detail "  [kit-remove] $key"
-        merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')"
-        continue
-      fi
-      kit_update_count=$((kit_update_count + 1))
-      _merge_progress_detail "  [kit-update] $key"
-      chosen="$nv"
-
-    elif [[ "$s_eq_n" == "true" ]]; then
-      # Kit didn't change it → keep user's current value
-      keep_user_count=$((keep_user_count + 1))
-      _merge_progress_detail "  [keep-user] $key"
-      continue
-
-    else
-      # Both user and kit changed the key: type-specific conflict resolution
-      local cv_type nv_type
-      cv_type="$(jq -n --argjson v "$cv" '$v | type')"
-      nv_type="$(jq -n --argjson v "$nv" '$v | type')"
-
-      if [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
-        conflict_count=$((conflict_count + 1))
-        chosen="$(_prompt_array_conflict "$key" "$sv" "$cv" "$nv")"
-
-      elif [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
+        ;;
+      merge-object)
         merge_object_count=$((merge_object_count + 1))
         _merge_progress_detail "  [merge-object] $key"
-        local obj_sv
-        obj_sv="$(jq -n --argjson v "$sv" 'if $v == null then {} else $v end')"
-        _merge_object_3way "$key" "$obj_sv" "$cv" "$nv" merged
-        continue
-
-      else
+        ;;
+      conflict-array|conflict-scalar)
         conflict_count=$((conflict_count + 1))
-        warn "  [conflict] $key — prompting for resolution"
-        chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
-      fi
-    fi
+        ;;
+    esac
 
-    # Apply the chosen value into merged.
-    # "null" means the resolution chose a side where the key does not exist
-    # (kit removed it, or the user deleted it) → delete the key; assigning
-    # would write a literal JSON null into settings.json
-    if [[ "$chosen" == "null" ]]; then
-      merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')"
-      continue
-    fi
-
-    merged="$(printf '%s' "$merged" | jq \
-      --arg k "$key" \
-      --argjson v "$chosen" \
-      '.[$k] = $v')"
+    case "$_RK_ACTION" in
+      keep)
+        continue
+        ;;
+      delete)
+        merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')"
+        ;;
+      object)
+        local obj_sv
+        obj_sv="$(jq -cn --argjson v "$sv" 'if $v == null then {} else $v end')"
+        _merge_object_3way "$key" "$obj_sv" "$cv" "$nv" merged
+        ;;
+      *)
+        merged="$(printf '%s' "$merged" | jq \
+          --arg k "$key" \
+          --argjson v "$_RK_VALUE" \
+          '.[$k] = $v')"
+        ;;
+    esac
   done <<EOF
 $all_keys
 EOF
@@ -672,21 +836,28 @@ EOF
 # Kit-only keys are adopted. Value conflicts are prompted (interactive)
 # or resolved in favor of current (non-interactive).
 # Objects are recursed one level to adopt new sub-keys.
+#
+# Thin wrapper: per-key resolution lives in _resolve_key_3way
+# (mode=bootstrap); $schema is left untouched in this path.
 # ---------------------------------------------------------------------------
 _merge_settings_bootstrap() {
   local current="$1"
   local new_kit="$2"
   local output="$3"
 
+  local c_doc n_doc
+  c_doc="$(< "$current")"
+  n_doc="$(< "$new_kit")"
+
   local merged
-  merged="$(< "$current")"
+  merged="$c_doc"
 
   # Collect all keys from both files
   local all_keys
   all_keys="$(jq -rn \
-    --slurpfile c "$current" \
-    --slurpfile n "$new_kit" \
-    '(($c[0] | keys) + ($n[0] | keys)) | unique[]')"
+    --argjson c "$c_doc" \
+    --argjson n "$n_doc" \
+    '(($c | keys) + ($n | keys)) | unique[]')"
   local total_keys=0 current_key=0
   total_keys="$(printf '%s\n' "$all_keys" | sed '/^$/d' | wc -l | tr -d ' ')"
 
@@ -698,55 +869,30 @@ _merge_settings_bootstrap() {
     [[ "$key" == "\$schema" ]] && continue
 
     local cv nv
-    cv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$current"  2>/dev/null || printf '')"
-    nv="$(jq -c --arg k "$key" 'if has($k) then .[$k] else null end' "$new_kit"  2>/dev/null || printf '')"
-    [[ -z "$cv" ]] && cv="null"
-    [[ -z "$nv" ]] && nv="null"
+    cv="$(_json_key_or_null "$c_doc" "$key")"
+    nv="$(_json_key_or_null "$n_doc" "$key")"
 
-    if [[ "$cv" == "null" && "$nv" != "null" ]]; then
-      # Kit-only key → adopt
+    _resolve_key_3way "bootstrap" "$key" "null" "$cv" "$nv"
+
+    if [[ "$_RK_CLASS" == "kit-add" ]]; then
       _merge_progress_detail "  [kit-add] $key"
-      merged="$(printf '%s' "$merged" | jq \
-        --arg k "$key" --argjson v "$nv" '.[$k] = $v')"
+    fi
 
-    elif [[ "$cv" != "null" && "$nv" == "null" ]]; then
-      # User-only key → keep
-      continue
-
-    elif [[ "$cv" == "$nv" ]]; then
-      # Same value → keep
-      continue
-
-    else
-      # Both have the key with different values
-      local cv_type nv_type
-      cv_type="$(jq -n --argjson v "$cv" '$v | type')"
-      nv_type="$(jq -n --argjson v "$nv" '$v | type')"
-
-      if [[ "$cv_type" == '"object"' && "$nv_type" == '"object"' ]]; then
-        # Object: adopt kit-only sub-keys, keep existing sub-keys
-        local sub_merged
-        sub_merged="$(jq -n --argjson c "$cv" --argjson n "$nv" '
-          $c + ($n | to_entries | map(select(.key as $k | $c | has($k) | not)) | from_entries)
-        ')"
+    case "$_RK_ACTION" in
+      keep)
+        continue
+        ;;
+      delete)
+        merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')"
+        ;;
+      *)
         merged="$(printf '%s' "$merged" | jq \
-          --arg k "$key" --argjson v "$sub_merged" '.[$k] = $v')"
-        _merge_progress_detail "  [merge-object] $key"
+          --arg k "$key" --argjson v "$_RK_VALUE" '.[$k] = $v')"
+        ;;
+    esac
 
-      elif [[ "$cv_type" == '"array"' && "$nv_type" == '"array"' ]]; then
-        # Array: use _prompt_array_conflict (has remember + non-interactive fallback)
-        local chosen
-        chosen="$(_prompt_array_conflict "$key" "[]" "$cv" "$nv")"
-        merged="$(printf '%s' "$merged" | jq \
-          --arg k "$key" --argjson v "$chosen" '.[$k] = $v')"
-
-      else
-        # Scalar: prompt or keep current
-        local chosen
-        chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
-        merged="$(printf '%s' "$merged" | jq \
-          --arg k "$key" --argjson v "$chosen" '.[$k] = $v')"
-      fi
+    if [[ "$_RK_CLASS" == "merge-object" ]]; then
+      _merge_progress_detail "  [merge-object] $key"
     fi
   done <<EOF
 $all_keys

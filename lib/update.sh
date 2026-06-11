@@ -8,6 +8,7 @@
 #               _SNAPSHOT_BOOTSTRAPPED, _BACKUP_TIMESTAMP, _SETUP_TMP_FILES[],
 #               LANGUAGE, UPDATE_MODE, STR_UPDATE_*
 # Exports: run_update(), _check_major_upgrade(), _sync_settings_metadata()
+#          (run_update delegates to _update_phase_* functions, one per step)
 # Dry-run: run_update has dry-run awareness (logs instead of deploying)
 set -euo pipefail
 
@@ -654,52 +655,35 @@ _count_update_hook_files() {
 }
 
 # ---------------------------------------------------------------------------
-# run_update - Main entry point for update mode
+# run_update phases
 #
-# Usage: run_update <project_dir> <claude_dir>
-#
-# Phases:
-#   1. settings.json: build new, 3-way compare/merge
-#   2. CLAUDE.md: build new, _update_file
-#   3. Content directories (agents, rules, commands, skills, memory)
-#   4. Hook scripts: deploy_hook_scripts
-#   5. Update snapshot for each updated file
-#   6. Report: skipped files list + summary
+# run_update() delegates to one function per progress step (1-5) plus a
+# final report. Phases communicate through shared globals (same pattern as
+# _UPDATE_UPDATED_FILES / _UPDATE_SKIPPED_FILES in the hook updater; plain
+# array appends, no dynamic variable names):
+#   _UPDATE_ALL_UPDATED_FILES — absolute paths of files written this run
+#   _UPDATE_ALL_SKIPPED_FILES — display-relative paths of skipped files
+#   _UPDATE_NEW_SETTINGS_FILE — freshly built kit settings.json (temp file),
+#                               set by phase 1, read by phase 5 so the
+#                               snapshot stores the kit baseline
 # ---------------------------------------------------------------------------
-run_update() {
-  local project_dir="$1"
-  local claude_dir="$2"
-  local snapshot_dir="${claude_dir}/.starter-kit-snapshot"
+_UPDATE_ALL_UPDATED_FILES=()
+_UPDATE_ALL_SKIPPED_FILES=()
+_UPDATE_NEW_SETTINGS_FILE=""
 
-  # Check for major version jumps and show recovery info
-  _check_major_upgrade "$claude_dir"
-
-  # Eagerly clear merge prefs if --reset-prefs was passed (even if no conflicts)
-  if [[ "${_RESET_MERGE_PREFS:-false}" == "true" ]]; then
-    _merge_prefs_file
-    rm -f "$_MERGE_PREFS_FILE"
-    info "$STR_MERGE_PREFS_CLEARED"
-  fi
-
+# --- Phase 1/5: settings.json (build new, 3-way compare/merge) ---------------
+_update_phase_settings() {
+  local claude_dir="$1"
+  local snapshot_dir="$2"
   local _dr="${DRY_RUN:-false}"
 
-  if [[ "$_dr" == "true" ]]; then
-    section "Dry Run: Simulating update"
-    _progress_summary "Preview Mode" "Simulating update without modifying ~/.claude"
-  else
-    section "$STR_UPDATE_TITLE"
-  fi
-
-  local updated_files=()
-  local skipped_files=()
-
-  # --- Phase 1: settings.json ---
   _progress_step 1 5 "$STR_UPDATE_SETTINGS"
 
   local new_settings
   new_settings="$(mktemp)"
   _SETUP_TMP_FILES+=("$new_settings")
   build_settings_file "$new_settings"
+  _UPDATE_NEW_SETTINGS_FILE="$new_settings"
 
   local current_settings="${claude_dir}/settings.json"
   local snapshot_settings="${snapshot_dir}/settings.json"
@@ -714,7 +698,7 @@ run_update() {
         info "Restore from backup if needed: ~/.claude.backup.${_BACKUP_TIMESTAMP}"
       fi
       _merge_settings_bootstrap "$current_settings" "$new_settings" "$current_settings"
-      updated_files+=("$current_settings")
+      _UPDATE_ALL_UPDATED_FILES+=("$current_settings")
       if [[ "$_dr" == "true" ]]; then
         info "settings.json will be merged (bootstrap)"
       else
@@ -723,7 +707,7 @@ run_update() {
     elif ! _file_changed "$snapshot_settings" "$current_settings"; then
       # User didn't change settings → safe to overwrite
       cp -a "$new_settings" "$current_settings"
-      updated_files+=("$current_settings")
+      _UPDATE_ALL_UPDATED_FILES+=("$current_settings")
       if [[ "$_dr" == "true" ]]; then
         info "settings.json will be updated"
       else
@@ -740,7 +724,7 @@ run_update() {
       # Both changed → 3-way merge
       info "$STR_UPDATE_SETTINGS_MERGING"
       merge_settings_3way "$snapshot_settings" "$current_settings" "$new_settings" "$current_settings"
-      updated_files+=("$current_settings")
+      _UPDATE_ALL_UPDATED_FILES+=("$current_settings")
       if [[ "$_dr" == "true" ]]; then
         info "settings.json will be merged (3-way)"
       else
@@ -750,7 +734,7 @@ run_update() {
   else
     # No snapshot → treat as fresh install for settings
     cp -a "$new_settings" "$current_settings"
-    updated_files+=("$current_settings")
+    _UPDATE_ALL_UPDATED_FILES+=("$current_settings")
     if [[ "$_dr" == "true" ]]; then
       info "settings.json will be created"
     else
@@ -766,8 +750,14 @@ run_update() {
   # can come out of Phase 1 still pointing statusLine at the retired bash
   # implementation. Rewrite it to the current kit fragment.
   _migrate_statusline_command "$current_settings"
+}
 
-  # --- Phase 2: CLAUDE.md (section-aware) ---
+# --- Phase 2/5: CLAUDE.md (section-aware) -------------------------------------
+_update_phase_claude_md() {
+  local claude_dir="$1"
+  local snapshot_dir="$2"
+  local _dr="${DRY_RUN:-false}"
+
   _progress_step 2 5 "$STR_UPDATE_CLAUDEMD"
 
   local new_claude_md
@@ -779,14 +769,14 @@ run_update() {
   local snapshot_claude_md="${snapshot_dir}/CLAUDE.md"
 
   if _update_claude_md "$current_claude_md" "$snapshot_claude_md" "$new_claude_md"; then
-    updated_files+=("$current_claude_md")
+    _UPDATE_ALL_UPDATED_FILES+=("$current_claude_md")
     if [[ "$_dr" == "true" ]]; then
       info "CLAUDE.md kit section will be updated"
     else
       ok "$STR_CLAUDEMD_KIT_UPDATED"
     fi
   else
-    skipped_files+=("CLAUDE.md")
+    _UPDATE_ALL_SKIPPED_FILES+=("CLAUDE.md")
     if [[ "$_dr" == "true" ]]; then
       info "CLAUDE.md — no kit section changes"
     else
@@ -801,8 +791,14 @@ run_update() {
     rm -f "$legacy_agents_md"
     ok "Removed legacy AGENTS.md"
   fi
+}
 
-  # --- Phase 3: Content directories ---
+# --- Phase 3/5: Content directories (agents, rules, commands, skills, memory) -
+_update_phase_content() {
+  local project_dir="$1"
+  local claude_dir="$2"
+  local snapshot_dir="$3"
+
   _progress_step 3 5 "Managed content files"
   local _content_total=0 _content_current=0
   _content_total="$(_count_update_content_files)"
@@ -823,6 +819,7 @@ run_update() {
 
     mkdir -p "$dest_dir"
 
+    local src_file
     while IFS= read -r -d '' src_file; do
       _content_current=$((_content_current + 1))
       if [[ "$_content_total" -gt 0 ]] && { [[ "$_content_current" -eq "$_content_total" ]] || (( _content_current % 10 == 0 )); }; then
@@ -836,14 +833,19 @@ run_update() {
       mkdir -p "$(dirname "$dest_file")"
 
       if _update_file "$dest_file" "$snap_file" "$src_file"; then
-        updated_files+=("$dest_file")
+        _UPDATE_ALL_UPDATED_FILES+=("$dest_file")
       else
-        skipped_files+=("${dir}/${rel_file}")
+        _UPDATE_ALL_SKIPPED_FILES+=("${dir}/${rel_file}")
       fi
     done < <(_find_update_content_files "$src_dir")
   done
+}
 
-  # --- Phase 5: Hook scripts (update-aware) ---
+# --- Phase 4/5: Hook scripts (update-aware) ------------------------------------
+_update_phase_hooks() {
+  local claude_dir="$1"
+  local snapshot_dir="$2"
+
   _progress_step 4 5 "Hook scripts"
   local _hook_total=0
   _hook_total="$(_count_update_hook_files)"
@@ -851,11 +853,17 @@ run_update() {
     _progress_summary "Hook scripts" "${_hook_total} files to check"
   fi
   _update_hook_scripts "$claude_dir" "$snapshot_dir"
-  updated_files+=("${_UPDATE_UPDATED_FILES[@]+"${_UPDATE_UPDATED_FILES[@]}"}")
-  skipped_files+=("${_UPDATE_SKIPPED_FILES[@]+"${_UPDATE_SKIPPED_FILES[@]}"}")
+  _UPDATE_ALL_UPDATED_FILES+=("${_UPDATE_UPDATED_FILES[@]+"${_UPDATE_UPDATED_FILES[@]}"}")
+  _UPDATE_ALL_SKIPPED_FILES+=("${_UPDATE_SKIPPED_FILES[@]+"${_UPDATE_SKIPPED_FILES[@]}"}")
   _remove_retired_managed_files "$claude_dir" "$snapshot_dir"
+}
 
-  # --- Phase 6: Update snapshot for each updated file ---
+# --- Phase 5/5: Snapshot refresh for each updated file -------------------------
+_update_phase_snapshot() {
+  local claude_dir="$1"
+  local snapshot_dir="$2"
+  local _dr="${DRY_RUN:-false}"
+
   _progress_step 5 5 "Snapshot and summary"
   # CRITICAL: For settings.json, snapshot must store the NEW KIT version
   # (not the merge result). This ensures the next update's 3-way comparison
@@ -866,7 +874,7 @@ run_update() {
     info "$STR_UPDATE_SNAPSHOT"
   fi
   local file
-  for file in "${updated_files[@]+"${updated_files[@]}"}"; do
+  for file in "${_UPDATE_ALL_UPDATED_FILES[@]+"${_UPDATE_ALL_UPDATED_FILES[@]}"}"; do
     local _basename
     _basename="$(basename "$file")"
     if [[ "$_basename" == "CLAUDE.md" ]]; then
@@ -875,7 +883,7 @@ run_update() {
       # Snapshot the kit-generated version, not the merge result
       local _snap_dest="${snapshot_dir}/settings.json"
       mkdir -p "$snapshot_dir"
-      cp "$new_settings" "$_snap_dest"
+      cp "$_UPDATE_NEW_SETTINGS_FILE" "$_snap_dest"
       if [[ "$_dr" != "true" ]]; then
         info "Snapshot updated: settings.json (kit baseline)"
       fi
@@ -896,35 +904,87 @@ run_update() {
   if [[ "$_dr" != "true" ]]; then
     ok "$STR_UPDATE_SNAPSHOT_DONE"
   fi
+}
 
-  # --- Report ---
-  if [[ "$_dr" != "true" ]]; then
-    if [[ ${#skipped_files[@]} -gt 0 ]]; then
-      printf "\n"
-      info "$STR_UPDATE_SKIPPED_TITLE"
-      local f
-      for f in "${skipped_files[@]}"; do
-        info "  - $f"
-      done
-    fi
+# --- Final report (prints after Step 5/5; skipped entirely in dry-run) ---------
+_update_report() {
+  local claude_dir="$1"
+  local _dr="${DRY_RUN:-false}"
 
+  [[ "$_dr" == "true" ]] && return 0
+
+  if [[ ${#_UPDATE_ALL_SKIPPED_FILES[@]} -gt 0 ]]; then
     printf "\n"
-    ok "$STR_UPDATE_COMPLETE (${#updated_files[@]} updated, ${#skipped_files[@]} skipped)"
-
-    # Show skip notification with recovery info when files were skipped
-    if [[ ${#skipped_files[@]} -gt 0 ]]; then
-      info "${STR_UPDATE_SKIPPED_HINT:-Skipped files retain your changes. Kit updates for those files will apply on next update after you accept or reset.}"
-      local backup_file="${claude_dir}/.starter-kit-last-backup"
-      if [[ -f "$backup_file" ]]; then
-        local _skip_backup
-        _skip_backup="$(cat "$backup_file")"
-        info "To restore kit defaults: cp -a \"$_skip_backup\" ~/.claude"
-      fi
-    fi
-
-    # --- Auto-update health check ---
-    _check_auto_update_health "$claude_dir"
+    info "$STR_UPDATE_SKIPPED_TITLE"
+    local f
+    for f in "${_UPDATE_ALL_SKIPPED_FILES[@]}"; do
+      info "  - $f"
+    done
   fi
+
+  printf "\n"
+  ok "$STR_UPDATE_COMPLETE (${#_UPDATE_ALL_UPDATED_FILES[@]} updated, ${#_UPDATE_ALL_SKIPPED_FILES[@]} skipped)"
+
+  # Show skip notification with recovery info when files were skipped
+  if [[ ${#_UPDATE_ALL_SKIPPED_FILES[@]} -gt 0 ]]; then
+    info "${STR_UPDATE_SKIPPED_HINT:-Skipped files retain your changes. Kit updates for those files will apply on next update after you accept or reset.}"
+    local backup_file="${claude_dir}/.starter-kit-last-backup"
+    if [[ -f "$backup_file" ]]; then
+      local _skip_backup
+      _skip_backup="$(cat "$backup_file")"
+      info "To restore kit defaults: cp -a \"$_skip_backup\" ~/.claude"
+    fi
+  fi
+
+  # --- Auto-update health check ---
+  _check_auto_update_health "$claude_dir"
+}
+
+# ---------------------------------------------------------------------------
+# run_update - Main entry point for update mode
+#
+# Usage: run_update <project_dir> <claude_dir>
+#
+# Phases (one function per progress step):
+#   1/5 _update_phase_settings  — settings.json: build new, 3-way compare/merge
+#   2/5 _update_phase_claude_md — CLAUDE.md: build new, section-aware update
+#   3/5 _update_phase_content   — agents, rules, commands, skills, memory
+#   4/5 _update_phase_hooks     — hook scripts + retired managed file cleanup
+#   5/5 _update_phase_snapshot  — snapshot refresh for each updated file
+#   _update_report              — skipped files list + summary (non-dry-run)
+# ---------------------------------------------------------------------------
+run_update() {
+  local project_dir="$1"
+  local claude_dir="$2"
+  local snapshot_dir="${claude_dir}/.starter-kit-snapshot"
+
+  # Check for major version jumps and show recovery info
+  _check_major_upgrade "$claude_dir"
+
+  # Eagerly clear merge prefs if --reset-prefs was passed (even if no conflicts)
+  if [[ "${_RESET_MERGE_PREFS:-false}" == "true" ]]; then
+    _merge_prefs_file
+    rm -f "$_MERGE_PREFS_FILE"
+    info "$STR_MERGE_PREFS_CLEARED"
+  fi
+
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    section "Dry Run: Simulating update"
+    _progress_summary "Preview Mode" "Simulating update without modifying ~/.claude"
+  else
+    section "$STR_UPDATE_TITLE"
+  fi
+
+  _UPDATE_ALL_UPDATED_FILES=()
+  _UPDATE_ALL_SKIPPED_FILES=()
+  _UPDATE_NEW_SETTINGS_FILE=""
+
+  _update_phase_settings "$claude_dir" "$snapshot_dir"
+  _update_phase_claude_md "$claude_dir" "$snapshot_dir"
+  _update_phase_content "$project_dir" "$claude_dir" "$snapshot_dir"
+  _update_phase_hooks "$claude_dir" "$snapshot_dir"
+  _update_phase_snapshot "$claude_dir" "$snapshot_dir"
+  _update_report "$claude_dir"
 }
 
 # ---------------------------------------------------------------------------

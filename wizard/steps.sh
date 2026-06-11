@@ -51,22 +51,12 @@ _step_language() {
 _step_profile() {
   if [[ -n "$PROFILE" ]]; then
     local _saved_overrides=()
-    local _var _val
-    for _var in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
-      _val="${!_var:-}"
-      if [[ -n "$_val" ]]; then
-        _saved_overrides+=("${_var}=${_val}")
-      fi
-    done
+    local _override
+    while IFS= read -r _override; do
+      [[ -n "$_override" ]] && _saved_overrides+=("$_override")
+    done < <(_capture_cli_overrides)
     load_profile_config "$PROFILE"
-    local _pair _restore_key _restore_val
-    for _pair in "${_saved_overrides[@]+"${_saved_overrides[@]}"}"; do
-      if [[ -n "$_pair" ]]; then
-        _restore_key="${_pair%%=*}"
-        _restore_val="${_pair#*=}"
-        printf -v "$_restore_key" '%s' "$_restore_val"
-      fi
-    done
+    _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
     return
   fi
   section "$STR_PROFILE_TITLE"
@@ -357,34 +347,7 @@ _fill_noninteractive_defaults() {
     [[ -n "$_override" ]] && _saved_overrides+=("$_override")
   done < <(_capture_cli_overrides)
 
-  local _saved_pairs=()
-  local _var _val _pair _restore_key _restore_val
-  local _formatter_prefer="biome"
-  local _legacy_formatter_state=false
-  for _var in $_CONFIG_ALLOWED_KEYS; do
-    _val="${!_var:-}"
-    if [[ -n "$_val" ]]; then
-      _saved_pairs+=("${_var}=${_val}")
-    fi
-  done
-  if [[ "${ENABLE_PRETTIER_HOOKS:-}" == "true" ]] && [[ -z "${ENABLE_BIOME_HOOKS:-}" ]]; then
-    _formatter_prefer="prettier"
-  fi
-  if [[ -n "${ENABLE_PRETTIER_HOOKS:-}" ]] && [[ -z "${ENABLE_BIOME_HOOKS:-}" ]]; then
-    _legacy_formatter_state=true
-  fi
-
-  load_profile_config "$PROFILE"
-
-  for _pair in "${_saved_pairs[@]+"${_saved_pairs[@]}"}"; do
-    _restore_key="${_pair%%=*}"
-    _restore_val="${_pair#*=}"
-    printf -v "$_restore_key" '%s' "$_restore_val"
-  done
-
-  if [[ "$_legacy_formatter_state" == "true" ]]; then
-    ENABLE_BIOME_HOOKS="false"
-  fi
+  _load_profile_preserving_values "$PROFILE"
 
   _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
 
@@ -397,7 +360,7 @@ _fill_noninteractive_defaults() {
   [[ -z "${ENABLE_WEB_CONTENT_UPDATE:-}" ]] && ENABLE_WEB_CONTENT_UPDATE="false"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
   [[ -z "$ENABLE_FONTS_SETUP" ]] && ENABLE_FONTS_SETUP="false"
-  _normalize_formatter_hooks "$_formatter_prefer"
+  _normalize_formatter_hooks "$_PROFILE_FILL_FORMATTER_PREFER"
 
   if [[ "$(uname -s)" != "Darwin" ]]; then
     ENABLE_GHOSTTY_SETUP="false"
