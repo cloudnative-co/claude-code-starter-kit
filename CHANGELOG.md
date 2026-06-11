@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.54.0] - 2026-06-11
+
+### Changed
+- **グローバル CLAUDE.md に注入される feature partial を最小化（Fable 5 セーフティ分類器の誤検知対策）**: Claude Code の新モデル Fable 5 には cybersecurity/biology 話題向けのセーフティ分類器があり、`~/.claude/CLAUDE.md` のキット管理セクションに含まれる SSRF 防御・認証情報・セキュリティ監査等の技術記述の累積によって、無害なメッセージ（挨拶のみ等）でも "Fable 5's safety measures flagged this message" が発生し Opus へ強制切替されることを実機検証で確認した。発生条件は「Fable 5 使用 + `web-content-extraction` / `codex-plugin` feature 有効」で、トリガーは特定キーワードではなくキット管理ブロック全体の累積（キーワード除去のみでは再現が続き、ブロック最小化で解消することを段階的切り分けで確認済み）。対策として、常時コンテキストに注入される CLAUDE.md partial 4 ファイル（`i18n/{ja,en}/partials/web-content-extraction.md`、`features/codex-plugin/CLAUDE.md.partial.{ja,en}`）を「行動指針 + コマンド一覧 + 詳細はドキュメント参照」の最小構成に変更。除去した技術詳細（SSRF ガード仕様・プライベート IP 拒否・DNS リバインディング対策・失敗時フォールバック手順）は `skills/web-content-extraction/SKILL.md` の Security Rules / Failure Handling 節に既存のため情報の欠落はなし（skill は on-demand 読み込みで常時注入されない）。Codex partial の委譲基準詳細・セキュリティ注意（API キーを含めない等）は plugin 本体ドキュメントへ委譲。既存インストールには `setup.sh --update` / `/update-kit` の 3-way merge で適用される（キット管理セクションのみ更新、ユーザーセクションは保持）
+
 ## [0.53.1] - 2026-06-10
 
 ### Fixed
