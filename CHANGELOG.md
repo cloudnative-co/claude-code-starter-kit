@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.56.0] - 2026-06-12
+
+リファクタリング計画 #104 の継続分（0.55.0 で open 維持とした構造課題 5 Issue #96 #97 #98 #99 #103）を完了。
+
+### Fixed
+- **`_safe_install_dir()` の全コピー共通の検証バイパスを修正（#99）**: 末尾スラッシュを 1 個しか除去しないため `$HOME//` が `$HOME` チェックと深さチェックをすり抜けて `rm -rf` ガードを突破できた穴と、相対パス（スラッシュ 3 個以上）が通過する穴を、4 コピー（install.sh / install.ps1 の WSL・Git Bash 埋め込み / uninstall.sh）すべてで修正（末尾スラッシュの全除去 + 絶対パス必須化）
+
+### Changed
+- **3-way merge をキー単位解決の単一コア `_resolve_key_3way` に統合（#97）**: `merge_settings_3way`（top-level）/ `_merge_object_3way`（nested）/ `_merge_settings_bootstrap`（bootstrap）の三重実装を、挙動マトリクスに基づく共通コア + 薄いラッパー構成へ統合。`has($k)` による false 値安全な値抽出は `_json_key_or_null` ヘルパー 1 箇所に集約（旧 8 箇所の重複解消）。経路間で意図的に異なる挙動（nested の深さ 2 kit-wins、bootstrap の shallow union、`$schema` 特例）はコア内にコメントで明示。**挙動変更 1 件**: top-level「snapshot に無く current/new-kit が異なる値」のケースを他経路と同じ型別ディスパッチに統一 — 旧実装は array/object も生 JSON のまま scalar プロンプトに落とし、非対話では kit が新設したキー（例: v0.20 → 最新の `permissions`）をユーザー版で丸ごと握り潰していたが、array は要素マージ・object は再帰マージで両取りするようになる
+- **`run_update` をフェーズ単位の関数に分割（#97）**: 約 245 行の単一関数を `_update_phase_settings` / `_update_phase_claude_md` / `_update_phase_content` / `_update_phase_hooks` / `_update_phase_snapshot` / `_update_report` へ分割（本体 33 行）。phase コメントと進捗表示 1-5 のずれも解消
+- **wizard の設定キーをレジストリ一元化（#98）**: `wizard/registry.sh` の `_CONFIG_KEYS` 単一レジストリから `_CONFIG_ALLOWED_KEYS` / `_CONFIG_SAVE_KEYS` をループ生成（生成結果は旧手書きリストと完全一致を検証済み）。新 ENABLE_* キーの追加はレジストリ 1 箇所 + i18n のみに。リセット処理の重複 2 箇所を `_reset_user_choices()` に統合、profile 読込の逐語重複（legacy formatter 判定含む）を `_load_profile_preserving_values()` に共通化
+- **対話プロンプトの入力をテスト可能に抽象化（#96）**: lib/deploy.sh の `/dev/tty` 直読み 2 箇所を `${_TTY_INPUT:-/dev/tty}` 注入式へ変更（既定動作は不変）。CLAUDE.md 移行の対話ループを `_claude_md_migration_prompt` として分離し、[M]erge / [S]kip / [O]verwrite / [N]ew-only の各分岐に自動テストを追加
+- **scenario CI の shard を再配分（#103）**: 45 シナリオ中 21 が集中していた update グループを `update`（更新フロー系 11 件）と `update-merge`（3-way merge・CLAUDE.md セクション・スナップショット系 10 件）に分割。最長 shard の実測時間が 2 分 28 秒 → 1 分 18 秒（約 53%）に短縮
+
+### Added
+- **埋め込みコピーの CI 同期検証（#99）**: `_safe_install_dir`（4 コピー）と `_clone_to_temp_and_swap`（3 コピー）の関数本体を正規化比較するテストを追加（片側だけ変更すると CI が落ちる。ミューテーションテストで検証済み）。install.sh の update 自動検出ロジックを `_resolve_setup_args()` として関数抽出し、fake manifest による 6 ケースの挙動テストと fake git による end-to-end テストを追加
+- **merge 統合の回帰テスト**: 空 snapshot の 3way ≡ bootstrap 一致テスト、型別ディスパッチ統一の pin テスト、深さ 2 kit-wins の pin テスト等 10 件（unit テスト計 344 件 Pass）
+
 ## [0.55.0] - 2026-06-12
 
 リファクタリング Issue #78〜#103 の一括対応。12 領域の並列監査（130 件の検証済み findings）に基づき、壊れていた hook の修正・update 経路の堅牢化・常時コンテキストの削減・大規模な dead code 整理・テスト基盤の刷新を行った。
