@@ -1,5 +1,5 @@
 {
   "session_id": "fixture-session-end",
   "hook_event_name": "SessionEnd",
-  "reason": "stop"
+  "reason": "other"
 }

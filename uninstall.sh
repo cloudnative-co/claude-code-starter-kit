@@ -101,11 +101,18 @@ _safe_cleanup_path() {
 }
 
 _remove_cleanup_path() {
-  local path="$1"
+  local path="$1" match
   [[ -n "$path" ]] || return 0
   if [[ "$path" == *'*'* ]]; then
     case "$path" in
-      "$CLAUDE_DIR/tmp/tool-count-"*) rm -f $path 2>/dev/null || true ;;
+      "$CLAUDE_DIR/tmp/tool-count-"*)
+        # compgen -G expands the glob without word splitting, so paths with
+        # spaces (e.g. Git Bash "C:/Users/First Last") are handled safely.
+        while IFS= read -r match; do
+          [[ -n "$match" ]] || continue
+          rm -f "$match" 2>/dev/null || true
+        done < <(compgen -G "$path" 2>/dev/null || true)
+        ;;
       *) warn "Skipping unsupported cleanup glob: $path" ;;
     esac
     return 0

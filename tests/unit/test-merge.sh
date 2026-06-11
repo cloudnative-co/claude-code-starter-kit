@@ -327,11 +327,14 @@ _write_json() {
 
 # ---------------------------------------------------------------------------
 # 13. _merge_object_3way: false sub-key values are preserved
+#     (current carries a user-added sub-key so the parent object is
+#      both-changed and the merge actually descends into _merge_object_3way
+#      instead of adopting the kit object wholesale at top level)
 # ---------------------------------------------------------------------------
 {
   test_name="3way: nested kit false values are preserved"
   snapshot="$(_write_json '{"features": {"enabled": true}}')"
-  current="$(_write_json '{"features": {"enabled": true}}')"
+  current="$(_write_json '{"features": {"enabled": true, "userFlag": "custom"}}')"
   new_kit="$(_write_json '{"features": {"enabled": false, "newFlag": false}}')"
   output="$(mktemp)"
 
@@ -339,7 +342,8 @@ _write_json() {
 
   if [[ "$_RF_RC" -eq 0 ]] \
     && jq -e '.features.enabled == false' "$output" >/dev/null \
-    && jq -e '.features.newFlag == false' "$output" >/dev/null; then
+    && jq -e '.features.newFlag == false' "$output" >/dev/null \
+    && jq -e '.features.userFlag == "custom"' "$output" >/dev/null; then
     pass "$test_name"
   else
     fail "$test_name"
@@ -461,4 +465,100 @@ _write_json() {
   _MERGE_PREFS_FILE=""
   _MERGE_PREFS_LOADED=false
   _MERGE_PREFS="{}"
+}
+
+# ---------------------------------------------------------------------------
+# 18. merge_settings_3way: user-changed top-level false value is kept
+#     (kit unchanged; false must not be misread as a missing key)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: user-changed top-level false value is kept (kit unchanged)"
+  snapshot="$(_write_json '{"flag": true, "stay": "x"}')"
+  current="$(_write_json '{"flag": false, "stay": "x"}')"
+  new_kit="$(_write_json '{"flag": true, "stay": "x"}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e 'has("flag")' "$output" >/dev/null \
+    && jq -e '.flag == false' "$output" >/dev/null \
+    && assert_json_field "$output" '.stay' "x"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# 19. merge_settings_3way: both changed with user=false → key survives
+#     (regression: pre-fix code mapped false to the missing-key sentinel and
+#      the conflict resolution deleted the key from the output entirely)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: both-changed top-level key with user false keeps false (keep-mine default)"
+  snapshot="$(_write_json '{"flag": true}')"
+  current="$(_write_json '{"flag": false}')"
+  new_kit="$(_write_json '{"flag": "kit-v2"}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e 'has("flag")' "$output" >/dev/null \
+    && jq -e '.flag == false' "$output" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# 20. _merge_object_3way: both-changed sub-key with user=false → key survives
+#     (regression: pre-fix code deleted the sub-key from the output entirely)
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: nested both-changed sub-key with user false keeps false (keep-mine default)"
+  snapshot="$(_write_json '{"env": {"DEBUG": true}}')"
+  current="$(_write_json '{"env": {"DEBUG": false}}')"
+  new_kit="$(_write_json '{"env": {"DEBUG": "verbose"}}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e '.env | has("DEBUG")' "$output" >/dev/null \
+    && jq -e '.env.DEBUG == false' "$output" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# 21. _merge_settings_bootstrap: kit-only false values are adopted
+#     (regression: pre-fix code mapped false to the missing-key sentinel so
+#      a new kit key with value false was never adopted)
+# ---------------------------------------------------------------------------
+{
+  test_name="bootstrap: kit-only false values are adopted, not dropped"
+  current="$(_write_json '{"userKey": "custom"}')"
+  new_kit="$(_write_json '{"newFlag": false, "feature": {"enabled": false}}')"
+  output="$(mktemp)"
+
+  run_func _merge_settings_bootstrap "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e 'has("newFlag")' "$output" >/dev/null \
+    && jq -e '.newFlag == false' "$output" >/dev/null \
+    && jq -e '.feature.enabled == false' "$output" >/dev/null \
+    && assert_json_field "$output" '.userKey' "custom"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$current" "$new_kit" "$output"
 }

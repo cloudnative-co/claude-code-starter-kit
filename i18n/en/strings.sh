@@ -152,6 +152,7 @@ STR_DEPLOY_PLUGINS_INSTALLED="Plugin:"
 STR_DEPLOY_PLUGINS_ALREADY="Already installed:"
 STR_DEPLOY_PLUGINS_UPDATED="Updated plugin:"
 STR_DEPLOY_PLUGINS_FAILED="Failed to install plugin:"
+STR_DEPLOY_PLUGINS_MARKETPLACE_FAILED="Failed to add plugin marketplace:"
 STR_DEPLOY_PLUGINS_SKIP="Skipping plugin install (Claude Code CLI not available)"
 
 # Post-deploy: CLI install

@@ -287,6 +287,21 @@ else
   fail "codex-setup: State B should warn when MCP cleanup fails"
 fi
 
+# State B: setup failure (not fully ready) must keep MCP — the legacy
+# registration is the user's only working Codex path until setup succeeds
+reset_codex_mocks
+MOCK_HAS_PLUGIN=true
+MOCK_HAS_MCP=true
+MOCK_SETUP_SUCCESS=false
+run_func run_codex_setup
+if assert_equals "0" "$_RF_RC" \
+  && assert_equals "1" "$MOCK_SETUP_CALLS" \
+  && assert_equals "0" "$MOCK_REMOVE_MCP_CALLS"; then
+  pass "codex-setup: State B keeps MCP when plugin setup fails"
+else
+  fail "codex-setup: State B must not remove MCP after a failed setup (setup_calls=$MOCK_SETUP_CALLS remove_calls=$MOCK_REMOVE_MCP_CALLS)"
+fi
+
 # State C: migration must keep MCP when setup is incomplete
 reset_codex_mocks
 MOCK_HAS_MCP=true

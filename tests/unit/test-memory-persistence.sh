@@ -19,9 +19,11 @@ _mp_home="$_mp_tmp/home"
 mkdir -p "$_mp_home"
 _mp_out="$_mp_tmp/post.out"
 _mp_err="$_mp_tmp/post.err"
-env HOME="$_mp_home" bash "$MEMORY_PERSISTENCE_POST" >"$_mp_out" 2>"$_mp_err"
+_mp_post_rc=0
+env HOME="$_mp_home" bash "$MEMORY_PERSISTENCE_POST" >"$_mp_out" 2>"$_mp_err" || _mp_post_rc=$?
 
-if assert_equals "" "$(cat "$_mp_err")" \
+if [[ "$_mp_post_rc" -eq 0 ]] \
+  && assert_equals "" "$(cat "$_mp_err")" \
   && assert_matches "Compaction complete\\. Recent session notes and learned context will be available on the next SessionStart\\." "$(cat "$_mp_out")" \
   && assert_file_not_exists "$_mp_home/.claude/sessions/compaction-log.txt"; then
   pass "memory-persistence: post-compact hook emits stdout reminder without runtime log files"
@@ -87,10 +89,12 @@ fi
 _mp_flow_home="$_mp_tmp/flow-home"
 mkdir -p "$_mp_flow_home"
 _mp_pre_err="$_mp_tmp/pre.err"
-env HOME="$_mp_flow_home" bash "$MEMORY_PERSISTENCE_PRE" >/dev/null 2>"$_mp_pre_err"
+_mp_pre_rc=0
+env HOME="$_mp_flow_home" bash "$MEMORY_PERSISTENCE_PRE" >/dev/null 2>"$_mp_pre_err" || _mp_pre_rc=$?
 _mp_session_file="$(ls "$_mp_flow_home/.claude/sessions"/*.tmp 2>/dev/null | head -1)"
 
-if assert_not_empty "$_mp_session_file" \
+if [[ "$_mp_pre_rc" -eq 0 ]] \
+  && assert_not_empty "$_mp_session_file" \
   && assert_file_contains "$_mp_session_file" "Compaction occurred" \
   && assert_file_not_contains "$_mp_session_file" "[Session context goes here]" \
   && assert_file_exists "$_mp_flow_home/.claude/sessions/compaction-log.txt"; then
@@ -101,17 +105,21 @@ fi
 
 _mp_start_out="$_mp_tmp/start.out"
 _mp_start_err="$_mp_tmp/start.err"
-env HOME="$_mp_flow_home" bash "$MEMORY_PERSISTENCE_START" >"$_mp_start_out" 2>"$_mp_start_err"
+_mp_start_rc=0
+env HOME="$_mp_flow_home" bash "$MEMORY_PERSISTENCE_START" >"$_mp_start_out" 2>"$_mp_start_err" || _mp_start_rc=$?
 
-if assert_equals "" "$(cat "$_mp_start_err")" \
+if [[ "$_mp_start_rc" -eq 0 ]] \
+  && assert_equals "" "$(cat "$_mp_start_err")" \
   && assert_file_contains "$_mp_start_out" "Compaction occurred"; then
   pass "memory-persistence: SessionStart emits available context on stdout"
 else
   fail "memory-persistence: SessionStart should emit context on stdout"
 fi
 
-env HOME="$_mp_flow_home" bash "$MEMORY_PERSISTENCE_END" >/dev/null 2>/dev/null
-if assert_file_contains "$_mp_session_file" "Last Updated"; then
+_mp_end_rc=0
+env HOME="$_mp_flow_home" bash "$MEMORY_PERSISTENCE_END" >/dev/null 2>/dev/null || _mp_end_rc=$?
+if [[ "$_mp_end_rc" -eq 0 ]] \
+  && assert_file_contains "$_mp_session_file" "Last Updated"; then
   pass "memory-persistence: SessionEnd updates existing notes without creating templates"
 else
   fail "memory-persistence: SessionEnd should update existing notes"

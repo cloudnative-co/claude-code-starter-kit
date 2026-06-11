@@ -150,6 +150,7 @@ STR_DEPLOY_PLUGINS_INSTALLED="プラグイン："
 STR_DEPLOY_PLUGINS_ALREADY="インストール済み："
 STR_DEPLOY_PLUGINS_UPDATED="プラグイン更新："
 STR_DEPLOY_PLUGINS_FAILED="プラグインのインストールに失敗："
+STR_DEPLOY_PLUGINS_MARKETPLACE_FAILED="プラグインマーケットプレイスの追加に失敗："
 STR_DEPLOY_PLUGINS_SKIP="プラグインのインストールをスキップ（Claude Code CLI が利用不可）"
 
 # Post-deploy: CLI install

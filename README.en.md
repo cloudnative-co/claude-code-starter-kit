@@ -167,7 +167,7 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 | Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Plugins | Codex Plugin | Ghostty |
 |---------|--------|-------|----------|--------|-------|--------|---------|-----------|---------|
 | Minimal | Yes | Yes | - | - | - | - | - | - | - |
-| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | 10 | Optional | - |
+| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | 5 | Optional | - |
 | Full | Yes | Yes | Yes | Yes | All | Yes | 14 | Yes | macOS only |
 
 - **Minimal**: Lightweight start with just agents and rules

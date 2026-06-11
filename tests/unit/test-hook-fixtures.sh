@@ -20,7 +20,7 @@ for _fixture in "$_hook_fixture_dir"/*.json; do
       elif .hook_event_name == "PostCompact" then
         (.trigger | type == "string")
       elif .hook_event_name == "SessionEnd" then
-        (.reason | type == "string")
+        (.reason | type == "string") and (.reason | IN("clear", "logout", "prompt_input_exit", "other"))
       else
         false
       end
@@ -61,9 +61,11 @@ fi
 
 _pr_fixture="$_hook_fixture_dir/posttooluse-gh-pr-create.json"
 _pr_err="$_hook_tmp/pr.err"
-bash "$PROJECT_DIR/features/pr-creation-log/scripts/log-pr.sh" <"$_pr_fixture" >/dev/null 2>"$_pr_err"
+_pr_rc=0
+bash "$PROJECT_DIR/features/pr-creation-log/scripts/log-pr.sh" <"$_pr_fixture" >/dev/null 2>"$_pr_err" || _pr_rc=$?
 
-if assert_matches "\\[Hook\\] PR created: https://github.com/cloudnative-co/claude-code-starter-kit/pull/99" "$(cat "$_pr_err")"; then
+if [[ "$_pr_rc" -eq 0 ]] \
+  && assert_matches "\\[Hook\\] PR created: https://github.com/cloudnative-co/claude-code-starter-kit/pull/99" "$(cat "$_pr_err")"; then
   pass "hook-fixtures: pr-creation-log consumes PostToolUse fixture"
 else
   fail "hook-fixtures: pr-creation-log should consume PostToolUse fixture"
@@ -75,10 +77,12 @@ _sc_err="$_hook_tmp/sc.err"
 _sc_runtime="$_hook_tmp/runtime"
 mkdir -p "$_sc_runtime"
 
+_sc_rc=0
 XDG_RUNTIME_DIR="$_sc_runtime" COMPACT_THRESHOLD=2 \
-  bash "$PROJECT_DIR/features/strategic-compact/scripts/suggest-compact.sh" <"$_sc_fixture" >"$_sc_out" 2>"$_sc_err"
+  bash "$PROJECT_DIR/features/strategic-compact/scripts/suggest-compact.sh" <"$_sc_fixture" >"$_sc_out" 2>"$_sc_err" || _sc_rc=$?
 
-if cmp -s "$_sc_fixture" "$_sc_out" \
+if [[ "$_sc_rc" -eq 0 ]] \
+  && cmp -s "$_sc_fixture" "$_sc_out" \
   && [[ -f "$_sc_runtime/tool-count-fixture-session-edit" ]] \
   && assert_matches "\\[FIC\\] Context ~50% used \\(1 tool calls\\)" "$(cat "$_sc_err")"; then
   pass "hook-fixtures: strategic-compact consumes PreToolUse fixture"
@@ -121,7 +125,7 @@ bash "$PROJECT_DIR/features/feature-recommendation/scripts/check-pending.sh" <"$
 HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/pre-compact.sh" <"$_hook_fixture_dir/precompact-manual.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
 HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/post-compact.sh" <"$_hook_fixture_dir/postcompact-manual.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
 HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/session-start.sh" <"$_hook_fixture_dir/sessionstart-startup.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
-HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/session-end.sh" <"$_hook_fixture_dir/sessionend-stop.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
+HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/session-end.sh" <"$_hook_fixture_dir/sessionend-other.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
 
 _tmux_rc=0
 bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" <"$_pre_dev_fixture" >/dev/null 2>"$_hook_tmp/tmux.err" || _tmux_rc=$?

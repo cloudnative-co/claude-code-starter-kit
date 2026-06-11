@@ -14,6 +14,14 @@ source "$SCRIPT_DIR/helpers.sh"
 printf "\n── Claude Code Starter Kit: Scenario Tests ──\n\n"
 SCENARIO_GROUP="${SCENARIO_GROUP:-all}"
 
+case "$SCENARIO_GROUP" in
+  all|core|update|features) ;;
+  *)
+    printf "ERROR: invalid SCENARIO_GROUP '%s' (expected: all, core, update, features)\n" "$SCENARIO_GROUP" >&2
+    exit 1
+    ;;
+esac
+
 run_scenario() {
   local group="$1"
   local name="$2"
