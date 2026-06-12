@@ -99,3 +99,14 @@
     fail "$test_name"
   fi
 }
+
+{
+  test_name="content-cleanup: settings-base has no generation-dependent pins (env / effortLevel)"
+  if ! jq -e 'has("env") or has("effortLevel")' "$PROJECT_DIR/config/settings-base.json" >/dev/null \
+    && jq -e '.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS == "1"' "$PROJECT_DIR/features/agent-teams/hooks.json" >/dev/null \
+    && grep -q '\[agent-teams\]=ENABLE_AGENT_TEAMS' "$PROJECT_DIR/lib/features.sh"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}

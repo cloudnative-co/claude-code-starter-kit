@@ -296,6 +296,7 @@ _step_confirm() {
   printf "%-20s : %s\n" "$STR_CONFIRM_FONTS" "$(_bool_label_enabled "$ENABLE_FONTS_SETUP")"
   printf "%-20s : %s\n" "$STR_CONFIRM_STATUSLINE" "$(_bool_label_enabled "${ENABLE_STATUSLINE:-false}")"
   printf "%-20s : %s\n" "$STR_CONFIRM_NO_FLICKER" "$(_bool_label_enabled "${ENABLE_NO_FLICKER:-false}")"
+  printf "%-20s : %s\n" "$STR_CONFIRM_AGENT_TEAMS" "$(_bool_label_enabled "${ENABLE_AGENT_TEAMS:-false}")"
   printf "%-20s : %s\n" "${STR_CONFIRM_FEATURE_RECOMMENDATION:-Feature Rec.}" "$(_bool_label_enabled "${ENABLE_FEATURE_RECOMMENDATION:-false}")"
 
   local hook_labels=()
@@ -356,6 +357,7 @@ _fill_noninteractive_defaults() {
   [[ -z "$ENABLE_NEW_INIT" ]] && ENABLE_NEW_INIT="true"
   [[ -z "${ENABLE_STATUSLINE:-}" ]] && ENABLE_STATUSLINE="true"
   [[ -z "${ENABLE_NO_FLICKER:-}" ]] && ENABLE_NO_FLICKER="false"
+  [[ -z "${ENABLE_AGENT_TEAMS:-}" ]] && ENABLE_AGENT_TEAMS="true"
   [[ -z "${ENABLE_FEATURE_RECOMMENDATION:-}" ]] && ENABLE_FEATURE_RECOMMENDATION="false"
   [[ -z "${ENABLE_WEB_CONTENT_UPDATE:-}" ]] && ENABLE_WEB_CONTENT_UPDATE="false"
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"

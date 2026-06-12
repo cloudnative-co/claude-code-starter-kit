@@ -8,7 +8,6 @@ BACKUP_PATH_FILE="${BACKUP_PATH_FILE:-$HOME/.claude/.starter-kit-last-backup}"
 STATUS_FILE="${STATUS_FILE:-$HOME/.claude/.starter-kit-update-status}"
 LEGACY_CACHE_FILE="${LEGACY_CACHE_FILE:-$HOME/.claude/.starter-kit-update-cache}"
 LEGACY_CACHE_TTL="${LEGACY_CACHE_TTL:-86400}"
-MIN_ASYNC_VERSION="${MIN_ASYNC_VERSION:-2.1.89}"
 AUTO_UPDATE_HOOK="${AUTO_UPDATE_HOOK:-SessionStart}"
 AUTO_UPDATE_LEGACY="${AUTO_UPDATE_LEGACY:-0}"
 
@@ -81,7 +80,6 @@ _auto_update_maybe_detach() {
       STATUS_FILE="$STATUS_FILE" \
       LEGACY_CACHE_FILE="$LEGACY_CACHE_FILE" \
       LEGACY_CACHE_TTL="$LEGACY_CACHE_TTL" \
-      MIN_ASYNC_VERSION="$MIN_ASYNC_VERSION" \
       AUTO_UPDATE_LEGACY="$AUTO_UPDATE_LEGACY" \
       "$0" >/dev/null 2>&1 &
     return 0

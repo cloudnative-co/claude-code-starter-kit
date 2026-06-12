@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.70.0] - 2026-06-12
+
+LLM 性能監査（#121）の最終弾（#120）。配布設定の世代依存ピンを整理した。これで監査計画 P1-P4 の全 14 Issue（#107〜#120）が完了。
+
+### Changed
+- **CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS を feature 化（#120）**: settings-base.json への無条件・無文書の埋め込みをやめ、`agent-teams` feature（`ENABLE_AGENT_TEAMS`、全プロファイル既定 true）に切り出し。既存ユーザーの動作は変わらないが、ウィザードでオフにでき、docs/wizard-config-mapping に文書化された。Claude Code 側で agent teams が GA になった際はフラグメントからキーを削除するだけで全ユーザーから除去できる（#75 の kit-remove 経路）
+- **settings-base.json の `effortLevel: "high"` 固定を削除（#120）**: 現行 CLI はモデル世代ごとに launch effort を管理しており、デフォルトと同値の静的ピンは将来の製品デフォルト変更を黙って打ち消すだけだった。未変更ユーザーは update の 3-way merge でキーが削除され、明示的に変更済みのユーザーの値は保持される（#75 で修正済みの経路）
+
+### Removed
+- **auto-update.sh の `MIN_ASYNC_VERSION` デッド変数を削除（#120）**: v0.55.0 でビルド時判定へ移行した際の残骸（定義 + detach 時の env 伝播の 2 箇所を同時削除）
+
+### Added
+- legacy hook 経路（Claude Code < 2.1.89 対応）の退役マイルストーンを宣言し、削除対象を列挙したトラッキング Issue #136 を起票（2026-10 以降の最初の minor で削除予定）
+
 ## [0.69.0] - 2026-06-12
 
 LLM 性能監査（#121）P4 の第 3 弾（#119）。CLAUDE.md 注入部（base + partials）の最終縮小。Fable 5 分類器対策（#76 / v0.54.0）と同方向の常時注入削減で、最大構成の合成 kit セクションは約 34% 縮小（ja: 2360 → 1557 bytes）。

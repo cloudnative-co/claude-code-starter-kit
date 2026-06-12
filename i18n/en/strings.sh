@@ -54,6 +54,7 @@ STR_FONTS_NO="No - Skip font installation"
 STR_CONFIRM_FONTS="Fonts"
 STR_CONFIRM_STATUSLINE="Status Line"
 STR_CONFIRM_NO_FLICKER="No Flicker"
+STR_CONFIRM_AGENT_TEAMS="Agent Teams (experimental)"
 STR_CONFIRM_FEATURE_RECOMMENDATION="Feature Rec."
 
 # Font installation messages

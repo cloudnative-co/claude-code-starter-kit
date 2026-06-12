@@ -1,0 +1,14 @@
+{
+	"name": "agent-teams",
+	"displayName": "Agent Teams (experimental)",
+	"description": "Enable Claude Code experimental agent teams via CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1",
+	"category": "setting",
+	"default": true,
+	"profiles": {
+		"minimal": true,
+		"standard": true,
+		"full": true
+	},
+	"dependencies": [],
+	"conflicts": []
+}

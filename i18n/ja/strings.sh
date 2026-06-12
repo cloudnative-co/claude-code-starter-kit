@@ -52,6 +52,7 @@ STR_FONTS_NO="いいえ - フォントのインストールをスキップ"
 STR_CONFIRM_FONTS="フォント"
 STR_CONFIRM_STATUSLINE="ステータスライン"
 STR_CONFIRM_NO_FLICKER="フリッカー防止"
+STR_CONFIRM_AGENT_TEAMS="Agent Teams（実験的機能）"
 STR_CONFIRM_FEATURE_RECOMMENDATION="機能レコメンド"
 
 # Font installation messages
