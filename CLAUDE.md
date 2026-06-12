@@ -191,6 +191,7 @@ Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and 
 
 - **Prerequisites auto-install**: The main setup flow requires `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, `node`, `tmux`, and `gh`. Stage 1 bootstrap (`wizard/wizard.sh`, `lib/colors.sh`, `lib/detect.sh`, `lib/prerequisites.sh`) remains Bash 3.2 compatible so the kit can auto-install or detect Bash 4+ and re-exec before Stage 2 (`declare -A`, `readarray`, etc.). Only show manual install commands after automatic installation fails.
 - **Variable naming**: `ENABLE_*` (feature toggles), `INSTALL_*` (component flags), `STR_*` (i18n strings), `_*` prefixed functions (private/internal)
+- **Reserved user namespace**: the kit MUST NOT ship files matching `rules/user-*.md` (or `user-*` trees under other managed dirs). Users place personal always-loaded rules there; `_update_file()` would silently overwrite a same-named user file on update because a kit-new file has no snapshot baseline.
 - **Boolean handling**: `_bool_normalize()` accepts true/1/yes/on → "true". Use `is_true()` for checks.
 - **No eval**: All dynamic variable assignment uses `printf -v` and `${!var}` (indirect expansion) to prevent injection.
 - **Ghostty detection**: Use `[[ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ]]` to detect Ghostty. Never use `-d "/Applications/Ghostty.app"` or `command -v ghostty` (both produce false positives).

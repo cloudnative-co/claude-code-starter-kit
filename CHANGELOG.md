@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.71.1] - 2026-06-12
+
+### Added
+- **`user-*` 名前空間の予約を規約化**: kit は `rules/user-*.md` 等の `user-*` 名のファイルを配布しないことを CLAUDE.md の Key Conventions に明文化し、CI テストで強制。ユーザーが個人の常時ロードルールを `~/.claude/rules/user-*.md` に置いても、将来の kit 更新で同名配布による無確認上書き（`_update_file()` は snapshot のない kit 新規ファイルを確認なしでコピーする）が起きないことを保証する
+
 ## [0.71.0] - 2026-06-12
 
 v0.57.0〜v0.70.0 の累積差分に対する multi-agent 通しレビュー（8 次元 + 14 Issue 受け入れ照合 + 敵対的検証）のフォローアップ（#138）。
