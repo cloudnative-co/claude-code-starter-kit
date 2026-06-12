@@ -91,7 +91,7 @@ STR_HOOKS_PRETTIER="Prettier Auto-format - Format JS/TS files after edits"
 STR_HOOKS_BIOME="Biome Auto-format - Format and lint JS/TS files after edits"
 STR_HOOKS_CONSOLE="Console.log Guard - Warn about console.log statements"
 STR_HOOKS_PR_LOG="PR Creation Log - Log PR URL after creation"
-STR_HOOKS_PRE_COMMIT="Pre-compact Auto-commit - Auto-commit before context compaction"
+STR_HOOKS_PRE_COMMIT="Pre-compact Snapshot - Stash tracked changes before context compaction (opt-in)"
 STR_HOOKS_DOC_SIZE="Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large"
 STR_HOOKS_FEATURE_RECOMMENDATION="Feature Recommendation - Notify about new features on session start"
 

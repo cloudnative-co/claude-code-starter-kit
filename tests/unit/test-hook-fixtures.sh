@@ -172,23 +172,28 @@ mkdir -p "$_pcc_home" "$_pcc_repo"
     && git init -q . \
     && git config user.name "Fixture" \
     && git config user.email "fixture@example.com" \
-    && printf 'pending change\n' >notes.txt
+    && printf 'base\n' >notes.txt \
+    && git add notes.txt \
+    && git commit -q -m "init" \
+    && printf 'pending change\n' >>notes.txt
 ) >/dev/null 2>&1 || _pcc_setup_ok=false
 
 _pcc_rc=0
 HOME="$_pcc_home" GIT_CONFIG_NOSYSTEM=1 CLAUDE_PROJECT_DIR="$_pcc_repo" \
   bash -c "$_pcc_cmd" <"$_hook_fixture_dir/precompact-manual.json" >/dev/null 2>&1 || _pcc_rc=$?
 
-_pcc_last_subject="$(HOME="$_pcc_home" git -C "$_pcc_repo" log -1 --format=%s 2>/dev/null || true)"
+_pcc_stash_subject="$(HOME="$_pcc_home" git -C "$_pcc_repo" stash list --format=%gs 2>/dev/null | head -1 || true)"
 _pcc_dirty="$(HOME="$_pcc_home" git -C "$_pcc_repo" status --porcelain 2>/dev/null || true)"
+_pcc_commit_count="$(HOME="$_pcc_home" git -C "$_pcc_repo" rev-list --count HEAD 2>/dev/null || true)"
 
 if [[ "$_pcc_setup_ok" == "true" ]] \
   && [[ "$_pcc_rc" -eq 0 ]] \
-  && assert_equals "checkpoint: pre-compact auto-commit" "$_pcc_last_subject" \
-  && assert_empty "$_pcc_dirty"; then
-  pass "hook-fixtures: pre-compact-commit inline command commits inside CLAUDE_PROJECT_DIR"
+  && assert_matches "pre-compact snapshot" "$_pcc_stash_subject" \
+  && assert_matches "notes\\.txt" "$_pcc_dirty" \
+  && assert_equals "1" "$_pcc_commit_count"; then
+  pass "hook-fixtures: pre-compact-commit stashes tracked changes without touching history or worktree"
 else
-  fail "hook-fixtures: pre-compact-commit inline command should commit inside CLAUDE_PROJECT_DIR"
+  fail "hook-fixtures: pre-compact-commit should store a stash snapshot, keep worktree dirty, add no commit"
 fi
 
 # pre-compact-commit safety: with CLAUDE_PROJECT_DIR unset the command must
@@ -211,15 +216,15 @@ _pcc_norun_rc=0
 ) || _pcc_norun_rc=$?
 
 _pcc_norun_status="$(HOME="$_pcc_home" git -C "$_pcc_norun_repo" status --porcelain 2>/dev/null || true)"
-_pcc_norun_head="$(HOME="$_pcc_home" git -C "$_pcc_norun_repo" rev-parse --quiet --verify HEAD 2>/dev/null || true)"
+_pcc_norun_stash="$(HOME="$_pcc_home" git -C "$_pcc_norun_repo" stash list 2>/dev/null || true)"
 
 if [[ "$_pcc_norun_setup_ok" == "true" ]] \
   && [[ "$_pcc_norun_rc" -eq 0 ]] \
   && assert_matches "\\?\\? stray\\.txt" "$_pcc_norun_status" \
-  && assert_empty "$_pcc_norun_head"; then
-  pass "hook-fixtures: pre-compact-commit skips commit when CLAUDE_PROJECT_DIR is unset"
+  && assert_empty "$_pcc_norun_stash"; then
+  pass "hook-fixtures: pre-compact-commit skips snapshot when CLAUDE_PROJECT_DIR is unset"
 else
-  fail "hook-fixtures: pre-compact-commit should not commit in cwd when CLAUDE_PROJECT_DIR is unset"
+  fail "hook-fixtures: pre-compact-commit should not stash in cwd when CLAUDE_PROJECT_DIR is unset"
 fi
 
 # auto-update.sh (SessionStart) — offline short-circuit: a missing KIT_DIR/.git

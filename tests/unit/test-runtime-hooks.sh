@@ -49,13 +49,17 @@
 }
 
 {
-  test_name="pre-compact-commit: cd failure cannot fall through to git commit"
+  test_name="pre-compact-commit: cd failure cannot fall through to git stash"
   cmd="$(jq -r '.hooks.PreCompact[0].hooks[0].command' "$PROJECT_DIR/features/pre-compact-commit/hooks.json")"
   # Guard must check non-empty BEFORE cd: Linux bash treats `cd ""` as a
   # successful no-op, so a bare `if cd "${VAR:-}"` fail-opens into the cwd.
+  # The snapshot must use stash create/store (no history commits, no add -A).
   if jq -e '.hooks.PreCompact[0].matcher == "*"' "$PROJECT_DIR/features/pre-compact-commit/hooks.json" >/dev/null \
     && [[ "$cmd" == 'if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && cd '* ]] \
-    && [[ "$cmd" == *"git add -A &&"* ]]; then
+    && [[ "$cmd" == *"git stash create"* ]] \
+    && [[ "$cmd" == *"git stash store"* ]] \
+    && [[ "$cmd" != *"git add -A"* ]] \
+    && [[ "$cmd" != *"git commit"* ]]; then
     pass "$test_name"
   else
     fail "$test_name"
