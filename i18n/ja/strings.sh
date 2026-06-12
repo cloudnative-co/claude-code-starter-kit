@@ -89,7 +89,7 @@ STR_HOOKS_PRETTIER="Prettier 自動フォーマット - JS/TS ファイルを編
 STR_HOOKS_BIOME="Biome 自動フォーマット - JS/TS ファイルを編集後に整形と lint 修正"
 STR_HOOKS_CONSOLE="Console.log ガード - console.log の警告"
 STR_HOOKS_PR_LOG="PR 作成ログ - PR 作成後に URL をログ"
-STR_HOOKS_PRE_COMMIT="コンパクト前自動コミット - compact 前に変更を自動コミット"
+STR_HOOKS_PRE_COMMIT="コンパクト前スナップショット - compact 前に tracked 変更を git stash に退避（opt-in）"
 STR_HOOKS_DOC_SIZE="ドキュメントサイズガード - CLAUDE.md/AGENTS.md の肥大化を警告"
 STR_HOOKS_FEATURE_RECOMMENDATION="機能レコメンド - セッション開始時に新機能を通知"
 

@@ -211,7 +211,7 @@ _init_hook_labels() {
     "${STR_HOOKS_BIOME:-Biome Auto-format - Format and lint JS/TS files after edits}"
     "$STR_HOOKS_CONSOLE"
     "$STR_HOOKS_PR_LOG"
-    "${STR_HOOKS_PRE_COMMIT:-Pre-compact auto-commit}"
+    "${STR_HOOKS_PRE_COMMIT:-Pre-compact Snapshot}"
     "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
     "${STR_HOOKS_FEATURE_RECOMMENDATION:-Feature Recommendation - Notify about new features on session start}"
   )

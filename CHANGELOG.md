@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.60.0] - 2026-06-12
+
+LLM 性能監査（#121）P1 の最終弾（#110）。pre-compact-commit を opt-in 化し、履歴を汚さない stash 方式に書き換えた。
+
+### Changed
+- **pre-compact-commit を opt-in 化（#110）**: standard / full プロファイルの既定を `false` に変更（全プロファイル既定 OFF）。現行 Claude Code はネイティブの checkpoint / rewind を備え、compaction でディスク上のファイルが失われることはないため、既定有効の価値より `git add -A` の害（untracked の機微ファイル巻き込み・checkpoint コミットによる履歴汚染・squash 時の混入）が上回っていた。**既存ユーザーが明示的に有効化した設定（保存済み config）は上書きされない**
+- **実装を stash スナップショット方式に書換（#110）**: `git add -A` + `git commit` を廃止し、`git stash create` + `git stash store -m 'pre-compact snapshot'` に変更。ブランチ履歴にコミットを作らず、作業ツリー・ステージ状態・untracked ファイルに一切触れない。復元は `git stash list` → `git stash apply`。表示名も「Pre-compact Snapshot（コンパクト前スナップショット）」に変更
+- README を「ネイティブ checkpoint / rewind がある現在は opt-in のレガシー保険」という位置づけに書き直し
+
 ## [0.59.0] - 2026-06-12
 
 LLM 性能監査（#121）P1 の第 3 弾（#109）。strategic-compact hook を撤去した。

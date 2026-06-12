@@ -67,7 +67,7 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 | `ENABLE_MEMORY_PERSISTENCE` | (retired) superseded by native auto-memory | None | Read as a legacy key and ignored |
 | `ENABLE_STRATEGIC_COMPACT` | (retired) hook removed; skill remains on-demand | None | Read as a legacy key and ignored |
 | `ENABLE_PR_CREATION_LOG` | PR Creation Log | PR creation logging support | Yes |
-| `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Commit | Commit helper before compact | Yes |
+| `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Snapshot | Stash tracked changes before compact (opt-in; default false in all profiles) | Yes |
 | `ENABLE_STATUSLINE` | Statusline | Statusline feature toggle | Yes |
 | `ENABLE_DOC_SIZE_GUARD` | Doc Size Guard | Warn when `CLAUDE.md` / `AGENTS.md` is too large | Yes |
 | `ENABLE_NO_FLICKER` | No Flicker | Reduce display flicker | Yes |
