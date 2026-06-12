@@ -196,7 +196,6 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | Prettier Auto-format | Formats JS/TS files after edits |
 | Biome Auto-format | Formats and lints JS/TS files after edits (Full uses Biome instead of Prettier) |
 | Console.log Guard | Warns about console.log statements left in code |
-| Memory Persistence | Saves/restores session state across sessions |
 | Strategic Compact | Suggests /compact at logical intervals |
 | PR Creation Log | Logs PR URL after creation |
 | Pre-compact Auto-commit | Auto-commits changes before context compaction |

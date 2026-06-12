@@ -122,10 +122,6 @@ bash "$PROJECT_DIR/features/console-log-guard/scripts/check-file.sh" <"$_post_ed
 (cd "$_hook_tmp" && bash "$PROJECT_DIR/features/doc-size-guard/scripts/check-doc-size.sh" <"$_post_write_fixture" >/dev/null 2>/dev/null) || _script_smoke_ok=false
 bash "$PROJECT_DIR/features/git-push-review/scripts/remind.sh" <"$_pre_push_fixture" >/dev/null 2>"$_hook_tmp/push.err" || _script_smoke_ok=false
 bash "$PROJECT_DIR/features/feature-recommendation/scripts/check-pending.sh" <"$_hook_fixture_dir/sessionstart-startup.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
-HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/pre-compact.sh" <"$_hook_fixture_dir/precompact-manual.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
-HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/post-compact.sh" <"$_hook_fixture_dir/postcompact-manual.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
-HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/session-start.sh" <"$_hook_fixture_dir/sessionstart-startup.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
-HOME="$_hook_tmp/home" bash "$PROJECT_DIR/features/memory-persistence/scripts/session-end.sh" <"$_hook_fixture_dir/sessionend-other.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
 
 _tmux_rc=0
 bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" <"$_pre_dev_fixture" >/dev/null 2>"$_hook_tmp/tmux.err" || _tmux_rc=$?

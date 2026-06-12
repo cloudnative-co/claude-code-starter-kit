@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.58.0] - 2026-06-12
+
+LLM 性能監査（#121）P1 の第 2 弾（#108）。native auto-memory と重複する memory-persistence feature を廃止した。
+
+### Removed
+- **memory-persistence feature を廃止（#108）**: SessionStart / SessionEnd / PreCompact / PostCompact の 4 hook と外部スクリプト 4 本を撤去。セッションノート（実質テンプレートのみで作業状態を保存していなかった）を毎セッション最大 80 行コンテキストに注入していたが、現行 Claude Code はプロジェクトごとの native auto-memory・compaction サマリ・`--resume` を標準装備しており、劣化重複だった。セッション状態の保持はネイティブ機能に委譲する
+- `ENABLE_MEMORY_PERSISTENCE` はレガシーキー化（保存済み config は読み捨て）。profiles / defaults / wizard の hook 選択肢から削除
+
+### Changed
+- **update 時の廃止 hook エントリ掃除を追加**: `_strip_retired_hook_entries()` が settings.json から廃止 feature のスクリプト（`~/.claude/hooks/memory-persistence/`）を指す hook エントリを除去し、空になった matcher / イベントを削除する。ユーザーが `hooks` をカスタマイズしていて 3-way merge がエントリを残すケースでも、削除済みスクリプトを指す壊れた hook が残らない。スクリプト本体と hooks ディレクトリは既存の retired 掃除（`_remove_retired_managed_files`）が削除する。`~/.claude/sessions/` は従来どおり uninstall の cleanup_paths 対象（既存定義を維持）
+
 ## [0.57.0] - 2026-06-12
 
 LLM 性能監査（#121）P1 の第 1 弾（#107）。旧モデル世代向けに設計されたシードメモリ配布を廃止した。

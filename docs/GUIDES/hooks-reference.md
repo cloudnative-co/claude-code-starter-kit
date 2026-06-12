@@ -9,12 +9,11 @@
 
 | イベント | 使用する機能（例) |
 |---|---|
-| `SessionStart` | auto-update, web-content-update, memory-persistence, feature-recommendation |
-| `SessionEnd` | auto-update, memory-persistence |
+| `SessionStart` | auto-update, web-content-update, feature-recommendation |
+| `SessionEnd` | auto-update |
 | `PreToolUse` | safety-net, tmux-hooks, doc-blocker, console-log-guard, strategic-compact, git-push-review |
 | `PostToolUse` | prettier-hooks, biome-hooks, doc-size-guard, pr-creation-log |
-| `PreCompact` | memory-persistence, pre-compact-commit |
-| `PostCompact` | memory-persistence |
+| `PreCompact` | pre-compact-commit |
 
 機能ごとの正確な定義は `features/<feature>/hooks.json` を参照。複数機能が
 同じイベントを使う場合、`merge_deep()` が配列を連結するため共存できる
