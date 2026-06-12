@@ -177,6 +177,7 @@ HOOK_KEYS=(
   "ENABLE_PRE_COMPACT_COMMIT"
   "ENABLE_DOC_SIZE_GUARD"
   "ENABLE_FEATURE_RECOMMENDATION"
+  "ENABLE_AGENT_TEAMS"
 )
 
 HOOK_TOKENS=(
@@ -191,6 +192,7 @@ HOOK_TOKENS=(
   "pre-commit"
   "doc-size"
   "feature-rec"
+  "agent-teams"
 )
 
 HOOK_LABELS=()
@@ -208,6 +210,7 @@ _init_hook_labels() {
     "${STR_HOOKS_PRE_COMMIT:-Pre-compact Snapshot}"
     "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
     "${STR_HOOKS_FEATURE_RECOMMENDATION:-Feature Recommendation - Notify about new features on session start}"
+    "${STR_HOOKS_AGENT_TEAMS:-Agent Teams (experimental) - Enable Claude Code agent teams}"
   )
 }
 

@@ -92,6 +92,7 @@ STR_HOOKS_BIOME="Biome Auto-format - Format and lint JS/TS files after edits"
 STR_HOOKS_PR_LOG="PR Creation Log - Log PR URL after creation"
 STR_HOOKS_PRE_COMMIT="Pre-compact Snapshot - Stash tracked changes before context compaction (opt-in)"
 STR_HOOKS_DOC_SIZE="Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large"
+STR_HOOKS_AGENT_TEAMS="Agent Teams (experimental) - Enable Claude Code agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)"
 STR_HOOKS_FEATURE_RECOMMENDATION="Feature Recommendation - Notify about new features on session start"
 
 # web-content-extraction skill dependency install (deploy-time messages)

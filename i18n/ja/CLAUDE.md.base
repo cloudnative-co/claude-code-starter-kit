@@ -3,7 +3,6 @@
 
 ## 基本方針
 - リポジトリに既存のコミット規約がある場合はそれに従い、ない場合は Conventional Commits 形式（feat: / fix: / refactor: / test: / docs: / chore:）を使う
-
 {{FEATURE:spec-kit}}
 {{FEATURE:web-content-extraction}}
 {{FEATURE:codex-plugin}}

@@ -550,18 +550,20 @@ _RETIRED_HOOK_FEATURES=(memory-persistence strategic-compact console-log-guard g
 
 # _strip_retired_hook_entries - Remove hook commands referencing retired
 # feature script dirs (~/.claude/hooks/<feature>/) from settings.json, then
-# drop matchers/events left empty.
+# drop matchers/events left empty. The pattern is anchored on "/.claude/" so
+# a user script that merely lives under a directory named after a retired
+# feature (e.g. ~/dotfiles/hooks/memory-persistence/) never matches.
 _strip_retired_hook_entries() {
   local settings_file="$1"
   [[ -f "$settings_file" ]] || return 0
   local feature tmp changed=false
   for feature in "${_RETIRED_HOOK_FEATURES[@]}"; do
-    jq -e --arg p "/hooks/${feature}/" '
+    jq -e --arg p "/.claude/hooks/${feature}/" '
       [(.hooks // {}) | to_entries[] | .value[]?.hooks[]? | (.command // "")]
       | any(contains($p))
     ' "$settings_file" >/dev/null 2>&1 || continue
     tmp="$(mktemp)"
-    if jq --arg p "/hooks/${feature}/" '
+    if jq --arg p "/.claude/hooks/${feature}/" '
       if .hooks then
         .hooks |= (to_entries
           | map(.value |= (map((.hooks //= []) | .hooks |= map(select((.command // "") | contains($p) | not)))

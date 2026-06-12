@@ -164,11 +164,11 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 
 ## Profiles
 
-| Profile | Agents | Rules | Commands | Skills | Hooks | Memory | Plugins | Codex Plugin | Ghostty |
-|---------|--------|-------|----------|--------|-------|--------|---------|-----------|---------|
-| Minimal | Yes | Yes | - | - | - | - | - | - | - |
-| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | Yes | 5 | Optional | - |
-| Full | Yes | Yes | Yes | Yes | All | Yes | 14 | Yes | macOS only |
+| Profile | Agents | Rules | Commands | Skills | Hooks | Plugins | Codex Plugin | Ghostty |
+|---|---|---|---|---|---|---|---|---|
+| Minimal | Yes | Yes | - | - | - | - | - | - |
+| Standard (Recommended) | Yes | Yes | Yes | Yes | Core | 5 | Optional | - |
+| Full | Yes | Yes | Yes | Yes | All | 14 | Yes | macOS only |
 
 - **Minimal**: Lightweight start with just agents and rules
 - **Standard**: Best for most teams. Includes commands, skills, and core hooks
@@ -327,7 +327,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --new-init=true \
   --codex-plugin=false \
   --commit-attribution=false \
-  --hooks=safety-net,auto-update,tmux,prettier,pr-log,pre-commit \
+  --hooks=safety-net,auto-update,tmux,prettier,pr-log,pre-commit,agent-teams \
   --plugins=security-guidance,commit-commands,pr-review-toolkit,document-skills@anthropic-agent-skills
 
 # Reuse a saved config

@@ -762,3 +762,44 @@ _write_json() {
   rm -f "$snapshot" "$current" "$new_kit" "$output"
   unset _prev_interactive
 }
+
+# ---------------------------------------------------------------------------
+# effortLevel pin removal (#120/#138): kit-removed key is deleted for
+# unchanged users and preserved for users who overrode it
+# ---------------------------------------------------------------------------
+{
+  test_name="3way: kit-removed effortLevel is deleted when user never changed it"
+  snapshot="$(_write_json '{"effortLevel": "high", "language": "en"}')"
+  current="$(_write_json '{"effortLevel": "high", "language": "en"}')"
+  new_kit="$(_write_json '{"language": "en"}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && [[ "$(jq 'has("effortLevel")' "$output")" == "false" ]] \
+    && assert_json_field "$output" '.language' "en"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+{
+  test_name="3way: kit-removed effortLevel is preserved when user overrode it"
+  snapshot="$(_write_json '{"effortLevel": "high", "language": "en"}')"
+  current="$(_write_json '{"effortLevel": "max", "language": "en"}')"
+  new_kit="$(_write_json '{"language": "en"}')"
+  output="$(mktemp)"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && assert_json_field "$output" '.effortLevel' "max"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+}

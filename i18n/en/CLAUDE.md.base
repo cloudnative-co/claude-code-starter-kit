@@ -3,7 +3,6 @@
 
 ## Basic Principles
 - Follow the repository's existing commit style; use Conventional Commits format (feat: / fix: / refactor: / test: / docs: / chore:) when no convention exists
-
 {{FEATURE:spec-kit}}
 {{FEATURE:web-content-extraction}}
 {{FEATURE:codex-plugin}}

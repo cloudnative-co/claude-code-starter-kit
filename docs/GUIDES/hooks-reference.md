@@ -21,6 +21,5 @@
 
 ## Compaction 前後の流れ（関連機能が有効な場合）
 
-- `PreCompact`: compaction でコンテキストが要約される前に走る（例: pre-compact-commit のスナップショット）
-- `PostCompact`: compaction 完了直後に走る
-- `SessionStart`: 次セッション開始時の復元・通知に使う
+- `PreCompact`: compaction でコンテキストが要約される前に走る（例: pre-compact-commit の stash スナップショット。opt-in）
+- セッション状態の保存・復元はキットの hook では行わない — Claude Code ネイティブの auto-memory / checkpoint・rewind / --resume に委譲している

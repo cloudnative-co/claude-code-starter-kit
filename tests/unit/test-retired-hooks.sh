@@ -16,6 +16,51 @@ _rh_run() {
 }
 
 {
+  test_name="retired-hooks: all retired feature entries are stripped in one pass"
+  _rh_all="$_rh_tmp/all-retired.json"
+  cat > "$_rh_all" <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "*", "hooks": [
+        {"type": "command", "command": "/home/u/.claude/hooks/strategic-compact/suggest-compact.sh"},
+        {"type": "command", "command": "/home/u/.claude/hooks/git-push-review/remind.sh"}
+      ]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Edit|Write", "hooks": [
+        {"type": "command", "command": "/home/u/.claude/hooks/console-log-guard/check-file.sh"}
+      ]}
+    ],
+    "SessionStart": [
+      {"matcher": "*", "hooks": [
+        {"type": "command", "command": "/home/u/.claude/hooks/memory-persistence/session-start.sh"}
+      ]}
+    ]
+  }
+}
+JSON
+  _rh_run "$_rh_all" >/dev/null 2>&1
+  if [[ "$(jq -r '.hooks | length' "$_rh_all")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="retired-hooks: user script under a same-named dir outside ~/.claude is kept"
+  _rh_user="$_rh_tmp/user-dir.json"
+  printf '{"hooks":{"PreCompact":[{"matcher":"*","hooks":[{"type":"command","command":"/home/u/dotfiles/hooks/memory-persistence/mine.sh"}]}]}}\n' > "$_rh_user"
+  _rh_run "$_rh_user" >/dev/null 2>&1
+  if [[ "$(jq -r '.hooks.PreCompact[0].hooks | length' "$_rh_user")" == "1" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
   test_name="retired-hooks: memory-persistence entries are stripped, others kept"
   _rh_settings="$_rh_tmp/settings.json"
   cat > "$_rh_settings" <<'JSON'

@@ -35,7 +35,7 @@ _doc_blocker_slop_name() {
   return "$matched"
 }
 
-if [[ "$file_path" =~ \.(md|txt)$ ]] && ! _doc_blocker_allowed_path "$file_path"; then
+if [[ "$file_path" =~ \.([Mm][Dd]|[Tt][Xx][Tt])$ ]] && ! _doc_blocker_allowed_path "$file_path"; then
   base="$(basename "$file_path")"
   if _doc_blocker_slop_name "$base"; then
     jq -cn --arg path "$file_path" '{

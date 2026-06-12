@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.71.0] - 2026-06-12
+
+v0.57.0〜v0.70.0 の累積差分に対する multi-agent 通しレビュー（8 次元 + 14 Issue 受け入れ照合 + 敵対的検証）のフォローアップ（#138）。
+
+### Fixed
+- **custom プロファイルの update で agent-teams env が無言で削除される問題を修正（#138）**: update 経路は非対話デフォルト補完を通らず、custom プロファイルには conf ファイルが無いため、`ENABLE_AGENT_TEAMS` が空のまま fragment 不注入 → 3-way merge でキー削除となっていた。`_restore_config_from_manifest` に後発キーのデフォルト補完を追加
+- **doc-blocker の拡張子ゲートを case-insensitive 化（#138）**: `SUMMARY.MD` / `NOTES.TXT` のような大文字拡張子が ask 確認をバイパスしていた（slop 名判定は nocasematch 済みだったが外側の拡張子ゲートが case-sensitive だった）
+- **`_strip_retired_hook_entries` のマッチを `/.claude/hooks/<feature>/` にアンカー強化（#138）**: 廃止 feature と同名のディレクトリ配下にあるユーザー自作 hook（例: `~/dotfiles/hooks/memory-persistence/`)を誤って除去し得た非アンカー substring マッチを修正（回帰テスト付き）
+
+### Added
+- **agent-teams をウィザード・`--hooks` CSV で切替可能に（#138、#120 の受け入れギャップ解消）**: `HOOK_KEYS` / `HOOK_TOKENS`（トークン `agent-teams`）/ `HOOK_LABELS` に登録し、custom プロファイルや `--hooks` 指定でオフにできるようにした。README の `--hooks` 例にも追加（`--hooks` は明示列挙のため、リストに含めない場合は無効化される点に注意）
+- agent teams GA 時の env フラグ除去トラッキング Issue #139 を起票（#120 の受け入れギャップ解消）
+- **テスト追加**: effortLevel ピン解除の merge 挙動 2 ケース（未変更→キー削除 / 上書き済み→値保持）、spec-kit partial の `INSTALL_COMMANDS` ゲート回帰テスト、retired 4 feature の一括 strip + ユーザー同名ディレクトリ保護のテスト（unit 計 348）
+
+### Changed
+- **CLAUDE.md 注入の体裁改善（#138）**: 無効 feature のマーカー行を空行で残す replace モードから行ごと削除する delete モードに変更（minimal プロファイルの連続空行を解消）。各 partial 先頭に区切り空行を追加し、partial 同士の密着を解消
+- **ドキュメント残骸の掃除（#138）**: README ja のプロファイル比較表（メモリ行・旧フック数）・フック節見出し「15個」→「11個」・エディタ注記の廃止 hook 言及、README en のプロファイル表 Memory 列、profiles/standard.conf ヘッダコメント、リポジトリ CLAUDE.md（Inline hooks 例・Doc Size Guard 記述）、docs/GUIDES/hooks-reference.md の Compaction 節、lib/deploy.sh の spec-kit 注入ブロックの誤コメント
+
 ## [0.70.0] - 2026-06-12
 
 LLM 性能監査（#121）の最終弾（#120）。配布設定の世代依存ピンを整理した。これで監査計画 P1-P4 の全 14 Issue（#107〜#120）が完了。
