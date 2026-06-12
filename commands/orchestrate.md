@@ -1,172 +1,53 @@
 # Orchestrate Command
 
-Sequential agent workflow for complex tasks.
+Plan, implement, and verify in the main thread; spawn independent review
+agents after implementation. Prefer parallel reviews over sequential
+agent relays.
 
 ## Usage
 
 `/orchestrate [workflow-type] [task-description]`
 
-## Workflow Types
+## Default Execution Model
 
-### feature
-Full feature implementation workflow:
-```
-planner -> tdd-guide -> code-reviewer -> security-reviewer
-```
+1. **Plan and implement in the main thread.** Keep full context; do not
+   split planning/implementation across agents unless the task genuinely
+   needs isolated exploration.
+2. **After implementation, spawn independent reviewers in parallel:**
+   - `code-reviewer` — always, before merge
+   - `security-reviewer` — when the change touches auth, payments, PII,
+     secrets, networking, or file/command boundaries
+   - `architect` — when the change alters system boundaries or major design
+3. **Reconcile findings yourself**, fix what is real, and report.
 
-### bugfix
-Bug investigation and fix workflow:
-```
-planner -> tdd-guide -> code-reviewer
-```
+## Review Focus by Task Type
 
-### refactor
-Safe refactoring workflow:
-```
-architect -> code-reviewer -> tdd-guide
-```
+These are review-lens suggestions, not required agent chains:
 
-### security
-Security-focused review:
-```
-security-reviewer -> code-reviewer -> architect
-```
+- **feature** — correctness against requirements, tests for new behavior, security surface
+- **bugfix** — root cause addressed (not symptom), regression test added
+- **refactor** — behavior preserved, test coverage before/after, no scope creep
+- **security** — input validation, authz/authn, secrets handling, injection surfaces
 
-## Execution Pattern
+## Output Requirements
 
-For each agent in the workflow:
+Report at the end (no fixed template — cover these points):
 
-1. **Invoke agent** with context from previous agent
-2. **Collect output** as structured handoff document
-3. **Pass to next agent** in chain
-4. **Aggregate results** into final report
+- Files changed
+- Test results (commands run and outcomes)
+- Review findings and how each was resolved
+- Verdict: SHIP / NEEDS WORK / BLOCKED
 
-## Handoff Document Format
+## Custom Sequences
 
-Between agents, create handoff document:
-
-```markdown
-## HANDOFF: [previous-agent] -> [next-agent]
-
-### Context
-[Summary of what was done]
-
-### Findings
-[Key discoveries or decisions]
-
-### Files Modified
-[List of files touched]
-
-### Open Questions
-[Unresolved items for next agent]
-
-### Recommendations
-[Suggested next steps]
-```
-
-## Example: Feature Workflow
-
-```
-/orchestrate feature "Add user authentication"
-```
-
-Executes:
-
-1. **Planner Agent**
-   - Analyzes requirements
-   - Creates implementation plan
-   - Identifies dependencies
-   - Output: `HANDOFF: planner -> tdd-guide`
-
-2. **TDD Guide Agent**
-   - Reads planner handoff
-   - Writes tests first
-   - Implements to pass tests
-   - Output: `HANDOFF: tdd-guide -> code-reviewer`
-
-3. **Code Reviewer Agent**
-   - Reviews implementation
-   - Checks for issues
-   - Suggests improvements
-   - Output: `HANDOFF: code-reviewer -> security-reviewer`
-
-4. **Security Reviewer Agent**
-   - Security audit
-   - Vulnerability check
-   - Final approval
-   - Output: Final Report
-
-## Final Report Format
-
-```
-ORCHESTRATION REPORT
-====================
-Workflow: feature
-Task: Add user authentication
-Agents: planner -> tdd-guide -> code-reviewer -> security-reviewer
-
-SUMMARY
--------
-[One paragraph summary]
-
-AGENT OUTPUTS
--------------
-Planner: [summary]
-TDD Guide: [summary]
-Code Reviewer: [summary]
-Security Reviewer: [summary]
-
-FILES CHANGED
--------------
-[List all files modified]
-
-TEST RESULTS
-------------
-[Test pass/fail summary]
-
-SECURITY STATUS
----------------
-[Security findings]
-
-RECOMMENDATION
---------------
-[SHIP / NEEDS WORK / BLOCKED]
-```
-
-## Parallel Execution
-
-For independent checks, run agents in parallel:
-
-```markdown
-### Parallel Phase
-Run simultaneously:
-- code-reviewer (quality)
-- security-reviewer (security)
-- architect (design)
-
-### Merge Results
-Combine outputs into single report
-```
-
-## Arguments
-
-$ARGUMENTS:
-- `feature <description>` - Full feature workflow
-- `bugfix <description>` - Bug fix workflow
-- `refactor <description>` - Refactoring workflow
-- `security <description>` - Security review workflow
-- `custom <agents> <description>` - Custom agent sequence
-
-## Custom Workflow Example
-
-```
-/orchestrate custom "architect,tdd-guide,code-reviewer" "Redesign caching layer"
-```
+`/orchestrate custom "<agents>" "<description>"` runs an explicit agent
+sequence when you really need one. Sub-agents do not share context: when
+chaining, pass the next agent a one-paragraph summary of what was done,
+key decisions, and open questions — no fixed handoff template.
 
 ## Tips
 
-1. **Start with planner** for complex features
-2. **Always include code-reviewer** before merge
-3. **Use security-reviewer** for auth/payment/PII
-4. **Keep handoffs concise** - focus on what next agent needs
-5. **Run verification** between agents if needed
+1. **Always include code-reviewer** before merge
+2. **Use security-reviewer** for auth/payment/PII surfaces
+3. Prefer parallel reviews over sequential chains — faster and no
+   information loss between agents

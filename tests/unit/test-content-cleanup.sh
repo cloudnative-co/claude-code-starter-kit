@@ -78,9 +78,10 @@
 }
 
 {
-  test_name="content-cleanup: orchestrate uses existing agents"
+  test_name="content-cleanup: orchestrate prefers parallel reviews over fixed chains"
   if ! grep -q 'explorer ->' "$PROJECT_DIR/commands/orchestrate.md" \
-    && grep -q 'planner -> tdd-guide -> code-reviewer' "$PROJECT_DIR/commands/orchestrate.md"; then
+    && ! grep -q 'planner -> tdd-guide -> code-reviewer' "$PROJECT_DIR/commands/orchestrate.md" \
+    && grep -q 'spawn independent reviewers in parallel' "$PROJECT_DIR/commands/orchestrate.md"; then
     pass "$test_name"
   else
     fail "$test_name"

@@ -28,7 +28,7 @@ _doc_blocker_decision() {
     "$PROJECT_DIR/.reports/SUMMARY.md"
     "$PROJECT_DIR/docs/CODEMAPS/ANALYSIS.md"
     "$PROJECT_DIR/.claude/evals/feature-name.md"
-    "$HOME/.claude/skills/learned/pattern.md"
+    "$HOME/.claude/skills/learned/pattern/SKILL.md"
     "$PROJECT_DIR/.specify/memory/constitution.md"
   )
   ok_all=true
