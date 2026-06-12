@@ -33,13 +33,18 @@ Look for:
 
 ## Output Format
 
-Create a skill file at `~/.claude/skills/learned/[pattern-name].md`:
+Create a skill at `~/.claude/skills/learned/<pattern-name>/SKILL.md` so the
+current skill discovery mechanism (directory + SKILL.md with YAML
+frontmatter) can load it:
 
 ```markdown
-# [Descriptive Pattern Name]
+---
+name: <pattern-name>
+description: <one-line description of the problem this solves>
+when_to_use: Use when <trigger condition for this pattern>
+---
 
-**Extracted:** [Date]
-**Context:** [Brief description of when this applies]
+# [Descriptive Pattern Name]
 
 ## Problem
 [What problem this solves - be specific]
@@ -49,18 +54,15 @@ Create a skill file at `~/.claude/skills/learned/[pattern-name].md`:
 
 ## Example
 [Code example if applicable]
-
-## When to Use
-[Trigger conditions - what should activate this skill]
 ```
 
 ## Process
 
 1. Review the session for extractable patterns
 2. Identify the most valuable/reusable insight
-3. Draft the skill file
+3. Draft the SKILL.md
 4. Ask user to confirm before saving
-5. Save to `~/.claude/skills/learned/`
+5. Save to `~/.claude/skills/learned/<pattern-name>/SKILL.md`
 
 ## Notes
 
@@ -68,3 +70,5 @@ Create a skill file at `~/.claude/skills/learned/[pattern-name].md`:
 - Don't extract one-time issues (specific API outages, etc.)
 - Focus on patterns that will save time in future sessions
 - Keep skills focused - one pattern per skill
+- Routine learnings are captured automatically by auto-memory; use /learn
+  only to promote a pattern into an activatable skill

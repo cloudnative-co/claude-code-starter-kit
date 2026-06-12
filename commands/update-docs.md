@@ -1,12 +1,13 @@
 # Update Documentation
 
-Sync documentation from source-of-truth:
+Sync documentation from real sources of truth:
 
-1. Read package.json scripts section
-   - Generate scripts reference table
+1. Detect the project's task definition source (package.json scripts,
+   Makefile, pyproject.toml, etc.)
+   - Generate a scripts/tasks reference table
    - Include descriptions from comments
 
-2. Read .env.example
+2. Read .env.example (if present)
    - Extract all environment variables
    - Document purpose and format
 
@@ -16,16 +17,18 @@ Sync documentation from source-of-truth:
    - Environment setup
    - Testing procedures
 
-4. Generate docs/RUNBOOK.md with:
-   - Deployment procedures
-   - Monitoring and alerts
-   - Common issues and fixes
-   - Rollback procedures
+4. Update docs/RUNBOOK.md **only when real operational sources exist**
+   (CI workflow definitions, Dockerfile/compose, IaC, deploy scripts, or
+   an existing docs/RUNBOOK.md). Derive content from those sources only.
+   Omit any section (Deployment / Monitoring / Rollback / ...) that has
+   no source — never invent procedures. List the missing sections in the
+   report instead.
 
 5. Identify obsolete documentation:
-   - Find docs not modified in 90+ days
+   - Find docs that look stale (e.g. not modified in ~90 days)
    - List for manual review
 
 6. Show diff summary
 
-Single source of truth: package.json and .env.example
+Sources of truth: task definitions and .env.example for scripts/env;
+CI / IaC / deploy configs for operational procedures.

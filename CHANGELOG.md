@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.64.0] - 2026-06-12
+
+LLM 性能監査（#121）P3 の第 1 弾（#114）。commands の旧モデル向け儀式（固定手順の強制）を成果指向に書き換えた。
+
+### Changed
+- **orchestrate（#114）**: 固定 4 エージェント直列チェーン + 定型 HANDOFF 文書 + 35 行固定レポートテンプレートを廃止。既定を「メインスレッドで計画・実装・検証し、実装後に独立レビューエージェント（code-reviewer 必須、対象に応じて security-reviewer / architect）を並列 spawn」に変更。タスク種別の固定チェーンはレビュー観点リストに格下げ。custom での直列チェーンは「次エージェントへ 1 段落で文脈を渡す」とだけ規定（定型テンプレート廃止）
+- **build-fix（#114）**: 「エラー 1 件ごとにフルビルド再実行」を「根本原因ごとにバッチ修正 + 最速の検証手段で再チェック + 最後にフルビルド 1 回」に変更。npm/pnpm ハードコードをビルドコマンド検出に一般化。「Fix one error at a time for safety!」を削除（3 回試行ルールとユーザー停止条件は保険として維持）
+- **refactor-clean（#114）**: 「削除 1 件ごとにフルテストを前後 2 回」を「green ベースライン 1 回 → SAFE 削除をバッチ適用（削除単位コミットでロールバック容易化）→ バッチごと focused tests → 最後にフル 1 回 → 失敗時はバイセクト」に変更。ツールリストを言語別に一般化。SAFE/CAUTION/DANGER 分類と「Never delete code without running tests first!」は維持
+- **learn（#114）**: 出力形式を現行スキル発見機構に適合する `~/.claude/skills/learned/<pattern-name>/SKILL.md` + YAML frontmatter（name / description / when_to_use）に修正（旧フラット .md はスキルとして自動ロードされなかった）。「ルーチンな学びは auto-memory が自動取得、/learn は activation 可能なスキルへの明示昇格専用」と棲み分けを明記
+- **update-docs（#114）**: RUNBOOK 生成を「実在する運用ソース（CI / Dockerfile / IaC / deploy スクリプト / 既存 RUNBOOK）がある場合のみ・ソースから導出できるセクションのみ」に限定し、ソースのないセクションは省略して不足として報告する方式に変更（運用手順の捏造を構造的に防止）。「Single source of truth: package.json and .env.example」の矛盾宣言を実際のソース集合に修正。タスク定義ソースの検出を一般化
+
 ## [0.63.0] - 2026-06-12
 
 LLM 性能監査（#121）P2 の最終弾（#113）。残る挙動ガード hook を整理した。
