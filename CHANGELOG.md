@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.69.0] - 2026-06-12
+
+LLM 性能監査（#121）P4 の第 3 弾（#119）。CLAUDE.md 注入部（base + partials）の最終縮小。Fable 5 分類器対策（#76 / v0.54.0）と同方向の常時注入削減で、最大構成の合成 kit セクションは約 34% 縮小（ja: 2360 → 1557 bytes）。
+
+### Removed
+- **「長いセッションでは /clear を活用」行を削除（#119）**: auto-compact 未成熟期のユーザー向けベストプラクティス由来。/clear はユーザーコマンドでモデルは実行できず、常時注入の指示として情報量ゼロ
+- **codex-plugin partial のタスク種別ルーティングを削除（#119）**: 「大きめのコード生成・複数ファイル変更・テスト作成・リファクタリング・原因調査は Codex へ」という旧世代の能力差前提の委譲示唆を、「クロスモデルの独立視点（/codex:review, /codex:adversarial-review）+ ユーザー明示依頼時の /codex:rescue」に縮小。打ち消し用だった「単純な作業は Claude が直接行う」も削除
+
+### Changed
+- **Conventional Commits を条件付き化（#119）**: 全プロジェクト一律強制から「リポジトリの既存規約を優先、規約がなければ Conventional Commits」に書換（rules/git-workflow.md と整合）
+- **Spec Kit ブロックを feature 化（#119）**: base 直書きで全プロファイルに常時注入されていた 4 行を `{{FEATURE:spec-kit}}` + `INSTALL_COMMANDS` ゲートの partial（1 行）に変更。minimal プロファイルでは注入されなくなり、マーカー共存規則・constitution 優先順位の詳細は commands/spec-kit-init.md に集約
+- **web-content-extraction partial を縮小（#119）**: harness が標準注入する skill description・コマンド一覧と重複していたコマンド列挙・SKILL.md 参照の 2 行を削除し、生 HTML を直接読まないポリシー 1 行のみに
+
 ## [0.68.0] - 2026-06-12
 
 LLM 性能監査（#121）P4 の第 2 弾（#118）。agents/ を現行世代に合わせて現代化した。
