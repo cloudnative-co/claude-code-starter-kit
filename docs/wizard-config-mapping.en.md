@@ -70,6 +70,7 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 | `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Snapshot | Stash tracked changes before compact (opt-in; default false in all profiles) | Yes |
 | `ENABLE_STATUSLINE` | Statusline | Statusline feature toggle | Yes |
 | `ENABLE_DOC_SIZE_GUARD` | Doc Size Guard | Warn when `CLAUDE.md` / `AGENTS.md` is too large | Yes |
+| `ENABLE_AGENT_TEAMS` | Agent Teams (experimental) | Injects CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 into settings.json env (default true in all profiles) | Yes |
 | `ENABLE_NO_FLICKER` | No Flicker | Reduce display flicker | Yes |
 | `ENABLE_FEATURE_RECOMMENDATION` | Feature Recommendation | Notify about newly available features | Yes |
 

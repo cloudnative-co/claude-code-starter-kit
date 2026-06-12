@@ -70,6 +70,7 @@
 | `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Snapshot | compact 前に tracked 変更を git stash へ退避（opt-in・全プロファイル既定 false） | はい |
 | `ENABLE_STATUSLINE` | Statusline | ステータスライン機能 | はい |
 | `ENABLE_DOC_SIZE_GUARD` | Doc Size Guard | 大きすぎる `CLAUDE.md` / `AGENTS.md` を警告 | はい |
+| `ENABLE_AGENT_TEAMS` | Agent Teams（実験的） | CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 を settings.json の env に注入（全プロファイル既定 true） | はい |
 | `ENABLE_NO_FLICKER` | No Flicker | 表示のちらつき低減設定 | はい |
 | `ENABLE_FEATURE_RECOMMENDATION` | Feature Recommendation | 新機能候補の通知 | はい |
 
