@@ -430,7 +430,7 @@ cd claude-code-starter-kit
 | **refactor-cleaner** | コード整理 | 不要なコードの削除・整理 |
 | **doc-updater** | ドキュメント更新 | README やドキュメントの更新 |
 
-### 💬 スラッシュコマンド（20個）
+### 💬 スラッシュコマンド（21個）
 
 スラッシュコマンドは、Claude に **ワンタッチで指示を出すショートカット** です。
 Claude Code のチャットで `/` に続けて入力します。
@@ -451,6 +451,7 @@ Claude Code のチャットで `/` に続けて入力します。
 | `/web-source-review` | URL を抽出し情報源としての信頼性を評価 |
 | `/handover` | セッション引き継ぎドキュメントの生成 |
 | `/update-kit` | スターターキットを手動で最新版に更新 |
+| `/audit-config` | 個人設定（CLAUDE.md ユーザーセクション・user-*.md）に旧モデル向けの不要な指示が残っていないか監査 |
 
 ### 🌐 Web 取得スキル（web-content-extraction）
 
@@ -867,6 +868,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > **CLAUDE.md のカスタマイズ**:
 > - `~/.claude/CLAUDE.md` は kit 管理セクション（`<!-- BEGIN STARTER-KIT-MANAGED -->` 〜 `<!-- END STARTER-KIT-MANAGED -->`）とユーザーセクション（`# ユーザー設定`）に分かれています
 > - ユーザーセクションに自由にカスタム指示を追加できます。update 時も kit セクションのみ更新され、ユーザーセクションは保持されます
+> - **おすすめ**: 個人の常時ロード指示は、CLAUDE.md のユーザーセクションよりも `~/.claude/rules/user-<名前>.md` として置くのがおすすめです。kit は `user-*` 名のファイルを配布しないことを保証している（CI で強制）ため、update のマージ対象から完全に外れ、ファイル単位で整理・バージョン管理できます。コンテキストコストはどちらも同じ（常時ロード）です
 > - 既存の CLAUDE.md にマーカーがない場合、初回 update 時に対話的にマイグレーションが行われます
 >
 > **既存ユーザー向け**:
@@ -899,7 +901,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 | やりたいこと | 方法 |
 |---|---|
 | エージェントを追加 | `~/.claude/agents/` に `.md` ファイルを作成 |
-| ルールを追加 | `~/.claude/rules/` に `.md` ファイルを作成 |
+| ルールを追加 | `~/.claude/rules/` に `.md` ファイルを作成（個人設定は `user-*.md` 推奨 — kit が配布しない予約名で update と衝突しない） |
 | コマンドを追加 | `~/.claude/commands/` に `.md` ファイルを作成 |
 | スキルを追加 | `~/.claude/skills/{name}/` に `SKILL.md` + 必要に応じて `references/`, `scripts/`, `assets/` を作成 |
 | フックを変更 | `~/.claude/settings.json` の hooks セクションを編集 |
@@ -1102,7 +1104,7 @@ claude-code-starter-kit/
 │   └── ja/                 # 日本語
 ├── agents/                 # AI エージェント定義（9種）
 ├── rules/                  # コーディングルール（8種）
-├── commands/               # スラッシュコマンド（20個）
+├── commands/               # スラッシュコマンド（21個）
 └── skills/                 # スキルモジュール（12個）
 ```
 
