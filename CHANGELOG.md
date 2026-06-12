@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.67.0] - 2026-06-12
+
+LLM 性能監査（#121）P4 の第 1 弾（#117）。常時注入される rules/ から現行モデルに情報量のない行を削除した（10 → 8 ファイル）。
+
+### Removed
+- **rules/patterns.md / rules/hooks.md を廃止（#117）**: patterns.md は「既存パターン踏襲」（harness 標準と重複）と「詳細例は skills へ」（ルール作者向けメタ指示の誤配置）を削除し、有効な 2 行（抽象化の閾値・構造化パーサ優先）を coding-style.md へ統合。hooks.md は hook 作成時しか意味を持たないリファレンスの常時注入だったため、要点をリポジトリ CLAUDE.md の Hook Fragment Assembly 節へ移設（SessionStart/SessionEnd の用途限定行はキット自身の利用実態と矛盾するため削除）。既存配備分は update の retired 掃除で除去
+- **行単位の削除（#117）**: anti-patterns.md「Load only task-relevant files…」（小コンテキスト時代の遺物）、agents.md の 8 領域列挙と並列実行・スコープ最小化行（agents/*.md の description と harness 標準の再記述）、coding-style.md の immutability 選好（JS テンプレ由来の越境。TS/JS スコープでは skills/coding-standards がカバー）とデフォルト挙動の再掲 3 行、permissions-guide.md の回帰テスト義務（キット開発規約のグローバル漏出 — リポジトリ CLAUDE.md へ移設）
+
+### Changed
+- **rules/agents.md を委譲閾値基準に書換（#117）**: 「Delegate to a subagent only when the task is large enough to amortize the overhead, or benefits from isolation or parallelism」+ 出力照合の 2 行に縮小（反証検証で「残す」と判定された L6 は維持）
+
 ## [0.66.0] - 2026-06-12
 
 LLM 性能監査（#121）P3 の最終弾（#116）。skills の一律強制を縮小し内容の鮮度を更新した。
