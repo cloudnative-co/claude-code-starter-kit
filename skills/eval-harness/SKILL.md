@@ -34,7 +34,7 @@ Expected Output: Description of expected result
 Ensure changes don't break existing functionality:
 ```markdown
 [REGRESSION EVAL: feature-name]
-Baseline: SHA or checkpoint name
+Baseline: git SHA (or a /checkpoint milestone name)
 Tests:
   - existing-test-1: PASS/FAIL
   - existing-test-2: PASS/FAIL

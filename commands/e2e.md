@@ -19,15 +19,10 @@ Use the `e2e-runner` agent and the repository's existing browser test setup.
 
 ## CI Baseline
 
-When creating GitHub Actions examples, use current actions and active Node LTS:
-
-```yaml
-- uses: actions/checkout@v4
-- uses: actions/setup-node@v4
-  with:
-    node-version: 22
-- uses: actions/upload-artifact@v4
-```
+When creating GitHub Actions examples, check and use the latest major
+versions of actions and the active Node LTS at generation time; if the
+repository already has `.github/workflows/`, treat those as the current
+baseline instead of hardcoding versions.
 
 ## Output
 

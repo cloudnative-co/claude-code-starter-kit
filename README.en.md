@@ -52,7 +52,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **3 profiles**: Minimal, Standard (recommended), Full
 - **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
 - **10 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide
-- **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
+- **20 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
 - **11 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
@@ -393,7 +393,7 @@ claude-code-starter-kit/
 │   └── ja/                 # Japanese templates & strings
 ├── agents/                 # Agent definitions (9 files)
 ├── rules/                  # Rule files (10 files)
-├── commands/               # Slash commands (21 files)
+├── commands/               # Slash commands (20 files)
 └── skills/                 # Skill modules (12 dirs)
 ```
 

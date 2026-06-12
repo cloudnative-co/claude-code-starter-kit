@@ -44,9 +44,12 @@
 }
 
 {
-  test_name="agents: e2e and security guidance use current baselines"
-  if grep -q 'actions/upload-artifact@v4' "$PROJECT_DIR/agents/e2e-runner.md" \
-    && grep -q 'node-version: 22' "$PROJECT_DIR/agents/e2e-runner.md" \
+  test_name="agents: e2e and security guidance avoid stale pinned baselines"
+  if ! grep -q 'actions/checkout@v' "$PROJECT_DIR/agents/e2e-runner.md" \
+    && ! grep -q 'node-version:' "$PROJECT_DIR/agents/e2e-runner.md" \
+    && ! grep -q 'actions/checkout@v' "$PROJECT_DIR/commands/e2e.md" \
+    && ! grep -q 'node-version:' "$PROJECT_DIR/commands/e2e.md" \
+    && grep -q 'active Node LTS' "$PROJECT_DIR/agents/e2e-runner.md" \
     && grep -q 'context.tracing.start' "$PROJECT_DIR/agents/e2e-runner.md" \
     && grep -q 'OWASP Top 10 2021' "$PROJECT_DIR/agents/security-reviewer.md" \
     && grep -q 'Server-Side Request Forgery' "$PROJECT_DIR/agents/security-reviewer.md"; then
