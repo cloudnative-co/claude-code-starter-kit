@@ -244,6 +244,8 @@ Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and 
 
 Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
 
+**Hook authoring conventions** (formerly distributed as `rules/hooks.md`): treat hook stdout/stderr as user-visible control surfaces and keep output concise; prefer external hook scripts over inline JSON shell when logic is nontrivial; filter by matcher first, then validate the real tool input schema inside the script. New hooks.json fragments and permissions.json changes need a regression test under `tests/unit/` (follow the `test-hook-fixtures.sh` style).
+
 **Hook ordering matters**: `safety-net` must be the **first** entry in `hook_fragments[]` so its `PreToolUse` entry appears at index 0 (runs before other PreToolUse hooks). When adding new PreToolUse hooks, append after safety-net.
 
 **`build_settings_file()`** in `lib/deploy.sh` is the single unified settings.json builder. It accepts an output path parameter and is called by both fresh install and update paths.
