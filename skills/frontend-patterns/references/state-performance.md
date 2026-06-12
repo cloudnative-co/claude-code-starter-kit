@@ -49,6 +49,8 @@ export function MarketProvider({ children }: { children: React.ReactNode }) {
 
 ## Memoization
 
+For projects **not** using React Compiler. With the Compiler enabled, manual memoization is generally unnecessary — add it only when profiling shows a real problem.
+
 ```typescript
 // useMemo for expensive computations
 const sortedMarkets = useMemo(() => {

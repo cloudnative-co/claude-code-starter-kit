@@ -10,46 +10,31 @@ export function useToggle(initialValue = false): [boolean, () => void] {
 }
 ```
 
-## Async Data Fetching Hook
+## Server State (Data Fetching)
+
+Do not hand-roll data-fetching hooks. Use a dedicated server-state library — TanStack Query or SWR — which handles caching, deduplication, retries, and revalidation correctly.
 
 ```typescript
-interface UseQueryOptions<T> {
-  onSuccess?: (data: T) => void
-  onError?: (error: Error) => void
-  enabled?: boolean
+// TanStack Query (v5: isPending; v4 used isLoading)
+import { useQuery } from '@tanstack/react-query'
+
+export function UserProfile({ userId }: { userId: string }) {
+  const { data, error, isPending } = useQuery({
+    queryKey: ['user', userId],
+    queryFn: () => fetchUser(userId),
+  })
+
+  if (isPending) return <Spinner />
+  if (error) return <ErrorMessage error={error} />
+  return <Profile user={data} />
 }
+```
 
-export function useQuery<T>(
-  key: string,
-  fetcher: () => Promise<T>,
-  options?: UseQueryOptions<T>
-) {
-  const [data, setData] = useState<T | null>(null)
-  const [error, setError] = useState<Error | null>(null)
-  const [loading, setLoading] = useState(false)
+```typescript
+// SWR (2.x: isLoading)
+import useSWR from 'swr'
 
-  const refetch = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const result = await fetcher()
-      setData(result)
-      options?.onSuccess?.(result)
-    } catch (err) {
-      const error = err as Error
-      setError(error)
-      options?.onError?.(error)
-    } finally {
-      setLoading(false)
-    }
-  }, [fetcher, options])
-
-  useEffect(() => {
-    if (options?.enabled !== false) refetch()
-  }, [key, refetch, options?.enabled])
-
-  return { data, error, loading, refetch }
-}
+const { data, error, isLoading } = useSWR(`/api/users/${userId}`, fetcher)
 ```
 
 ## Debounce Hook

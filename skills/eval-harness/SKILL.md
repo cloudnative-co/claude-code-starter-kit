@@ -14,7 +14,6 @@ Eval-Driven Development treats evals as the "unit tests of AI development":
 - Define expected behavior BEFORE implementation
 - Run evals continuously during development
 - Track regressions with each change
-- Use pass@k metrics for reliability measurement
 
 ## Eval Types
 
@@ -58,16 +57,16 @@ npm run build && echo "PASS" || echo "FAIL"
 ```
 
 ### 2. Model-Based Grader
-Use Claude to evaluate open-ended outputs:
+Have a separate instance (subagent) review open-ended outputs against a checklist:
 ```markdown
 [MODEL GRADER PROMPT]
-Evaluate the following code change:
+Review the following code change and answer each question with YES/NO plus evidence:
 1. Does it solve the stated problem?
 2. Is it well-structured?
 3. Are edge cases handled?
 4. Is error handling appropriate?
 
-Score: 1-5 (1=poor, 5=excellent)
+Verdict: PASS/FAIL
 Reasoning: [explanation]
 ```
 
@@ -80,19 +79,7 @@ Reason: Why human review is needed
 Risk Level: LOW/MEDIUM/HIGH
 ```
 
-## Metrics
-
-### pass@k
-"At least one success in k attempts"
-- pass@1: First attempt success rate
-- pass@3: Success within 3 attempts
-- Typical target: pass@3 > 90%
-
-### pass^k
-"All k trials succeed"
-- Higher bar for reliability
-- pass^3: 3 consecutive successes
-- Use for critical paths
+Note: statistical metrics like pass@k require running the same task k times independently. If you truly need them, implement an automated script (e.g., a headless `claude -p` loop), not manual bookkeeping in an interactive session.
 
 ## Eval Workflow
 
@@ -109,10 +96,6 @@ Risk Level: LOW/MEDIUM/HIGH
 1. Existing login still works
 2. Session management unchanged
 3. Logout flow intact
-
-### Success Metrics
-- pass@3 > 90% for capability evals
-- pass^3 = 100% for regression evals
 ```
 
 ### 2. Implement
@@ -135,9 +118,9 @@ EVAL REPORT: feature-xyz
 ========================
 
 Capability Evals:
-  create-user:     PASS (pass@1)
-  validate-email:  PASS (pass@2)
-  hash-password:   PASS (pass@1)
+  create-user:     PASS (attempts: 1)
+  validate-email:  PASS (attempts: 2)
+  hash-password:   PASS (attempts: 1)
   Overall:         3/3 passed
 
 Regression Evals:
@@ -145,10 +128,6 @@ Regression Evals:
   session-mgmt:    PASS
   logout-flow:     PASS
   Overall:         3/3 passed
-
-Metrics:
-  pass@1: 67% (2/3)
-  pass@3: 100% (3/3)
 
 Status: READY FOR REVIEW
 ```
@@ -188,11 +167,10 @@ Store evals in project:
 
 1. **Define evals BEFORE coding** - Forces clear thinking about success criteria
 2. **Run evals frequently** - Catch regressions early
-3. **Track pass@k over time** - Monitor reliability trends
-4. **Use code graders when possible** - Deterministic > probabilistic
-5. **Human review for security** - Never fully automate security checks
-6. **Keep evals fast** - Slow evals don't get run
-7. **Version evals with code** - Evals are first-class artifacts
+3. **Use code graders when possible** - Deterministic > probabilistic
+4. **Human review for security** - Never fully automate security checks
+5. **Keep evals fast** - Slow evals don't get run
+6. **Version evals with code** - Evals are first-class artifacts
 
 ## Example: Adding Authentication
 
@@ -221,7 +199,7 @@ Run: /eval check add-authentication
 ### Phase 4: Report
 EVAL REPORT: add-authentication
 ==============================
-Capability: 5/5 passed (pass@3: 100%)
-Regression: 3/3 passed (pass^3: 100%)
+Capability: 5/5 passed
+Regression: 3/3 passed
 Status: SHIP IT
 ```

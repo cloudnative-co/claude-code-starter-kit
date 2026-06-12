@@ -65,12 +65,14 @@ Process these 5 files in parallel using subagents. Each subagent handles one fil
 Collect all results and present a unified summary.
 ```
 
-### Ultrathink
-For complex reasoning tasks, include the keyword:
+### Deep Reasoning
+For complex design and architecture decisions:
+- Use Plan Mode for work that benefits from an explicit reviewed plan before changes.
+- Extended thinking is controlled by the harness (thinking toggle / effort settings), not by magic keywords in the prompt.
+- In the prompt itself, ask for depth in natural language, e.g.:
 ```
-ultrathink about the best architecture for this system
+Before implementing, compare alternative designs and their trade-offs.
 ```
-Triggers extended thinking mode for higher effort reasoning.
 
 ## Debugging Patterns
 
@@ -93,7 +95,7 @@ Look at this screenshot. The layout is broken. Fix it.
 Create a phase-wise plan for this feature. Each phase must have:
 1. Clear deliverable
 2. Test criteria (unit, integration, or manual verification)
-3. Estimated context usage
+3. Rollback plan if verification fails
 
 Do not proceed to the next phase until the current phase passes all tests.
 ```

@@ -1,6 +1,6 @@
 ---
 name: tdd-guide
-description: Test-driven development guide. Use when adding behavior, fixing bugs, or refactoring code where tests should describe the expected contract.
+description: Test-driven development guide. Use when the user explicitly requests TDD or tests-first development, or when building new behavior where test coverage is a stated requirement.
 tools: Read, Write, Edit, Bash, Grep
 model: sonnet
 ---

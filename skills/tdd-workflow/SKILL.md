@@ -1,31 +1,31 @@
 ---
 name: tdd-workflow
-description: Use this skill when writing new features, fixing bugs, or refactoring code. Enforces test-driven development with 80%+ coverage including unit, integration, and E2E tests.
-when_to_use: Use when implementing features, fixing bugs, or refactoring with tests-first discipline and explicit coverage expectations.
+description: Use this skill when the user explicitly asks for TDD or a tests-first workflow, or when developing a new feature with a test coverage requirement. Provides a structured red-green-refactor workflow with unit, integration, and E2E test guidance.
+when_to_use: Use when the user explicitly requests TDD/tests-first development, or when building a new feature where test coverage is a stated requirement.
 ---
 
 # Test-Driven Development Workflow
 
-This skill ensures all code development follows TDD principles with comprehensive test coverage.
+This skill provides a structured TDD workflow for projects that adopt tests-first development.
 
 ## When to Activate
 
-- Writing new features or functionality
-- Fixing bugs or issues
-- Refactoring existing code
-- Adding API endpoints
-- Creating new components
+- The user explicitly asks for TDD or tests-first development
+- New feature work where test coverage is a stated requirement
+- Adding API endpoints or components under a coverage policy
+
+For routine bug fixes or refactors, add focused tests for the changed behavior instead of invoking this full workflow (the /tdd command and tdd-guide agent remain available when you want it explicitly).
 
 ## Core Principles
 
 ### 1. Tests BEFORE Code
-ALWAYS write tests first, then implement code to make tests pass.
+Within this workflow, the default is to write tests first, then implement code to make tests pass.
 
-### 2. Coverage Requirements
-- Minimum 80% coverage (unit + integration + E2E)
-- All edge cases covered
-- Error scenarios tested
-- Boundary conditions verified
+### 2. Coverage Guidance
+- Coverage target follows the project's own standard (e.g., 80% as a common baseline); scale effort with the size of the change
+- Cover relevant edge cases
+- Test error scenarios
+- Verify boundary conditions
 
 ### 3. Test Types
 
@@ -33,7 +33,7 @@ ALWAYS write tests first, then implement code to make tests pass.
 
 **Integration Tests** - API endpoints, database operations, service interactions, external API calls.
 
-**E2E Tests (Playwright)** - Critical user flows, complete workflows, browser automation, UI interactions.
+**E2E Tests (Playwright)** - Critical user flows, complete workflows, browser automation, UI interactions. Applies to web UI projects only.
 
 ## TDD Workflow Steps
 
@@ -50,8 +50,11 @@ so that I can find relevant markets even without exact keywords.
 For each user journey, create comprehensive test cases covering happy paths, edge cases, fallback behavior, and sorting/filtering logic.
 
 ### Step 3: Run Tests (They Should Fail)
+Use the project's test runner. Examples:
 ```bash
-npm test
+npm test                      # Node.js
+pytest                        # Python
+bash tests/run-unit-tests.sh  # shell projects
 # Tests should fail - we haven't implemented yet
 ```
 
@@ -59,6 +62,7 @@ npm test
 Write minimal code to make tests pass.
 
 ### Step 5: Run Tests Again
+Re-run the same test command (e.g., `npm test`, `pytest`):
 ```bash
 npm test
 # Tests should now pass
@@ -72,9 +76,11 @@ Improve code quality while keeping tests green:
 - Enhance readability
 
 ### Step 7: Verify Coverage
+Use the project's coverage tooling. Examples:
 ```bash
-npm run test:coverage
-# Verify 80%+ coverage achieved
+npm run test:coverage   # Node.js
+pytest --cov            # Python
+# Verify coverage meets the project's target
 ```
 
 ## Best Practices
@@ -92,7 +98,7 @@ npm run test:coverage
 
 ## Success Metrics
 
-- 80%+ code coverage achieved
+- Coverage target met (per project standard, e.g., 80%)
 - All tests passing (green)
 - No skipped or disabled tests
 - Fast test execution (< 30s for unit tests)
@@ -101,9 +107,11 @@ npm run test:coverage
 
 ## References
 
-- `references/test-templates.md` - Unit, integration, E2E, and mocking code templates
-- `references/testing-mistakes.md` - Common pitfalls, file organization, coverage config, CI setup
+These templates target JavaScript/TypeScript stacks; adapt the structure for other languages.
+
+- `references/test-templates.md` - Unit, integration, E2E, and mocking code templates (JS/TS)
+- `references/testing-mistakes.md` - Common pitfalls, file organization, coverage config, CI setup (JS/TS)
 
 ---
 
-**Remember**: Tests are not optional. They are the safety net that enables confident refactoring, rapid development, and production reliability.
+**Remember**: Give changed behavior a focused test. Tests are the safety net that enables confident refactoring, rapid development, and production reliability.
