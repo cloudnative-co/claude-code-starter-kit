@@ -110,3 +110,13 @@
     fail "$test_name"
   fi
 }
+
+{
+  test_name="content-cleanup: kit never ships files in the reserved user-* namespace"
+  if ! find "$PROJECT_DIR/rules" "$PROJECT_DIR/agents" "$PROJECT_DIR/commands" "$PROJECT_DIR/skills" \
+      -name 'user-*' -print 2>/dev/null | grep -q .; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
