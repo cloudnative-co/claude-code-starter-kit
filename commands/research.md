@@ -10,7 +10,7 @@ You are entering **Research Phase**. Your goal is to deeply understand the relev
 
 1. **Identify scope**: Based on the user's request, determine which parts of the codebase are relevant.
 
-2. **Deep read**: Read all relevant files thoroughly. Use words like "deeply examine", "trace the flow", "understand the intricacies" in your analysis. Don't skim - understand the actual logic, edge cases, and design decisions.
+2. **Deep read**: Read all relevant files thoroughly. Don't skim - understand the actual logic, edge cases, and design decisions.
 
 3. **Map dependencies**: Trace imports, function calls, and data flow across files. Document the dependency graph.
 

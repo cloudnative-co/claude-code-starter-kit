@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.65.0] - 2026-06-12
+
+LLM 性能監査（#121）P3 の第 2 弾（#115）。commands の低優先掃除（ネイティブ重複・呪文・ハードコードの除去）。
+
+### Removed
+- **update-codemaps を削除（#115）**: 静的コードマップの常設維持は旧モデルの探索能力不足への補償で、現行モデルは必要時の直接探索の方が常に新鮮。恣意的な「30% 変更で承認」ゲートと「Use TypeScript/Node.js」指定も同時に廃止。agents/doc-updater の codemap 言及を一般化。doc-blocker の codemaps/ allowlist は既存ユーザーの生成物保護のため残置。既存配備分は update の retired 掃除で除去（コマンド数 21 → 20）
+
+### Changed
+- **checkpoint を git マイルストーン記録に縮小（#115）**: セッション内ロールバックはネイティブ checkpoint/rewind（Esc Esc / /rewind)に委譲することを明記し、本コマンドはセッション横断のマイルストーン記録専用に。記録していないデータ（過去のテスト成績・カバレッジ）との比較を要求していた verify の矛盾を解消（`git diff --stat` + 現在のテスト結果のみ報告）
+- **research のマジックワード呪文を削除（#115）**: 「"deeply examine" 等の語句を使え」という旧世代プロンプティングの迷信を削除（精読の強制自体は維持）
+- **update-kit のツール選択 babysitting を削除（#115）**: 「cat ではなく Read ツールを使え」の注記を削除（conf 編集ガードレールは維持）
+- **test-coverage のスタック固定を一般化（#115）**: npm/pnpm・coverage-summary.json 固定をテストツール検出 + 例示に変更（80% 閾値はキット規約として維持）
+- **e2e / e2e-runner の CI 例からバージョンピンを除去（#115）**: actions@v4 / Node 22 の固定例示が「最新を使え」という指示文と自己矛盾していたため、「生成時に最新メジャーと Active LTS を確認、既存 .github/workflows/ があればそれを基準に」へ変更
+- **spec-kit-init の陳腐化前提を更新（#115）**: 「Spec Kit v0.10 が出たら再評価」の未来予告を v0.10.0 出荷済みの現状記述（git extension は opt-in、--no-git 廃止）に置換。「4 steps」→「5 steps」の不整合も修正
+
 ## [0.64.0] - 2026-06-12
 
 LLM 性能監査（#121）P3 の第 1 弾（#114）。commands の旧モデル向け儀式（固定手順の強制）を成果指向に書き換えた。

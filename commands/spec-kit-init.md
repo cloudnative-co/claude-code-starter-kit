@@ -14,7 +14,7 @@ cycle; `uv tool upgrade specify-cli` is how you keep Spec Kit current.
 ## Instructions
 
 You are entering **Spec Kit Initialization**. Walk the user through the
-4 steps below in order. Do not execute heavy operations without
+5 steps below in order. Do not execute heavy operations without
 confirmation; the user is in control.
 
 ### Step 1 — Verify prerequisites
@@ -58,6 +58,10 @@ specify init . --integration claude --script sh
 specify init --here --integration claude --script sh --force
 ```
 
+If the user wants Spec Kit's feature-branch automation, run
+`specify extension add git` after init (the git extension is opt-in
+since v0.10.0).
+
 After init, the project will have:
 
 - `.claude/skills/speckit-*` — 14 SKILL.md files (project-local, namespaced)
@@ -97,7 +101,7 @@ explicit go-ahead — it executes the entire task list and can be expensive.
 ## Notes & gotchas
 
 - Spec Kit's command separator is **hyphen, not dot**: `/speckit-plan`, NOT `/speckit.plan`. The dot form was retired before v0.8.0.
-- `specify init` creates a git branch unless `--no-git` is passed; Spec Kit v0.10 will make the `git` extension opt-in. Re-evaluate this command when v0.10 ships.
+- Since Spec Kit v0.10.0 (2026-06), the git extension is opt-in and the `--no-git` flag has been removed; `specify init` does not create a git branch by default. Run `specify extension add git` after init if you want Spec Kit's branch automation.
 - `specify init` writes only into `<project>/`. It does NOT touch `~/.claude/` (verified during the StarterKit evaluation in `docs/spec-kit-evaluation.md`).
 - Spec Kit's bash scripts (`.specify/scripts/bash/*.sh`) do NOT use `rm -rf`, `curl`, `wget`, `sudo`, or `git push --force`. They are compatible with the StarterKit's deny rules.
 - Long-term maintenance of `specify-cli` is delegated to `uv tool upgrade`; the StarterKit does not bundle or pin a Spec Kit version.

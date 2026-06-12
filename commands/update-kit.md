@@ -35,7 +35,7 @@ Before running the update:
 
 After a successful update (or if already up to date), check for pending feature recommendations.
 
-**Note**: Always use the Read tool (not `cat`) to read files, and the Edit tool to modify `~/.claude-starter-kit.conf`. Skip any feature named `feature-recommendation` if it appears in the pending list (self-referential — should not happen, but guard against it).
+**Note**: Skip any feature named `feature-recommendation` if it appears in the pending list (self-referential — should not happen, but guard against it).
 
 #### Step 1: Check for pending features
 
