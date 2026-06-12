@@ -75,3 +75,62 @@
     fail "$test_name"
   fi
 }
+
+
+{
+  test_name="tmux-hooks: run_in_background dev server passes without any output"
+  _th_tmp="$(mktemp -d)"
+  _SETUP_TMP_FILES+=("$_th_tmp")
+  _th_rc=0
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s","run_in_background":true}}' "npm run dev" \
+    | env -u TMUX bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" >/dev/null 2>"$_th_tmp/bg.err" || _th_rc=$?
+  if [[ "$_th_rc" -eq 0 ]] && [[ ! -s "$_th_tmp/bg.err" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="tmux-hooks: foreground dev server is a non-blocking reminder (no exit 2)"
+  _th_tmp2="$(mktemp -d)"
+  _SETUP_TMP_FILES+=("$_th_tmp2")
+  _th_rc=0
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "npm run dev" \
+    | env -u TMUX bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" >/dev/null 2>"$_th_tmp2/fg.err" || _th_rc=$?
+  if [[ "$_th_rc" -eq 0 ]] \
+    && grep -q "prefer run_in_background" "$_th_tmp2/fg.err" \
+    && ! grep -q "BLOCKED" "$_th_tmp2/fg.err"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="tmux-hooks: build/test commands no longer trigger advisory noise"
+  _th_tmp3="$(mktemp -d)"
+  _SETUP_TMP_FILES+=("$_th_tmp3")
+  _th_rc=0
+  printf '{"tool_name":"Bash","tool_input":{"command":"npm test"}}' \
+    | env -u TMUX bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" >/dev/null 2>"$_th_tmp3/adv.err" || _th_rc=$?
+  if [[ "$_th_rc" -eq 0 ]] && [[ ! -s "$_th_tmp3/adv.err" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="tmux-hooks: dev server inside tmux session stays silent"
+  _th_tmp4="$(mktemp -d)"
+  _SETUP_TMP_FILES+=("$_th_tmp4")
+  _th_rc=0
+  printf '{"tool_name":"Bash","tool_input":{"command":"npm run %s"}}' "dev" \
+    | env TMUX=fake-session bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" >/dev/null 2>"$_th_tmp4/in-tmux.err" || _th_rc=$?
+  if [[ "$_th_rc" -eq 0 ]] && [[ ! -s "$_th_tmp4/in-tmux.err" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}

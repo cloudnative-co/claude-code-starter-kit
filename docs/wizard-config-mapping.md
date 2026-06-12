@@ -58,7 +58,7 @@
 | `ENABLE_SAFETY_NET` | Safety Net | 危険なコマンドの遮断 | はい |
 | `ENABLE_AUTO_UPDATE` | Auto Update | セッション開始時の更新確認 | はい |
 | `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Web 取得スキル依存の更新確認 | はい |
-| `ENABLE_TMUX_HOOKS` | Tmux Reminder | 長時間処理を tmux に誘導 | はい |
+| `ENABLE_TMUX_HOOKS` | Tmux Reminder | foreground の dev サーバーに run_in_background を提案（非ブロック） | はい |
 | `ENABLE_GIT_PUSH_REVIEW` | Git Push Review | push 前に差分確認 | はい |
 | `ENABLE_DOC_BLOCKER` | Doc Blocker | 不要な `.md` / `.txt` 作成を抑制 | はい |
 | `ENABLE_PRETTIER_HOOKS` | Prettier Auto-format | JS / TS 編集後の整形 | はい |

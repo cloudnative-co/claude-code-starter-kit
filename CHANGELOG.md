@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.61.0] - 2026-06-12
+
+LLM 性能監査（#121）P2 の第 1 弾（#111）。tmux-hooks のハードブロックをリマインダーに降格した。
+
+### Changed
+- **tmux-hooks のハードブロックを非ブロックのリマインダーに降格（#111）**: TMUX 外での dev サーバー起動（`npm run dev` 等）を exit 2 でブロックしていた挙動を撤廃。現行 Claude Code はネイティブの background 実行（`run_in_background`）とログ取得を備えており、ブロックはむしろネイティブ機能の利用を妨害していた。新挙動: (1) `run_in_background=true` は即許可（出力なし）、(2) TMUX 外の foreground dev サーバーは exit 0 + stderr 1 行のリマインダー（run_in_background を第一候補、永続セッションが必要なら tmux を代替として提示）、(3) npm test / cargo build / docker 等への「Consider running in tmux」定常 advisory は削除（高頻度コマンドへの情報量ゼロのノイズ）
+
 ## [0.60.0] - 2026-06-12
 
 LLM 性能監査（#121）P1 の最終弾（#110）。pre-compact-commit を opt-in 化し、履歴を汚さない stash 方式に書き換えた。

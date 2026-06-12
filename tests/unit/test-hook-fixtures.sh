@@ -105,13 +105,13 @@ bash "$PROJECT_DIR/features/git-push-review/scripts/remind.sh" <"$_pre_push_fixt
 bash "$PROJECT_DIR/features/feature-recommendation/scripts/check-pending.sh" <"$_hook_fixture_dir/sessionstart-startup.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
 
 _tmux_rc=0
-bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" <"$_pre_dev_fixture" >/dev/null 2>"$_hook_tmp/tmux.err" || _tmux_rc=$?
+env -u TMUX bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" <"$_pre_dev_fixture" >/dev/null 2>"$_hook_tmp/tmux.err" || _tmux_rc=$?
 
 if [[ "$_script_smoke_ok" == "true" ]] \
   && assert_matches "console\\.log found" "$(cat "$_hook_tmp/console.err")" \
   && assert_matches "Reminder: review your staged changes" "$(cat "$_hook_tmp/push.err")" \
-  && [[ "$_tmux_rc" -eq 2 ]] \
-  && assert_matches "Dev server must run in tmux" "$(cat "$_hook_tmp/tmux.err")"; then
+  && [[ "$_tmux_rc" -eq 0 ]] \
+  && assert_matches "prefer run_in_background" "$(cat "$_hook_tmp/tmux.err")"; then
   pass "hook-fixtures: distributed hook scripts consume real-schema fixtures"
 else
   fail "hook-fixtures: distributed hook scripts should consume real-schema fixtures"

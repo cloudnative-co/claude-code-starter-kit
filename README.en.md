@@ -190,7 +190,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 |---|---|
 | **Safety Net** | Blocks destructive git/filesystem commands (`git reset --hard`, `rm -rf`, `git push --force`, etc.) before execution |
 | **Auto Update** | Checks for starter kit updates on session start and applies them in the background |
-| Tmux Reminder | Suggests tmux for long-running commands |
+| Tmux Reminder | Suggests run_in_background for foreground dev servers (non-blocking) |
 | Git Push Review | Pauses before git push for code review |
 | Doc Blocker | Prevents creation of unnecessary .md/.txt files |
 | Prettier Auto-format | Formats JS/TS files after edits |
