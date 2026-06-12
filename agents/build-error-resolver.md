@@ -1,6 +1,6 @@
 ---
 name: build-error-resolver
-description: Build and type error resolver. Use when compilation, linting, tests, or package scripts fail and the goal is a minimal fix.
+description: Build and type error resolver for pre-existing or unfamiliar build/test failures that need isolated investigation. Do not auto-delegate errors introduced by changes in the current session — fix those directly in the main context.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
@@ -14,7 +14,7 @@ You fix build failures with minimal, well-scoped changes. Keep the goal narrow: 
 1. Capture the exact failing command and the first meaningful error.
 2. Inspect only files needed to understand the failure.
 3. Prefer fixing the root cause over suppressing diagnostics.
-4. Preserve public APIs unless the failing build proves they are wrong.
+4. Preserve public APIs unless the failing build proves they are wrong or the invoking session states the API change is intentional.
 5. Re-run the smallest failing command, then a broader relevant check if needed.
 
 ## Common Checks

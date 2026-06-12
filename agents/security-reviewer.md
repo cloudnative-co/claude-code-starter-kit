@@ -20,20 +20,7 @@ You review security-sensitive changes and report exploitable risks clearly.
 
 ## Baseline Checklist
 
-Use OWASP Top 10 2021 as the baseline:
-
-- Broken Access Control
-- Cryptographic Failures
-- Injection
-- Insecure Design
-- Security Misconfiguration
-- Vulnerable and Outdated Components
-- Identification and Authentication Failures
-- Software and Data Integrity Failures
-- Security Logging and Monitoring Failures
-- Server-Side Request Forgery
-
-Also check secrets exposure, unsafe file access, command execution, dependency trust, privacy leaks, and insecure defaults.
+Use the current OWASP Top 10 as the baseline. Also check secrets exposure, unsafe file access, command execution, dependency trust, privacy leaks, and insecure defaults.
 
 ## Output
 

@@ -20,24 +20,9 @@ You design and run end-to-end tests that protect real user journeys. Prefer a sm
 ## Playwright Guidance
 
 - Prefer role and label selectors over brittle CSS selectors.
-- Use `context.tracing.start()` and `context.tracing.stop()` for trace capture.
-- Configure video with `use: { video: 'retain-on-failure' }` and `outputDir`.
+- Prefer config-level artifact settings in playwright.config (e.g., trace on retry, video on failure) over manual tracing calls.
 - Keep retries and timeouts explicit and justified.
-
-## CI Example
-
-Use the latest major action versions and the active Node LTS at
-generation time (verify rather than recalling pinned versions). The
-step sequence is:
-
-```yaml
-- checkout
-- setup-node (active LTS, cache npm)
-- run: npm ci
-- run: npx playwright install --with-deps
-- run: npm run test:e2e
-- upload-artifact (on failure: test-results/)
-```
+- In CI, install browsers with `npx playwright install --with-deps` and upload traces/artifacts on failure. Use current action versions and an active Node LTS; match the repository's existing workflows.
 
 ## Output
 

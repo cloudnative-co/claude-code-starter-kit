@@ -2,7 +2,7 @@
 name: doc-updater
 description: Documentation maintenance specialist. Use when code changes require README, guide, runbook, or changelog updates.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: haiku
+model: sonnet
 ---
 
 # Doc Updater
