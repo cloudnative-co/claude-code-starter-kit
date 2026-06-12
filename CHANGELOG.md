@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.59.0] - 2026-06-12
+
+LLM 性能監査（#121）P1 の第 3 弾（#109）。strategic-compact hook を撤去した。
+
+### Removed
+- **strategic-compact hook を撤去（#109）**: Edit/Write のたびにサブプロセスを起動してツールコール数を数え、「30 tool calls = Context ~50% used」という実測に基づかない context 使用率をセッションに注入していた PreToolUse hook を削除。実際の context 使用率は同梱 statusline（`context_window.used_percentage`）が表示しており、現行の auto-compaction 品質では回数ベースの代理指標は誤情報だった。既存インストールの hook スクリプト・settings.json エントリは update 時の retired 掃除（`_remove_retired_managed_files` / `_strip_retired_hook_entries`）で自動除去
+- `ENABLE_STRATEGIC_COMPACT` はレガシーキー化（保存済み config は読み捨て）。profiles / defaults / wizard の hook 選択肢から削除
+
+### Changed
+- **skills/strategic-compact をオンデマンド前提に書換（#109）**: 「auto-compact は任意の時点で発火して作業を壊す」という旧世代前提の説明・hook 連動の記述・外部 X リンクを削除し、フェーズ境界（探索後・マイルストーン後・大きな文脈切替前）での手動 /compact の判断基準のみに縮小。実使用率は statusline を確認するよう明記
+- README.en.md の hook 列挙から廃止済み feature（memory persistence / strategic compact）を除去（#108 の追随漏れ修正を含む）
+
 ## [0.58.0] - 2026-06-12
 
 LLM 性能監査（#121）P1 の第 2 弾（#108）。native auto-memory と重複する memory-persistence feature を廃止した。

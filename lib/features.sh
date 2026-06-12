@@ -23,7 +23,6 @@ declare -g -A _FEATURE_FLAGS=(
   [prettier-hooks]=ENABLE_PRETTIER_HOOKS
   [biome-hooks]=ENABLE_BIOME_HOOKS
   [console-log-guard]=ENABLE_CONSOLE_LOG_GUARD
-  [strategic-compact]=ENABLE_STRATEGIC_COMPACT
   [pr-creation-log]=ENABLE_PR_CREATION_LOG
   [pre-compact-commit]=ENABLE_PRE_COMPACT_COMMIT
   [auto-update]=ENABLE_AUTO_UPDATE
@@ -45,7 +44,6 @@ declare -g -A _FEATURE_HAS_SCRIPTS=(
   [biome-hooks]=true
   [console-log-guard]=true
   [pr-creation-log]=true
-  [strategic-compact]=true
   [auto-update]=true
   [statusline]=true
   [doc-size-guard]=true
@@ -59,7 +57,7 @@ declare -g -A _FEATURE_HAS_SCRIPTS=(
 # ---------------------------------------------------------------------------
 declare -g -a _FEATURE_ORDER=(
   safety-net tmux-hooks doc-blocker prettier-hooks biome-hooks console-log-guard
-  strategic-compact pr-creation-log pre-compact-commit
+  pr-creation-log pre-compact-commit
   auto-update web-content-update statusline doc-size-guard no-flicker
   feature-recommendation
 )

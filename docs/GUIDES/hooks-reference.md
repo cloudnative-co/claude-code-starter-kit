@@ -11,7 +11,7 @@
 |---|---|
 | `SessionStart` | auto-update, web-content-update, feature-recommendation |
 | `SessionEnd` | auto-update |
-| `PreToolUse` | safety-net, tmux-hooks, doc-blocker, console-log-guard, strategic-compact, git-push-review |
+| `PreToolUse` | safety-net, tmux-hooks, doc-blocker, console-log-guard, git-push-review |
 | `PostToolUse` | prettier-hooks, biome-hooks, doc-size-guard, pr-creation-log |
 | `PreCompact` | pre-compact-commit |
 

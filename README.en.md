@@ -54,7 +54,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **10 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide
 - **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
-- **15 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, git push review, doc blocker, Prettier or Biome formatting, console.log guard, memory persistence, strategic compact, PR creation log, pre-compact auto-commit, statusline, doc size guard, feature recommendation
+- **13 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, git push review, doc blocker, Prettier or Biome formatting, console.log guard, PR creation log, pre-compact auto-commit, statusline, doc size guard, feature recommendation
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
@@ -196,7 +196,6 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | Prettier Auto-format | Formats JS/TS files after edits |
 | Biome Auto-format | Formats and lints JS/TS files after edits (Full uses Biome instead of Prettier) |
 | Console.log Guard | Warns about console.log statements left in code |
-| Strategic Compact | Suggests /compact at logical intervals |
 | PR Creation Log | Logs PR URL after creation |
 | Pre-compact Auto-commit | Auto-commits changes before context compaction |
 | Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds recommended line count (Full only) |
@@ -330,7 +329,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --new-init=true \
   --codex-plugin=false \
   --commit-attribution=false \
-  --hooks=safety-net,auto-update,tmux,git-push,prettier,console,memory,compact,pr-log,pre-commit \
+  --hooks=safety-net,auto-update,tmux,git-push,prettier,console,pr-log,pre-commit \
   --plugins=security-guidance,commit-commands,pr-review-toolkit,document-skills@anthropic-agent-skills
 
 # Reuse a saved config

@@ -65,7 +65,7 @@
 | `ENABLE_BIOME_HOOKS` | Biome Auto-format | JS / TS 編集後の整形・lint | はい |
 | `ENABLE_CONSOLE_LOG_GUARD` | Console Log Guard | `console.log` の取り残し検知 | はい |
 | `ENABLE_MEMORY_PERSISTENCE` | （廃止）native auto-memory に委譲 | なし | レガシーキーとして読み捨て |
-| `ENABLE_STRATEGIC_COMPACT` | Strategic Compact | compact 提案の補助 | はい |
+| `ENABLE_STRATEGIC_COMPACT` | （廃止）hook は撤去、skill のみオンデマンドで残存 | なし | レガシーキーとして読み捨て |
 | `ENABLE_PR_CREATION_LOG` | PR Creation Log | PR 作成ログの補助 | はい |
 | `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Commit | compact 前のコミット補助 | はい |
 | `ENABLE_STATUSLINE` | Statusline | ステータスライン機能 | はい |
