@@ -72,15 +72,15 @@ else
 fi
 
 _doc_fixture="$_hook_fixture_dir/pretooluse-write-doc.json"
-_doc_err="$_hook_tmp/doc.err"
+_doc_out="$_hook_tmp/doc.out"
 _doc_rc=0
-bash "$PROJECT_DIR/features/doc-blocker/scripts/check-doc-write.sh" <"$_doc_fixture" >/dev/null 2>"$_doc_err" || _doc_rc=$?
+bash "$PROJECT_DIR/features/doc-blocker/scripts/check-doc-write.sh" <"$_doc_fixture" >"$_doc_out" 2>/dev/null || _doc_rc=$?
 
-if [[ "$_doc_rc" -eq 2 ]] \
-  && assert_matches "\\[Hook\\] BLOCKED: Use README.md" "$(cat "$_doc_err")"; then
-  pass "hook-fixtures: doc-blocker consumes PreToolUse Write fixture"
+if [[ "$_doc_rc" -eq 0 ]] \
+  && [[ "$(jq -r '.hookSpecificOutput.permissionDecision // empty' "$_doc_out")" == "ask" ]]; then
+  pass "hook-fixtures: doc-blocker downgrades slop doc Write to a permission ask"
 else
-  fail "hook-fixtures: doc-blocker should block ad-hoc docs from fixture input"
+  fail "hook-fixtures: doc-blocker should emit an ask decision for slop docs"
 fi
 
 _post_edit_fixture="$_hook_tmp/post-edit.json"

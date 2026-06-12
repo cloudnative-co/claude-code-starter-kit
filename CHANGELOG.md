@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.62.0] - 2026-06-12
+
+LLM 性能監査（#121）P2 の第 2 弾（#112）。doc-blocker を allowlist 全拒否から slop パターン拒否方式に反転した。
+
+### Changed
+- **doc-blocker を deny-by-pattern 方式に反転（#112）**: 旧実装は allowlist 外の全 .md/.txt Write を exit 2 で無条件ブロックし、ユーザーが明示的に依頼した文書（CHANGELOG.md・LICENSE.txt・docs/ 配下の設計文書・ADR 等）まで一律に妨げていた。新実装: (1) SUMMARY / REPORT / FINDINGS / ANALYSIS / NOTES / RESULTS / TAKEAWAYS 系のアドホック文書名（大文字小文字不問・アンダースコア結合変形含む）のみ対象、(2) ブロックではなく PreToolUse の `permissionDecision: ask` で確認に降格（ユーザー依頼なら 1 確認で通せる）、(3) 確認メッセージに対象パス・常時許可パス・無効化手段（ENABLE_DOC_BLOCKER=false）を明記、(4) キットコマンドの出力先 allowlist（HANDOVER.md / .reports/ / docs/CODEMAPS/ 等）は「常時許可」として維持。一般文書は素通しになり、exit 2 のハードブロックは全廃
+
 ## [0.61.0] - 2026-06-12
 
 LLM 性能監査（#121）P2 の第 1 弾（#111）。tmux-hooks のハードブロックをリマインダーに降格した。

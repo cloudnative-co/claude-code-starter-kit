@@ -192,7 +192,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | **Auto Update** | Checks for starter kit updates on session start and applies them in the background |
 | Tmux Reminder | Suggests run_in_background for foreground dev servers (non-blocking) |
 | Git Push Review | Pauses before git push for code review |
-| Doc Blocker | Prevents creation of unnecessary .md/.txt files |
+| Doc Blocker | Asks for confirmation only on ad-hoc SUMMARY/REPORT style docs (general docs pass) |
 | Prettier Auto-format | Formats JS/TS files after edits |
 | Biome Auto-format | Formats and lints JS/TS files after edits (Full uses Biome instead of Prettier) |
 | Console.log Guard | Warns about console.log statements left in code |
