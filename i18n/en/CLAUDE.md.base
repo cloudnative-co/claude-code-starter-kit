@@ -2,14 +2,9 @@
 # Global Settings
 
 ## Basic Principles
-- Use Conventional Commits format (feat: / fix: / refactor: / test: / docs: / chore:)
-- Use `/clear` in long sessions to refresh context
+- Follow the repository's existing commit style; use Conventional Commits format (feat: / fix: / refactor: / test: / docs: / chore:) when no convention exists
 
-## Optional: GitHub Spec Kit (Spec-Driven Development)
-- If a project uses GitHub Spec Kit, it manages a separate block in this file marked `<!-- SPECKIT START --> ... <!-- SPECKIT END -->`. The two blocks coexist; do not merge or reorder them.
-- Project-local `<project>/.specify/memory/constitution.md` **overrides** user-level global rules (this file and `~/.claude/rules/`) for that project's scope.
-- Run `/spec-kit-init` inside a project to bootstrap the SDD workflow; `specify-cli` itself is installed via `uv tool install`, not by this kit.
-
+{{FEATURE:spec-kit}}
 {{FEATURE:web-content-extraction}}
 {{FEATURE:codex-plugin}}
 <!-- END STARTER-KIT-MANAGED -->

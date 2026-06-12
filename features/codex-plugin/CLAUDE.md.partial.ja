@@ -2,8 +2,8 @@
 
 # Codex プラグイン
 
-> `openai/codex-plugin-cc` を入れている場合のみ適用する。単純な作業（1ファイル・数行の修正、設定/ドキュメント編集等）は Claude が直接行う。
+> `openai/codex-plugin-cc` を入れている場合のみ適用する。
 
-- 大きめのコード生成・複数ファイル変更・レビュー・テスト作成・リファクタリング・原因調査などは Codex に委譲できる。Claude は結果を検証・統合してから報告する。
+- Codex はクロスモデルの独立視点として使う: `/codex:review` / `/codex:adversarial-review` によるレビューと、ユーザーが明示的に依頼した場合の `/codex:rescue`（調査・長時間ジョブのオフロード）。Claude は結果を検証・統合してから報告する。
 - コマンド: `/codex:review` `/codex:adversarial-review` `/codex:rescue` `/codex:status` `/codex:result` `/codex:cancel` `/codex:setup`
 - 委譲基準・レビュー観点・注意事項の詳細は plugin のドキュメントに従う。

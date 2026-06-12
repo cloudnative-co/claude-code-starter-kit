@@ -2,8 +2,8 @@
 
 # Codex Plugin
 
-> Applies only when the Codex plugin (`openai/codex-plugin-cc`) is installed. Simple tasks (single-file/few-line changes, config or doc edits) are handled directly by Claude.
+> Applies only when the Codex plugin (`openai/codex-plugin-cc`) is installed.
 
-- Larger code generation, multi-file changes, reviews, test creation, refactoring, and root-cause analysis can be delegated to Codex. Claude verifies and integrates the results before reporting.
+- Use Codex for an independent cross-model perspective: reviews via `/codex:review` / `/codex:adversarial-review`, and `/codex:rescue` when the user explicitly asks to offload an investigation or long-running job. Claude verifies and integrates the results before reporting.
 - Commands: `/codex:review` `/codex:adversarial-review` `/codex:rescue` `/codex:status` `/codex:result` `/codex:cancel` `/codex:setup`
 - For delegation criteria, review focus, and cautions, follow the plugin's documentation.
