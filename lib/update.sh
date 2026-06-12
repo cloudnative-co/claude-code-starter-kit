@@ -546,7 +546,7 @@ _migrate_statusline_command() {
 # Hook features the kit no longer ships. Their settings.json entries must be
 # stripped during update even when the user customized "hooks" (merge keeps
 # user-touched values, which would leave commands pointing at deleted scripts).
-_RETIRED_HOOK_FEATURES=(memory-persistence)
+_RETIRED_HOOK_FEATURES=(memory-persistence strategic-compact)
 
 # _strip_retired_hook_entries - Remove hook commands referencing retired
 # feature script dirs (~/.claude/hooks/<feature>/) from settings.json, then

@@ -71,25 +71,6 @@ else
   fail "hook-fixtures: pr-creation-log should consume PostToolUse fixture"
 fi
 
-_sc_fixture="$_hook_fixture_dir/pretooluse-edit-file.json"
-_sc_out="$_hook_tmp/sc.out"
-_sc_err="$_hook_tmp/sc.err"
-_sc_runtime="$_hook_tmp/runtime"
-mkdir -p "$_sc_runtime"
-
-_sc_rc=0
-XDG_RUNTIME_DIR="$_sc_runtime" COMPACT_THRESHOLD=2 \
-  bash "$PROJECT_DIR/features/strategic-compact/scripts/suggest-compact.sh" <"$_sc_fixture" >"$_sc_out" 2>"$_sc_err" || _sc_rc=$?
-
-if [[ "$_sc_rc" -eq 0 ]] \
-  && cmp -s "$_sc_fixture" "$_sc_out" \
-  && [[ -f "$_sc_runtime/tool-count-fixture-session-edit" ]] \
-  && assert_matches "\\[FIC\\] Context ~50% used \\(1 tool calls\\)" "$(cat "$_sc_err")"; then
-  pass "hook-fixtures: strategic-compact consumes PreToolUse fixture"
-else
-  fail "hook-fixtures: strategic-compact should preserve fixture input and key by session_id"
-fi
-
 _doc_fixture="$_hook_fixture_dir/pretooluse-write-doc.json"
 _doc_err="$_hook_tmp/doc.err"
 _doc_rc=0

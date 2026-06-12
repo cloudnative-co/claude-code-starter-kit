@@ -31,7 +31,7 @@ _CONFIG_KEYS=(
 # never written back by save_config (e.g., ENABLE_CODEX_MCP is migrated to
 # ENABLE_CODEX_PLUGIN by _normalize_codex_state; INSTALL_MEMORY is retired —
 # the kit no longer ships seed memory files).
-_CONFIG_LEGACY_KEYS="ENABLE_CODEX_MCP INSTALL_MEMORY ENABLE_MEMORY_PERSISTENCE"
+_CONFIG_LEGACY_KEYS="ENABLE_CODEX_MCP INSTALL_MEMORY ENABLE_MEMORY_PERSISTENCE ENABLE_STRATEGIC_COMPACT"
 
 # Generated lists (do not edit by hand — extend _CONFIG_KEYS instead):
 #   _CONFIG_ALLOWED_KEYS — space-separated allowlist for _safe_source_config
@@ -175,7 +175,6 @@ HOOK_KEYS=(
   "ENABLE_PRETTIER_HOOKS"
   "ENABLE_BIOME_HOOKS"
   "ENABLE_CONSOLE_LOG_GUARD"
-  "ENABLE_STRATEGIC_COMPACT"
   "ENABLE_PR_CREATION_LOG"
   "ENABLE_PRE_COMPACT_COMMIT"
   "ENABLE_DOC_SIZE_GUARD"
@@ -192,7 +191,6 @@ HOOK_TOKENS=(
   "prettier"
   "biome"
   "console"
-  "compact"
   "pr-log"
   "pre-commit"
   "doc-size"
@@ -212,7 +210,6 @@ _init_hook_labels() {
     "$STR_HOOKS_PRETTIER"
     "${STR_HOOKS_BIOME:-Biome Auto-format - Format and lint JS/TS files after edits}"
     "$STR_HOOKS_CONSOLE"
-    "$STR_HOOKS_COMPACT"
     "$STR_HOOKS_PR_LOG"
     "${STR_HOOKS_PRE_COMMIT:-Pre-compact auto-commit}"
     "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
