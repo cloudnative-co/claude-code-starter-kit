@@ -31,7 +31,7 @@ _CONFIG_KEYS=(
 # never written back by save_config (e.g., ENABLE_CODEX_MCP is migrated to
 # ENABLE_CODEX_PLUGIN by _normalize_codex_state; INSTALL_MEMORY is retired —
 # the kit no longer ships seed memory files).
-_CONFIG_LEGACY_KEYS="ENABLE_CODEX_MCP INSTALL_MEMORY"
+_CONFIG_LEGACY_KEYS="ENABLE_CODEX_MCP INSTALL_MEMORY ENABLE_MEMORY_PERSISTENCE"
 
 # Generated lists (do not edit by hand — extend _CONFIG_KEYS instead):
 #   _CONFIG_ALLOWED_KEYS — space-separated allowlist for _safe_source_config
@@ -175,7 +175,6 @@ HOOK_KEYS=(
   "ENABLE_PRETTIER_HOOKS"
   "ENABLE_BIOME_HOOKS"
   "ENABLE_CONSOLE_LOG_GUARD"
-  "ENABLE_MEMORY_PERSISTENCE"
   "ENABLE_STRATEGIC_COMPACT"
   "ENABLE_PR_CREATION_LOG"
   "ENABLE_PRE_COMPACT_COMMIT"
@@ -193,7 +192,6 @@ HOOK_TOKENS=(
   "prettier"
   "biome"
   "console"
-  "memory"
   "compact"
   "pr-log"
   "pre-commit"
@@ -214,7 +212,6 @@ _init_hook_labels() {
     "$STR_HOOKS_PRETTIER"
     "${STR_HOOKS_BIOME:-Biome Auto-format - Format and lint JS/TS files after edits}"
     "$STR_HOOKS_CONSOLE"
-    "$STR_HOOKS_MEMORY"
     "$STR_HOOKS_COMPACT"
     "$STR_HOOKS_PR_LOG"
     "${STR_HOOKS_PRE_COMMIT:-Pre-compact auto-commit}"

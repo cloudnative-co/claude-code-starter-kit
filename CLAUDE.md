@@ -125,12 +125,12 @@ Each feature in `features/*/` has a `hooks.json` containing Claude Code hook def
 
 Three fragment styles exist:
 - **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields, nested inside `"hooks"` (e.g., `features/tmux-hooks/hooks.json`)
-- **External script hooks**: `hooks.json` references a script path with `__HOME__` token inside `"hooks"`, (e.g., `"hooks": {"PreCompact": [{"hooks": [{"command": "__HOME__/.claude/hooks/memory-persistence/pre-compact.sh"}]}], "PostCompact": [{"hooks": [{"command": "__HOME__/.claude/hooks/memory-persistence/post-compact.sh"}]}]}`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`. Both `.sh` and `.py` scripts are supported.
+- **External script hooks**: `hooks.json` references a script path with `__HOME__` token inside `"hooks"`, (e.g., `"hooks": {"PostToolUse": [{"hooks": [{"command": "__HOME__/.claude/hooks/doc-size-guard/check-doc-size.sh"}]}]}`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`. Both `.sh` and `.py` scripts are supported.
 - **Top-level settings**: `hooks.json` can contain any top-level settings key alongside `"hooks"`. The jq deep-merge applies at root level, so `{"statusLine": {...}}` and `{"env": {...}}` merge correctly (e.g., `features/statusline/hooks.json`, `features/safety-net/hooks.json`).
 
 `build_settings_json()` in `lib/json-builder.sh` performs the merge:
 1. Deep-merge `settings-base.json` + `permissions.json` via `jq -s '.[0] * .[1]'`
-2. Iteratively merge each hook fragment via `merge_deep()` — a recursive jq function that concatenates arrays (e.g., `PreCompact` entries from `memory-persistence` and `pre-compact-commit` coexist) while deep-merging objects and replacing scalars
+2. Iteratively merge each hook fragment via `merge_deep()` — a recursive jq function that concatenates arrays (e.g., multiple features can append `PreToolUse` or `SessionStart` entries) while deep-merging objects and replacing scalars
 3. `replace_home_path()` substitutes `__HOME__` → actual `$HOME` in all string values
 4. Final `validate_json()` check before writing output
 

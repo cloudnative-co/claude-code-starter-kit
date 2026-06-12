@@ -64,7 +64,7 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 | `ENABLE_PRETTIER_HOOKS` | Prettier Auto-format | Format JS / TS edits | Yes |
 | `ENABLE_BIOME_HOOKS` | Biome Auto-format | Format and lint JS / TS edits | Yes |
 | `ENABLE_CONSOLE_LOG_GUARD` | Console Log Guard | Warn on leftover `console.log` | Yes |
-| `ENABLE_MEMORY_PERSISTENCE` | Memory Persistence | Persist important knowledge | Yes |
+| `ENABLE_MEMORY_PERSISTENCE` | (retired) superseded by native auto-memory | None | Read as a legacy key and ignored |
 | `ENABLE_STRATEGIC_COMPACT` | Strategic Compact | Compact suggestion support | Yes |
 | `ENABLE_PR_CREATION_LOG` | PR Creation Log | PR creation logging support | Yes |
 | `ENABLE_PRE_COMPACT_COMMIT` | Pre-compact Commit | Commit helper before compact | Yes |

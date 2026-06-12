@@ -543,6 +543,45 @@ _migrate_statusline_command() {
   fi
 }
 
+# Hook features the kit no longer ships. Their settings.json entries must be
+# stripped during update even when the user customized "hooks" (merge keeps
+# user-touched values, which would leave commands pointing at deleted scripts).
+_RETIRED_HOOK_FEATURES=(memory-persistence)
+
+# _strip_retired_hook_entries - Remove hook commands referencing retired
+# feature script dirs (~/.claude/hooks/<feature>/) from settings.json, then
+# drop matchers/events left empty.
+_strip_retired_hook_entries() {
+  local settings_file="$1"
+  [[ -f "$settings_file" ]] || return 0
+  local feature tmp changed=false
+  for feature in "${_RETIRED_HOOK_FEATURES[@]}"; do
+    jq -e --arg p "/hooks/${feature}/" '
+      [(.hooks // {}) | to_entries[] | .value[]?.hooks[]? | (.command // "")]
+      | any(contains($p))
+    ' "$settings_file" >/dev/null 2>&1 || continue
+    tmp="$(mktemp)"
+    if jq --arg p "/hooks/${feature}/" '
+      if .hooks then
+        .hooks |= (to_entries
+          | map(.value |= (map((.hooks //= []) | .hooks |= map(select((.command // "") | contains($p) | not)))
+                           | map(select((.hooks | length) > 0))))
+          | map(select((.value | length) > 0))
+          | from_entries)
+      else . end
+    ' "$settings_file" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$settings_file"
+      changed=true
+    else
+      rm -f "$tmp"
+      warn "Could not strip retired ${feature} hook entries from settings.json (unexpected hooks structure)"
+    fi
+  done
+  if [[ "$changed" == "true" ]]; then
+    ok "Removed retired hook entries from settings.json"
+  fi
+}
+
 _remove_retired_managed_files() {
   local claude_dir="$1"
   local snapshot_dir="$2"
@@ -750,6 +789,11 @@ _update_phase_settings() {
   # can come out of Phase 1 still pointing statusLine at the retired bash
   # implementation. Rewrite it to the current kit fragment.
   _migrate_statusline_command "$current_settings"
+
+  # User-touched "hooks" survive the merge with kit-removed entries intact,
+  # which would leave commands pointing at scripts the retired-file sweep
+  # deletes. Strip them explicitly.
+  _strip_retired_hook_entries "$current_settings"
 }
 
 # --- Phase 2/5: CLAUDE.md (section-aware) -------------------------------------
