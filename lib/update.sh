@@ -798,6 +798,25 @@ _update_phase_settings() {
   _strip_retired_hook_entries "$current_settings"
 }
 
+# _claude_md_user_section_has_content - Returns 0 when the user section of a
+# deployed CLAUDE.md (everything after the END marker) contains real content
+# beyond the scaffold (section heading, HTML comments, blank lines).
+_claude_md_user_section_has_content() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  _has_kit_markers "$file" || return 1
+  awk '
+    { gsub(/\r$/, "") }
+    found && NF {
+      if ($0 ~ /^[[:space:]]*<!--/) next
+      if ($0 == "# ユーザー設定" || $0 == "# User Settings") next
+      has = 1; exit
+    }
+    $0 == "<!-- END STARTER-KIT-MANAGED -->" { found = 1 }
+    END { exit has ? 0 : 1 }
+  ' "$file"
+}
+
 # --- Phase 2/5: CLAUDE.md (section-aware) -------------------------------------
 _update_phase_claude_md() {
   local claude_dir="$1"
@@ -828,6 +847,13 @@ _update_phase_claude_md() {
     else
       info "$STR_CLAUDEMD_KIT_UNCHANGED"
     fi
+  fi
+
+  # Non-blocking tip: personal always-loaded instructions live better in
+  # ~/.claude/rules/user-*.md (reserved namespace the kit never ships) than
+  # in the CLAUDE.md user section. One info line, no prompt, no nag loop.
+  if _claude_md_user_section_has_content "$current_claude_md"; then
+    info "${STR_UPDATE_USER_RULES_TIP:-Tip: personal instructions in the CLAUDE.md user section can live in ~/.claude/rules/user-*.md instead (reserved for you; never touched by updates). See README.}"
   fi
 
   # Older releases deployed AGENTS.md into ~/.claude. The starter kit no

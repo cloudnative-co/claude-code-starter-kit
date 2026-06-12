@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.72.0] - 2026-06-12
+
+個人設定の置き場所ガイダンスと監査コマンドを追加（v0.71.1 の `user-*` 予約規約の活用面）。
+
+### Added
+- **`/audit-config` コマンドを新設**: ユーザー所有の設定（CLAUDE.md ユーザーセクション・`rules/user-*.md`・プロジェクト CLAUDE.md）を「現行モデルに必要か」の観点で監査する。判定レンズは babysitting / over-prescription / stale-premise / context-tax の 4 分類。削りすぎ防止を組み込み済み: モデルが推測できない個人選好は削除対象にしない、context-tax 判定は settings / harness の実確認を伴う場合のみ、出力は提案のみで適用はユーザー承認後（コマンド数 20 → 21）
+- **README に個人設定の推奨配置を明記（ja/en）**: 個人の常時ロード指示は CLAUDE.md ユーザーセクションより `~/.claude/rules/user-*.md` 推奨（kit が配布しない予約名のため update と完全分離、ファイル単位で管理可能。コンテキストコストは同一であることも明記）
+- **update 時の非ブロック tip**: CLAUDE.md ユーザーセクションに実コンテンツ（スキャフォールド以外）がある場合のみ、update の CLAUDE.md 処理直後に `rules/user-*.md` への移設案内を info 1 行で表示（プロンプトなし・nag なし）。検出ヘルパー `_claude_md_user_section_has_content` のユニットテスト付き
+
 ## [0.71.1] - 2026-06-12
 
 ### Added

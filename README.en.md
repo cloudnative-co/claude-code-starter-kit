@@ -52,7 +52,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **3 profiles**: Minimal, Standard (recommended), Full
 - **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
 - **8 rules**: coding-style, git-workflow, performance, security, testing, agents, anti-patterns, permissions-guide
-- **20 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
+- **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
 - **11 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
@@ -252,6 +252,7 @@ After restarting your terminal, start `claude` in your project directory. The in
 /oss-analyze     # Analyze an OSS repo/doc URL for tech + adoption decisions
 /web-source-review # Evaluate a URL's credibility as an information source
 /handover        # Structured session handover document
+/audit-config    # Audit personal config for outdated model-babysitting instructions
 /update-kit      # Manually update starter kit to latest version
 ```
 
@@ -393,7 +394,7 @@ claude-code-starter-kit/
 │   └── ja/                 # Japanese templates & strings
 ├── agents/                 # Agent definitions (9 files)
 ├── rules/                  # Rule files (8 files)
-├── commands/               # Slash commands (20 files)
+├── commands/               # Slash commands (21 files)
 └── skills/                 # Skill modules (12 dirs)
 ```
 
@@ -402,7 +403,7 @@ claude-code-starter-kit/
 After installation, you can extend or modify any component:
 
 - **Add an agent**: Create a new `.md` file in `~/.claude/agents/`
-- **Add a rule**: Create a new `.md` file in `~/.claude/rules/`
+- **Add a rule**: Create a new `.md` file in `~/.claude/rules/` (for personal always-loaded preferences, `user-*.md` is recommended — the kit reserves that namespace and never ships such files, so updates can never collide with yours)
 - **Add a command**: Create a new `.md` file in `~/.claude/commands/`
 - **Add a skill**: Create a new directory under `~/.claude/skills/` with a `SKILL.md`
 - **Modify hooks**: Edit `~/.claude/settings.json` hooks section

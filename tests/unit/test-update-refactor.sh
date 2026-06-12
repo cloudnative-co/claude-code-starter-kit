@@ -94,3 +94,39 @@
     fail "$test_name (helper_uses=$helper_uses inline_has=$inline_has)"
   fi
 }
+
+{
+  test_name="update: user-section content detection drives the rules/user-* tip"
+  _ust_tmp="$(mktemp -d)"
+  _SETUP_TMP_FILES+=("$_ust_tmp")
+  # scaffold only (heading + placeholder comment) → no tip
+  cat > "$_ust_tmp/scaffold.md" <<'MD'
+<!-- BEGIN STARTER-KIT-MANAGED -->
+# Global Settings
+<!-- END STARTER-KIT-MANAGED -->
+
+# User Settings
+
+<!-- Add your custom instructions below -->
+MD
+  # real user content → tip
+  cat > "$_ust_tmp/content.md" <<'MD'
+<!-- BEGIN STARTER-KIT-MANAGED -->
+# Global Settings
+<!-- END STARTER-KIT-MANAGED -->
+
+# ユーザー設定
+
+- 個人ルールがここにある
+MD
+  # markerless → no tip (migration path handles it)
+  printf '# my own file\n- stuff\n' > "$_ust_tmp/markerless.md"
+  _ust_rc_scaffold=0; _claude_md_user_section_has_content "$_ust_tmp/scaffold.md" || _ust_rc_scaffold=$?
+  _ust_rc_content=0; _claude_md_user_section_has_content "$_ust_tmp/content.md" || _ust_rc_content=$?
+  _ust_rc_markerless=0; _claude_md_user_section_has_content "$_ust_tmp/markerless.md" || _ust_rc_markerless=$?
+  if [[ "$_ust_rc_scaffold" -ne 0 ]] && [[ "$_ust_rc_content" -eq 0 ]] && [[ "$_ust_rc_markerless" -ne 0 ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name (scaffold=$_ust_rc_scaffold content=$_ust_rc_content markerless=$_ust_rc_markerless)"
+  fi
+}
