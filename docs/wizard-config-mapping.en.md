@@ -60,7 +60,7 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 | `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Check web extraction skill dependency updates | Yes |
 | `ENABLE_TMUX_HOOKS` | Tmux Reminder | Suggest run_in_background for foreground dev servers (non-blocking) | Yes |
 | `ENABLE_GIT_PUSH_REVIEW` | Git Push Review | Pause before push and open a diff | Yes |
-| `ENABLE_DOC_BLOCKER` | Doc Blocker | Prevent unnecessary `.md` / `.txt` files | Yes |
+| `ENABLE_DOC_BLOCKER` | Doc Blocker | Ask-only guard for slop doc patterns (general docs allowed) | Yes |
 | `ENABLE_PRETTIER_HOOKS` | Prettier Auto-format | Format JS / TS edits | Yes |
 | `ENABLE_BIOME_HOOKS` | Biome Auto-format | Format and lint JS / TS edits | Yes |
 | `ENABLE_CONSOLE_LOG_GUARD` | Console Log Guard | Warn on leftover `console.log` | Yes |

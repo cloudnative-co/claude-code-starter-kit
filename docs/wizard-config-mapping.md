@@ -60,7 +60,7 @@
 | `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Web 取得スキル依存の更新確認 | はい |
 | `ENABLE_TMUX_HOOKS` | Tmux Reminder | foreground の dev サーバーに run_in_background を提案（非ブロック） | はい |
 | `ENABLE_GIT_PUSH_REVIEW` | Git Push Review | push 前に差分確認 | はい |
-| `ENABLE_DOC_BLOCKER` | Doc Blocker | 不要な `.md` / `.txt` 作成を抑制 | はい |
+| `ENABLE_DOC_BLOCKER` | Doc Blocker | SUMMARY/REPORT 等の slop パターンのみ確認に降格（一般文書は許可） | はい |
 | `ENABLE_PRETTIER_HOOKS` | Prettier Auto-format | JS / TS 編集後の整形 | はい |
 | `ENABLE_BIOME_HOOKS` | Biome Auto-format | JS / TS 編集後の整形・lint | はい |
 | `ENABLE_CONSOLE_LOG_GUARD` | Console Log Guard | `console.log` の取り残し検知 | はい |
