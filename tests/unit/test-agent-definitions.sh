@@ -34,7 +34,7 @@
     && [[ "$(_agent_model e2e-runner)" == "sonnet" ]] \
     && [[ "$(_agent_model refactor-cleaner)" == "sonnet" ]] \
     && [[ "$(_agent_model security-reviewer)" == "sonnet" ]] \
-    && [[ "$(_agent_model doc-updater)" == "haiku" ]] \
+    && [[ "$(_agent_model doc-updater)" == "sonnet" ]] \
     && [[ "$(_agent_model architect)" == "opus" ]] \
     && [[ "$(_agent_model planner)" == "opus" ]]; then
     pass "$test_name"
@@ -50,9 +50,10 @@
     && ! grep -q 'actions/checkout@v' "$PROJECT_DIR/commands/e2e.md" \
     && ! grep -q 'node-version:' "$PROJECT_DIR/commands/e2e.md" \
     && grep -q 'active Node LTS' "$PROJECT_DIR/agents/e2e-runner.md" \
-    && grep -q 'context.tracing.start' "$PROJECT_DIR/agents/e2e-runner.md" \
-    && grep -q 'OWASP Top 10 2021' "$PROJECT_DIR/agents/security-reviewer.md" \
-    && grep -q 'Server-Side Request Forgery' "$PROJECT_DIR/agents/security-reviewer.md"; then
+    && ! grep -q 'context.tracing.start' "$PROJECT_DIR/agents/e2e-runner.md" \
+    && grep -q 'playwright.config' "$PROJECT_DIR/agents/e2e-runner.md" \
+    && grep -q 'current OWASP Top 10' "$PROJECT_DIR/agents/security-reviewer.md" \
+    && ! grep -q 'OWASP Top 10 20' "$PROJECT_DIR/agents/security-reviewer.md"; then
     pass "$test_name"
   else
     fail "$test_name"

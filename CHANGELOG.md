@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.68.0] - 2026-06-12
+
+LLM 性能監査（#121）P4 の第 2 弾（#118）。agents/ を現行世代に合わせて現代化した。
+
+### Changed
+- **doc-updater の model を haiku → sonnet（#118）**: 「現行コードと矛盾する古い記述の除去」というコード理解依存の要求仕様と最弱モデル固定が不整合だった。「高頻度ロールに opus を固定しない」コスト設計は維持
+- **e2e-runner の API レシピと CI 例を方針化（#118）**: 旧モデルの API ハルシネーション対策だった `context.tracing.start()` / video 設定の手動レシピを「playwright.config の config レベル設定（trace on retry / video on failure）優先」の規約に置換。CI Example セクションは「--with-deps でブラウザ導入・失敗時 artifact 回収・最新 action と Active LTS を確認・既存 workflows に合わせる」の 1 行ガイダンスに縮小（固定 YAML は復活させない）
+- **security-reviewer の OWASP 年次固定を解除（#118）**: 「OWASP Top 10 2021」明示と全 10 項目の列挙（現行モデルには既知のコンテキスト税）を「current OWASP Top 10 をベースラインに」へ置換。キット固有のシェル文脈チェック（secrets / file access / command execution 等）は維持
+- **build-error-resolver の起動条件を絞り込み（#118）**: 「あらゆる失敗時」から「既存・未知のビルド失敗の隔離調査用。自セッションの変更で壊したエラーはメインコンテキストで直す」に変更。意図的な API 変更との衝突を防ぐ但し書きも追加
+- tdd-guide の起動条件ゲート（finding 6）は v0.66.0（#116）で対応済み
+
 ## [0.67.0] - 2026-06-12
 
 LLM 性能監査（#121）P4 の第 1 弾（#117）。常時注入される rules/ から現行モデルに情報量のない行を削除した（10 → 8 ファイル）。
