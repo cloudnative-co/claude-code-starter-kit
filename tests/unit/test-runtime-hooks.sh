@@ -15,7 +15,7 @@
 {
   test_name="runtime hooks: high-frequency inline bash hooks are external scripts"
   ok_all=true
-  for feature in biome-hooks prettier-hooks console-log-guard doc-blocker tmux-hooks git-push-review pr-creation-log; do
+  for feature in biome-hooks prettier-hooks doc-blocker tmux-hooks pr-creation-log; do
     if jq -r '.. | objects | .command? // empty' "$PROJECT_DIR/features/$feature"/hooks*.json \
       | grep -q '#!/bin/bash'; then
       ok_all=false
@@ -33,15 +33,6 @@
   if jq -e '.hooks.SessionStart[0].matcher == "startup"' "$PROJECT_DIR/features/auto-update/hooks.json" >/dev/null \
     && jq -e '.hooks.SessionStart[0].matcher == "startup"' "$PROJECT_DIR/features/feature-recommendation/hooks.json" >/dev/null \
     && jq -e '.hooks.SessionStart[0].matcher == "startup"' "$PROJECT_DIR/features/web-content-update/hooks.json" >/dev/null; then
-    pass "$test_name"
-  else
-    fail "$test_name"
-  fi
-}
-
-{
-  test_name="console-log-guard: session audit moved from Stop to SessionEnd and Write is covered"
-  if jq -e 'has("hooks") and (.hooks | has("Stop") | not) and .hooks.SessionEnd[0].matcher == "*" and .hooks.PostToolUse[0].matcher == "Edit|Write"' "$PROJECT_DIR/features/console-log-guard/hooks.json" >/dev/null; then
     pass "$test_name"
   else
     fail "$test_name"

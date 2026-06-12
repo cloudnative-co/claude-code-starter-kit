@@ -142,16 +142,6 @@ apply_settings_preferences() {
   mv "$tmp_file" "$file"
 }
 
-editor_command() {
-  case "${1:-none}" in
-    vscode) printf "code --diff" ;;
-    cursor) printf "cursor --diff" ;;
-    zed)    printf "zed" ;;
-    neovim) printf "nvim -d" ;;
-    *)      printf "" ;;
-  esac
-}
-
 # ---------------------------------------------------------------------------
 # Backup
 # ---------------------------------------------------------------------------
@@ -541,7 +531,6 @@ build_claude_md_to_file() {
 # Usage: build_settings_file <output_path>
 #
 # Uses _FEATURE_ORDER and _FEATURE_FLAGS from lib/features.sh to iterate
-# enabled features. Special case: git-push-review (editor substitution).
 # Assertion: safety-net must be _FEATURE_ORDER[0].
 # ---------------------------------------------------------------------------
 build_settings_file() {
@@ -586,27 +575,6 @@ build_settings_file() {
     fi
     [[ -f "$hooks_json" ]] && hook_fragments+=("$hooks_json")
   done
-
-  # Special case: git-push-review (needs editor command substitution)
-  if is_true "${ENABLE_GIT_PUSH_REVIEW:-false}"; then
-    if [[ "${EDITOR_CHOICE:-none}" == "none" ]]; then
-      warn "Git push review hook skipped (no editor selected)"
-    else
-      local editor_cmd editor_cmd_escaped src tmp
-      editor_cmd="$(editor_command "$EDITOR_CHOICE")"
-      editor_cmd_escaped="$(printf '%s\n' "$editor_cmd" | sed 's/[&\\|]/\\&/g')"
-      src="$PROJECT_DIR/features/git-push-review/hooks.json"
-      tmp="$(mktemp)"
-      _SETUP_TMP_FILES+=("$tmp")
-      if grep -q "__EDITOR_CMD__" "$src" 2>/dev/null; then
-        sed "s|__EDITOR_CMD__|$editor_cmd_escaped|g" "$src" > "$tmp"
-      else
-        cp -a "$src" "$tmp"
-      fi
-      hook_fragments+=("$tmp")
-      tmp_files+=("$tmp")
-    fi
-  fi
 
   build_settings_json "$base" "$permissions" "$out" ${hook_fragments[@]+"${hook_fragments[@]}"}
   apply_settings_preferences "$out"
