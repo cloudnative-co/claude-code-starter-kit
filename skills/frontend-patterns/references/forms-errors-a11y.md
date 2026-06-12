@@ -88,10 +88,10 @@ export class ErrorBoundary extends React.Component<
 }
 ```
 
-## Framer Motion Animations
+## motion Animations (formerly Framer Motion)
 
 ```typescript
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence } from 'motion/react'
 
 export function AnimatedList({ items }: { items: Item[] }) {
   return (

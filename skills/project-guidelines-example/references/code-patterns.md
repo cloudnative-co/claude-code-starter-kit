@@ -67,7 +67,7 @@ class AnalysisResult(BaseModel):
 async def analyze_with_claude(content: str) -> AnalysisResult:
     client = Anthropic()
     response = client.messages.create(
-        model="claude-sonnet-4-5-20250514",
+        model="claude-opus-4-8",  # Check the official docs (Models Overview) for the latest model IDs
         max_tokens=1024,
         messages=[{"role": "user", "content": content}],
         tools=[{

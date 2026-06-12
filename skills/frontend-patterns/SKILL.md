@@ -15,7 +15,7 @@ Composition over inheritance, compound components, render props.
 See [references/component-patterns.md](references/component-patterns.md) for implementations.
 
 ### Custom Hooks
-Reusable hooks: useToggle, useQuery, useDebounce.
+Reusable hooks: useToggle, useDebounce; server state via TanStack Query / SWR.
 See [references/hooks-patterns.md](references/hooks-patterns.md) for implementations.
 
 ### State Management & Performance
@@ -23,7 +23,7 @@ Context + Reducer pattern, memoization, code splitting, virtualization.
 See [references/state-performance.md](references/state-performance.md) for implementations.
 
 ### Forms, Error Boundaries, Animation & Accessibility
-Controlled forms with validation, ErrorBoundary, Framer Motion, keyboard navigation, focus management.
+Controlled forms with validation, ErrorBoundary, motion (formerly Framer Motion), keyboard navigation, focus management.
 See [references/forms-errors-a11y.md](references/forms-errors-a11y.md) for implementations.
 
 ## Quick Decision Guide
@@ -31,13 +31,15 @@ See [references/forms-errors-a11y.md](references/forms-errors-a11y.md) for imple
 | Need | Pattern |
 |------|---------|
 | Shared state across siblings | Context + Reducer |
-| Expensive computation | `useMemo` |
-| Stable callback reference | `useCallback` |
-| Prevent unnecessary re-renders | `React.memo` |
+| Expensive computation (no React Compiler) | `useMemo` |
+| Stable callback reference (no React Compiler) | `useCallback` |
+| Prevent unnecessary re-renders (no React Compiler) | `React.memo` |
 | Large list rendering | Virtualization (`@tanstack/react-virtual`) |
 | Heavy component | `lazy()` + `Suspense` |
 | Form validation | Controlled form + error state |
 | Graceful error handling | ErrorBoundary class component |
 | Keyboard accessible UI | `role`, `aria-*`, `onKeyDown` handlers |
+
+**Note**: On projects using React Compiler, manual memoization (`useMemo`/`useCallback`/`React.memo`) is generally unnecessary; add it only when profiling shows a real problem.
 
 **Remember**: Choose patterns that fit your project complexity. Not every project needs every pattern.

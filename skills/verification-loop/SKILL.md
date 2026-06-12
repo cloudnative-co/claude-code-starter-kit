@@ -18,60 +18,37 @@ Invoke this skill:
 
 ## Verification Phases
 
-### Phase 1: Build Verification
-```bash
-# Check if project builds
-npm run build 2>&1 | tail -20
-# OR
-pnpm build 2>&1 | tail -20
-```
+Pick the right command for each phase from the project's own configuration (package.json scripts, Makefile, CI workflow, etc.). The commands below are examples, not prescriptions. Summarize long output instead of pasting it verbatim.
 
-If build fails, STOP and fix before continuing.
+### Phase 1: Build Verification
+Check that the project builds. Examples: `npm run build`, `cargo check`, `go build ./...`, `shellcheck -S warning *.sh`.
+
+If the build fails, STOP and fix before continuing.
 
 ### Phase 2: Type Check
-```bash
-# TypeScript projects
-npx tsc --noEmit 2>&1 | head -30
-
-# Python projects
-pyright . 2>&1 | head -30
-```
+Run the project's type checker if it has one. Examples: `npx tsc --noEmit` (TypeScript), `pyright .` or `mypy .` (Python).
 
 Report all type errors. Fix critical ones before continuing.
 
 ### Phase 3: Lint Check
-```bash
-# JavaScript/TypeScript
-npm run lint 2>&1 | head -30
-
-# Python
-ruff check . 2>&1 | head -30
-```
+Run the project's linter. Examples: `npm run lint`, `ruff check .`, `shellcheck`.
 
 ### Phase 4: Test Suite
-```bash
-# Run tests with coverage
-npm run test -- --coverage 2>&1 | tail -50
-
-# Check coverage threshold
-# Target: 80% minimum
-```
+Run the project's test suite, with coverage if available. Examples: `npm test -- --coverage`, `pytest --cov`, `bash tests/run-unit-tests.sh`.
 
 Report:
 - Total tests: X
 - Passed: X
 - Failed: X
-- Coverage: X%
+- Coverage: X% (against the project's target)
 
 ### Phase 5: Security Scan
-```bash
-# Check for secrets
-grep -rn "sk-" --include="*.ts" --include="*.js" . 2>/dev/null | head -10
-grep -rn "api_key" --include="*.ts" --include="*.js" . 2>/dev/null | head -10
+Check for leaked secrets in the changes:
+- If a dedicated scanner is available (gitleaks, trufflehog), use it.
+- Otherwise, follow the bundled security-review skill.
+- At minimum, review the added lines of `git diff` for credentials, tokens, and keys. Do not report PASS based on a repository-wide grep.
 
-# Check for console.log
-grep -rn "console.log" --include="*.ts" --include="*.tsx" src/ 2>/dev/null | head -10
-```
+Also check for leftover debug output (e.g., `console.log`, `print`) in the changed files.
 
 ### Phase 6: Diff Review
 ```bash
@@ -107,20 +84,8 @@ Issues to Fix:
 2. ...
 ```
 
-## Continuous Mode
-
-For long sessions, run verification every 15 minutes or after major changes:
-
-```markdown
-Set a mental checkpoint:
-- After completing each function
-- After finishing a component
-- Before moving to next task
-
-Run: /verify
-```
-
 ## Integration with Hooks
 
 This skill complements PostToolUse hooks but provides deeper verification.
 Hooks catch issues immediately; this skill provides comprehensive review.
+If you need periodic automated re-verification, use a hook or the /loop command; instructions in this skill body cannot schedule themselves.

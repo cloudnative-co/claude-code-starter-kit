@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.66.0] - 2026-06-12
+
+LLM 性能監査（#121）P3 の最終弾（#116）。skills の一律強制を縮小し内容の鮮度を更新した。
+
+### Changed
+- **tdd-workflow（#116）**: 「全作業（バグ修正・リファクタ含む）に TDD + 80% カバレッジを一律強制」を「TDD の明示要求時、またはカバレッジ要件のある新機能開発」に限定。日常的なバグ修正・リファクタは「変更した挙動に focused なテスト」（rules/testing.md と整合）。絶対表現（ALWAYS / not optional）をワークフロー内デフォルトに緩和、80% は「プロジェクト基準に合わせた目安」へ。npm 固定コマンドをスタック別例示化、E2E は Web UI 限定と明記、references は JS/TS 向けと注記
+- **verification-loop（#116）**: 6 観点とレポート様式は維持しつつ、固定コマンド + `| tail -20` 等の出力打ち切り指定を例示に降格・削除。Phase 5 の `grep "sk-"` 式 secret 検査を「gitleaks/trufflehog → security-review skill → 最低限 diff 追加行の確認」に置換（リポジトリ全体 grep で PASS を出さない）。実行不能な「15 分ごとに検証」「mental checkpoint」の Continuous Mode セクションを削除（定期実行は hook / /loop の領分と明記）
+- **eval-harness（#116）**: 対話セッションでは測定不能な pass@k / pass^k 指標の手書き記録と Model-Based Grader の 1-5 自己採点を削除。「PASS (pass@2)」は「PASS (attempts: 2)」に改名（再試行回数として有用）。Model Grader はサブエージェントによる YES/NO チェックリスト + PASS/FAIL に置換。「本当に pass@k を測るなら headless 自動実行スクリプトで」と注記。成功条件の事前定義・Code-Based Grader・Eval Storage は維持
+- **prompt-patterns（#116）**: 旧世代の「ultrathink」キーワード詠唱機構の説明を「Deep Reasoning」（Plan Mode / harness の thinking・effort 制御 / 自然言語で深さを促す）に置換。Phase-wise Gated Plan の「Estimated context usage」（モデルに実測手段がなかった時代の項目）を「Rollback plan if verification fails」に差し替え
+- **frontend-patterns（#116）**: メモ化 3 行（useMemo/useCallback/React.memo）を React Compiler 未採用プロジェクト条件付きに変更 + Compiler 採用時の注記。手書き useQuery フック（onSuccess/onError 形・依存配列の無限再フェッチ footgun 含む）を TanStack Query / SWR の最小例に置換。Framer Motion → motion 改称（`import from 'motion/react'`）
+- **project-guidelines-example（#116）**: 例示コードの `claude-sonnet-4-5-20250514`（存在しない疑いのある日付サフィックス付き旧 ID）を `claude-opus-4-8` + 「最新 ID は公式 docs で確認」コメントに修正
+
 ## [0.65.0] - 2026-06-12
 
 LLM 性能監査（#121）P3 の第 2 弾（#115）。commands の低優先掃除（ネイティブ重複・呪文・ハードコードの除去）。
