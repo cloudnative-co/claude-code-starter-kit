@@ -141,7 +141,7 @@ esac
 }
 
 ensure_dirs() {
-  mkdir -p "$CLAUDE_DIR"/{agents,rules,commands,skills,memory,hooks}
+  mkdir -p "$CLAUDE_DIR"/{agents,rules,commands,skills,hooks}
 }
 
 should_auto_install_biome() {
@@ -327,7 +327,6 @@ else
     copy_if_enabled "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
     copy_if_enabled "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
     copy_if_enabled "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
-    copy_if_enabled "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
 
     build_claude_md
 

@@ -263,7 +263,6 @@ collect_managed_target_files() {
   _add_managed_tree_targets "$PROJECT_DIR/rules" "$CLAUDE_DIR/rules"
   _add_managed_tree_targets "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
   _add_managed_tree_targets "$PROJECT_DIR/skills" "$CLAUDE_DIR/skills"
-  _add_managed_tree_targets "$PROJECT_DIR/memory" "$CLAUDE_DIR/memory"
   # Registry-driven: hook script paths from _FEATURE_HAS_SCRIPTS
   local _feat_name
   for _feat_name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
@@ -779,7 +778,6 @@ _deploy_fresh_with_existing() {
   _copy_dir_safe "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
   _copy_dir_safe "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
   _copy_dir_safe "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
-  _copy_dir_safe "$INSTALL_MEMORY"  "$PROJECT_DIR/memory"   "$CLAUDE_DIR/memory"
 
   _build_claude_md_safe
   _build_settings_safe

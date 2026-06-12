@@ -629,7 +629,7 @@ _prune_empty_dirs() {
 _count_update_content_files() {
   local total=0
   local dir
-  for dir in agents rules commands skills memory; do
+  for dir in agents rules commands skills; do
     local src_dir="${PROJECT_DIR}/${dir}"
     local flag_var
     flag_var="INSTALL_$(printf '%s' "$dir" | tr '[:lower:]' '[:upper:]')"
@@ -793,7 +793,7 @@ _update_phase_claude_md() {
   fi
 }
 
-# --- Phase 3/5: Content directories (agents, rules, commands, skills, memory) -
+# --- Phase 3/5: Content directories (agents, rules, commands, skills) --------
 _update_phase_content() {
   local project_dir="$1"
   local claude_dir="$2"
@@ -803,7 +803,7 @@ _update_phase_content() {
   local _content_total=0 _content_current=0
   _content_total="$(_count_update_content_files)"
   local dir
-  for dir in agents rules commands skills memory; do
+  for dir in agents rules commands skills; do
     local src_dir="${project_dir}/${dir}"
     local dest_dir="${claude_dir}/${dir}"
     local snap_dir="${snapshot_dir}/${dir}"
@@ -948,7 +948,7 @@ _update_report() {
 # Phases (one function per progress step):
 #   1/5 _update_phase_settings  — settings.json: build new, 3-way compare/merge
 #   2/5 _update_phase_claude_md — CLAUDE.md: build new, section-aware update
-#   3/5 _update_phase_content   — agents, rules, commands, skills, memory
+#   3/5 _update_phase_content   — agents, rules, commands, skills
 #   4/5 _update_phase_hooks     — hook scripts + retired managed file cleanup
 #   5/5 _update_phase_snapshot  — snapshot refresh for each updated file
 #   _update_report              — skipped files list + summary (non-dry-run)

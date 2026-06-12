@@ -74,7 +74,7 @@ install.ps1 (Windows: WSL2 setup + clone repo via WSL + bootstrap)
       → lib/deploy.sh (build + deploy functions)
         → build_claude_md() — template engine assembles ~/.claude/CLAUDE.md
         → build_settings_file() — jq merges base JSON + permissions + hook fragments → settings.json
-      → deploy files to ~/.claude/{agents,rules,commands,skills,memory}/
+      → deploy files to ~/.claude/{agents,rules,commands,skills}/
       → lib/ghostty.sh (Ghostty install + config, macOS only, if enabled)
       → lib/fonts.sh (cross-platform font install + Windows Terminal auto-config)
       → write_manifest() — tracks deployed files for uninstall
@@ -96,7 +96,7 @@ Libraries sourced by `setup.sh` in two stages. `setup_stage1()` (Bash 3.2 compat
 
 Three profiles (`profiles/*.conf`) define feature toggles as `VAR=true/false`:
 - **minimal** — agents + rules only
-- **standard** — adds commands, skills, memory, core hooks, Ghostty (macOS), programming fonts
+- **standard** — adds commands, skills, core hooks, Ghostty (macOS), programming fonts
 - **full** — everything including Codex Plugin
 
 ### i18n
@@ -183,7 +183,6 @@ Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and 
 | `rules/*.md` | `~/.claude/rules/` | `INSTALL_RULES=true` |
 | `commands/` | `~/.claude/commands/` | `INSTALL_COMMANDS=true` |
 | `skills/` | `~/.claude/skills/` | `INSTALL_SKILLS=true` |
-| `memory/` | `~/.claude/memory/` | `INSTALL_MEMORY=true` |
 | `features/*/scripts/` | `~/.claude/hooks/<feature>/` | feature-specific |
 | assembled CLAUDE.md | `~/.claude/CLAUDE.md` | always |
 | assembled settings.json | `~/.claude/settings.json` | always |

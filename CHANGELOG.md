@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.57.0] - 2026-06-12
+
+LLM 性能監査（#121）P1 の第 1 弾（#107）。旧モデル世代向けに設計されたシードメモリ配布を廃止した。
+
+### Removed
+- **`memory/` シードメモリの配布を廃止（#107）**: `~/.claude/memory/` へコピーしていた 5 ファイル（MEMORY.md / best-practices.md / context-engineering.md / settings-reference.md / architecture.md）の配布を終了。内容は native auto-memory 登場前のコミュニティ・ベストプラクティス集で、(1) Claude Code が自動ロードする場所ではないのに auto-memory と同一の命名・構造を持ち混同リスクがあった、(2) settings 優先順位の誤情報（managed-settings を「最下位」と記載 — 実際は最上位）、「CLAUDE.md 150 行超で遵守保証なし」「~50% で手動 /compact」「コンテキスト末尾 20% を避けろ」等の旧世代 lore を全ユーザーに配布していた。既存インストールのキット配布分は `setup.sh --update` / `/update-kit` の retired 掃除で自動削除される（ユーザーが編集したファイルは保護されて残る）
+- `INSTALL_MEMORY` はレガシーキー化（保存済み config は読み捨て、新規保存はされない）。profiles / defaults から削除
+
+### Changed
+- **CLAUDE.md.base / spec-kit-init の cn-memory 参照を整理（#107）**: 実際にはロードされない `~/.claude/memory/`（cn-memory）を規約源として参照していた箇所を、実際にロードされるユーザーレベル規約（`~/.claude/CLAUDE.md` と `~/.claude/rules/`）への参照に修正
+- **doc-size-guard の警告文言を見直し（#107）**: 「遵守限界」を示唆する文言から「常時ロードのコンテキストコスト削減の推奨（サイズ衛生）」へ変更（閾値は不変）
+
+### Added
+- `docs/GUIDES/hooks-reference.md`: 旧 `memory/context-engineering.md` にあったキット固有情報（配備 hook イベント一覧・compaction 前後の流れ）をユーザー向けドキュメントとして移設
+
 ## [0.56.0] - 2026-06-12
 
 リファクタリング計画 #104 の継続分（0.55.0 で open 維持とした構造課題 5 Issue #96 #97 #98 #99 #103）を完了。

@@ -29,8 +29,9 @@ _CONFIG_KEYS=(
 
 # Legacy keys: accepted when loading saved config (kept in the allowlist) but
 # never written back by save_config (e.g., ENABLE_CODEX_MCP is migrated to
-# ENABLE_CODEX_PLUGIN by _normalize_codex_state).
-_CONFIG_LEGACY_KEYS="ENABLE_CODEX_MCP"
+# ENABLE_CODEX_PLUGIN by _normalize_codex_state; INSTALL_MEMORY is retired —
+# the kit no longer ships seed memory files).
+_CONFIG_LEGACY_KEYS="ENABLE_CODEX_MCP INSTALL_MEMORY"
 
 # Generated lists (do not edit by hand — extend _CONFIG_KEYS instead):
 #   _CONFIG_ALLOWED_KEYS — space-separated allowlist for _safe_source_config

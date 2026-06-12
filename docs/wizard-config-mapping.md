@@ -47,7 +47,7 @@
 | `INSTALL_RULES` | `~/.claude/rules/` | 初回配置, update | 同上 |
 | `INSTALL_COMMANDS` | `~/.claude/commands/` | 初回配置, update | 同上 |
 | `INSTALL_SKILLS` | `~/.claude/skills/` | 初回配置, update | 同上 |
-| `INSTALL_MEMORY` | `~/.claude/memory/` | 初回配置, update | 同上 |
+| `INSTALL_MEMORY` | （廃止）シードメモリは配布されなくなった | なし | レガシーキーとして読み捨て。update で既存のキット配布ファイルは掃除される |
 
 ## フック選択の対応表
 

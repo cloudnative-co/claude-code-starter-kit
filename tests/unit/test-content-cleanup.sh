@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/unit/test-content-cleanup.sh - Commands/skills/memory hygiene checks
+# tests/unit/test-content-cleanup.sh - Commands/skills hygiene checks
 
 {
   test_name="content-cleanup: duplicated or dead command/skill payloads are removed"
@@ -53,9 +53,9 @@
 }
 
 {
-  test_name="content-cleanup: command and memory docs omit stale project residue"
+  test_name="content-cleanup: command docs omit stale project residue"
   stale_pattern='PMX|Privy|Solana|Supabase|Real Money|upload-artifact@v3|node-version: 18|Opus 4\.6|/rpi:|browser\.startTracing|videosPath|market liquidity|semantic search'
-  if ! grep -RE "$stale_pattern" "$PROJECT_DIR/commands" "$PROJECT_DIR/memory" "$PROJECT_DIR/skills/security-review" "$PROJECT_DIR/skills/strategic-compact" >/dev/null 2>&1; then
+  if ! grep -RE "$stale_pattern" "$PROJECT_DIR/commands" "$PROJECT_DIR/skills/security-review" "$PROJECT_DIR/skills/strategic-compact" >/dev/null 2>&1; then
     pass "$test_name"
   else
     fail "$test_name"
@@ -81,6 +81,18 @@
   test_name="content-cleanup: orchestrate uses existing agents"
   if ! grep -q 'explorer ->' "$PROJECT_DIR/commands/orchestrate.md" \
     && grep -q 'planner -> tdd-guide -> code-reviewer' "$PROJECT_DIR/commands/orchestrate.md"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="content-cleanup: seed memory distribution is retired"
+  if [[ ! -d "$PROJECT_DIR/memory" ]] \
+    && ! grep -q 'PROJECT_DIR/memory' "$PROJECT_DIR/lib/deploy.sh" \
+    && ! grep -q 'INSTALL_MEMORY' "$PROJECT_DIR/setup.sh" \
+    && grep -q 'INSTALL_MEMORY' <<< "$(grep '_CONFIG_LEGACY_KEYS=' "$PROJECT_DIR/wizard/registry.sh")"; then
     pass "$test_name"
   else
     fail "$test_name"

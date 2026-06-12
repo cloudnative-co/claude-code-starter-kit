@@ -34,10 +34,10 @@ check_file_size() {
     line_count=$(wc -l < "$file" | tr -d ' ')
 
     if (( line_count > error_limit )); then
-        echo "ERROR: ${label} is ${line_count} lines (limit: ${error_limit}). Refactor content into sub-files and use Progressive Disclosure." >&2
+        echo "ERROR: ${label} is ${line_count} lines (size-hygiene threshold: ${error_limit}). Always-loaded lines cost context every turn — move details into skills/ or docs/ (progressive disclosure)." >&2
         return 1
     elif (( line_count > warn_limit )); then
-        echo "WARNING: ${label} is ${line_count} lines (recommended: <${warn_limit}). Consider moving details to skills/ or docs/." >&2
+        echo "WARNING: ${label} is ${line_count} lines (size-hygiene target: <${warn_limit}). Consider moving details to skills/ or docs/ to reduce always-loaded context." >&2
     fi
     return 0
 }

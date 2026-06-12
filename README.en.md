@@ -171,7 +171,7 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 | Full | Yes | Yes | Yes | Yes | All | Yes | 14 | Yes | macOS only |
 
 - **Minimal**: Lightweight start with just agents and rules
-- **Standard**: Best for most teams. Includes commands, skills, core hooks, and memory
+- **Standard**: Best for most teams. Includes commands, skills, and core hooks
 - **Full**: Everything enabled including all hooks and Codex Plugin sub-agent delegation
 
 ### Web Content Extraction Skill
@@ -398,8 +398,7 @@ claude-code-starter-kit/
 ├── agents/                 # Agent definitions (9 files)
 ├── rules/                  # Rule files (10 files)
 ├── commands/               # Slash commands (21 files)
-├── skills/                 # Skill modules (12 dirs)
-└── memory/                 # Best practice memory (5 files)
+└── skills/                 # Skill modules (12 dirs)
 ```
 
 ## Customization
