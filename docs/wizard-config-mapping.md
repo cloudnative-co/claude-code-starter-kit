@@ -18,7 +18,7 @@
 | プロファイル | `PROFILE` / `--profile` | 個別フラグの初期値セットを決める | `wizard` の初期化, manifest | いいえ |
 | Codex Plugin | `ENABLE_CODEX_PLUGIN` / `--codex-plugin` | Codex プラグインのインストールと認証を行うか | `setup.sh` の Codex Plugin セットアップ | いいえ |
 | 新しい `/init` | `ENABLE_NEW_INIT` / `--new-init` | Claude Code の対話型 `/init` を有効にする | `settings.json` の `env.CLAUDE_CODE_NEW_INIT` | はい |
-| エディタ | `EDITOR_CHOICE` / `--editor` | git push review hook を有効にするかどうか（`none` で hook フラグメント自体をスキップ） | hook フラグメントの合成可否, manifest | 間接的 |
+| エディタ | `EDITOR_CHOICE` / `--editor` | 使用エディタの記録（現在この選択で挙動が変わる機能はない） | 保存 config, manifest | いいえ |
 | Ghostty | `ENABLE_GHOSTTY_SETUP` / `--ghostty` | Ghostty の追加セットアップ | Ghostty 設定処理 | いいえ |
 | フック | `ENABLE_*` / `--hooks` | 有効化するフックを選ぶ | `settings.json` の hooks 合成 | はい |
 | プラグイン | `SELECTED_PLUGINS` / `--plugins` | Claude Code セッション内で有効化する推奨プラグイン | プラグイン導入処理, manifest | いいえ |
@@ -32,7 +32,7 @@
 | `LANGUAGE` | UI 表示言語と生成物の言語 | `settings.json`, `CLAUDE.md`, i18n | 現在は `日本語` / `English` を設定 |
 | `PROFILE` | Minimal / Standard / Full / Custom の初期値選択 | `wizard` のデフォルト展開, manifest | 実際の挙動は個別フラグへ展開される |
 | `ENABLE_NEW_INIT` | Claude Code の新しい `/init` 対話モード | `settings.json` の `env.CLAUDE_CODE_NEW_INIT` | Minimal / Standard / Full は既定 `true`、Custom では選択式 |
-| `EDITOR_CHOICE` | git push review hook の有効化判定 | `features/git-push-review/hooks.json` の合成可否 | `none` のときは hook フラグメント自体をスキップ。hook は push 前に stderr へレビューリマインダーを表示するだけで、エディタ起動や差分表示は行わない |
+| `EDITOR_CHOICE` | 使用エディタの記録のみ | 保存 config と manifest への記録 | git-push-review hook の廃止に伴い、この値で挙動が変わる機能はなくなった |
 | `COMMIT_ATTRIBUTION` | Claude Code 帰属の表示有無 | `settings.json` の `attribution.commit`, `attribution.pr` | `false` で commit / PR 両方の帰属表示を空文字にする |
 | `ENABLE_CODEX_PLUGIN` | Codex Plugin セットアップ実行可否 | Codex CLI 認証と plugin install | 反映は `settings.json` ではなく外部セットアップ |
 | `ENABLE_GHOSTTY_SETUP` | Ghostty の追加セットアップ | macOS 向け Ghostty 設定 | macOS 以外では無効化される |
@@ -59,11 +59,11 @@
 | `ENABLE_AUTO_UPDATE` | Auto Update | セッション開始時の更新確認 | はい |
 | `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Web 取得スキル依存の更新確認 | はい |
 | `ENABLE_TMUX_HOOKS` | Tmux Reminder | foreground の dev サーバーに run_in_background を提案（非ブロック） | はい |
-| `ENABLE_GIT_PUSH_REVIEW` | Git Push Review | push 前に差分確認 | はい |
+| `ENABLE_GIT_PUSH_REVIEW` | （廃止）実効ガードは permissions 側が担当 | なし | レガシーキーとして読み捨て |
 | `ENABLE_DOC_BLOCKER` | Doc Blocker | SUMMARY/REPORT 等の slop パターンのみ確認に降格（一般文書は許可） | はい |
 | `ENABLE_PRETTIER_HOOKS` | Prettier Auto-format | JS / TS 編集後の整形 | はい |
 | `ENABLE_BIOME_HOOKS` | Biome Auto-format | JS / TS 編集後の整形・lint | はい |
-| `ENABLE_CONSOLE_LOG_GUARD` | Console Log Guard | `console.log` の取り残し検知 | はい |
+| `ENABLE_CONSOLE_LOG_GUARD` | （廃止）rules/coding-style と linter に委譲 | なし | レガシーキーとして読み捨て |
 | `ENABLE_MEMORY_PERSISTENCE` | （廃止）native auto-memory に委譲 | なし | レガシーキーとして読み捨て |
 | `ENABLE_STRATEGIC_COMPACT` | （廃止）hook は撤去、skill のみオンデマンドで残存 | なし | レガシーキーとして読み捨て |
 | `ENABLE_PR_CREATION_LOG` | PR Creation Log | PR 作成ログの補助 | はい |

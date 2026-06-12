@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.63.0] - 2026-06-12
+
+LLM 性能監査（#121）P2 の最終弾（#113）。残る挙動ガード hook を整理した。
+
+### Removed
+- **console-log-guard を廃止（#113）**: JS/TS 編集ごとの console.log 警告と SessionEnd 全体監査を撤去。exit 0 の stderr 警告はモデルの行動を変えられず、CLI ツール等の正当な console.log にも無差別警告していた。rules/coding-style.md の「stray debug output」ルールと linter（ESLint no-console / biome）への委譲で代替
+- **git-push-review を廃止（#113）**: git push 前の定型リマインダー（情報量ゼロの stderr 1 行）を撤去。実効的なガードは permissions.json の force-push deny 側が担っている。lib/deploy.sh の `__EDITOR_CMD__` 置換特例（デッドコード）と `editor_command()`（呼び出し元ゼロ）も削除。エディタ選択ステップは設定記録用として存続（文言を修正）
+- 両 feature とも `_RETIRED_HOOK_FEATURES` に追加 — 既存インストールの settings.json エントリと hook スクリプトは update 時に自動掃除。`ENABLE_CONSOLE_LOG_GUARD` / `ENABLE_GIT_PUSH_REVIEW` はレガシーキー化
+
+### Changed
+- **doc-size-guard を警告専用に再設計（#113）**: (1) 誤検知がほぼ 100% だったパス参照チェック（バッククォート内の `/` や `.` を含む全文字列を実在パスとして検証）を削除、(2) ERROR / exit 1 を廃止して常に非ブロックの WARNING のみに、(3) 閾値を現行モデルの指示追従力に合わせて緩和（CLAUDE.md warn 150→250 行、AGENTS.md warn 60→150 行）、(4) feature.json の `standard: true` と profiles/standard.conf の `false` の矛盾を解消（standard は false が実態）
+- **no-flicker を opt-in 化（#113）**: standard / full の既定を false に変更。CLAUDE_CODE_NO_FLICKER はもはや experimental ではなく現行 CLI には第一級の `tui: "fullscreen"` 設定が存在する。また現行 Claude Code は tmux 等の環境で fullscreen レンダラーを意図的に自動無効化しており、無条件 env 注入はその安全側判定をオーバーライドするため既定配布をやめる。description から「experimental」を削除。`tui` キーへの移行は対応最小バージョン確認後に別途実施
+
 ## [0.62.0] - 2026-06-12
 
 LLM 性能監査（#121）P2 の第 2 弾（#112）。doc-blocker を allowlist 全拒否から slop パターン拒否方式に反転した。

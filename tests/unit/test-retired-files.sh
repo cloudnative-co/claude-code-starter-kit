@@ -3,7 +3,7 @@
 # statusline migration regression guards
 #
 # Covers the update-path bugs fixed after the #78-#103 refactor review:
-#   1. git-push-review scripts must deploy via _update_hook_scripts
+#   1. scripted features must deploy via _update_hook_scripts
 #   2. _remove_retired_managed_files must not treat user-deleted (but still
 #      kit-shipped) files as retired, must keep customized retired files, and
 #      must map manifest paths recorded under a different claude_dir (dry-run)
@@ -29,36 +29,36 @@ ENABLE_CODEX_PLUGIN="false"
 source "$PROJECT_DIR/lib/deploy.sh"
 source "$PROJECT_DIR/lib/update.sh"
 
-# Disable every scripted feature, then enable only git-push-review so the
+# Disable every scripted feature, then enable only doc-size-guard so the
 # update deploy assertions stay focused.
 for _rt_feat in "${_FEATURE_SCRIPT_ORDER[@]}"; do
   _rt_flag="${_FEATURE_FLAGS[$_rt_feat]:-}"
   [[ -n "$_rt_flag" ]] && printf -v "$_rt_flag" '%s' "false"
 done
 # shellcheck disable=SC2034  # read via ${!flag} indirection in sourced libs
-printf -v ENABLE_GIT_PUSH_REVIEW '%s' "true"
+printf -v ENABLE_DOC_SIZE_GUARD '%s' "true"
 
-# ── 1. update path deploys git-push-review scripts ────────────────────────
+# ── 1. update path deploys scripted feature scripts ───────────────────────
 {
-  test_name="retired-files: _update_hook_scripts deploys git-push-review remind.sh"
+  test_name="retired-files: _update_hook_scripts deploys doc-size-guard script"
   _rt_cd="$(mktemp -d)"
   _rt_snap="$(mktemp -d)"
   _SETUP_TMP_FILES+=("$_rt_cd" "$_rt_snap")
   _rt_rc=0
   _update_hook_scripts "$_rt_cd" "$_rt_snap" || _rt_rc=$?
-  if [[ "$_rt_rc" -eq 0 ]] && [[ -x "$_rt_cd/hooks/git-push-review/remind.sh" ]]; then
+  if [[ "$_rt_rc" -eq 0 ]] && [[ -x "$_rt_cd/hooks/doc-size-guard/check-doc-size.sh" ]]; then
     pass "$test_name"
   else
     fail "$test_name (rc=$_rt_rc)"
   fi
 }
 
-# ── 2. manifest/snapshot tracking covers git-push-review ──────────────────
+# ── 2. manifest/snapshot tracking covers scripted features ────────────────
 {
-  test_name="retired-files: collect_managed_target_files includes git-push-review script"
+  test_name="retired-files: collect_managed_target_files includes doc-size-guard script"
   collect_managed_target_files
   if printf '%s\n' "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}" \
-    | grep -qx "$CLAUDE_DIR/hooks/git-push-review/remind.sh"; then
+    | grep -qx "$CLAUDE_DIR/hooks/doc-size-guard/check-doc-size.sh"; then
     pass "$test_name"
   else
     fail "$test_name"

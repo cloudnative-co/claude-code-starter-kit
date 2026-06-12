@@ -85,7 +85,6 @@ fi
 
 _post_edit_fixture="$_hook_tmp/post-edit.json"
 _post_write_fixture="$_hook_tmp/post-write.json"
-_pre_push_fixture="$_hook_fixture_dir/pretooluse-bash-git-push.json"
 _pre_dev_fixture="$_hook_fixture_dir/pretooluse-bash-npm-dev.json"
 _sample_ts="$_hook_tmp/sample.ts"
 _sample_claude="$_hook_tmp/CLAUDE.md"
@@ -99,17 +98,13 @@ jq --arg path "$_sample_claude" '.tool_input.file_path = $path' \
 _script_smoke_ok=true
 bash "$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh" <"$_post_edit_fixture" >/dev/null 2>/dev/null || _script_smoke_ok=false
 bash "$PROJECT_DIR/features/prettier-hooks/scripts/format-file.sh" <"$_post_edit_fixture" >/dev/null 2>/dev/null || _script_smoke_ok=false
-bash "$PROJECT_DIR/features/console-log-guard/scripts/check-file.sh" <"$_post_edit_fixture" >/dev/null 2>"$_hook_tmp/console.err" || _script_smoke_ok=false
 (cd "$_hook_tmp" && bash "$PROJECT_DIR/features/doc-size-guard/scripts/check-doc-size.sh" <"$_post_write_fixture" >/dev/null 2>/dev/null) || _script_smoke_ok=false
-bash "$PROJECT_DIR/features/git-push-review/scripts/remind.sh" <"$_pre_push_fixture" >/dev/null 2>"$_hook_tmp/push.err" || _script_smoke_ok=false
 bash "$PROJECT_DIR/features/feature-recommendation/scripts/check-pending.sh" <"$_hook_fixture_dir/sessionstart-startup.json" >/dev/null 2>/dev/null || _script_smoke_ok=false
 
 _tmux_rc=0
 env -u TMUX bash "$PROJECT_DIR/features/tmux-hooks/scripts/check-bash.sh" <"$_pre_dev_fixture" >/dev/null 2>"$_hook_tmp/tmux.err" || _tmux_rc=$?
 
 if [[ "$_script_smoke_ok" == "true" ]] \
-  && assert_matches "console\\.log found" "$(cat "$_hook_tmp/console.err")" \
-  && assert_matches "Reminder: review your staged changes" "$(cat "$_hook_tmp/push.err")" \
   && [[ "$_tmux_rc" -eq 0 ]] \
   && assert_matches "prefer run_in_background" "$(cat "$_hook_tmp/tmux.err")"; then
   pass "hook-fixtures: distributed hook scripts consume real-schema fixtures"
@@ -123,41 +118,6 @@ fi
 #   - web-content-update: inline `node` one-liner; not reliably runnable in CI
 #   - safety-net: requires the external cc-safety-net binary, absent in CI
 # ---------------------------------------------------------------------------
-
-# console-log-guard audit-session.sh (SessionEnd) — needs a git repo with an
-# unstaged console.log change; run inside an isolated temp repo + temp HOME.
-_cla_repo="$_hook_tmp/console-audit-repo"
-_cla_home="$_hook_tmp/console-audit-home"
-_cla_err="$_hook_tmp/cla.err"
-_cla_setup_ok=true
-mkdir -p "$_cla_repo" "$_cla_home"
-(
-  export HOME="$_cla_home" GIT_CONFIG_NOSYSTEM=1
-  cd "$_cla_repo" \
-    && git init -q . \
-    && git config user.name "Fixture" \
-    && git config user.email "fixture@example.com" \
-    && printf 'export const ok = true\n' >app.ts \
-    && git add app.ts \
-    && git commit -qm 'init' \
-    && printf "console.log('leftover')\n" >>app.ts
-) >/dev/null 2>&1 || _cla_setup_ok=false
-
-_cla_rc=0
-(
-  cd "$_cla_repo" \
-    && HOME="$_cla_home" GIT_CONFIG_NOSYSTEM=1 \
-      bash "$PROJECT_DIR/features/console-log-guard/scripts/audit-session.sh" \
-      <"$_hook_fixture_dir/sessionend-other.json" >/dev/null 2>"$_cla_err"
-) || _cla_rc=$?
-
-if [[ "$_cla_setup_ok" == "true" ]] \
-  && [[ "$_cla_rc" -eq 0 ]] \
-  && assert_matches "\\[Hook\\] WARNING: console\\.log in app\\.ts" "$(cat "$_cla_err")"; then
-  pass "hook-fixtures: console-log-guard session audit consumes SessionEnd fixture"
-else
-  fail "hook-fixtures: console-log-guard session audit should consume SessionEnd fixture"
-fi
 
 # pre-compact-commit inline PreCompact command — executed verbatim from
 # hooks.json via bash -c with the PreCompact fixture on stdin.

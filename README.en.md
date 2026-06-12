@@ -54,7 +54,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **10 rules**: coding-style, git-workflow, hooks, patterns, performance, security, testing, agents, anti-patterns, permissions-guide
 - **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
-- **13 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, git push review, doc blocker, Prettier or Biome formatting, console.log guard, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
+- **11 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
 - **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
@@ -146,7 +146,7 @@ Language → Profile → Codex Plugin → New /init → Editor → Ghostty → F
 
 Each step shows numbered options with descriptions. Recommended choices are marked.
 
-> **About the Editor step**: The wizard asks which code editor you use. This decides whether the git push review hook is enabled (it prints a review reminder before `git push`; it does not launch an editor or show a diff). Choosing "None" skips the hook entirely. **If you don't have an editor installed or aren't sure, choose "None"** — Claude Code works entirely in the terminal and does not require an editor.
+> **About the Editor step**: The wizard asks which code editor you use, purely to record your environment in the saved config. **If you don't have an editor installed or aren't sure, choose "None"** — Claude Code works entirely in the terminal and does not require an editor.
 
 > **Want to know where each choice is applied?** See [Wizard Config Mapping](docs/wizard-config-mapping.en.md). It explains which values are written to `settings.json`, which are used only during setup, and which act as presets.
 >
@@ -154,7 +154,7 @@ Each step shows numbered options with descriptions. Recommended choices are mark
 
 ### Editor Setup (Optional)
 
-A code editor is a dedicated application for writing and editing code. While Claude Code runs in the terminal and doesn't require one, having an editor enables the git push review hook feature.
+A code editor is a dedicated application for writing and editing code. Claude Code runs in the terminal and doesn't require one.
 
 **Recommended: [VS Code](https://code.visualstudio.com/)** (free, by Microsoft)
 - **macOS**: Download from [code.visualstudio.com](https://code.visualstudio.com/), then run `Cmd + Shift + P` → "Shell Command: Install 'code' command in PATH"
@@ -191,14 +191,12 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | **Safety Net** | Blocks destructive git/filesystem commands (`git reset --hard`, `rm -rf`, `git push --force`, etc.) before execution |
 | **Auto Update** | Checks for starter kit updates on session start and applies them in the background |
 | Tmux Reminder | Suggests run_in_background for foreground dev servers (non-blocking) |
-| Git Push Review | Pauses before git push for code review |
 | Doc Blocker | Asks for confirmation only on ad-hoc SUMMARY/REPORT style docs (general docs pass) |
 | Prettier Auto-format | Formats JS/TS files after edits |
 | Biome Auto-format | Formats and lints JS/TS files after edits (Full uses Biome instead of Prettier) |
-| Console.log Guard | Warns about console.log statements left in code |
 | PR Creation Log | Logs PR URL after creation |
 | Pre-compact Snapshot | Stashes tracked changes before context compaction (opt-in) |
-| Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds recommended line count (Full only) |
+| Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds size-hygiene targets (non-blocking; Full only) |
 | Web Content Update | Auto-updates the web-content-extraction skill's deps on session start (opt-in; default in Full only) |
 | Feature Recommendation | Notifies about newly available features for the selected profile |
 
@@ -329,7 +327,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --new-init=true \
   --codex-plugin=false \
   --commit-attribution=false \
-  --hooks=safety-net,auto-update,tmux,git-push,prettier,console,pr-log,pre-commit \
+  --hooks=safety-net,auto-update,tmux,prettier,pr-log,pre-commit \
   --plugins=security-guidance,commit-commands,pr-review-toolkit,document-skills@anthropic-agent-skills
 
 # Reuse a saved config
