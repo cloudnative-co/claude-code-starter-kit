@@ -509,12 +509,13 @@ build_claude_md_to_file() {
 
   cp -a "$base" "$out"
 
-  # Web content extraction standard rule — only when the skill is installed
+  # Spec Kit pointer — only when commands (incl. /spec-kit-init) are installed
   if is_true "${INSTALL_COMMANDS:-false}"; then
     local sk_partial="$PROJECT_DIR/i18n/${lang}/partials/spec-kit.md"
     inject_feature "$out" "spec-kit" "$sk_partial"
   fi
 
+  # Web content extraction standard rule — only when the skill is installed
   if is_true "${INSTALL_SKILLS:-false}"; then
     local wce_partial="$PROJECT_DIR/i18n/${lang}/partials/web-content-extraction.md"
     inject_feature "$out" "web-content-extraction" "$wce_partial"
@@ -525,7 +526,7 @@ build_claude_md_to_file() {
     inject_feature "$out" "codex-plugin" "$partial"
   fi
 
-  remove_unresolved "$out"
+  remove_unresolved "$out" "delete"
 }
 
 # ---------------------------------------------------------------------------

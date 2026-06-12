@@ -146,6 +146,25 @@ else
   fail "web-content-extraction: CLAUDE.md rule gating/markers incorrect"
 fi
 
+
+# --- spec-kit partial: gated on INSTALL_COMMANDS (mirror of the wce gate) ---
+_wce_reset_flags
+INSTALL_COMMANDS="true"
+CLAUDE_DIR="$_wce_tmp/cmds-on"; mkdir -p "$CLAUDE_DIR"
+build_claude_md >/dev/null 2>&1 || true
+_wce_reset_flags
+INSTALL_COMMANDS="false"
+CLAUDE_DIR="$_wce_tmp/cmds-off"; mkdir -p "$CLAUDE_DIR"
+build_claude_md >/dev/null 2>&1 || true
+if grep -q "spec-kit-init" "$_wce_tmp/cmds-on/CLAUDE.md" \
+  && ! grep -q "spec-kit-init" "$_wce_tmp/cmds-off/CLAUDE.md" \
+  && ! grep -q "{{FEATURE:" "$_wce_tmp/cmds-on/CLAUDE.md" \
+  && ! grep -q "{{FEATURE:" "$_wce_tmp/cmds-off/CLAUDE.md"; then
+  pass "spec-kit: CLAUDE.md pointer gated on INSTALL_COMMANDS, no stray markers"
+else
+  fail "spec-kit: CLAUDE.md pointer gating/markers incorrect"
+fi
+
 # --- 8. Syntax check skill scripts when Node is available ---
 if command -v node >/dev/null 2>&1; then
   _wce_check_ok=true

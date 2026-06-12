@@ -124,7 +124,7 @@ Each feature in `features/*/` has a `hooks.json` containing Claude Code hook def
 **IMPORTANT: Hook types (`SessionStart`, `SessionEnd`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`, `Notification`) MUST be nested inside a `"hooks"` key in hooks.json.** Claude Code reads hooks from `settings.json.hooks.*`, not from the top level. Top-level settings keys (`env`, `statusLine`, etc.) remain at the root.
 
 Three fragment styles exist:
-- **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields, nested inside `"hooks"` (e.g., `features/tmux-hooks/hooks.json`)
+- **Inline hooks**: bash commands embedded as escaped JSON strings in `hooks.json` `"command"` fields, nested inside `"hooks"` (e.g., `features/pre-compact-commit/hooks.json`)
 - **External script hooks**: `hooks.json` references a script path with `__HOME__` token inside `"hooks"`, (e.g., `"hooks": {"PostToolUse": [{"hooks": [{"command": "__HOME__/.claude/hooks/doc-size-guard/check-doc-size.sh"}]}]}`). These scripts are deployed by `deploy_hook_scripts()` to `~/.claude/hooks/<feature>/` with `chmod +x`. Both `.sh` and `.py` scripts are supported.
 - **Top-level settings**: `hooks.json` can contain any top-level settings key alongside `"hooks"`. The jq deep-merge applies at root level, so `{"statusLine": {...}}` and `{"env": {...}}` merge correctly (e.g., `features/statusline/hooks.json`, `features/safety-net/hooks.json`).
 
@@ -262,7 +262,7 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCo
 - **Safety Net**: `cc-safety-net` PreToolUse hook blocks destructive shell/git operations and sets both canonical and legacy strict env names for fail-closed compatibility.
 - **Auto Update**: async SessionStart/SessionEnd update checks with lock/status files; older Claude versions use the legacy cache hook.
 - **Status Line**: Python statusLine command showing model, context usage, and 5h/7d rate limits.
-- **Doc Size Guard**: validates CLAUDE.md/AGENTS.md line counts and broken path references after Write.
+- **Doc Size Guard**: non-blocking size-hygiene warning when CLAUDE.md/AGENTS.md exceeds line targets after Write.
 - **Feature Recommendation**: writes pending feature names and notifies via SessionStart for enabled profiles.
 
 ## Platform Detection

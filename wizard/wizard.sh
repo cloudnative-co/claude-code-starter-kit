@@ -399,6 +399,12 @@ _restore_config_from_manifest() {
     ENABLE_CODEX_PLUGIN="$manifest_codex_plugin"
   fi
 
+  # Keys introduced after older installs get their intended default here.
+  # Profile conf covers minimal/standard/full, but custom has no conf file,
+  # so without this fill a custom-profile update would silently drop the
+  # agent-teams env fragment (3-way merge would then delete the key).
+  [[ -z "${ENABLE_AGENT_TEAMS:-}" ]] && ENABLE_AGENT_TEAMS="true"
+
   _normalize_formatter_hooks
   _normalize_codex_state
   load_strings "$LANGUAGE"

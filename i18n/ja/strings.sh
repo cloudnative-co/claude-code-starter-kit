@@ -90,6 +90,7 @@ STR_HOOKS_BIOME="Biome 自動フォーマット - JS/TS ファイルを編集後
 STR_HOOKS_PR_LOG="PR 作成ログ - PR 作成後に URL をログ"
 STR_HOOKS_PRE_COMMIT="コンパクト前スナップショット - compact 前に tracked 変更を git stash に退避（opt-in）"
 STR_HOOKS_DOC_SIZE="ドキュメントサイズガード - CLAUDE.md/AGENTS.md の肥大化を警告"
+STR_HOOKS_AGENT_TEAMS="Agent Teams（実験的） - Claude Code の agent teams を有効化（CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS）"
 STR_HOOKS_FEATURE_RECOMMENDATION="機能レコメンド - セッション開始時に新機能を通知"
 
 # web-content-extraction skill dependency install (deploy-time messages)
