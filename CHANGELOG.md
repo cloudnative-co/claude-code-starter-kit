@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.72.1] - 2026-06-26
+
+`web-content-extraction` skill の `undici` 脆弱性を解消（Wiz `main` ブランチスキャン #134）。
+
+### Security
+- **`undici` を脆弱性修正版へ更新（#134）**: 直接依存を `^8.4.1` → `^8.5.0`（解決 8.4.1 → 8.5.0）、`jsdom` 経由の推移依存を 7.27.2 → 7.28.0（`jsdom@29.1.1` の `undici@^7.25.0` 範囲内）に更新。TLS 証明書検証バイパス（SOCKS5 ProxyAgent）・Set-Cookie 経由の HTTP ヘッダーインジェクション・keep-alive ソケット再利用によるレスポンスキュー汚染・WebSocket DoS 等の advisory を解消し、`npm audit` を 0 件にした。`undici` は自動更新（`update-deps.mjs`）の対象外（手動レビュー必須の HTTP 層）のため手動で更新。skill 自身のテスト（node `--test` 40 件）と `npm ci` 整合を確認済み
+
 ## [0.72.0] - 2026-06-12
 
 個人設定の置き場所ガイダンスと監査コマンドを追加（v0.71.1 の `user-*` 予約規約の活用面）。
