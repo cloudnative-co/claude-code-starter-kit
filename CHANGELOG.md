@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.72.2] - 2026-07-17
+
+総合レビュー（Phase 0〜7）に基づくセキュリティ・信頼性・鮮度の修正。新規機能・破壊的変更なし。各修正は Codex（gpt-5.6-sol）クロスレビューを通過。
+
+### Security
+- **`defuddle` を 0.19.1 に更新（stored XSS 修正）**: extractor が攻撃者制御可能な DOM 属性値を未エスケープで HTML 文字列に補間していた stored XSS（上流 PR #326）を解消。`web-content-extraction` skill は攻撃者由来の任意 Web ページを処理するため優先度が高い。あわせて `undici` を 8.5.0 → 8.7.0 に更新（2026-06 の advisory 修正境界からの余裕確保）。skill テスト 40 件・`npm audit` 0 件を確認
+- **Codex CLI 導入の sudo `npm install` に `--ignore-scripts` を付与**: 侵害パッケージの postinstall が root 権限で実行されるリスクを排除（他の npm グローバル導入と統一）
+- **`OPENAI_API_KEY` を書き込む RC ファイルに `chmod 600` を強制**: group/other-readable な環境での API キー漏洩を防止
+
+### Fixed
+- **インストーラ/アンインストーラが `grep` 無ヒット × `pipefail` で無言即死する問題を修正**: `lib/detect.sh`（`ID=` 行のない `/etc/os-release`）と `uninstall.sh`（`LANGUAGE=` 行のない破損 conf）で `set -euo pipefail` 下にパイプ全体が exit 1 となり処理が中断していた。`features/pr-creation-log/scripts/log-pr.sh` の同型も修正
+- **プラグイン検出が現行 Claude CLI（v2.1.211）の `❯` マーカーに未対応で既存プラグインを検出できない問題を修正**: `_claude_plugin_list_has()` がマーカーを `-`/`*`/`+` 限定で判定していたため false negative となり、導入済みプラグインを毎回再導入試行していた。マーカー判定を一般化
+- **`uninstall.sh` の Codex 検出を厳密化**: 単純な部分一致から構造化判定に変更し、失効した `claude mcp list -s user` オプション（現行 CLI に存在しない）による legacy MCP 検出の無効化も修正
+- **doc-blocker / doc-size-guard フックが全 Write 呼び出しで `tool_input` 全量を stdout へ echo back していた問題を修正**: hook 出力簡潔性の規約に反しトークンを浪費していた。非トリガー時は無出力に
+
+### Changed
+- **`cc-safety-net`（Safety Net）の説明を正確化**: 「破壊的コマンドをブロックする」という断定表現を、上流ツールの実際の保証範囲（偶発的操作を抑止する footgun ガードであり、意図的な回避やプロンプトインジェクション対策ではない）に沿って修正（feature.json / README / CLAUDE.md / i18n / ウィザード文言）
+- **GitHub Actions を更新**: `actions/cache` を v6.1.0、`actions/setup-node` を v7.0.0 に（いずれも drop-in・破壊的変更なしを action.yml 差分で確認）
+
 ## [0.72.1] - 2026-06-26
 
 `web-content-extraction` skill の `undici` 脆弱性を解消（Wiz `main` ブランチスキャン #134）。
