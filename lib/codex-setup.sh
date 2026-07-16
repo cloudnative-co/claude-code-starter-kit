@@ -33,19 +33,26 @@ _run_capture() {
   return "$_rc"
 }
 
+# _claude_plugin_list_has(): structured match against `claude plugin list`
+# output. The marker check is widened from a fixed "-"/"*"/"+" set to "any
+# token not starting with an alnum/underscore", since the installed CLI
+# renders the marker as "❯" and a literal multibyte marker in the awk
+# regex would be locale-fragile. Also ported to uninstall.sh (self-contained
+# copy there, since uninstall.sh does not source lib/).
 _claude_plugin_list_has() {
-  local _list="$1"
-  local _name="$2"
+  local _list="$1" _name="$2"
   awk -v name="$_name" '
     {
-      candidate = $1
-      if (candidate == "-" || candidate == "*" || candidate == "+") {
-        candidate = $2
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (line == "") next
+      n = split(line, parts, /[[:space:]]+/)
+      candidate = parts[1]
+      if (candidate !~ /^[A-Za-z0-9_]/ && n >= 2) {
+        candidate = parts[2]
       }
       sub(/@.*/, "", candidate)
-      if (candidate == name) {
-        found = 1
-      }
+      if (candidate == name) { found = 1 }
     }
     END { exit found ? 0 : 1 }
   ' <<< "$_list"
