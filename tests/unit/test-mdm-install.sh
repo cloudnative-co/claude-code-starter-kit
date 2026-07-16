@@ -132,3 +132,24 @@ rm -rf "$_tmpd"
 ( export MDM_BREW_PRESENT_OVERRIDE=0 KIT_MDM_PREREQ_MODE=skip
   out="$(mdm_prereq_plan 2>/dev/null)"
   [[ "$out" == "skip" ]] && pass "mdm-install: PREREQ_MODE=skip は skip" || fail "mdm-install: skip 期待 (got '$out')" )
+
+# ── 降格 argv 構築 ───────────────────────────────────────
+(
+  export PROFILE="standard" LANGUAGE="ja" KIT_MDM_GIT_REF="main"
+  argv="$(mdm_build_drop_argv 501 jane /Users/jane /path/to/setup.sh --non-interactive 2>/dev/null)"
+  # env -i と固定変数、許可された設定変数が含まれ、root の無関係な変数は含まれない
+  echo "$argv" | grep -q 'env' || fail "mdm-install: env -i が無い"
+  echo "$argv" | grep -q 'HOME=/Users/jane' && pass "mdm-install: HOME を固定" || fail "mdm-install: HOME 固定なし"
+  echo "$argv" | grep -q 'USER=jane' && pass "mdm-install: USER を固定" || fail "mdm-install: USER 固定なし"
+  echo "$argv" | grep -q 'PROFILE=standard' && pass "mdm-install: PROFILE を伝搬" || fail "mdm-install: PROFILE 伝搬なし"
+  echo "$argv" | grep -q 'LANGUAGE=ja' && pass "mdm-install: LANGUAGE を伝搬" || fail "mdm-install: LANGUAGE 伝搬なし"
+)
+(
+  unset PROFILE
+  argv="$(mdm_build_drop_argv 501 jane /Users/jane /path/to/setup.sh 2>/dev/null)"
+  if echo "$argv" | grep -q 'PROFILE='; then
+    fail "mdm-install: 未設定の PROFILE は渡さない"
+  else
+    pass "mdm-install: 未設定変数は伝搬しない"
+  fi
+)

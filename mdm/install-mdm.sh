@@ -182,6 +182,41 @@ mdm_prereq_plan() {
   return 0
 }
 
+# 対象ユーザーへ降格するための argv を構築（env -i で root 環境を継承しない）。
+# 実行は Task 8。ここでは組み立てのみ（テスト可能に stdout へ改行区切りで出力）。
+_MDM_PASSTHROUGH_KEYS="PROFILE LANGUAGE EDITOR_CHOICE COMMIT_ATTRIBUTION \
+ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_STATUSLINE ENABLE_SAFETY_NET \
+ENABLE_AUTO_UPDATE ENABLE_DOC_SIZE_GUARD ENABLE_FEATURE_RECOMMENDATION \
+ENABLE_PRE_COMPACT_COMMIT ENABLE_WEB_CONTENT_UPDATE ENABLE_NO_FLICKER ENABLE_NEW_INIT \
+KIT_MDM_GIT_REF KIT_MDM_INSTALL_DIR KIT_MDM_INSTALL_CLAUDE_CLI KIT_MDM_DRY_RUN \
+HTTP_PROXY HTTPS_PROXY NO_PROXY"
+
+mdm_build_drop_argv() {
+  local _uid="$1" _user="$2" _home="$3"; shift 3
+  local _brewbin=""
+  [[ -x /opt/homebrew/bin/brew ]] && _brewbin="/opt/homebrew/bin:"
+  [[ -x /usr/local/bin/brew ]] && _brewbin="${_brewbin}/usr/local/bin:"
+  {
+    printf '%s\n' 'env'
+    printf '%s\n' '-i'
+    printf '%s\n' "HOME=$_home"
+    printf '%s\n' "USER=$_user"
+    printf '%s\n' "LOGNAME=$_user"
+    printf '%s\n' "PATH=${_brewbin}/usr/bin:/bin:/usr/sbin:/sbin"
+    [[ -n "${LANGUAGE:-}" ]] && printf '%s\n' "LANG=${LANGUAGE}_JP.UTF-8" || true
+    local _k
+    for _k in $_MDM_PASSTHROUGH_KEYS; do
+      if [[ -n "${!_k:-}" ]]; then
+        printf '%s\n' "$_k=${!_k}"
+      fi
+    done
+    # 実行するスクリプトと引数
+    printf '%s\n' /bin/bash
+    local _a
+    for _a in "$@"; do printf '%s\n' "$_a"; done
+  }
+}
+
 # ── main は Task 8 で実装。source-only 時は実行しない。────────
 if [[ "${MDM_SOURCE_ONLY:-0}" != "1" ]] && { [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; }; then
   mdm_main "$@"   # Task 8 で定義
