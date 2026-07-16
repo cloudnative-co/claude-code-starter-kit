@@ -186,3 +186,66 @@ rm -rf "$_tmpd"
     && pass "mdm-install: LANGUAGE=ja は LANG=ja_JP.UTF-8 にマップ" \
     || fail "mdm-install: LANGUAGE=ja の LANG マッピングが不正 (argv: $argv)"
 )
+
+# ── Homebrew pkg URL 解決（GitHub API レスポンスのモック。jq 非依存 grep/sed）──
+_brew_tmpd="$(mktemp -d)"
+_brew_fixture_ok="$_brew_tmpd/release-ok.json"
+cat > "$_brew_fixture_ok" <<'EOF'
+{
+  "tag_name": "4.6.15",
+  "assets": [
+    {
+      "name": "Homebrew-4.6.15.pkg.sha256",
+      "browser_download_url": "https://github.com/Homebrew/brew/releases/download/4.6.15/Homebrew-4.6.15.pkg.sha256"
+    },
+    {
+      "name": "Homebrew-4.6.15.pkg",
+      "browser_download_url": "https://github.com/Homebrew/brew/releases/download/4.6.15/Homebrew-4.6.15.pkg"
+    }
+  ]
+}
+EOF
+(
+  export MDM_BREW_RELEASES_JSON_OVERRIDE="$_brew_fixture_ok"
+  out="$(_mdm_resolve_brew_pkg_url 2>/dev/null)"
+  if [[ "$out" == "https://github.com/Homebrew/brew/releases/download/4.6.15/Homebrew-4.6.15.pkg" ]]; then
+    pass "mdm-install: brew pkg URL を .pkg アセットから解決"
+  else
+    fail "mdm-install: brew pkg URL 解決が不正 (got '$out')"
+  fi
+)
+
+_brew_fixture_nopkg="$_brew_tmpd/release-nopkg.json"
+cat > "$_brew_fixture_nopkg" <<'EOF'
+{
+  "tag_name": "4.6.15",
+  "assets": [
+    {
+      "name": "Homebrew-4.6.15.pkg.sha256",
+      "browser_download_url": "https://github.com/Homebrew/brew/releases/download/4.6.15/Homebrew-4.6.15.pkg.sha256"
+    }
+  ]
+}
+EOF
+(
+  export MDM_BREW_RELEASES_JSON_OVERRIDE="$_brew_fixture_nopkg"
+  _rc=0
+  _mdm_resolve_brew_pkg_url >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -ne 0 ]]; then
+    pass "mdm-install: .pkg アセットが無い場合は失敗を返す"
+  else
+    fail "mdm-install: .pkg アセットが無いのに成功してしまう"
+  fi
+)
+
+(
+  export MDM_BREW_RELEASES_JSON_OVERRIDE="$_brew_tmpd/does-not-exist.json"
+  _rc=0
+  _mdm_resolve_brew_pkg_url >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -ne 0 ]]; then
+    pass "mdm-install: JSON 取得不可（空応答）時は失敗を返す"
+  else
+    fail "mdm-install: 空応答なのに成功してしまう"
+  fi
+)
+rm -rf "$_brew_tmpd"

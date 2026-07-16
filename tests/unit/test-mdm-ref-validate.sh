@@ -8,7 +8,7 @@ source "$PROJECT_DIR/mdm/lib-mdm-config.sh"
 # ローカルにテスト用リポジトリを作る
 _repo="$(mktemp -d)"
 (
-  cd "$_repo"
+  cd "$_repo" || exit 1
   git init -q
   git config user.email t@example.com
   git config user.name test

@@ -378,49 +378,108 @@ _mdm_ensure_clt() {
   return 1
 }
 
-# Homebrew の導入（spec §5.2）。brew の prefix 所有権は対象ユーザーである
-# 必要があるため、公式インストーラを対象ユーザー権限（環境分離降格）で実行する。
-#
-# KNOWN LIMITATION（実機確認手順で要検証）: spec §5.2 が第一選択とする
-# 「公式 .pkg + HOMEBREW_PKG_USER」方式ではなく、既存 lib/prerequisites.sh の
-# _ensure_homebrew と同じ curl|bash 公式インストーラを対象ユーザー権限で
-# 実行する方式を採用した。理由: (1) Homebrew 公式 pkg インストーラの
-# HOMEBREW_PKG_USER 呼び出し仕様を本セッションで一次情報から確認できず、
-# 誤った pkg URL/手順を組み込むリスクを避けた。(2) この curl|bash コマンドは
-# 本リポジトリの lib/prerequisites.sh で既に使用実績がある。
-# 既知リスク: 対象ユーザーがパスワードなし sudo を持たない環境では
-# インストーラ内部の権限昇格が非対話実行でハングし得る（spec が pkg 方式を
-# 推奨する理由そのもの）。本番導入前に docs.brew.sh/Installation で
-# 現行の pkg 方式を確認し、必要なら置き換えることを推奨する。
-_mdm_bootstrap_homebrew() {
-  local _user="$1" _home="$2"
-  [[ -x /opt/homebrew/bin/brew || -x /usr/local/bin/brew ]] && return 0
-  local _uid
-  _uid="$(id -u "$_user" 2>/dev/null || true)"
-  if [[ -z "$_uid" ]]; then
-    mdm_log R3 "Homebrew 導入: 対象ユーザーの UID を解決できない"
-    return 1
+# GitHub API から Homebrew 公式 pkg（アセット名 Homebrew-<version>.pkg）の
+# browser_download_url を解決する（spec §5.2 第一選択の一部）。
+# 出典: https://github.com/Homebrew/brew/releases/latest （2026-07-16 確認）。
+# root フェーズの前提導入より前に呼ばれるため jq が使える保証が無く、
+# jq 非依存で grep/sed により JSON から値を抜き出す。
+# MDM_BREW_RELEASES_JSON_OVERRIDE でテスト時にモック可能（curl を経由せずファイルから読む）。
+_mdm_resolve_brew_pkg_url() {
+  local _json
+  if [[ -n "${MDM_BREW_RELEASES_JSON_OVERRIDE:-}" ]]; then
+    _json="$(cat "$MDM_BREW_RELEASES_JSON_OVERRIDE" 2>/dev/null || true)"
+  else
+    _json="$(curl -fsSL "https://api.github.com/repos/Homebrew/brew/releases/latest" 2>/dev/null || true)"
   fi
-  local _script
-  _script="$(mktemp "${TMPDIR:-/tmp}/mdm-brew-install.XXXXXX" 2>/dev/null)" || {
-    mdm_log R3 "Homebrew 導入: 一時スクリプトの作成に失敗"
+  [[ -z "$_json" ]] && return 1
+  local _url
+  # 無ヒットの可能性がある grep は pipefail 下で非0を返し得るため `|| true` で
+  # 握り潰し、後段の空文字チェックに委ねる（本ファイル既存の NOTE と同じ作法）。
+  _url="$(printf '%s' "$_json" \
+    | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*\.pkg"' \
+    | head -n1 \
+    | sed -E 's/^"browser_download_url"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  [[ -z "$_url" ]] && return 1
+  printf '%s' "$_url"
+  return 0
+}
+
+# Homebrew の導入（spec §5.2）。公式 .pkg + HOMEBREW_PKG_USER 方式
+# （出典: https://docs.brew.sh/Installation、2026-07-16 確認）。
+#
+# macOS の .pkg インストーラは Homebrew/brew の GitHub Releases に配置され、
+# デフォルト prefix（Apple Silicon: /opt/homebrew, Intel: /usr/local）に
+# 対象ユーザー単独所有で導入される。ログインウィンドウ/ユーザーログイン前でも
+# 動作するため MDM の root コンテキストに適する（curl|bash 版と異なり、対象
+# ユーザーのパスワードなし sudo に依存しない）。
+#
+# 手順（各ステップの一次情報根拠は上記 docs.brew.sh/Installation の記載）:
+#   1. GitHub API から pkg の browser_download_url を解決（_mdm_resolve_brew_pkg_url）
+#   2. 代替インストールユーザーを /var/tmp/.homebrew_pkg_user.plist に書く
+#      （`defaults write /var/tmp/.homebrew_pkg_user HOMEBREW_PKG_USER <user>`。
+#      ファイルと対象ユーザーは install 前に存在必須 — 対象ユーザーは R2 で検証済み）
+#   3. pkg をダウンロードし pkgutil --check-signature で Developer ID 署名を確認
+#      （検証失敗時は導入せず終了 — 呼び出し元経由で exit 11 = MDM_EXIT_BREW）
+#   4. installer -pkg <pkg> -target / で導入（root 実行）
+#   5. 一時ファイル（pkg・plist）をクリーンアップし、brew バイナリの存在で成否判定
+#
+# curl|bash 経路は撤去済み（パスワードなし sudo が無い環境での非対話ハング
+# リスクを避けるため）。pkg 方式が不可能な場合は暗黙フォールバックせず失敗を返す。
+_mdm_bootstrap_homebrew() {
+  local _user="$1"
+  [[ -x /opt/homebrew/bin/brew || -x /usr/local/bin/brew ]] && return 0
+
+  local _pkg_url
+  _pkg_url="$(_mdm_resolve_brew_pkg_url)" || {
+    mdm_log R3 "Homebrew pkg の URL を解決できない（GitHub API 応答不正 or ネットワーク不可）"
     return 1
   }
-  {
-    printf '#!/bin/bash\n'
-    printf 'set -euo pipefail\n'
-    printf 'export NONINTERACTIVE=1\n'
-    printf '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n'
-  } > "$_script"
-  chmod +x "$_script"
-  mdm_log R3 "Homebrew を対象ユーザー($_user)権限で導入中"
-  local _rc=0
-  _mdm_exec_as_user "$_uid" "$_user" "$_home" "$_script" || _rc=$?
-  rm -f "$_script"
-  if [[ $_rc -ne 0 ]]; then
-    mdm_log R3 "Homebrew の導入に失敗 (exit=$_rc)"
+
+  # NOTE: mktemp のテンプレートに XXXXXX の後ろへ拡張子等のサフィックスを
+  # 付けると、macOS 標準 (BSD) mktemp は置換をスキップしてテンプレート文字列
+  # をそのまま返す（exit 0・ファイル未作成・実機検証済み）。予測可能な
+  # パスになりファイル未作成のまま以降の処理が進む重大な不具合になるため、
+  # XXXXXX は末尾に置く（拡張子を付けない）。installer(1) は拡張子を要求しない。
+  local _pkg
+  _pkg="$(mktemp "${TMPDIR:-/tmp}/mdm-homebrew-pkg.XXXXXX" 2>/dev/null)" || {
+    mdm_log R3 "Homebrew 導入: 一時 pkg パスの作成に失敗"
+    return 1
+  }
+
+  mdm_log R3 "Homebrew pkg をダウンロード中: $_pkg_url"
+  if ! curl -fsSL -o "$_pkg" "$_pkg_url" 2>/dev/null; then
+    mdm_log R3 "Homebrew pkg のダウンロードに失敗: $_pkg_url"
+    rm -f "$_pkg" 2>/dev/null || true
     return 1
   fi
+
+  # 署名検証: exit code に加えて証明書チェーンに "Developer ID Installer" が
+  # 含まれることを確認してから installer にかける（spec 要求）。
+  local _sig_out _sig_rc=0
+  _sig_out="$(pkgutil --check-signature "$_pkg" 2>&1)" || _sig_rc=$?
+  if [[ $_sig_rc -ne 0 ]] || ! printf '%s' "$_sig_out" | grep -q 'Developer ID Installer'; then
+    mdm_log R3 "Homebrew pkg の署名検証に失敗（Developer ID 署名を確認できない）"
+    rm -f "$_pkg" 2>/dev/null || true
+    return 1
+  fi
+
+  # 代替インストールユーザーの指定（install 直前に作成。ファイルと対象
+  # ユーザーは install 前に存在必須 — 一次情報の記載どおり）
+  if ! defaults write /var/tmp/.homebrew_pkg_user HOMEBREW_PKG_USER "$_user" 2>/dev/null; then
+    mdm_log R3 "Homebrew 導入: /var/tmp/.homebrew_pkg_user.plist の作成に失敗"
+    rm -f "$_pkg" 2>/dev/null || true
+    return 1
+  fi
+
+  mdm_log R3 "Homebrew pkg を導入中 (HOMEBREW_PKG_USER=$_user)"
+  local _rc=0
+  installer -pkg "$_pkg" -target / >/dev/null 2>&1 || _rc=$?
+  rm -f "$_pkg" /var/tmp/.homebrew_pkg_user.plist 2>/dev/null || true
+  if [[ $_rc -ne 0 ]]; then
+    mdm_log R3 "Homebrew pkg の導入に失敗 (exit=$_rc)"
+    return 1
+  fi
+
   if [[ -x /opt/homebrew/bin/brew || -x /usr/local/bin/brew ]]; then
     return 0
   fi
@@ -431,10 +490,12 @@ _mdm_bootstrap_homebrew() {
 # R3: 前提ブートストラップ（spec §5.2）。root 実行前提、mdm_prereq_plan が
 # "bootstrap" のときのみ呼ばれる。CLT → Homebrew の順（brew の導入自体が
 # CLT のコンパイラ/git に依存するため）。
+# NOTE: Homebrew は pkg + HOMEBREW_PKG_USER 方式のため対象ユーザーの home は
+# 不要（_user のみ渡す）。
 _mdm_bootstrap_prereqs() {
-  local _user="$1" _home="$2"
+  local _user="$1"
   _mdm_ensure_clt || return 1
-  _mdm_bootstrap_homebrew "$_user" "$_home" || return 1
+  _mdm_bootstrap_homebrew "$_user" || return 1
   return 0
 }
 
@@ -576,7 +637,7 @@ mdm_main() {
   if [[ "$_euid" -eq 0 ]]; then
     case "$(mdm_prereq_plan)" in
       fail) mdm_log R3 "前提不足かつ導入無効"; _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_PREREQ" ;;
-      bootstrap) _mdm_bootstrap_prereqs "$_user" "$_home" || _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_BREW" ;;
+      bootstrap) _mdm_bootstrap_prereqs "$_user" || _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_BREW" ;;
     esac
   fi
 
