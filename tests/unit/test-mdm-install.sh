@@ -118,3 +118,17 @@ mkdir -p "$_fakehome"
     || fail "mdm-install: 存在しない home を拒否すべき"
 )
 rm -rf "$_tmpd"
+
+# ── 前提方針判定 ─────────────────────────────────────────
+( export MDM_BREW_PRESENT_OVERRIDE=1
+  out="$(mdm_prereq_plan 2>/dev/null)"
+  [[ "$out" == "skip" ]] && pass "mdm-install: brew あり -> skip" || fail "mdm-install: brew あり時は skip (got '$out')" )
+( export MDM_BREW_PRESENT_OVERRIDE=0 KIT_MDM_INSTALL_HOMEBREW=true KIT_MDM_PREREQ_MODE=auto
+  out="$(mdm_prereq_plan 2>/dev/null)"
+  [[ "$out" == "bootstrap" ]] && pass "mdm-install: brew なし+install=true -> bootstrap" || fail "mdm-install: bootstrap 期待 (got '$out')" )
+( export MDM_BREW_PRESENT_OVERRIDE=0 KIT_MDM_INSTALL_HOMEBREW=false
+  out="$(mdm_prereq_plan 2>/dev/null)"
+  [[ "$out" == "fail" ]] && pass "mdm-install: brew なし+install=false -> fail" || fail "mdm-install: fail 期待 (got '$out')" )
+( export MDM_BREW_PRESENT_OVERRIDE=0 KIT_MDM_PREREQ_MODE=skip
+  out="$(mdm_prereq_plan 2>/dev/null)"
+  [[ "$out" == "skip" ]] && pass "mdm-install: PREREQ_MODE=skip は skip" || fail "mdm-install: skip 期待 (got '$out')" )

@@ -158,6 +158,30 @@ mdm_resolve_ref_sha() {
   return 0
 }
 
+# ── 前提ブートストラップの判定（brew 有無・CLT 方針）spec §5.x ──
+# brew 有無検知。MDM_BREW_PRESENT_OVERRIDE でテスト時にモック可能（"1"=あり/それ以外=なし）。
+_mdm_brew_present() {
+  if [[ -n "${MDM_BREW_PRESENT_OVERRIDE:-}" ]]; then
+    [[ "$MDM_BREW_PRESENT_OVERRIDE" == "1" ]]; return
+  fi
+  [[ -x /opt/homebrew/bin/brew || -x /usr/local/bin/brew ]] || command -v brew >/dev/null 2>&1
+}
+
+# brew 有無 × KIT_MDM_INSTALL_HOMEBREW × KIT_MDM_PREREQ_MODE から方針を決定し stdout へ。
+# skip=brew あり(または PREREQ_MODE=skip)で何もしない / bootstrap=brew 導入が必要 / fail=導入せず不足で終了。
+# 実際の CLT/Homebrew 導入は本体 lib/prerequisites.sh を再利用する（Task 8）。
+mdm_prereq_plan() {
+  case "${KIT_MDM_PREREQ_MODE:-auto}" in
+    skip) printf 'skip'; return 0 ;;
+  esac
+  if _mdm_brew_present; then printf 'skip'; return 0; fi
+  case "$(mdm_validate_bool "${KIT_MDM_INSTALL_HOMEBREW:-true}" 2>/dev/null || echo true)" in
+    true) printf 'bootstrap' ;;
+    *)    printf 'fail' ;;
+  esac
+  return 0
+}
+
 # ── main は Task 8 で実装。source-only 時は実行しない。────────
 if [[ "${MDM_SOURCE_ONLY:-0}" != "1" ]] && { [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; }; then
   mdm_main "$@"   # Task 8 で定義
