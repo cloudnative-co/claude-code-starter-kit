@@ -49,4 +49,7 @@ if [[ "$file_path" =~ \.([Mm][Dd]|[Tt][Xx][Tt])$ ]] && ! _doc_blocker_allowed_pa
   fi
 fi
 
-printf '%s\n' "$input"
+# Non-trigger case: allow silently. Echoing tool_input back to stdout is not
+# part of the PreToolUse contract (biome-hooks/prettier-hooks stay silent
+# too) and would be relayed for every Write call regardless of matcher.
+exit 0

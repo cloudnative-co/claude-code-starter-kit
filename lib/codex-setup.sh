@@ -68,6 +68,8 @@ _save_openai_key() {
     chmod "$orig_mode" "$rc_file"
   fi
   printf '\n# OpenAI API Key (added by claude-code-starter-kit)\nexport OPENAI_API_KEY=%q\n' "$key" >> "$rc_file"
+  # Force 600 regardless of the rc file's prior mode: it now embeds a secret.
+  chmod 600 "$rc_file"
   export OPENAI_API_KEY="$key"
 }
 
@@ -188,7 +190,7 @@ _install_codex_cli() {
     elif [[ "${WIZARD_NONINTERACTIVE:-false}" == "true" ]]; then
       _last_error="${STR_CODEX_CLI_SUDO_SKIPPED:-Non-interactive mode cannot prompt for sudo. Install Codex CLI manually.}"
     else
-      if _run_capture _npm_output sudo npm install -g @openai/codex; then
+      if _run_capture _npm_output sudo npm install -g --ignore-scripts --no-audit --no-fund @openai/codex; then
         _codex_installed=true
       else
         _last_error="sudo npm install -g @openai/codex: ${_npm_output:-unknown error}"

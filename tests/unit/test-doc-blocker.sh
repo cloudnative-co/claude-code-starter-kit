@@ -10,7 +10,11 @@ _run_doc_blocker_path() {
 
 _doc_blocker_decision() {
   local path="$1"
-  _run_doc_blocker_path "$path" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null || printf 'allow'
+  local out
+  out="$(_run_doc_blocker_path "$path")"
+  # Non-trigger case now exits 0 with no stdout (no echo back of tool_input).
+  [[ -z "$out" ]] && { printf 'allow'; return; }
+  printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null || printf 'allow'
 }
 
 {
