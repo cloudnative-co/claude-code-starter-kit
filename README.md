@@ -40,6 +40,7 @@ irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/mai
 - [主な機能](#-主な機能)
 - [セットアップ後にできること](#-セットアップ後にできること)
 - [非対話モード](#-非対話モード自動セットアップ)
+- [MDM 一括配布（macOS）](docs/mdm/README.md)
 - [カスタマイズ](#-カスタマイズ)
 - [アンインストール](#-アンインストール)
 - [FAQ](#-faq)
@@ -891,6 +892,14 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 ```
 
 > 以前のセットアップで保存された設定ファイルをそのまま再利用します。
+
+---
+
+## 📦 MDM 一括配布（macOS）
+
+Jamf / Intune / Workspace ONE / Ivanti などの MDM 経由で、社内の macOS 端末へこのキットをゼロタッチでサイレント配布できます（`mdm/install-mdm.sh`）。対象ユーザー・ホームの検証、Homebrew/Xcode CLT の前提ブートストラップ、特権降格、機械可読なログ・終了コード・レシート、`detect-mdm.sh` による準拠状況の検知まで含みます。
+
+設定キー・終了コード表・製品別の手順（Jamf / Intune / Workspace ONE / Ivanti / 汎用）は [`docs/mdm/README.md`](docs/mdm/README.md) を参照してください。**現時点の実装は macOS のみ**です（Windows 版は今後対応予定）。
 
 ---
 

@@ -37,6 +37,7 @@ irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/mai
 - [Profiles](#profiles)
 - [Usage](#usage)
 - [Non-Interactive Mode](#non-interactive-mode)
+- [MDM Deployment (macOS)](docs/mdm/README.md)
 - [Directory Structure](#directory-structure)
 - [Customization](#customization)
 - [Uninstall](#uninstall)
@@ -363,6 +364,12 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - During interactive install/update, if existing settings could be affected, you'll be asked "Would you like to preview changes?" automatically. Clean-slate installs skip this prompt.
 > - Dry-run output is labeled as `Preview Mode`, making it easier to distinguish from the actual update run.
 > - `--non-interactive --dry-run` installs nothing and exits immediately.
+
+## MDM Deployment (macOS)
+
+This kit can be silently deployed to managed macOS devices via MDM (Jamf, Intune, Workspace ONE, Ivanti, and others) using `mdm/install-mdm.sh`. It handles target-user/home validation, Homebrew/Xcode CLT prerequisite bootstrapping, privilege drop, machine-readable logs/exit codes/receipts, and compliance detection via `detect-mdm.sh`.
+
+Configuration keys, the exit code table, and per-product setup instructions (Jamf / Intune / Workspace ONE / Ivanti / generic) are documented in [`docs/mdm/README.md`](docs/mdm/README.md). **Note: that guide is currently Japanese-only, and only the macOS implementation exists today** (Windows support is planned for a future release).
 
 ## Directory Structure
 
