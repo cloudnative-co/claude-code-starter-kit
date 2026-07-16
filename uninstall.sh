@@ -168,7 +168,10 @@ _detect_language() {
   local conf="$HOME/.claude-starter-kit.conf"
   if [[ -f "$conf" ]]; then
     local lang
-    lang="$(grep '^LANGUAGE=' "$conf" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"')"
+    # `|| true` prevents pipefail from propagating grep's no-match exit code
+    # (1) when the conf lacks a LANGUAGE= line, which would otherwise
+    # trigger `set -e` and abort before the printf 'en' fallback below.
+    lang="$(grep '^LANGUAGE=' "$conf" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' || true)"
     if [[ -n "$lang" ]]; then
       printf '%s' "$lang"
       return
