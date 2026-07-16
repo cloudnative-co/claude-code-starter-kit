@@ -74,6 +74,57 @@ mdm_receipt_write() {
   } > "$_path"
 }
 
+# コンソールユーザーを取得（テスト時は MDM_CONSOLE_USER_OVERRIDE を優先）
+_mdm_console_user() {
+  if [[ -n "${MDM_CONSOLE_USER_OVERRIDE:-}" ]]; then
+    printf '%s' "$MDM_CONSOLE_USER_OVERRIDE"; return 0
+  fi
+  # scutil の ConsoleUser、フォールバック stat /dev/console
+  local _u
+  _u="$(printf 'show State:/Users/ConsoleUser\n' | scutil 2>/dev/null | awk '/Name :/{print $3; exit}' || true)"
+  [[ -z "$_u" ]] && _u="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+  printf '%s' "$_u"
+}
+
+mdm_resolve_target_user() {
+  local _u="${KIT_MDM_TARGET_USER:-}"
+  [[ -z "$_u" ]] && _u="$(_mdm_console_user)"
+  case "$_u" in
+    ''|root|_mbsetupuser|loginwindow|daemon|nobody)
+      mdm_log R2 "対象ユーザーを解決できない（'$_u' は無効）"
+      return "$MDM_EXIT_USER" ;;
+  esac
+  printf '%s' "$_u"
+  return 0
+}
+
+# 対象ユーザーの canonical home を取得・検証。dscl はモック可能。
+mdm_validate_user_home() {
+  local _user="$1" _home
+  if [[ -n "${MDM_DSCL_HOME_OVERRIDE:-}" ]]; then
+    _home="$MDM_DSCL_HOME_OVERRIDE"
+  else
+    _home="$(dscl . -read "/Users/$_user" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true)"
+  fi
+  if [[ -z "$_home" || ! -d "$_home" ]]; then
+    mdm_log R2 "home が存在しない: '$_home'"
+    return "$MDM_EXIT_USER"
+  fi
+  if [[ -L "$_home" ]]; then
+    mdm_log R2 "home が symlink: $_home"
+    return "$MDM_EXIT_USER"
+  fi
+  if [[ "${MDM_VALIDATE_HOME_SKIP_OWNER:-0}" != "1" ]]; then
+    local _owner; _owner="$(stat -f '%Su' "$_home" 2>/dev/null || echo '')"
+    if [[ "$_owner" != "$_user" ]]; then
+      mdm_log R2 "home の所有者が対象ユーザーでない: $_owner"
+      return "$MDM_EXIT_USER"
+    fi
+  fi
+  # canonical 化
+  ( cd "$_home" 2>/dev/null && pwd -P )
+}
+
 # ── main は Task 8 で実装。source-only 時は実行しない。────────
 if [[ "${MDM_SOURCE_ONLY:-0}" != "1" ]] && { [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; }; then
   mdm_main "$@"   # Task 8 で定義

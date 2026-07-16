@@ -58,3 +58,63 @@ else
   fail "mdm-install: レシートが不正な JSON"
 fi
 rm -rf "$_tmpd"
+
+# ── 対象ユーザー解決（モック）────────────────────────────
+(
+  export KIT_MDM_TARGET_USER="jane"
+  if out="$(mdm_resolve_target_user 2>/dev/null)" && [[ "$out" == "jane" ]]; then
+    pass "mdm-install: KIT_MDM_TARGET_USER が優先される"
+  else
+    fail "mdm-install: KIT_MDM_TARGET_USER 優先が効かない (got '$out')"
+  fi
+)
+(
+  unset KIT_MDM_TARGET_USER
+  export MDM_CONSOLE_USER_OVERRIDE="alice"   # テスト用フック
+  if out="$(mdm_resolve_target_user 2>/dev/null)" && [[ "$out" == "alice" ]]; then
+    pass "mdm-install: コンソールユーザーにフォールバック"
+  else
+    fail "mdm-install: コンソールユーザー解決失敗 (got '$out')"
+  fi
+)
+(
+  unset KIT_MDM_TARGET_USER
+  export MDM_CONSOLE_USER_OVERRIDE="root"     # 無効ユーザー
+  # NOTE: 関数呼び出しを裸のステートメントとして書き $? を後で参照すると、
+  # 失敗時(20)に継承された set -e でこのサブシェルが assert 行の手前で
+  # 即終了し、外側の test runner (set -euo pipefail 下で source) まで
+  # 停止する。`|| _rc=$?` で明示的に捕捉して errexit を回避する。
+  _rc=0
+  mdm_resolve_target_user >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_USER" "$_rc" "root は無効ユーザーで exit USER" \
+    && pass "mdm-install: root/システムユーザーを拒否" \
+    || fail "mdm-install: root を拒否すべき"
+)
+
+# ── home 検証（モック）────────────────────────────────────
+_tmpd="$(mktemp -d)"
+# macOS では mktemp -d が /var/... (実体は /private/var/... へのシンボリックリンク)
+# を返すため、実装側の canonical 化 (cd && pwd -P) と比較する前に _tmpd 自体も
+# 正規化しておかないと期待値がシンボリックリンク経由のパスのままズレる。
+_tmpd="$(cd "$_tmpd" && pwd -P)"
+_fakehome="$_tmpd/Users/jane"
+mkdir -p "$_fakehome"
+(
+  export MDM_DSCL_HOME_OVERRIDE="$_fakehome"
+  export MDM_VALIDATE_HOME_SKIP_OWNER=1        # テストは非root所有のため owner 検査を切替
+  if out="$(mdm_validate_user_home "jane" 2>/dev/null)" && [[ "$out" == "$_fakehome" ]]; then
+    pass "mdm-install: home 検証が canonical パスを返す"
+  else
+    fail "mdm-install: home 検証失敗 (got '$out')"
+  fi
+)
+(
+  export MDM_DSCL_HOME_OVERRIDE="$_tmpd/Users/nonexistent"
+  export MDM_VALIDATE_HOME_SKIP_OWNER=1
+  _rc=0
+  mdm_validate_user_home "jane" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_USER" "$_rc" "存在しない home は exit USER" \
+    && pass "mdm-install: 存在しない home を拒否" \
+    || fail "mdm-install: 存在しない home を拒否すべき"
+)
+rm -rf "$_tmpd"
