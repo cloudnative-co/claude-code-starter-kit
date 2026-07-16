@@ -20,16 +20,30 @@ else
 fi
 
 # ── レシート生成 ──────────────────────────────────────────
+# NOTE: 以下の MDM_RCPT_* はこのファイルでは直接参照せず mdm_receipt_write
+# 側が間接参照するグローバル。shellcheck は静的にそれを追えないため、Task 3
+# の install-mdm.sh 自身の終了コード定数と同じ「1行1定数+個別disable」方式で
+# 個別に SC2034 を無効化する。
 _tmpd="$(mktemp -d)"
+# shellcheck disable=SC2034
 MDM_RCPT_KIT_VERSION="0.73.0"
+# shellcheck disable=SC2034
 MDM_RCPT_GIT_REF="main"
+# shellcheck disable=SC2034
 MDM_RCPT_RESOLVED_SHA="abc123"
+# shellcheck disable=SC2034
 MDM_RCPT_INSTALL_DIR="/Users/jane/.claude-starter-kit"
+# shellcheck disable=SC2034
 MDM_RCPT_REQUIRED_COMPONENTS='["kit","claude_cli"]'
+# shellcheck disable=SC2034
 MDM_RCPT_PROFILE="standard"
+# shellcheck disable=SC2034
 MDM_RCPT_TARGET_USER="jane"
+# shellcheck disable=SC2034
 MDM_RCPT_PARTIAL='[]'
+# shellcheck disable=SC2034
 MDM_RCPT_TIMESTAMP="2026-07-16T00:00:00Z"
+# shellcheck disable=SC2034
 MDM_RCPT_LOG_PATH="/Library/Logs/ClaudeCodeStarterKit/install.log"
 mdm_receipt_write "$_tmpd/receipt.json" "success" "0"
 
@@ -152,4 +166,23 @@ rm -rf "$_tmpd"
   else
     pass "mdm-install: 未設定変数は伝搬しない"
   fi
+)
+
+# ── LANG マッピング回帰テスト（Task 8 バグ修正）─────────────
+# 旧実装は "LANG=${LANGUAGE}_JP.UTF-8" と決め打ちしており、LANGUAGE=en のとき
+# 不正ロケール "en_JP.UTF-8" を生成していた。_mdm_lang_to_locale 経由で
+# en->en_US.UTF-8 / ja->ja_JP.UTF-8 に正しくマップされることを確認する。
+(
+  export LANGUAGE="en"
+  argv="$(mdm_build_drop_argv 501 jane /Users/jane /path/to/setup.sh 2>/dev/null)"
+  echo "$argv" | grep -q '^LANG=en_US.UTF-8$' \
+    && pass "mdm-install: LANGUAGE=en は LANG=en_US.UTF-8 にマップ" \
+    || fail "mdm-install: LANGUAGE=en の LANG マッピングが不正 (argv: $argv)"
+)
+(
+  export LANGUAGE="ja"
+  argv="$(mdm_build_drop_argv 501 jane /Users/jane /path/to/setup.sh 2>/dev/null)"
+  echo "$argv" | grep -q '^LANG=ja_JP.UTF-8$' \
+    && pass "mdm-install: LANGUAGE=ja は LANG=ja_JP.UTF-8 にマップ" \
+    || fail "mdm-install: LANGUAGE=ja の LANG マッピングが不正 (argv: $argv)"
 )
