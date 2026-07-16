@@ -233,6 +233,17 @@ mdm_build_drop_argv() {
   }
 }
 
+# setup.sh へ渡す引数を組み立てる（KIT_MDM_DRY_RUN=true のとき --dry-run を
+# 追加。spec §7.3: KIT_MDM_DRY_RUN は本体の --dry-run へ伝搬する契約）。
+# stdout へ改行区切りで出力し、呼び出し側で配列化する（mdm_build_drop_argv
+# と同じ形式・_mdm_exec_as_user 経由の呼び出しにもそのまま渡せる）。
+mdm_build_setup_argv() {
+  printf '%s\n' '--non-interactive'
+  if [[ "$(mdm_validate_bool "${KIT_MDM_DRY_RUN:-false}" 2>/dev/null || echo false)" == "true" ]]; then
+    printf '%s\n' '--dry-run'
+  fi
+}
+
 # ── 自己ブートストラップ判定（spec §3.1・§5.1 U1a）─────────
 # 隣接する lib-mdm-config.sh が無ければ要ブートストラップ（exit 0）。
 # 判定ディレクトリは MDM_SELF_DIR（テスト用オーバーライド）、既定は自身の隣。
@@ -566,8 +577,12 @@ _mdm_run_user_phase() {
     MDM_RCPT_REQUIRED_COMPONENTS='["kit"]'
   fi
 
-  # U2: setup.sh --non-interactive を直接実行（root 時のみ環境分離降格。spec §5.1/§5.3）
-  mdm_log U2 "setup.sh --non-interactive を実行"
+  # U2: setup.sh を直接実行（root 時のみ環境分離降格。spec §5.1/§5.3）。
+  # 引数は mdm_build_setup_argv で組み立てる（KIT_MDM_DRY_RUN=true なら --dry-run も付与）。
+  local -a _setup_argv=()
+  local _sa_line
+  while IFS= read -r _sa_line; do _setup_argv+=("$_sa_line"); done < <(mdm_build_setup_argv)
+  mdm_log U2 "setup.sh を実行: ${_setup_argv[*]}"
   if [[ "$_euid" -eq 0 ]]; then
     local _uid
     _uid="$(id -u "$_user" 2>/dev/null || true)"
@@ -575,12 +590,12 @@ _mdm_run_user_phase() {
       mdm_log U2 "対象ユーザーの UID を解決できない"
       return 1
     fi
-    if ! _mdm_exec_as_user "$_uid" "$_user" "$_home" "$_install_dir/setup.sh" --non-interactive; then
+    if ! _mdm_exec_as_user "$_uid" "$_user" "$_home" "$_install_dir/setup.sh" "${_setup_argv[@]}"; then
       mdm_log U2 "setup.sh の実行に失敗"
       return 1
     fi
   else
-    if ! /bin/bash "$_install_dir/setup.sh" --non-interactive; then
+    if ! /bin/bash "$_install_dir/setup.sh" "${_setup_argv[@]}"; then
       mdm_log U2 "setup.sh の実行に失敗"
       return 1
     fi
@@ -597,6 +612,19 @@ _mdm_run_user_phase() {
   fi
 
   return 0
+}
+
+# MDM 配布固有の既定値を適用する（本体 profiles/*.conf の既定と異なる値を
+# MDM 配布でだけ上書きする場所）。mdm_config_apply の**後**に呼ぶこと —
+# conf/env で既に明示された値（既存 env 値）は変更せず、未設定のキーにのみ
+# MDM 既定を適用する（mdm_config_apply と同じ「既存 env 値は上書きしない」
+# 優先順位を踏襲）。
+#   - ENABLE_GHOSTTY_SETUP: 本体既定は standard/full プロファイルで true だが、
+#     MDM 配布では GUI アプリの既定導入を避けるため既定 off とする（spec §5.6）。
+#     mdm-config.conf で ENABLE_GHOSTTY_SETUP=true を明示すれば on にできる。
+_mdm_apply_mdm_defaults() {
+  : "${ENABLE_GHOSTTY_SETUP:=false}"
+  export ENABLE_GHOSTTY_SETUP
 }
 
 # R1..R4 のオーケストレーション（spec §5.1）。root フェーズは実副作用
@@ -621,6 +649,7 @@ mdm_main() {
   mkdir -p "$(dirname "$MDM_LOG_FILE")" 2>/dev/null || true
   local _conf="/Library/Application Support/ClaudeCodeStarterKit/mdm-config.conf"
   mdm_config_apply "$_conf" || { mdm_log R1 "設定エラー"; exit "$MDM_EXIT_CONFIG"; }
+  _mdm_apply_mdm_defaults
 
   # R2: ユーザー・home 解決
   local _euid; _euid="$(id -u)"

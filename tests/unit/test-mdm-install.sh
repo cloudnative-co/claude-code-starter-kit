@@ -249,3 +249,69 @@ EOF
   fi
 )
 rm -rf "$_brew_tmpd"
+
+# ── MDM 既定値の適用（Ghostty は MDM 既定 off・spec §5.6）─────
+# mdm_config_apply と同じ「既存 env 値は上書きしない」優先順位を踏襲する
+# ことを確認する: 未設定時のみ false を既定にし、conf/env で明示済みの
+# true/false はそのまま維持されなければならない。
+(
+  unset ENABLE_GHOSTTY_SETUP
+  _mdm_apply_mdm_defaults
+  if [[ "$ENABLE_GHOSTTY_SETUP" == "false" ]]; then
+    pass "mdm-install: ENABLE_GHOSTTY_SETUP 未設定時は既定 false"
+  else
+    fail "mdm-install: ENABLE_GHOSTTY_SETUP 未設定時の既定が不正 (got '$ENABLE_GHOSTTY_SETUP')"
+  fi
+)
+(
+  export ENABLE_GHOSTTY_SETUP=true
+  _mdm_apply_mdm_defaults
+  if [[ "$ENABLE_GHOSTTY_SETUP" == "true" ]]; then
+    pass "mdm-install: ENABLE_GHOSTTY_SETUP=true の明示指定を維持"
+  else
+    fail "mdm-install: ENABLE_GHOSTTY_SETUP=true の明示指定が上書きされた (got '$ENABLE_GHOSTTY_SETUP')"
+  fi
+)
+(
+  export ENABLE_GHOSTTY_SETUP=false
+  _mdm_apply_mdm_defaults
+  if [[ "$ENABLE_GHOSTTY_SETUP" == "false" ]]; then
+    pass "mdm-install: ENABLE_GHOSTTY_SETUP=false の明示指定を維持"
+  else
+    fail "mdm-install: ENABLE_GHOSTTY_SETUP=false の明示指定が上書きされた (got '$ENABLE_GHOSTTY_SETUP')"
+  fi
+)
+
+# ── setup.sh 引数の組み立て（KIT_MDM_DRY_RUN -> --dry-run 配線）──
+# 実 setup.sh 実行は副作用があるため、argv 組み立て (mdm_build_setup_argv)
+# のみを検証する。mdm_validate_bool は test-mdm-config.sh（アルファベット順
+# でこのファイルより先に実行される）が共有プロセスへ source 済みの前提
+# （mdm_prereq_plan の既存テストと同じ依存関係）。
+(
+  unset KIT_MDM_DRY_RUN
+  argv="$(mdm_build_setup_argv 2>/dev/null)"
+  echo "$argv" | grep -q -- '--non-interactive' \
+    && pass "mdm-install: setup.sh argv に --non-interactive を含む" \
+    || fail "mdm-install: setup.sh argv に --non-interactive が無い (argv: $argv)"
+  if echo "$argv" | grep -q -- '--dry-run'; then
+    fail "mdm-install: KIT_MDM_DRY_RUN 未設定なのに --dry-run が含まれる"
+  else
+    pass "mdm-install: KIT_MDM_DRY_RUN 未設定時は --dry-run を含まない"
+  fi
+)
+(
+  export KIT_MDM_DRY_RUN=true
+  argv="$(mdm_build_setup_argv 2>/dev/null)"
+  echo "$argv" | grep -q -- '--dry-run' \
+    && pass "mdm-install: KIT_MDM_DRY_RUN=true で --dry-run を配線" \
+    || fail "mdm-install: KIT_MDM_DRY_RUN=true なのに --dry-run が無い (argv: $argv)"
+)
+(
+  export KIT_MDM_DRY_RUN=false
+  argv="$(mdm_build_setup_argv 2>/dev/null)"
+  if echo "$argv" | grep -q -- '--dry-run'; then
+    fail "mdm-install: KIT_MDM_DRY_RUN=false なのに --dry-run が含まれる"
+  else
+    pass "mdm-install: KIT_MDM_DRY_RUN=false 時は --dry-run を含まない"
+  fi
+)
