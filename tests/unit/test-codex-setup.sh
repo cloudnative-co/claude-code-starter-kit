@@ -73,6 +73,33 @@ else
   fail "codex-setup: plugin list matching should not use substring matches"
 fi
 
+# Real `claude plugin list` (CLI v2.1.211+) renders the marker as "❯", not
+# "-"/"*"/"+". Verified against live output on 2026-07-16.
+_REAL_PLUGIN_LIST=$'Installed plugins:\n\n  ❯ claude-md-management@claude-plugins-official\n    Version: 1.0.0\n    Scope: user\n    Status: ✔ enabled\n\n  ❯ code-review@claude-plugins-official\n    Version: unknown\n    Scope: user\n    Status: ✔ enabled\n\n  ❯ codex@openai-codex\n    Version: 1.0.1\n    Scope: user\n    Status: ✔ enabled\n'
+if _claude_plugin_list_has "$_REAL_PLUGIN_LIST" "codex" \
+  && _claude_plugin_list_has "$_REAL_PLUGIN_LIST" "code-review" \
+  && _claude_plugin_list_has "$_REAL_PLUGIN_LIST" "claude-md-management"; then
+  pass "codex-setup: plugin list matching detects entries under the real ❯ marker"
+else
+  fail "codex-setup: plugin list matching should detect ❯-marked entries (real CLI output format)"
+fi
+
+if ! _claude_plugin_list_has "$_REAL_PLUGIN_LIST" "codex-tools" \
+  && ! _claude_plugin_list_has "$_REAL_PLUGIN_LIST" "nonexistent-plugin"; then
+  pass "codex-setup: plugin list matching under ❯ marker rejects non-matching/substring names"
+else
+  fail "codex-setup: plugin list matching under ❯ marker should not false-positive"
+fi
+
+if _claude_plugin_list_has $'  - foo-plugin@mkt\n' "foo-plugin" \
+  && _claude_plugin_list_has $'  * foo-plugin@mkt\n' "foo-plugin" \
+  && _claude_plugin_list_has $'  + foo-plugin@mkt\n' "foo-plugin" \
+  && _claude_plugin_list_has $'foo-plugin@mkt\n' "foo-plugin"; then
+  pass "codex-setup: plugin list matching still accepts legacy -/*/+ markers and bare name@marketplace lines"
+else
+  fail "codex-setup: plugin list matching regressed on legacy -/*/+ markers or bare name@marketplace lines"
+fi
+
 reset_codex_mocks() {
   # shellcheck disable=SC2034  # globals are consumed by sourced codex-setup.sh
   MOCK_HAS_PLUGIN=false

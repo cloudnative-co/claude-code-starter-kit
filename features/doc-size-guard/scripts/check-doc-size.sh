@@ -11,7 +11,6 @@ input=$(cat)
 # matcher can only filter by tool name, so the file_path filter lives here.
 written_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || true)
 if [[ ! "$written_path" =~ (CLAUDE|AGENTS)\.md$ ]]; then
-    printf '%s\n' "$input"
     exit 0
 fi
 
@@ -47,8 +46,5 @@ done
 for claude_path in "${PROJECT_ROOT}/CLAUDE.md" "${PROJECT_ROOT}/.claude/CLAUDE.md"; do
     check_file_size "$claude_path" "$WARN_LINES_CLAUDE" "CLAUDE.md"
 done
-
-# Pass through the input
-printf '%s\n' "$input"
 
 exit 0

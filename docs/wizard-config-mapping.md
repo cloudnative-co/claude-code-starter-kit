@@ -55,7 +55,7 @@
 
 | キー | フック / 機能 | 主な目的 | `settings.json` に入るか |
 |---|---|---|---|
-| `ENABLE_SAFETY_NET` | Safety Net | 危険なコマンドの遮断 | はい |
+| `ENABLE_SAFETY_NET` | Safety Net | 危険なコマンドの偶発的実行を抑止 | はい |
 | `ENABLE_AUTO_UPDATE` | Auto Update | セッション開始時の更新確認 | はい |
 | `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Web 取得スキル依存の更新確認 | はい |
 | `ENABLE_TMUX_HOOKS` | Tmux Reminder | foreground の dev サーバーに run_in_background を提案（非ブロック） | はい |

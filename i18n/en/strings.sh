@@ -82,7 +82,7 @@ STR_FINAL_INCOMPLETE_FONTS="The following fonts could not be installed:"
 
 # Step 5: Hooks
 STR_HOOKS_TITLE="Select hooks to enable (enter numbers separated by spaces):"
-STR_HOOKS_SAFETY_NET="Safety Net - Block destructive git/filesystem commands (cc-safety-net)"
+STR_HOOKS_SAFETY_NET="Safety Net - Helps prevent accidental destructive git/filesystem commands (cc-safety-net)"
 STR_HOOKS_AUTO_UPDATE="Auto Update - Automatically update starter kit on session start"
 STR_HOOKS_WEB_CONTENT_UPDATE="Web Content Update - Auto-update web-content-extraction skill deps on session start (opt-in)"
 STR_HOOKS_TMUX="Tmux Reminder - Suggest run_in_background for foreground dev servers (non-blocking)"

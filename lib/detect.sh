@@ -67,7 +67,10 @@ _detect_macos_arch() {
 _detect_linux_distro() {
   if [[ -f /etc/os-release ]]; then
     # Parse /etc/os-release safely instead of sourcing as shell code
-    DISTRO="$(grep '^ID=' /etc/os-release 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"'"'")"
+    # `|| true` prevents pipefail from propagating grep's no-match exit code
+    # (1) when /etc/os-release lacks an ID= line, which would otherwise
+    # trigger `set -e` and silently kill the caller.
+    DISTRO="$(grep '^ID=' /etc/os-release 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"'"'" || true)"
     DISTRO="${DISTRO:-unknown}"
 
     case "$DISTRO" in

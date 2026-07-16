@@ -1,7 +1,7 @@
 {
 	"name": "safety-net",
 	"displayName": "Safety Net",
-	"description": "Blocks destructive git/filesystem commands via cc-safety-net PreToolUse hook",
+	"description": "Helps prevent accidental destructive git/filesystem commands via the cc-safety-net PreToolUse hook (a footgun guard, not a defense against deliberate bypass or prompt injection)",
 	"category": "hook",
 	"default": true,
 	"profiles": {

@@ -83,3 +83,57 @@ if [[ "$_uname" != MSYS_NT* && "$_uname" != MINGW* ]]; then
 else
   skip "detect: is_msys non-MSYS check" "running inside MSYS/MinGW"
 fi
+
+# ── H1 regression: _detect_linux_distro must not die via pipefail/set -e ──
+#
+# `DISTRO="$(grep '^ID=' /etc/os-release | ... )"` propagates grep's
+# no-match exit code (1) through the pipeline under `set -euo pipefail`.
+# Called directly (as detect_os() does — not wrapped in a further command
+# substitution), that used to kill the whole script silently before it
+# could fall back to DISTRO="unknown". Mock /etc/os-release by sourcing a
+# copy of lib/detect.sh with the path swapped for a fixture file, so the
+# real detection logic runs unmodified against test input.
+
+_dt_tmp="$(mktemp -d)"
+cat > "$_dt_tmp/os-release-no-id" <<'EOF'
+NAME="Weird Linux"
+VERSION_ID="1.0"
+EOF
+cat > "$_dt_tmp/os-release-normal" <<'EOF'
+NAME="Ubuntu"
+ID=ubuntu
+VERSION_ID="22.04"
+EOF
+
+_dt_mock_lib="$_dt_tmp/detect-mock.sh"
+sed "s#/etc/os-release#$_dt_tmp/CURRENT_OS_RELEASE#g" "$PROJECT_DIR/lib/detect.sh" > "$_dt_mock_lib"
+
+cp "$_dt_tmp/os-release-no-id" "$_dt_tmp/CURRENT_OS_RELEASE"
+_dt_out="$(bash -c '
+  source "$1"
+  OS="linux"; ARCH="x86_64"
+  _detect_linux_distro
+  printf "DISTRO=%s DISTRO_FAMILY=%s" "$DISTRO" "$DISTRO_FAMILY"
+' _ "$_dt_mock_lib" 2>&1)"
+_dt_rc=$?
+if [[ "$_dt_rc" -eq 0 ]] && [[ "$_dt_out" == "DISTRO=unknown DISTRO_FAMILY=unknown" ]]; then
+  pass "detect: _detect_linux_distro falls back to unknown instead of dying when os-release lacks ID= (H1 regression)"
+else
+  fail "detect: _detect_linux_distro should survive a missing ID= line (rc=$_dt_rc out='$_dt_out')"
+fi
+
+cp "$_dt_tmp/os-release-normal" "$_dt_tmp/CURRENT_OS_RELEASE"
+_dt_out2="$(bash -c '
+  source "$1"
+  OS="linux"; ARCH="x86_64"
+  _detect_linux_distro
+  printf "DISTRO=%s DISTRO_FAMILY=%s" "$DISTRO" "$DISTRO_FAMILY"
+' _ "$_dt_mock_lib" 2>&1)"
+_dt_rc2=$?
+if [[ "$_dt_rc2" -eq 0 ]] && [[ "$_dt_out2" == "DISTRO=ubuntu DISTRO_FAMILY=debian" ]]; then
+  pass "detect: _detect_linux_distro still resolves DISTRO/DISTRO_FAMILY normally when ID= is present"
+else
+  fail "detect: _detect_linux_distro should resolve ubuntu/debian normally (rc=$_dt_rc2 out='$_dt_out2')"
+fi
+
+rm -rf "$_dt_tmp"

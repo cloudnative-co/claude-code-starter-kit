@@ -168,7 +168,10 @@ _detect_language() {
   local conf="$HOME/.claude-starter-kit.conf"
   if [[ -f "$conf" ]]; then
     local lang
-    lang="$(grep '^LANGUAGE=' "$conf" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"')"
+    # `|| true` prevents pipefail from propagating grep's no-match exit code
+    # (1) when the conf lacks a LANGUAGE= line, which would otherwise
+    # trigger `set -e` and abort before the printf 'en' fallback below.
+    lang="$(grep '^LANGUAGE=' "$conf" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' || true)"
     if [[ -n "$lang" ]]; then
       printf '%s' "$lang"
       return
@@ -395,10 +398,39 @@ fi
 # ---------------------------------------------------------------------------
 # Codex Plugin / legacy MCP cleanup
 # ---------------------------------------------------------------------------
+# _claude_plugin_list_has(): structured match against `claude plugin list`
+# output (self-contained port of lib/codex-setup.sh's helper of the same
+# name — uninstall.sh does not source lib/ — with the marker check widened
+# from a fixed "-"/"*"/"+" set to "any token not starting with an
+# alnum/underscore", since the installed CLI renders the marker as "❯" and
+# a literal multibyte marker in the awk regex would be locale-fragile).
+# A plain `grep -qw "codex"` false-positives on names like "codex-tools"
+# (word-boundary matching treats "-" as a boundary); this requires the
+# first non-marker token to equal the name exactly (ignoring an "@marketplace"
+# suffix).
+_claude_plugin_list_has() {
+  local _list="$1" _name="$2"
+  awk -v name="$_name" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (line == "") next
+      n = split(line, parts, /[[:space:]]+/)
+      candidate = parts[1]
+      if (candidate !~ /^[A-Za-z0-9_]/ && n >= 2) {
+        candidate = parts[2]
+      }
+      sub(/@.*/, "", candidate)
+      if (candidate == name) { found = 1 }
+    }
+    END { exit found ? 0 : 1 }
+  ' <<< "$_list"
+}
+
 if command -v claude &>/dev/null; then
   # Check for Codex plugin
   _codex_plugin_list="$(claude plugin list 2>/dev/null || true)"
-  if echo "$_codex_plugin_list" | grep -qw "codex" 2>/dev/null; then
+  if _claude_plugin_list_has "$_codex_plugin_list" "codex"; then
     printf "\n"
     read -r -p "$STR_CODEX_PLUGIN_REMOVE_ASK" _codex_plugin_confirm
     case "$_codex_plugin_confirm" in
@@ -412,9 +444,17 @@ if command -v claude &>/dev/null; then
         ;;
     esac
   fi
-  # Check for legacy Codex MCP
-  _codex_mcp_list="$(claude mcp list -s user 2>/dev/null || true)"
-  if echo "$_codex_mcp_list" | grep -qw "codex" 2>/dev/null; then
+  # Check for legacy Codex MCP.
+  # NOTE: `-s user` is not a valid `claude mcp list` option on current CLIs
+  # (it errors with "unknown option '-s'"), so it always fell through to the
+  # `|| true` empty-list fallback and this check never fired. Use the same
+  # scope-less invocation as lib/codex-setup.sh's _has_legacy_mcp(). The mcp
+  # list format is "<name>: <command...>" (not the plugin-list marker
+  # format), so match on an anchored "name:" prefix instead of the
+  # plugin-list helper above — a bare `grep -qw "codex"` would also
+  # false-positive on e.g. "codex-tools: ...".
+  _codex_mcp_list="$(claude mcp list 2>/dev/null || true)"
+  if echo "$_codex_mcp_list" | grep -qE '^codex:' 2>/dev/null; then
     printf "\n"
     read -r -p "$STR_CODEX_MCP_REMOVE_ASK" _codex_mcp_confirm
     case "$_codex_mcp_confirm" in

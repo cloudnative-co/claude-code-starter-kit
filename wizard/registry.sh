@@ -199,7 +199,7 @@ HOOK_LABELS=()
 _init_hook_labels() {
   [[ ${#HOOK_LABELS[@]} -gt 0 ]] && return
   HOOK_LABELS=(
-    "${STR_HOOKS_SAFETY_NET:-Safety Net - Block destructive git/filesystem commands}"
+    "${STR_HOOKS_SAFETY_NET:-Safety Net - Helps prevent accidental destructive git/filesystem commands}"
     "${STR_HOOKS_AUTO_UPDATE:-Auto Update - Automatically update starter kit on session start}"
     "${STR_HOOKS_WEB_CONTENT_UPDATE:-Web Content Update - Auto-update web-content-extraction skill deps on session start}"
     "$STR_HOOKS_TMUX"
