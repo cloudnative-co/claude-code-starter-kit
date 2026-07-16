@@ -65,6 +65,18 @@ jobs:
           fi
           echo "PASS: Bash 3.2 re-exec works correctly"
 
+      # ── macOS-specific: mdm/*.sh must stay Bash 3.2 syntax-compatible ──
+      # (MDM silent-install runs under macOS system /bin/bash, which stays at 3.2)
+      - name: Verify mdm/*.sh syntax under Bash 3.2
+        if: runner.os == 'macOS'
+        run: |
+          /bin/bash --version
+          for f in mdm/*.sh; do
+            echo "Checking $f"
+            /bin/bash -n "$f"
+          done
+          echo "PASS: mdm/*.sh is Bash 3.2 syntax-compatible"
+
   scenario-tests:
     strategy:
       fail-fast: false

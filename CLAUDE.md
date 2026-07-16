@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-
 NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/main/install.sh)"
 
 # Validate all shell scripts (matches CI severity)
-shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh
+shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh mdm/*.sh
 
 # Run unit tests
 bash tests/run-unit-tests.sh
