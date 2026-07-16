@@ -188,7 +188,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 
 | Hook | Description |
 |---|---|
-| **Safety Net** | Blocks destructive git/filesystem commands (`git reset --hard`, `rm -rf`, `git push --force`, etc.) before execution |
+| **Safety Net** | Helps prevent accidental destructive git/filesystem commands (`git reset --hard`, `rm -rf`, `git push --force`, etc.) before execution |
 | **Auto Update** | Checks for starter kit updates on session start and applies them in the background |
 | Tmux Reminder | Suggests run_in_background for foreground dev servers (non-blocking) |
 | Doc Blocker | Asks for confirmation only on ad-hoc SUMMARY/REPORT style docs (general docs pass) |
@@ -202,7 +202,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 
 #### Safety Net
 
-[cc-safety-net](https://github.com/kenryu42/cc-safety-net) intercepts Bash commands via a PreToolUse hook and blocks destructive operations before they execute.
+[cc-safety-net](https://github.com/kenryu42/cc-safety-net) intercepts Bash commands via a PreToolUse hook to help prevent *accidental* destructive operations (a footgun guard, not a security boundary). It matches on command string patterns only, so it is not designed to resist deliberate bypass or prompt injection.
 
 Blocked commands include:
 - `git reset --hard` — discards uncommitted changes

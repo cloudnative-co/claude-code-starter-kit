@@ -260,7 +260,7 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCo
 
 ## Notable Features
 
-- **Safety Net**: `cc-safety-net` PreToolUse hook blocks destructive shell/git operations and sets both canonical and legacy strict env names for fail-closed compatibility.
+- **Safety Net**: `cc-safety-net` PreToolUse hook helps prevent *accidental* destructive shell/git operations (string-pattern matching only; not a defense against deliberate bypass or prompt injection) and sets both canonical and legacy strict env names for fail-closed compatibility.
 - **Auto Update**: async SessionStart/SessionEnd update checks with lock/status files; older Claude versions use the legacy cache hook.
 - **Status Line**: Python statusLine command showing model, context usage, and 5h/7d rate limits.
 - **Doc Size Guard**: non-blocking size-hygiene warning when CLAUDE.md/AGENTS.md exceeds line targets after Write.

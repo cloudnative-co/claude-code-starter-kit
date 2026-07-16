@@ -55,7 +55,7 @@ These flags are used to merge the corresponding `features/*/hooks.json` fragment
 
 | Key | Hook / feature | Main purpose | Included in `settings.json` |
 |---|---|---|---|
-| `ENABLE_SAFETY_NET` | Safety Net | Block destructive commands | Yes |
+| `ENABLE_SAFETY_NET` | Safety Net | Help prevent accidental destructive commands | Yes |
 | `ENABLE_AUTO_UPDATE` | Auto Update | Check for starter kit updates on session start | Yes |
 | `ENABLE_WEB_CONTENT_UPDATE` | Web Content Update | Check web extraction skill dependency updates | Yes |
 | `ENABLE_TMUX_HOOKS` | Tmux Reminder | Suggest run_in_background for foreground dev servers (non-blocking) | Yes |
