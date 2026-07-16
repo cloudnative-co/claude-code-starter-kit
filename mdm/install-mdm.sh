@@ -125,6 +125,39 @@ mdm_validate_user_home() {
   ( cd "$_home" 2>/dev/null && pwd -P )
 }
 
+# ref を確定 SHA に解決（spec §5.5）。install.sh は再実行しない前提で wrapper が直接管理。
+mdm_resolve_ref_sha() {
+  local _repo="$1" _ref="$2" _sha
+  # 形式検証（SHA or check-ref-format --branch）
+  if ! mdm_validate_gitref "$_ref" >/dev/null 2>&1; then
+    mdm_log U1 "不正な git ref 形式: $_ref"
+    return "$MDM_EXIT_CONFIG"
+  fi
+  # SHA 直指定ならそのまま commit 解決を試す
+  # NOTE: --verify 必須。無指定の `git rev-parse <ref>` は解決失敗時でも
+  # 引数文字列をそのまま stdout へ echo して返す（exit code は非0でも stdout
+  # が非空になる）ため、後段の `[[ -z "$_sha" ]]` チェックをすり抜けて
+  # 未解決 ref をそのまま「確定 SHA」として誤って返してしまう（実機検証済み）。
+  # --verify は失敗時に stdout を空にする。
+  if printf '%s' "$_ref" | grep -qE '^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$'; then
+    _sha="$(git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
+  else
+    # 明示 fetch → FETCH_HEAD の commit を真実とする（ローカル ref を更新しないことがあるため）
+    if ! git -C "$_repo" fetch --quiet origin "$_ref" 2>/dev/null; then
+      # origin が無い（初回 clone 前のローカルテスト）場合はローカル ref 解決にフォールバック
+      _sha="$(git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
+    else
+      _sha="$(git -C "$_repo" rev-parse --verify "FETCH_HEAD^{commit}" 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -z "$_sha" ]]; then
+    mdm_log U1 "ref を解決できない: $_ref"
+    return "$MDM_EXIT_SETUP"
+  fi
+  printf '%s' "$_sha"
+  return 0
+}
+
 # ── main は Task 8 で実装。source-only 時は実行しない。────────
 if [[ "${MDM_SOURCE_ONLY:-0}" != "1" ]] && { [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; }; then
   mdm_main "$@"   # Task 8 で定義
