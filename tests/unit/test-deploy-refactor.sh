@@ -87,7 +87,7 @@ EOF
     CLAUDE_DIR="$_manifest_tmp/.claude"
     mkdir -p "$CLAUDE_DIR"
     printf '{"sentinel":true}\n' > "$CLAUDE_DIR/.starter-kit-manifest.json"
-    KIT_MDM_MANAGED=false
+    export KIT_MDM_MANAGED=false
     managed_files_json() { printf 'invalid-json'; }
     cleanup_paths_json() { printf '[]'; }
     _manifest_rc=0
@@ -108,7 +108,7 @@ EOF
     CLAUDE_DIR="$_manifest_tmp/.claude"
     mkdir -p "$CLAUDE_DIR"
     printf '{"sentinel":true}\n' > "$CLAUDE_DIR/.starter-kit-manifest.json"
-    KIT_MDM_MANAGED=false
+    export KIT_MDM_MANAGED=false
     managed_files_json() { printf '[]'; return 42; }
     cleanup_paths_json() { printf '[]'; }
     _manifest_rc=0
@@ -134,7 +134,7 @@ EOF
     _manifest_tmp="$(mktemp -d)"
     CLAUDE_DIR="$_manifest_tmp/.claude"
     mkdir -p "$CLAUDE_DIR/.starter-kit-manifest.json"
-    KIT_MDM_MANAGED=false
+    export KIT_MDM_MANAGED=false
     managed_files_json() { printf '[]'; }
     cleanup_paths_json() { printf '[]'; }
     _manifest_rc=0
