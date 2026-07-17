@@ -306,13 +306,48 @@ mdm_build_setup_argv() {
   fi
 }
 
+# 隣接 lib が root にとって信頼可能か（R2-Critical 対応）。
+# 通常ファイル・非 symlink・root 所有・ファイルと親 dir とも group/other 書込不可。
+# _mdm_boot_config_file_is_secure と同じ検査だが、対象が「これから root で
+# source する実行コード」なので独立関数として明示する。
+_mdm_adjacent_lib_is_trusted() {
+  local _lib="$1"
+  [[ -f "$_lib" && ! -L "$_lib" ]] || return 1
+  local _dir _mode _dmode
+  _dir="$(dirname "$_lib")"
+  _mode="$(stat -f '%Lp' "$_lib" 2>/dev/null || stat -c '%a' "$_lib" 2>/dev/null || echo '')"
+  _mdm_boot_mode_is_safe "$_mode" || return 1
+  _dmode="$(stat -f '%Lp' "$_dir" 2>/dev/null || stat -c '%a' "$_dir" 2>/dev/null || echo '')"
+  _mdm_boot_mode_is_safe "$_dmode" || return 1
+  if [[ "${MDM_CONFIG_SKIP_OWNER_CHECK:-0}" != "1" ]]; then
+    local _owner _downer
+    _owner="$(stat -f '%Su' "$_lib" 2>/dev/null || stat -c '%U' "$_lib" 2>/dev/null || echo '')"
+    [[ "$_owner" == "root" ]] || return 1
+    _downer="$(stat -f '%Su' "$_dir" 2>/dev/null || stat -c '%U' "$_dir" 2>/dev/null || echo '')"
+    [[ "$_downer" == "root" ]] || return 1
+  fi
+  return 0
+}
+
 # ── 自己ブートストラップ判定（spec §3.1・§5.1 U1a）─────────
 # 隣接する lib-mdm-config.sh が無ければ要ブートストラップ（exit 0）。
+# ★R2-Critical: root 実行時は隣接 lib の存在だけでなく信頼可能性
+# （_mdm_adjacent_lib_is_trusted）も要求する。sticky/共有ディレクトリに
+# 単一ファイル配置された場合、攻撃者が隣に lib を植えて次回 root 実行で
+# 任意コード実行できるため、信頼できない隣接 lib は**無視**して
+# 自己ブートストラップ（pin 済み取得）に切り替える。
 # 判定ディレクトリは MDM_SELF_DIR（テスト用オーバーライド）、既定は自身の隣。
 mdm_needs_bootstrap() {
   local _dir="${MDM_SELF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)}"
-  [[ -f "$_dir/lib-mdm-config.sh" ]] && return 1
-  return 0
+  local _lib="$_dir/lib-mdm-config.sh"
+  [[ -f "$_lib" ]] || return 0
+  local _euid
+  _euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
+  if [[ "$_euid" -eq 0 ]] && ! _mdm_adjacent_lib_is_trusted "$_lib"; then
+    mdm_log R1 "隣接する lib-mdm-config.sh が信頼できない（symlink/所有者/権限）。無視して自己ブートストラップする: $_lib"
+    return 0
+  fi
+  return 1
 }
 
 # ── 自己ブートストラップ launcher 専用ヘルパー（lib 非依存・自己完結）────
@@ -999,8 +1034,30 @@ mdm_main() {
   # R1: 設定読込（CLI 引数 > env > 管理設定ファイル > 既定。High#3 staging 検証）。
   # ログファイルは設定確定 + R2 の home 解決後に開くため、ここでの失敗は
   # stderr（MDM 側が捕捉）と終了コードのみで報告される。
+  #
+  # 隣接 lib の source は inode 束縛で行う（R2-Critical）:
+  # 事前 inode 記録 → root 時は信頼検証 → open → fd の inode 照合 → fd から
+  # source。検証と読込の間の差し替えは inode 不一致で拒否される
+  # （mdm_config_apply の fd 読みと同じ手法。/dev/fd の mode/デバイス番号は
+  # macOS で信頼できないため inode のみ照合）。
+  local _lib_path _lib_euid _lib_pre_ino _lib_fd_ino
+  _lib_path="${MDM_SELF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)}/lib-mdm-config.sh"
+  _lib_pre_ino="$(stat -f '%i' "$_lib_path" 2>/dev/null || stat -c '%i' "$_lib_path" 2>/dev/null || echo 'pre-fail')"
+  _lib_euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
+  if [[ "$_lib_euid" -eq 0 ]] && ! _mdm_adjacent_lib_is_trusted "$_lib_path"; then
+    mdm_log R1 "隣接 lib が信頼できない（source 直前の再検証）"
+    exit "$MDM_EXIT_CONFIG"
+  fi
+  exec 9<"$_lib_path" || { mdm_log R1 "lib-mdm-config.sh を開けない: $_lib_path"; exit "$MDM_EXIT_CONFIG"; }
+  _lib_fd_ino="$(stat -Lf '%i' /dev/fd/9 2>/dev/null || stat -Lc '%i' /dev/fd/9 2>/dev/null || echo 'fd-fail')"
+  if [[ "$_lib_pre_ino" != "$_lib_fd_ino" ]]; then
+    exec 9<&-
+    mdm_log R1 "lib-mdm-config.sh が検査と読込の間に差し替えられた（TOCTOU）"
+    exit "$MDM_EXIT_CONFIG"
+  fi
   # shellcheck source=mdm/lib-mdm-config.sh
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib-mdm-config.sh"
+  source /dev/fd/9
+  exec 9<&-
   mdm_config_apply "$(_mdm_config_path)" "$@" || { mdm_log R1 "設定エラー"; _mdm_fail_unresolved "$MDM_EXIT_CONFIG"; }
   _mdm_apply_mdm_defaults
 

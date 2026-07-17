@@ -18,6 +18,57 @@ touch "$_tmpd/lib-mdm-config.sh"
   else
     pass "mdm-bootstrap: lib 存在時は再取得しない"
   fi )
+
+# ══ R2-Critical 回帰: root は信頼できない隣接 lib を source しない ══
+# 単一ファイル配布で sticky/共有ディレクトリに配置された場合、攻撃者が隣に
+# lib-mdm-config.sh を植えられる。root 実行時は「通常ファイル・非 symlink・
+# root 所有・ファイル/親 dir とも group/other 書込不可」を満たさない隣接 lib
+# を無視して自己ブートストラップ（pin 済み取得）に切り替える。
+(
+  # 親 dir が world-writable → 信頼しない（要ブートストラップ）
+  _open="$_tmpd/open-dir"; mkdir -p "$_open"; chmod 777 "$_open"
+  touch "$_open/lib-mdm-config.sh"; chmod 644 "$_open/lib-mdm-config.sh"
+  export MDM_SELF_DIR="$_open" MDM_EUID_OVERRIDE=0 MDM_CONFIG_SKIP_OWNER_CHECK=1
+  if mdm_needs_bootstrap; then
+    pass "mdm-bootstrap: root は書込可能 dir の隣接 lib を信頼しない"
+  else
+    fail "mdm-bootstrap: root が書込可能 dir の隣接 lib を source してしまう（R2-Critical 回帰）"
+  fi
+)
+(
+  # 隣接 lib が symlink → 信頼しない
+  _sldir="$_tmpd/symlink-dir"; mkdir -p "$_sldir"; chmod 755 "$_sldir"
+  touch "$_tmpd/real-lib"
+  ln -s "$_tmpd/real-lib" "$_sldir/lib-mdm-config.sh"
+  export MDM_SELF_DIR="$_sldir" MDM_EUID_OVERRIDE=0 MDM_CONFIG_SKIP_OWNER_CHECK=1
+  if mdm_needs_bootstrap; then
+    pass "mdm-bootstrap: root は symlink の隣接 lib を信頼しない"
+  else
+    fail "mdm-bootstrap: root が symlink の隣接 lib を source してしまう"
+  fi
+)
+(
+  # 隣接 lib が group/other 書込可 → 信頼しない
+  _wldir="$_tmpd/writable-lib-dir"; mkdir -p "$_wldir"; chmod 755 "$_wldir"
+  touch "$_wldir/lib-mdm-config.sh"; chmod 666 "$_wldir/lib-mdm-config.sh"
+  export MDM_SELF_DIR="$_wldir" MDM_EUID_OVERRIDE=0 MDM_CONFIG_SKIP_OWNER_CHECK=1
+  if mdm_needs_bootstrap; then
+    pass "mdm-bootstrap: root は group/other 書込可の隣接 lib を信頼しない"
+  else
+    fail "mdm-bootstrap: root が書込可の隣接 lib を source してしまう"
+  fi
+)
+(
+  # 安全な隣接 lib（755 dir・644 file・非 symlink）は root でも信頼する
+  _okdir="$_tmpd/ok-dir"; mkdir -p "$_okdir"; chmod 755 "$_okdir"
+  touch "$_okdir/lib-mdm-config.sh"; chmod 644 "$_okdir/lib-mdm-config.sh"
+  export MDM_SELF_DIR="$_okdir" MDM_EUID_OVERRIDE=0 MDM_CONFIG_SKIP_OWNER_CHECK=1
+  if mdm_needs_bootstrap; then
+    fail "mdm-bootstrap: 安全な隣接 lib が root で信頼されない"
+  else
+    pass "mdm-bootstrap: 安全な隣接 lib は root でも信頼される"
+  fi
+)
 rm -rf "$_tmpd"
 
 # ── _mdm_receipt_dir_for（R4 のパス選択ロジック。実 id -u に依存しないよう
