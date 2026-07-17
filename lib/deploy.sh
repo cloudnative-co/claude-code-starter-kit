@@ -26,6 +26,13 @@ is_true() {
   esac
 }
 
+_deploy_mdm_managed() {
+  case "${KIT_MDM_MANAGED:-}" in
+    true|TRUE|1|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # language_code - returns the code Claude Code expects in settings.json
 language_code() {
   case "${LANGUAGE:-en}" in
@@ -84,6 +91,16 @@ _claude_cli_semver() {
 _claude_supports_async_hooks() {
   local min_version="${1:-2.1.89}"
   local current_version=""
+
+  # The privileged MDM launcher pins this internal decision before running
+  # setup so both deployment and independent postcondition rendering use the
+  # same hook schema. It is deliberately not a public MDM config key.
+  if _deploy_mdm_managed; then
+    case "${KIT_MDM_ASYNC_HOOKS:-}" in
+      true) return 0 ;;
+      false) return 1 ;;
+    esac
+  fi
 
   # Fail open when Claude is absent so generated config stays forward-looking
   # during offline tests or first install. Fail closed when a present CLI has an
@@ -146,6 +163,24 @@ apply_settings_preferences() {
 # Backup
 # ---------------------------------------------------------------------------
 _BACKUP_TIMESTAMP=""
+_BACKUP_PATH=""
+
+_mdm_rotate_backups() { # <new-backup>
+  local new_backup="$1" candidate suffix
+  for candidate in "$HOME"/.claude.mdm-backup.*; do
+    [[ -e "$candidate" || -L "$candidate" ]] || continue
+    [[ "$candidate" == "$new_backup" ]] && continue
+    suffix="${candidate#"$HOME"/.claude.mdm-backup.}"
+    [[ "$suffix" =~ ^[0-9]{14}(\.[0-9]+)?$ ]] || continue
+    # This prefix is reserved exclusively for bounded MDM rotation. Removing
+    # the entry itself is safe for symlinks/FIFOs too and never opens copied
+    # user-controlled marker content.
+    if ! rm -rf "$candidate"; then
+      warn "Could not rotate old MDM backup: $candidate"
+      return 1
+    fi
+  done
+}
 
 backup_existing() {
   # Dry-run: no real backup needed (sim dir protects the real filesystem)
@@ -153,12 +188,37 @@ backup_existing() {
 
   if [[ -e "$CLAUDE_DIR" ]]; then
     _BACKUP_TIMESTAMP="$(date +%Y%m%d%H%M%S)"
-    local backup="$HOME/.claude.backup.${_BACKUP_TIMESTAMP}"
-    cp -a "$CLAUDE_DIR" "$backup"
+    local backup_prefix="$HOME/.claude.backup."
+    _deploy_mdm_managed && backup_prefix="$HOME/.claude.mdm-backup."
+    local backup_base="${backup_prefix}${_BACKUP_TIMESTAMP}"
+    local backup="$backup_base" collision=0
+    while [[ -e "$backup" || -L "$backup" ]]; do
+      collision=$((collision + 1))
+      [[ "$collision" -le 100 ]] || { warn "Could not allocate backup path"; return 1; }
+      backup="$backup_base.$collision"
+    done
+    _BACKUP_TIMESTAMP="${backup#"$backup_prefix"}"
+    cp -a "$CLAUDE_DIR" "$backup" || return 1
+    _BACKUP_PATH="$backup"
+    if _deploy_mdm_managed; then
+      if [[ ! -d "$backup" || -L "$backup" ]] || ! _mdm_rotate_backups "$backup"; then
+        rm -rf "$backup" 2>/dev/null || true
+        return 1
+      fi
+    fi
     ok "Backed up existing ~/.claude to $backup"
 
     # Persist backup path for cross-process recovery (e.g., auto-update.sh)
-    printf '%s\n' "$backup" > "$CLAUDE_DIR/.starter-kit-last-backup"
+    if _deploy_mdm_managed; then
+      local backup_marker_tmp
+      backup_marker_tmp="$(mktemp)"
+      _SETUP_TMP_FILES+=("$backup_marker_tmp")
+      printf '%s\n' "$backup" > "$backup_marker_tmp"
+      _mdm_atomic_replace_managed_file \
+        "$backup_marker_tmp" "$CLAUDE_DIR/.starter-kit-last-backup" || return 1
+    else
+      printf '%s\n' "$backup" > "$CLAUDE_DIR/.starter-kit-last-backup"
+    fi
   fi
 }
 
@@ -194,12 +254,195 @@ _find_distribution_files() {
     -type f -print0 2>/dev/null)
 }
 
+_mdm_distribution_relpath_is_safe() {
+  local rel="$1"
+  [[ -n "$rel" && "$rel" != /* && ! "$rel" =~ [[:cntrl:]] ]] || return 1
+  case "/$rel/" in
+    */../*|*/./*|*//*) return 1 ;;
+  esac
+  return 0
+}
+
+_mdm_distribution_path_is_confined() {
+  local path="$1"
+  local root="${CLAUDE_DIR:-}"
+  [[ "$root" == /* && "$path" == /* ]] || return 1
+  while [[ "$root" != "/" && "$root" == */ ]]; do
+    root="${root%/}"
+  done
+  [[ "$root" != "/" && -d "$root" && ! -L "$root" ]] || return 1
+  [[ "$path" == "$root" ]] && return 0
+  case "$path" in
+    "$root"/*) ;;
+    *) return 1 ;;
+  esac
+  _mdm_distribution_relpath_is_safe "${path#"$root"/}"
+}
+
+_mdm_ensure_real_distribution_dir() {
+  local dir="$1"
+  if ! _mdm_distribution_path_is_confined "$dir"; then
+    warn "Refusing unsafe MDM distribution directory"
+    return 1
+  fi
+
+  local root="${CLAUDE_DIR:-}"
+  while [[ "$root" != "/" && "$root" == */ ]]; do
+    root="${root%/}"
+  done
+  [[ "$dir" == "$root" ]] && return 0
+
+  local rel="${dir#"$root"/}"
+  local current="$root" rest="$rel" segment
+  while [[ -n "$rest" ]]; do
+    segment="${rest%%/*}"
+    rest="${rest#"$segment"}"
+    rest="${rest#/}"
+    current="$current/$segment"
+    if [[ -L "$current" ]]; then
+      warn "Refusing symlinked MDM distribution directory: ${current#"$root"/}"
+      return 1
+    fi
+    if [[ -e "$current" ]]; then
+      if [[ ! -d "$current" ]]; then
+        warn "Refusing non-directory MDM distribution parent: ${current#"$root"/}"
+        return 1
+      fi
+    else
+      mkdir "$current"
+      if [[ ! -d "$current" || -L "$current" ]]; then
+        warn "Failed to create a real MDM distribution directory: ${current#"$root"/}"
+        return 1
+      fi
+    fi
+  done
+}
+
+_mdm_distribution_target_is_safe() {
+  local target="$1"
+  if ! _mdm_distribution_path_is_confined "$target"; then
+    warn "Refusing unsafe MDM distribution target"
+    return 1
+  fi
+
+  local parent="${target%/*}"
+  _mdm_ensure_real_distribution_dir "$parent" || return 1
+
+  local root="${CLAUDE_DIR:-}"
+  while [[ "$root" != "/" && "$root" == */ ]]; do
+    root="${root%/}"
+  done
+  if [[ -L "$target" ]]; then
+    warn "Refusing symlinked MDM distribution target: ${target#"$root"/}"
+    return 1
+  fi
+  if [[ -e "$target" && ! -f "$target" ]]; then
+    warn "Refusing special MDM distribution target: ${target#"$root"/}"
+    return 1
+  fi
+  return 0
+}
+
+_mdm_atomic_replace_managed_file() {
+  local src_file="$1"
+  local dest_file="$2"
+  _mdm_distribution_target_is_safe "$dest_file" || return 1
+
+  # Copy to a fresh inode and rename it into place. This avoids following a
+  # final symlink and also prevents an existing hard link from propagating the
+  # managed write to another user-owned pathname.
+  local parent="${dest_file%/*}"
+  local tmp_file
+  tmp_file="$(mktemp "$parent/.starter-kit-copy.XXXXXX")" || return 1
+  _SETUP_TMP_FILES+=("$tmp_file")
+  if ! cp -p "$src_file" "$tmp_file"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  if ! _mdm_distribution_target_is_safe "$dest_file"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  if ! mv -f "$tmp_file" "$dest_file"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+}
+
+_mdm_copy_distribution_file() {
+  _mdm_atomic_replace_managed_file "$1" "$2"
+}
+
+_mdm_make_distribution_scripts_executable() {
+  local src_root="$1" dest_root="$2"
+  local src_file rel_path dest_file
+  while IFS= read -r -d '' src_file; do
+    case "$src_file" in
+      *.sh|*.py) ;;
+      *) continue ;;
+    esac
+    rel_path="${src_file#"$src_root"/}"
+    dest_file="$dest_root/$rel_path"
+    _mdm_distribution_target_is_safe "$dest_file" || return 1
+    chmod +x "$dest_file"
+  done < <(_find_distribution_files "$src_root")
+}
+
+_prepare_mdm_claude_root() {
+  _deploy_mdm_managed || return 0
+  if [[ -L "$CLAUDE_DIR" ]] || [[ -e "$CLAUDE_DIR" && ! -d "$CLAUDE_DIR" ]]; then
+    error "FATAL: MDM requires CLAUDE_DIR to be a real directory"
+    return 1
+  fi
+  if [[ ! -e "$CLAUDE_DIR" ]]; then
+    mkdir "$CLAUDE_DIR"
+  fi
+  if [[ ! -d "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]]; then
+    error "FATAL: could not establish a real MDM CLAUDE_DIR"
+    return 1
+  fi
+}
+
 _copy_distribution_tree() {
   local src_root="$1"
   local dest_root="$2"
   local mode="${3:-overwrite}"
 
   [[ -d "$src_root" ]] || return 0
+
+  if _deploy_mdm_managed; then
+    _mdm_ensure_real_distribution_dir "$dest_root" || return 1
+
+    local -a src_files=()
+    local src_file rel_path dest_file
+    while IFS= read -r -d '' src_file; do
+      src_files+=("$src_file")
+    done < <(_find_distribution_files "$src_root")
+
+    # Preflight the complete tree before replacing any managed file. Parent
+    # directories may be created, but an unsafe destination fails closed before
+    # managed content is changed.
+    for src_file in "${src_files[@]+"${src_files[@]}"}"; do
+      rel_path="${src_file#"$src_root"/}"
+      if ! _mdm_distribution_relpath_is_safe "$rel_path"; then
+        warn "Refusing unsafe MDM distribution source path"
+        return 1
+      fi
+      dest_file="$dest_root/$rel_path"
+      _mdm_distribution_target_is_safe "$dest_file" || return 1
+    done
+
+    for src_file in "${src_files[@]+"${src_files[@]}"}"; do
+      rel_path="${src_file#"$src_root"/}"
+      dest_file="$dest_root/$rel_path"
+      if [[ "$mode" == "new" && -e "$dest_file" ]]; then
+        continue
+      fi
+      _mdm_copy_distribution_file "$src_file" "$dest_file" || return 1
+    done
+    return 0
+  fi
+
   mkdir -p "$dest_root"
 
   local src_file rel_path dest_file
@@ -249,14 +492,26 @@ collect_managed_target_files() {
   # Enumerate all starter-kit-owned file paths, then keep only paths that
   # currently exist under ~/.claude. This preserves tracking for leftovers from
   # previously enabled components without sweeping up arbitrary user files.
-  _add_managed_tree_targets "$PROJECT_DIR/agents" "$CLAUDE_DIR/agents"
-  _add_managed_tree_targets "$PROJECT_DIR/rules" "$CLAUDE_DIR/rules"
-  _add_managed_tree_targets "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
-  _add_managed_tree_targets "$PROJECT_DIR/skills" "$CLAUDE_DIR/skills"
+  if ! _deploy_mdm_managed || is_true "${INSTALL_AGENTS:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/agents" "$CLAUDE_DIR/agents"
+  fi
+  if ! _deploy_mdm_managed || is_true "${INSTALL_RULES:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/rules" "$CLAUDE_DIR/rules"
+  fi
+  if ! _deploy_mdm_managed || is_true "${INSTALL_COMMANDS:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
+  fi
+  if ! _deploy_mdm_managed || is_true "${INSTALL_SKILLS:-false}"; then
+    _add_managed_tree_targets "$PROJECT_DIR/skills" "$CLAUDE_DIR/skills"
+  fi
   # Registry-driven: hook script paths from _FEATURE_HAS_SCRIPTS
   local _feat_name
-  for _feat_name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
+  for _feat_name in "${_FEATURE_SCRIPT_ORDER[@]+"${_FEATURE_SCRIPT_ORDER[@]}"}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$_feat_name]+set}" ]] || continue
+    if _deploy_mdm_managed; then
+      local _feat_flag="${_FEATURE_FLAGS[$_feat_name]:-}"
+      [[ -n "$_feat_flag" ]] && is_true "${!_feat_flag:-false}" || continue
+    fi
     _add_managed_tree_targets "$PROJECT_DIR/features/$_feat_name/scripts" "$CLAUDE_DIR/hooks/$_feat_name"
   done
 
@@ -274,6 +529,266 @@ collect_managed_target_files() {
   fi
 }
 
+# MDM must attest both what is present and what must be absent.  The universe
+# is every path shipped by the current pinned checkout across all profiles;
+# profile-disabled paths are safe deletion candidates only when their bytes
+# still match that checkout payload.
+declare -g -A _MDM_UNIVERSE_SOURCE_BY_REL=()
+declare -g -A _MDM_UNIVERSE_EXEC_BY_REL=()
+declare -g -A _MDM_CURRENT_REL_SET=()
+declare -g -A _MDM_PRIOR_REL_SET=()
+
+_mdm_load_prior_inventory() {
+  _MDM_PRIOR_REL_SET=()
+  local inventory="${KIT_MDM_PRIOR_MANAGED_INVENTORY:-}" owner mode rel count=0
+  [[ -n "$inventory" ]] || return 0
+  case "$inventory" in
+    /private/tmp/claude-kit-mdm-prior.*|/tmp/claude-kit-mdm-prior.*) ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$inventory" && ! -L "$inventory" ]] || return 1
+  owner="$(stat -f '%u' "$inventory" 2>/dev/null \
+    || stat -c '%u' "$inventory" 2>/dev/null)" || return 1
+  if [[ "${MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK:-0}" != 1 ]]; then
+    [[ "$owner" == 0 ]] || return 1
+  fi
+  mode="$(stat -f '%Mp%Lp' "$inventory" 2>/dev/null \
+    || stat -c '%a' "$inventory" 2>/dev/null)" || return 1
+  [[ "$mode" =~ ^[0-7]+$ ]] || return 1
+  while [[ ${#mode} -gt 3 ]]; do mode="${mode#?}"; done
+  case "$mode" in *[2367]|?[2367]?) return 1 ;; esac
+  while IFS= read -r rel || [[ -n "$rel" ]]; do
+    _mdm_distribution_relpath_is_safe "$rel" || return 1
+    [[ -z "${_MDM_PRIOR_REL_SET[$rel]+set}" ]] || return 1
+    _MDM_PRIOR_REL_SET[$rel]=1
+    count=$((count + 1)); [[ "$count" -le 2000 ]] || return 1
+  done < "$inventory"
+}
+
+_mdm_register_universe_tree() { # <source-root> <destination-prefix> <scripts:0|1>
+  local src_root="$1" dest_prefix="$2" scripts="$3"
+  local src_file source_rel managed_rel executable
+  while IFS= read -r -d '' src_file; do
+    source_rel="${src_file#"$src_root"/}"
+    _mdm_distribution_relpath_is_safe "$source_rel" || return 1
+    managed_rel="$dest_prefix/$source_rel"
+    [[ -z "${_MDM_UNIVERSE_SOURCE_BY_REL[$managed_rel]+set}" ]] || return 1
+    executable=false
+    if [[ -x "$src_file" ]] \
+      || [[ "$scripts" == 1 && ( "$src_file" == *.sh || "$src_file" == *.py ) ]]; then
+      executable=true
+    fi
+    _MDM_UNIVERSE_SOURCE_BY_REL[$managed_rel]="$src_file"
+    _MDM_UNIVERSE_EXEC_BY_REL[$managed_rel]="$executable"
+  done < <(_find_distribution_files "$src_root")
+}
+
+_mdm_build_managed_universe() {
+  _MDM_UNIVERSE_SOURCE_BY_REL=()
+  _MDM_UNIVERSE_EXEC_BY_REL=()
+  _MDM_CURRENT_REL_SET=()
+  _mdm_load_prior_inventory || return 1
+  collect_managed_target_files
+  local target feature
+  for target in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
+    case "$target" in
+      "$CLAUDE_DIR"/*) _MDM_CURRENT_REL_SET[${target#"$CLAUDE_DIR"/}]=1 ;;
+      *) return 1 ;;
+    esac
+  done
+  _mdm_register_universe_tree "$PROJECT_DIR/agents" agents 0 || return 1
+  _mdm_register_universe_tree "$PROJECT_DIR/rules" rules 0 || return 1
+  _mdm_register_universe_tree "$PROJECT_DIR/commands" commands 0 || return 1
+  _mdm_register_universe_tree "$PROJECT_DIR/skills" skills 0 || return 1
+  for feature in "${_FEATURE_SCRIPT_ORDER[@]+"${_FEATURE_SCRIPT_ORDER[@]}"}"; do
+    [[ "${_FEATURE_HAS_SCRIPTS[$feature]+set}" ]] || continue
+    _mdm_register_universe_tree \
+      "$PROJECT_DIR/features/$feature/scripts" "hooks/$feature" 1 || return 1
+  done
+}
+
+mdm_absent_files_json() {
+  _mdm_build_managed_universe || return 1
+  {
+    local rel
+    for rel in "${!_MDM_UNIVERSE_SOURCE_BY_REL[@]}"; do
+      [[ -n "${_MDM_CURRENT_REL_SET[$rel]+set}" ]] || printf '%s\n' "$rel"
+    done
+    for rel in "${!_MDM_PRIOR_REL_SET[@]}"; do
+      [[ -n "${_MDM_CURRENT_REL_SET[$rel]+set}" ]] || printf '%s\n' "$rel"
+    done
+  } | LC_ALL=C sort -u | jq -R -s 'split("\n")[:-1]'
+}
+
+_mdm_claim_and_remove_absent_file() { # <root> <relative> <source> <exec> <prior>
+  local root="$1" relative="$2" source="$3" expects_exec="$4" prior="$5"
+  [[ -x /usr/bin/python3 ]] || return 1
+  /usr/bin/python3 -I -B -c '
+import hashlib, os, stat, sys
+
+root, relative, source, expects_exec, prior = sys.argv[1:]
+parts = relative.split("/")
+dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+
+def open_parent():
+    try:
+        current = os.open(root, dir_flags)
+    except FileNotFoundError:
+        return None, None
+    except OSError:
+        raise SystemExit(1)
+    for component in parts[:-1]:
+        try:
+            before = os.stat(component, dir_fd=current, follow_symlinks=False)
+        except FileNotFoundError:
+            os.close(current)
+            return None, None
+        except OSError:
+            os.close(current)
+            raise SystemExit(1)
+        if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+            os.close(current)
+            raise SystemExit(1)
+        try:
+            child = os.open(component, dir_flags, dir_fd=current)
+        except OSError:
+            os.close(current)
+            raise SystemExit(1)
+        opened = os.fstat(child)
+        if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            os.close(child)
+            os.close(current)
+            raise SystemExit(1)
+        os.close(current)
+        current = child
+    return current, parts[-1]
+
+parent, name = open_parent()
+if parent is None:
+    raise SystemExit(0)
+try:
+    try:
+        os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        raise SystemExit(0)
+    except OSError:
+        raise SystemExit(1)
+    quarantine = ".starter-kit-retired.{}.{}".format(os.getpid(), os.urandom(12).hex())
+    try:
+        os.rename(name, quarantine, src_dir_fd=parent, dst_dir_fd=parent)
+    except OSError:
+        raise SystemExit(1)
+
+    def restore():
+        try:
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+            return False
+        except FileNotFoundError:
+            try:
+                os.rename(quarantine, name, src_dir_fd=parent, dst_dir_fd=parent)
+                return True
+            except OSError:
+                return False
+        except OSError:
+            return False
+
+    try:
+        claimed = os.stat(quarantine, dir_fd=parent, follow_symlinks=False)
+        if stat.S_ISDIR(claimed.st_mode):
+            raise ValueError("directory")
+        if prior == "true":
+            os.unlink(quarantine, dir_fd=parent)
+            raise SystemExit(0)
+        if not stat.S_ISREG(claimed.st_mode) or claimed.st_mode & 0o022:
+            raise ValueError("unsafe file")
+        if bool(claimed.st_mode & stat.S_IXUSR) != (expects_exec == "true"):
+            raise ValueError("mode mismatch")
+        claimed_fd = os.open(quarantine, file_flags, dir_fd=parent)
+        try:
+            opened = os.fstat(claimed_fd)
+            identity = (claimed.st_dev, claimed.st_ino, claimed.st_size, claimed.st_mtime_ns)
+            if identity != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns):
+                raise ValueError("claim changed")
+            if opened.st_size > 64 * 1024 * 1024:
+                raise ValueError("claim too large")
+            claim_hash = hashlib.sha256()
+            while True:
+                chunk = os.read(claimed_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                claim_hash.update(chunk)
+            after = os.fstat(claimed_fd)
+            if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+                raise ValueError("claim modified")
+        finally:
+            os.close(claimed_fd)
+        source_fd = os.open(source, file_flags)
+        try:
+            source_before = os.fstat(source_fd)
+            if not stat.S_ISREG(source_before.st_mode) or source_before.st_size > 64 * 1024 * 1024:
+                raise ValueError("source invalid")
+            source_identity = (
+                source_before.st_dev, source_before.st_ino,
+                source_before.st_size, source_before.st_mtime_ns,
+            )
+            source_hash = hashlib.sha256()
+            while True:
+                chunk = os.read(source_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                source_hash.update(chunk)
+            source_after = os.fstat(source_fd)
+            if source_identity != (
+                source_after.st_dev, source_after.st_ino,
+                source_after.st_size, source_after.st_mtime_ns,
+            ):
+                raise ValueError("source modified")
+        finally:
+            os.close(source_fd)
+        if claim_hash.digest() != source_hash.digest():
+            raise ValueError("content mismatch")
+        os.unlink(quarantine, dir_fd=parent)
+        raise SystemExit(0)
+    except SystemExit:
+        raise
+    except (OSError, ValueError):
+        restore()
+        raise SystemExit(1)
+finally:
+    os.close(parent)
+' "$root" "$relative" "$source" "$expects_exec" "$prior"
+}
+
+_mdm_reconcile_absent_managed_files() { # <claude-dir> <snapshot-dir>
+  _deploy_mdm_managed || return 0
+  local claude_dir="$1" snapshot_dir="$2" rel source expects_exec path_root path_rel
+  local prior_authorized
+  _mdm_build_managed_universe || return 1
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    source="${_MDM_UNIVERSE_SOURCE_BY_REL[$rel]:-}"
+    expects_exec="${_MDM_UNIVERSE_EXEC_BY_REL[$rel]:-false}"
+    prior_authorized=false
+    [[ -n "${_MDM_PRIOR_REL_SET[$rel]+set}" ]] && prior_authorized=true
+    for path_root in "$claude_dir" "$snapshot_dir"; do
+      path_rel="$rel"
+      if ! _mdm_claim_and_remove_absent_file \
+        "$path_root" "$path_rel" "$source" "$expects_exec" "$prior_authorized"; then
+        warn "Ambiguous disabled MDM managed file: $rel"
+        return 1
+      fi
+    done
+  done < <({
+    for rel in "${!_MDM_UNIVERSE_SOURCE_BY_REL[@]}"; do
+      [[ -n "${_MDM_CURRENT_REL_SET[$rel]+set}" ]] || printf '%s\n' "$rel"
+    done
+    for rel in "${!_MDM_PRIOR_REL_SET[@]}"; do
+      [[ -n "${_MDM_CURRENT_REL_SET[$rel]+set}" ]] || printf '%s\n' "$rel"
+    done
+  } | LC_ALL=C sort -u)
+}
+
 managed_files_json() {
   collect_managed_target_files
   {
@@ -282,7 +797,24 @@ managed_files_json() {
       [[ -f "$file" ]] && printf '%s\n' "$file"
     done
     true  # Ensure non-zero from last [[ -f ]] miss doesn't trigger pipefail
-  } | sort -u | jq -R -s 'split("\n")[:-1]'
+  } | LC_ALL=C sort -u | jq -R -s 'split("\n")[:-1]'
+}
+
+_normalize_mdm_managed_modes() {
+  _deploy_mdm_managed || return 0
+  local file mode link_count
+  for file in "$@"; do
+    [[ -f "$file" ]] || continue
+    _mdm_distribution_target_is_safe "$file" || return 1
+    link_count="$(stat -f '%l' "$file" 2>/dev/null || stat -c '%h' "$file" 2>/dev/null || true)"
+    if [[ ! "$link_count" =~ ^[0-9]+$ || "$link_count" -ne 1 ]]; then
+      warn "Refusing to chmod a hard-linked MDM managed file: ${file#"$CLAUDE_DIR"/}"
+      return 1
+    fi
+    mode=600
+    [[ -x "$file" ]] && mode=700
+    chmod "$mode" "$file"
+  done
 }
 
 cleanup_paths_json() {
@@ -311,11 +843,20 @@ write_managed_snapshot() {
   for file in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
     [[ -f "$file" ]] && snapshot_files+=("$file")
   done
-  _write_snapshot "$CLAUDE_DIR" "${snapshot_files[@]+"${snapshot_files[@]}"}"
+  _normalize_mdm_managed_modes "${snapshot_files[@]+"${snapshot_files[@]}"}"
+  _write_snapshot "$CLAUDE_DIR" "${snapshot_files[@]+"${snapshot_files[@]}"}" || return 1
 
   # CLAUDE.md: replace full-file snapshot with kit-section-only snapshot
   if [[ -f "$CLAUDE_DIR/CLAUDE.md" ]]; then
-    _snapshot_claude_md "$CLAUDE_DIR" "$CLAUDE_DIR/CLAUDE.md"
+    _snapshot_claude_md "$CLAUDE_DIR" "$CLAUDE_DIR/CLAUDE.md" || return 1
+  fi
+
+  if _deploy_mdm_managed; then
+    local snapshot_file
+    for file in "${snapshot_files[@]+"${snapshot_files[@]}"}"; do
+      snapshot_file="$CLAUDE_DIR/.starter-kit-snapshot/${file#"$CLAUDE_DIR"/}"
+      _normalize_mdm_managed_modes "$snapshot_file"
+    done
   fi
 }
 
@@ -327,7 +868,7 @@ bootstrap_snapshot_from_current() {
   write_managed_snapshot
   _SNAPSHOT_BOOTSTRAPPED=true
   if [[ -n "${_BACKUP_TIMESTAMP:-}" ]]; then
-    info "Backup available at: ~/.claude.backup.${_BACKUP_TIMESTAMP}"
+    info "Backup available at: ${_BACKUP_PATH:-$HOME/.claude.backup.${_BACKUP_TIMESTAMP}}"
   fi
 }
 
@@ -373,7 +914,7 @@ copy_if_enabled() {
   local dest="$3"
 
   if is_true "$flag"; then
-    _copy_distribution_tree "$src" "$dest" "overwrite"
+    _copy_distribution_tree "$src" "$dest" "overwrite" || return 1
     ok "Installed $(basename "$dest")"
   else
     info "Skipped $(basename "$dest")"
@@ -407,7 +948,7 @@ _copy_dir_safe() {
   fi
 
   if [[ "$has_existing" == "false" ]]; then
-    _copy_distribution_tree "$src" "$dest" "overwrite"
+    _copy_distribution_tree "$src" "$dest" "overwrite" || return 1
     ok "Installed $label"
     return
   fi
@@ -415,7 +956,9 @@ _copy_dir_safe() {
   # Existing files found — decide what to do
   local action="new"  # default for non-interactive
 
-  if [[ "${_MERGE_INTERACTIVE:-true}" == "true" ]]; then
+  if _deploy_mdm_managed; then
+    action="overwrite"
+  elif [[ "${_MERGE_INTERACTIVE:-true}" == "true" ]]; then
     warn "$STR_FRESH_DIR_EXISTS $label/"
     printf "  %s " "$STR_FRESH_DIR_PROMPT" >&2
     local reply=""
@@ -433,7 +976,7 @@ _copy_dir_safe() {
 
   case "$action" in
     overwrite)
-      _copy_distribution_tree "$src" "$dest" "overwrite"
+      _copy_distribution_tree "$src" "$dest" "overwrite" || return 1
       ok "Installed $label (overwrite)"
       ;;
     skip)
@@ -441,7 +984,7 @@ _copy_dir_safe() {
       ok "$label: $STR_FRESH_SKIPPED"
       ;;
     new)
-      _copy_distribution_tree "$src" "$dest" "new"
+      _copy_distribution_tree "$src" "$dest" "new" || return 1
       ok "$label: $STR_FRESH_NEW_ONLY"
       ;;
   esac
@@ -498,7 +1041,15 @@ maybe_install_web_content_deps() {
 # ---------------------------------------------------------------------------
 build_claude_md() {
   local out="$CLAUDE_DIR/CLAUDE.md"
-  build_claude_md_to_file "$out"
+  if _deploy_mdm_managed; then
+    local tmp_out
+    tmp_out="$(mktemp)"
+    _SETUP_TMP_FILES+=("$tmp_out")
+    build_claude_md_to_file "$tmp_out"
+    _mdm_atomic_replace_managed_file "$tmp_out" "$out" || return 1
+  else
+    build_claude_md_to_file "$out"
+  fi
   ok "Built CLAUDE.md"
 }
 
@@ -592,6 +1143,20 @@ build_settings_file() {
   fi
 }
 
+_build_settings_managed_file() {
+  local out="$1"
+  if ! _deploy_mdm_managed; then
+    build_settings_file "$out"
+    return
+  fi
+
+  local tmp_out
+  tmp_out="$(mktemp)"
+  _SETUP_TMP_FILES+=("$tmp_out")
+  build_settings_file "$tmp_out"
+  _mdm_atomic_replace_managed_file "$tmp_out" "$out" || return 1
+}
+
 _compose_migrated_claude_md() {
   local new_kit_file="$1"
   local existing_file="$2"
@@ -658,6 +1223,10 @@ _claude_md_migration_prompt() {
 _build_claude_md_safe() {
   local target="$CLAUDE_DIR/CLAUDE.md"
 
+  if _deploy_mdm_managed; then
+    _mdm_distribution_target_is_safe "$target" || return 1
+  fi
+
   if [[ ! -f "$target" ]]; then
     build_claude_md
     return
@@ -697,8 +1266,26 @@ _build_claude_md_safe() {
   old_kit_trimmed="$(_sed '/^[[:space:]]*$/d' "$old_kit_output")"
 
   if [[ "$current_trimmed" == "$old_kit_trimmed" ]]; then
-    cp -a "$new_claude_md" "$target"
+    if _deploy_mdm_managed; then
+      _mdm_atomic_replace_managed_file "$new_claude_md" "$target" || return 1
+    else
+      cp -a "$new_claude_md" "$target"
+    fi
     ok "CLAUDE.md upgraded to section-aware format"
+    return
+  fi
+
+  # MDM remediation must converge to the marker-managed document expected by
+  # the independent renderer. Preserve an existing marker-less document as the
+  # user section instead of taking the normal non-interactive "skip" path,
+  # which would omit CLAUDE.md from the manifest and make attestation fail.
+  if _deploy_mdm_managed; then
+    local merged
+    merged="$(mktemp)"
+    _SETUP_TMP_FILES+=("$merged")
+    _compose_migrated_claude_md "$new_claude_md" "$target" > "$merged"
+    _mdm_atomic_replace_managed_file "$merged" "$target" || return 1
+    ok "CLAUDE.md upgraded — existing content preserved in user section"
     return
   fi
 
@@ -724,8 +1311,12 @@ _build_claude_md_safe() {
 _build_settings_safe() {
   local target="$CLAUDE_DIR/settings.json"
 
+  if _deploy_mdm_managed; then
+    _mdm_distribution_target_is_safe "$target" || return 1
+  fi
+
   if [[ ! -f "$target" ]]; then
-    build_settings_file "$target"
+    _build_settings_managed_file "$target"
     return
   fi
 
@@ -748,14 +1339,18 @@ _deploy_fresh_with_existing() {
   info "$STR_EXISTING_CLAUDE_MERGE_NOTE"
   printf "\n"
 
-  _copy_dir_safe "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents"
-  _copy_dir_safe "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
-  _copy_dir_safe "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
-  _copy_dir_safe "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
+  _copy_dir_safe "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents" || return 1
+  _copy_dir_safe "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules" || return 1
+  _copy_dir_safe "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands" || return 1
+  _copy_dir_safe "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills" || return 1
 
-  _build_claude_md_safe
-  _build_settings_safe
-  deploy_hook_scripts "merge-aware"
+  _build_claude_md_safe || return 1
+  _build_settings_safe || return 1
+  if _deploy_mdm_managed; then
+    deploy_hook_scripts "simple" || return 1
+  else
+    deploy_hook_scripts "merge-aware" || return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -777,6 +1372,18 @@ write_manifest() {
   files_json="$(managed_files_json)"
   local cleanup_paths
   cleanup_paths="$(cleanup_paths_json)"
+  local mdm_absent_files='[]'
+  local mdm_managed=false
+  if _deploy_mdm_managed; then
+    mdm_managed=true
+    mdm_absent_files="$(mdm_absent_files_json)" || return 1
+  fi
+
+  local manifest_out="$manifest"
+  if _deploy_mdm_managed; then
+    manifest_out="$(mktemp)"
+    _SETUP_TMP_FILES+=("$manifest_out")
+  fi
 
   jq -n \
     --arg version "2" \
@@ -792,6 +1399,8 @@ write_manifest() {
     --arg codex_plugin "${ENABLE_CODEX_PLUGIN:-false}" \
     --argjson files "$files_json" \
     --argjson cleanup_paths "$cleanup_paths" \
+    --argjson mdm_absent_files "$mdm_absent_files" \
+    --argjson mdm_managed "$mdm_managed" \
     --arg snapshot_dir "$CLAUDE_DIR/.starter-kit-snapshot" \
     --arg claude_dir "$CLAUDE_DIR" \
     '{
@@ -808,9 +1417,15 @@ write_manifest() {
       codex_plugin: $codex_plugin,
       files: $files,
       cleanup_paths: $cleanup_paths,
+      mdm_absent_files: $mdm_absent_files,
+      mdm_managed: $mdm_managed,
       snapshot_dir: $snapshot_dir,
       claude_dir: $claude_dir
-    }' > "$manifest"
+    }' > "$manifest_out"
+
+  if _deploy_mdm_managed; then
+    _mdm_atomic_replace_managed_file "$manifest_out" "$manifest" || return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------

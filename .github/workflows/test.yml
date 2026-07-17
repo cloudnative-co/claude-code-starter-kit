@@ -65,37 +65,6 @@ jobs:
           fi
           echo "PASS: Bash 3.2 re-exec works correctly"
 
-      # ── macOS-specific: mdm/*.sh must stay Bash 3.2 compatible ──
-      # (MDM silent-install runs under macOS system /bin/bash, which stays at 3.2)
-      # 構文検査に加え、mdm ユニットテスト一式を 3.2 で実行して parser・
-      # 終了コード経路を検証する（Medium 対応: 構文のみでは不足）。
-      # NOTE: tests/helpers.sh のカウンタはサブシェル内の pass/fail を親に
-      # 集計しない既知の制約があるため、出力の FAIL 行を直接ゲートにする。
-      - name: Verify mdm/*.sh under Bash 3.2 (syntax + unit tests)
-        if: runner.os == 'macOS'
-        run: |
-          /bin/bash --version
-          for f in mdm/*.sh; do
-            echo "Checking $f"
-            /bin/bash -n "$f"
-          done
-          out="$(/bin/bash -c 'source tests/helpers.sh && for f in tests/unit/test-mdm-*.sh; do source "$f"; done' 2>&1)" || {
-            echo "$out"
-            echo "FAIL: mdm unit tests aborted under Bash 3.2"
-            exit 1
-          }
-          echo "$out"
-          if echo "$out" | grep -q 'FAIL'; then
-            echo "FAIL: mdm unit tests failed under Bash 3.2"
-            exit 1
-          fi
-          pass_count="$(echo "$out" | grep -c 'PASS' || true)"
-          if [ "$pass_count" -lt 50 ]; then
-            echo "FAIL: suspiciously few assertions ran under Bash 3.2 (${pass_count})"
-            exit 1
-          fi
-          echo "PASS: mdm/*.sh Bash 3.2 syntax + ${pass_count} unit assertions OK"
-
   scenario-tests:
     strategy:
       fail-fast: false

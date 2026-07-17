@@ -897,9 +897,9 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 
 ## 📦 MDM 一括配布（macOS）
 
-Jamf / Intune / Workspace ONE / Ivanti などの MDM 経由で、社内の macOS 端末へこのキットをゼロタッチでサイレント配布できます（`mdm/install-mdm.sh`）。対象ユーザー・ホームの検証、Homebrew/Xcode CLT の前提ブートストラップ、特権降格、機械可読なログ・終了コード・レシート、`detect-mdm.sh` による準拠状況の検知まで含みます。
+Jamf / Intune / Workspace ONE / Ivanti などの MDM 経由で、社内の macOS 端末へこのキットをゼロタッチ配布できます。production remediation は root と小文字40桁の commit SHA 固定が必須で、同じリリースの `mdm/install-mdm.sh` + `mdm/render-expected.py` を trust bundle として配布します。trusted static renderer が present / absent の管理対象を生成し、live / snapshot の完全一致と不要ファイルの不在を root が確認した場合だけ schema v2 receipt を発行します。
 
-設定キー・終了コード表・製品別の手順（Jamf / Intune / Workspace ONE / Ivanti / 汎用）は [`docs/mdm/README.md`](docs/mdm/README.md) を参照してください。**現時点の実装は macOS のみ**です（Windows 版は今後対応予定）。
+`settings.json` は全体を MDM 管理し、`CLAUDE.md` の user section と別のユーザーファイルは保持します。MDM では auto-update、web updater、通常 plugin、Codex Plugin を常に無効化し、Ghostty / fonts だけを明示 opt-in にできます。per-user lock、成功済み present path だけを保持する root history、最新1世代の専用バックアップで再実行を保護します。詳細は [`docs/mdm/README.md`](docs/mdm/README.md) を参照してください。**現時点の実装は macOS のみ**です。
 
 ---
 
@@ -1095,6 +1095,7 @@ claude-code-starter-kit/
 ├── setup.sh                # メインセットアップ（ウィザード + デプロイ）
 ├── uninstall.sh            # アンインストール用スクリプト
 ├── lib/                    # 共有シェルライブラリ（detect, deploy, update, merge ほか）
+├── mdm/                    # macOS MDM installer / renderer / detector
 ├── wizard/                 # 対話型ウィザード
 │   ├── wizard.sh           # ウィザードの入口・設定復元
 │   ├── registry.sh         # hook / plugin レジストリと CLI 解析
@@ -1124,7 +1125,8 @@ claude-code-starter-kit/
 シェルスクリプトの静的解析には [ShellCheck](https://www.shellcheck.net/) を使用しています。PR 作成時に GitHub Actions で自動実行されます。ローカルで実行する場合:
 
 ```bash
-shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh
+shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh \
+  mdm/*.sh tests/run-*.sh tests/unit/test-mdm-*.sh
 ```
 
 ---

@@ -2,19 +2,17 @@
 # tests/unit/test-mdm-ref-validate.sh - ref 形式検証と SHA 解決
 
 MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
-# shellcheck source=mdm/lib-mdm-config.sh
-source "$PROJECT_DIR/mdm/lib-mdm-config.sh"
 
 # ローカルにテスト用リポジトリを作る
 _repo="$(mktemp -d)"
 (
   cd "$_repo" || exit 1
   git init -q
-  git config user.email t@example.com
-  git config user.name test
   printf 'a\n' > f.txt
   git add f.txt
-  git commit -qm first
+  GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    git commit -qm first
   git tag v0.0.1
 ) >/dev/null 2>&1
 
@@ -34,7 +32,7 @@ done
 
 # 不正 ref 形式は exit CONFIG(50)
 # NOTE: 裸のステートメント呼び出し + $? 参照は set -euo pipefail 下では
-# 失敗時にテストランナー全体を即終了させる (test-mdm-config.sh の教訓)。
+# 失敗時にテストランナー全体を即終了させない。
 # `|| _rc=$?` で明示的に捕捉してから assert する。
 _rc=0
 mdm_resolve_ref_sha "$_repo" "--force" >/dev/null 2>&1 || _rc=$?

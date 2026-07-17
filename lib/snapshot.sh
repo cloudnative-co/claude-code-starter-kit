@@ -14,6 +14,13 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 _SNAPSHOT_DIR_NAME=".starter-kit-snapshot"
 
+_snapshot_mdm_managed() {
+  case "${KIT_MDM_MANAGED:-}" in
+    true|TRUE|1|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # _write_snapshot <claude_dir> <file_path...>
 #
@@ -25,12 +32,24 @@ _write_snapshot() {
   shift
   local snapshot_dir="${claude_dir}/${_SNAPSHOT_DIR_NAME}"
 
-  # Remove stale snapshot
-  if [[ -d "$snapshot_dir" ]]; then
-    rm -rf "$snapshot_dir"
+  # Remove stale snapshot. In MDM mode, unlink a hostile snapshot-dir symlink
+  # itself and recreate a real directory without traversing its referent.
+  if _snapshot_mdm_managed; then
+    if [[ -L "$snapshot_dir" ]]; then
+      rm -f "$snapshot_dir"
+    elif [[ -e "$snapshot_dir" && ! -d "$snapshot_dir" ]]; then
+      warn "snapshot: refusing non-directory MDM snapshot path"
+      return 1
+    elif [[ -d "$snapshot_dir" ]]; then
+      rm -rf "$snapshot_dir"
+    fi
+    _mdm_ensure_real_distribution_dir "$snapshot_dir" || return 1
+  else
+    if [[ -d "$snapshot_dir" ]]; then
+      rm -rf "$snapshot_dir"
+    fi
+    mkdir -p "$snapshot_dir"
   fi
-
-  mkdir -p "$snapshot_dir"
 
   local file
   for file in "$@"; do
@@ -40,10 +59,13 @@ _write_snapshot() {
     local dest_dir
     dest_dir="$(dirname "$dest")"
 
-    mkdir -p "$dest_dir"
-
     if [[ -f "$file" ]]; then
-      cp "$file" "$dest"
+      if _snapshot_mdm_managed; then
+        _mdm_atomic_replace_managed_file "$file" "$dest" || return 1
+      else
+        mkdir -p "$dest_dir"
+        cp "$file" "$dest"
+      fi
     else
       warn "snapshot: file not found, skipping: $file"
     fi
@@ -100,10 +122,13 @@ _update_snapshot_file() {
   local dest_dir
   dest_dir="$(dirname "$dest")"
 
-  mkdir -p "$dest_dir"
-
   if [[ -f "$file_path" ]]; then
-    cp "$file_path" "$dest"
+    if _snapshot_mdm_managed; then
+      _mdm_atomic_replace_managed_file "$file_path" "$dest" || return 1
+    else
+      mkdir -p "$dest_dir"
+      cp "$file_path" "$dest"
+    fi
     if [[ "${DRY_RUN:-false}" != "true" ]]; then
       info "Snapshot updated: ${rel_path}"
     fi
@@ -123,6 +148,9 @@ _update_snapshot_file() {
 # ---------------------------------------------------------------------------
 _repair_snapshot_markers() {
   local file="$1"
+  if _snapshot_mdm_managed; then
+    _mdm_distribution_target_is_safe "$file" || return 1
+  fi
   [[ -f "$file" ]] || return 0
 
   local begin_count
@@ -149,18 +177,29 @@ _snapshot_claude_md() {
   local snapshot_dir="${claude_dir}/${_SNAPSHOT_DIR_NAME}"
   local dest="${snapshot_dir}/CLAUDE.md"
 
-  mkdir -p "$snapshot_dir"
-
   if [[ ! -f "$file_path" ]]; then
     warn "snapshot: CLAUDE.md not found, cannot snapshot"
     return 1
   fi
 
-  if _has_kit_markers "$file_path"; then
-    _extract_kit_section "$file_path" > "$dest"
+  if _snapshot_mdm_managed; then
+    local tmp_dest
+    tmp_dest="$(mktemp)"
+    _register_tmp "$tmp_dest"
+    if _has_kit_markers "$file_path"; then
+      _extract_kit_section "$file_path" > "$tmp_dest"
+    else
+      cp "$file_path" "$tmp_dest"
+    fi
+    _mdm_atomic_replace_managed_file "$tmp_dest" "$dest" || return 1
   else
-    # No markers (pre-migration) — snapshot full file
-    cp "$file_path" "$dest"
+    mkdir -p "$snapshot_dir"
+    if _has_kit_markers "$file_path"; then
+      _extract_kit_section "$file_path" > "$dest"
+    else
+      # No markers (pre-migration) — snapshot full file
+      cp "$file_path" "$dest"
+    fi
   fi
 
   _repair_snapshot_markers "$dest"

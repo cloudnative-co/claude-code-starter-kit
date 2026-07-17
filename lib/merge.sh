@@ -130,6 +130,30 @@ _json_type() {
   jq -rn --argjson v "$1" '$v | type' 2>/dev/null || printf 'null'
 }
 
+_merge_mdm_managed() {
+  case "${KIT_MDM_MANAGED:-}" in
+    true|TRUE|1|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The generated settings document is wholly MDM-owned. Keeping local-only keys
+# would allow a target user to inject unreviewed hooks or environment settings
+# into a deployment that is otherwise reported as compliant.
+_merge_settings_mdm_documents() {
+  local n_doc="$3" output="$4"
+  local tmp_out
+  tmp_out="$(mktemp)"
+  if ! jq -n \
+    --argjson n "$n_doc" '$n | if type == "object" then . else error("settings must be an object") end' \
+    > "$tmp_out"; then
+    rm -f "$tmp_out"
+    error "MDM authoritative settings merge failed"
+    return 1
+  fi
+  mv "$tmp_out" "$output"
+}
+
 # ---------------------------------------------------------------------------
 # _merge_arrays_3way - Merge a JSON array using 3-way logic
 #
@@ -716,6 +740,12 @@ merge_settings_3way() {
   c_doc="$(< "$current")"
   n_doc="$(< "$new_kit")"
 
+  if _merge_mdm_managed; then
+    _merge_settings_mdm_documents "$s_doc" "$c_doc" "$n_doc" "$output"
+    ok "MDM authoritative 3-way merge complete: $output"
+    return 0
+  fi
+
   # Collect all top-level keys from all three files
   local all_keys
   all_keys="$(jq -rn \
@@ -851,6 +881,12 @@ _merge_settings_bootstrap() {
 
   local merged
   merged="$c_doc"
+
+  if _merge_mdm_managed; then
+    _merge_settings_mdm_documents '{}' "$c_doc" "$n_doc" "$output"
+    ok "MDM authoritative bootstrap merge complete: $output"
+    return 0
+  fi
 
   # Collect all keys from both files
   local all_keys

@@ -367,9 +367,9 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 
 ## MDM Deployment (macOS)
 
-This kit can be silently deployed to managed macOS devices via MDM (Jamf, Intune, Workspace ONE, Ivanti, and others) using `mdm/install-mdm.sh`. It handles target-user/home validation, Homebrew/Xcode CLT prerequisite bootstrapping, privilege drop, machine-readable logs/exit codes/receipts, and compliance detection via `detect-mdm.sh`.
+This kit can be silently deployed to managed macOS devices via MDM (Jamf, Intune, Workspace ONE, Ivanti, and others). Production remediation requires root, a pinned lowercase 40-character commit SHA, and a trusted two-file bundle containing `mdm/install-mdm.sh` plus `mdm/render-expected.py` from the same release. The trusted static renderer defines both files that must be present and managed paths that must be absent; a root-owned schema-v2 receipt is issued only after live and snapshot postconditions pass.
 
-Configuration keys, the exit code table, and per-product setup instructions (Jamf / Intune / Workspace ONE / Ivanti / generic) are documented in [`docs/mdm/README.md`](docs/mdm/README.md). **Note: that guide is currently Japanese-only, and only the macOS implementation exists today** (Windows support is planned for a future release).
+`settings.json` is fully MDM-managed, while the `CLAUDE.md` user section and unrelated user-created files are preserved. Auto-update, the web updater, regular marketplace plugins, and the Codex Plugin are always disabled under MDM; Ghostty and fonts remain explicit opt-ins. A per-user lock (contention exits 21), root history containing only successfully attested present paths, and a dedicated one-generation backup protect reruns. See [`docs/mdm/README.md`](docs/mdm/README.md) for the full contract. **That guide is currently Japanese-only, and only the macOS implementation exists today**.
 
 ## Directory Structure
 
@@ -380,6 +380,7 @@ claude-code-starter-kit/
 ├── setup.sh                # Main setup script (wizard + deploy)
 ├── uninstall.sh            # Manifest-based clean uninstall
 ├── lib/                    # Shared shell libraries (detect, deploy, update, merge, etc.)
+├── mdm/                    # macOS MDM installer, renderer, and detector
 ├── wizard/                 # Interactive wizard
 │   ├── wizard.sh           # Wizard entrypoint and config restore
 │   ├── registry.sh         # Hook/plugin registries and CLI parsing
@@ -460,7 +461,8 @@ Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manif
 Shell scripts are statically analyzed with [ShellCheck](https://www.shellcheck.net/). It runs automatically via GitHub Actions on PRs. To run locally:
 
 ```bash
-shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh
+shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh \
+  mdm/*.sh tests/run-*.sh tests/unit/test-mdm-*.sh
 ```
 
 ## Changelog

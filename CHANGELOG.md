@@ -6,21 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [0.73.0] - 2026-07-17
 
-MDM（Jamf / Intune / Workspace ONE / Ivanti 等）から macOS 管理端末へキットをゼロタッチ配布するサイレントインストール機能を追加（設計仕様: `docs/superpowers/specs/2026-07-16-mdm-silent-install-design.md`。Windows 版は別 Plan で今後実装）。
+MDM（Jamf / Intune / Workspace ONE / Ivanti 等）から macOS 管理端末へキットをゼロタッチ配布するサイレントインストール機能を追加。Windows 版は今後対応予定。
 
 ### Added
-- **`mdm/install-mdm.sh`（macOS MDM サイレントインストーラ）**: root コンテキストから対象ユーザーを解決・検証（コンソールユーザー自動検出 / `dscl` 実在確認 / UID>=501 / home 所有者・symlink 検証）し、前提ブートストラップ（Xcode CLT は MDM baseline 前提・Homebrew は公式 pkg + `HOMEBREW_PKG_USER` 方式で自動導入）→ `KIT_MDM_GIT_REF` の SHA 確定 checkout → `setup.sh --non-interactive` を環境分離降格（`launchctl asuser` + `sudo -u` + `env -i`・絶対パス固定）で直接実行する。既存インストール検出時は `setup.sh --update` で本体の update パスに接続。単一ファイル配布用の自己ブートストラップ launcher を内蔵（lib 非依存で ref 検証・固定後の実体のみ実行）
-- **`mdm/detect-mdm.sh`（検知スクリプト）**: レシートの実体照合（`result` / `target_user` 一致 / clone の `HEAD == resolved_sha` / 必須時のみ対象ユーザー home の Claude CLI）で compliant / non-compliant を 1 行報告。root 実行時の既定対象はコンソールユーザー。`--user` / `--min-version` 対応。Jamf EA・Intune Custom Attribute・Workspace ONE Sensor にそのまま載せられる
-- **`mdm/lib-mdm-config.sh`（管理設定の型検証パーサ）**: `CLI 引数（KEY=VALUE）> 環境変数 > 管理設定ファイル > 既定値` の優先順位を staging 方式で解決し、全入力源の値を一括型検証（boolean / enum / git ref / username / 絶対パス。不正値は `exit 50`）。設定ファイルは所有者・パーミッション・親ディレクトリ・symlink を検証し、dev:inode 束縛の fd 読み取りで TOCTOU を排除
-- **機械可読な運用契約**: 固定終了コード表（0/10/11/20/30/40/50/60）、タイムスタンプ付きログ（root: `/Library/Logs/ClaudeCodeStarterKit`・ユーザーモード: `~/Library/Logs/...`）、JSON レシート（`/Library/Application Support/ClaudeCodeStarterKit/receipt-<user>.json`、失敗時は best-effort で `receipt-_unresolved.json`）
-- **`docs/mdm/README.md`**: 配布単位（MDM baseline + mdm/ bundle）、設定キー、終了コード、レシート契約、Jamf / Intune / Workspace ONE / Ivanti / 汎用 MDM の製品別手順（ja。英語版は follow-up）
-- **テスト/CI**: mdm ユニットテスト群（bootstrap 固定・設定 staging・ユーザー検証・argv 構築・Homebrew 経路・detect 実体照合）、本体 `_CONFIG_KEYS` との乖離検出テスト（フル照合）、macOS system Bash 3.2 での実行検証 CI ステップ、shellcheck 対象への `mdm/*.sh` 追加
+- **macOS MDM install bundle**: `mdm/install-mdm.sh` と trusted static renderer `mdm/render-expected.py` を追加。production remediation は clean privileged Bash、root、小文字40桁 commit SHAを必須とし、固定 URL から root-private authoritative checkout を作成する。`dscl` の `NFSHomeDirectory` は最初から canonical physical path であることを必須とし、別名表記や symlink 祖先を含む home は `exit 20`。`setup.sh` は対象ユーザーで実行し、root は checkout コードを実行しない
+- **期待状態への収束と保持用 checkout**: renderer が固定 SHA と MDM 設定から present files の内容・mode と absent paths を生成し、root が live / snapshot の一致と absent の不在を完全照合した場合だけ成功とする。保持用 checkout は `<home>/.claude-starter-kit` に固定し、同一親の stage で fixed-SHA checkout を完成させて管理 marker / HEAD を検証してから原子的に切り替える。途中失敗は旧 checkout を保持し、自身が作成した初回残骸と stage を除去して再試行可能にする
+- **MDM 管理設定と dry-run**: fresh / update の双方で明示した MDM 値を保存済み設定より優先し、`settings.json` 全体とキット配布ファイルを expected state へ収束する。`CLAUDE.md` の user section と別のユーザーファイルは保持して attestation 対象外とする。非 root は managed files / receipt / compliance 状態を変更せず監査ログだけを残す `KIT_MDM_DRY_RUN=true` のみ許可する
+- **`mdm/detect-mdm.sh`（検知スクリプト）**: Git を起動せず、root receipt、exact 41-byte detached HEAD、manifest、対象ユーザー owner、mode、ACL、link count、deployment digest を検証する。必須時は Claude CLI の symlink 先に対し、`anchor apple generic`、Developer ID の intermediate / leaf OID、leaf OU の Team ID、identifier を固定した明示 Apple Developer ID requirement と、identifier / Team ID / Authority 表示を照合する。`--user` / `--min-version` / `--expected-commit FULL_SHA` に対応
+- **機械可読な運用契約**: 固定終了コード、タイムスタンプ付きログ、`manifest_sha256` と `deployment_sha256` を含む atomic な root-owned schema v2 JSON レシートを追加。成功レシートは renderer の期待状態と postcondition の完全照合後だけ発行する
+- **安全な再実行契約**: system 領域の per-user 排他 lock を全 mutating remediation に適用し、競合は状態を変更せず `exit 21`。root managed history は postcondition 成功済みの present path だけを削除権限として atomic に保持し、失敗時は不変。MDM 専用 `~/.claude.mdm-backup.*` は最新1世代だけ保持する
+- **運用ガイドとテスト/CI**: `docs/mdm/README.md` に secret-free authority-only proxy、Jamf / Intune / Workspace ONE / Ivanti / 汎用 MDM の bundle 配布・検知手順、実機未検証事項を記載。root/user 境界、信頼チェーン、fresh/update/dry-run、renderer、receipt v2、detector の回帰テストを macOS system Bash 3.2 / Linux CI へ追加
 
 ### Security
-- MDM 層は最終レビュー（Codex gpt-5.6-sol + Claude 独立クロスレビュー・2 巡）の指摘を全件反映済み: 自己ブートストラップの ref 固定前コード実行排除と信頼できない隣接 lib の root source 拒否、root の git 操作を検証済みユーザーへ降格（`.git/config` 経由の権限昇格排除）、`KIT_MDM_INSTALL_DIR` の home 配下制約、argv シリアライズ廃止によるコマンド注入排除、Homebrew pkg の URL 制約 + 署名 Team ID pin（`927JGANW46`）+ plist 排他作成、環境変数/CLI 値を含む全設定入力の型検証、レシート/ログ/CLT marker の umask 非依存 + 排他作成 + symlink 追随排除、MDM 検証済み設定が update/fresh の設定復元に巻き戻らない再適用機構（`KIT_MDM_MANAGED`）
+- root のコード信頼境界を install bundle に限定。checkout は root-private な data / target-user execution source として分離し、root は静的 renderer 以外の checkout コードを実行しない。`BASH_ENV`、imported functions、user PATH、Git 設定を production へ伝搬させない。bundle / config は owner、mode、symlink、ACL と open した実体の一致を検証する。log は root-owned の安全なパスで排他作成した fd へ書き、receipt は同様のパスへ atomic に置き換える。managed files は owner、mode、ACL、link count、内容を bounded snapshot で検証する。proxy は資格情報を含まない authority-only URL に制限する
 
 ### Changed
 - `setup.sh`: `KIT_MDM_INSTALL_CLAUDE_CLI=false`（MDM ラッパーが注入）のとき Claude CLI 導入をスキップする最小強化（未設定・不正値は従来どおり導入 = fail-closed）
+- **MDM の自己更新経路を固定 OFF**: auto-update、web updater、通常の marketplace plugin、Codex Plugin は profile / 保存済み設定にかかわらず無効化し、対応する boolean の `true` や `SELECTED_PLUGINS` 指定は設定エラーにする。Ghostty / fonts だけを明示 opt-in とする
 
 ## [0.72.2] - 2026-07-17
 

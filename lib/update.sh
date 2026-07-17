@@ -12,6 +12,13 @@
 # Dry-run: run_update has dry-run awareness (logs instead of deploying)
 set -euo pipefail
 
+_update_mdm_managed() {
+  case "${KIT_MDM_MANAGED:-}" in
+    true|TRUE|1|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # _check_major_upgrade - Detect major version jumps and warn the user
 #
@@ -114,6 +121,10 @@ _update_claude_md() {
   local snapshot_kit="$2"
   local new_kit_file="$3"
 
+  if _update_mdm_managed; then
+    _mdm_distribution_target_is_safe "$current" || return 1
+  fi
+
   # Build new kit content and extract its kit section
   local new_kit_section
   new_kit_section="$(mktemp)"
@@ -122,7 +133,11 @@ _update_claude_md() {
 
   # Case 1: current does not exist → write full new file
   if [[ ! -f "$current" ]]; then
-    cp -a "$new_kit_file" "$current"
+    if _update_mdm_managed; then
+      _mdm_atomic_replace_managed_file "$new_kit_file" "$current" || return 1
+    else
+      cp -a "$new_kit_file" "$current"
+    fi
     return 0
   fi
 
@@ -145,8 +160,29 @@ _update_claude_md() {
 
     if [[ "$current_trimmed" == "$old_kit_trimmed" ]]; then
       # Unmodified old kit output → safe to auto-upgrade
-      cp -a "$new_kit_file" "$current"
+      if _update_mdm_managed; then
+        _mdm_atomic_replace_managed_file "$new_kit_file" "$current" || return 1
+      else
+        cp -a "$new_kit_file" "$current"
+      fi
       info "CLAUDE.md upgraded to section-aware format"
+      return 0
+    fi
+
+    if _update_mdm_managed; then
+      local kit_section existing_content user_heading merged_current
+      kit_section="$(< "$new_kit_section")"
+      existing_content="$(< "$current")"
+      user_heading="$(_user_section_heading)"
+      merged_current="$(mktemp)"
+      _SETUP_TMP_FILES+=("$merged_current")
+      {
+        printf '%s\n' "$kit_section"
+        printf '\n%s\n\n' "$user_heading"
+        printf '%s\n' "$existing_content"
+      } > "$merged_current"
+      _mdm_atomic_replace_managed_file "$merged_current" "$current" || return 1
+      info "CLAUDE.md upgraded — existing content preserved in user section"
       return 0
     fi
 
@@ -187,6 +223,17 @@ _update_claude_md() {
   current_kit_section="$(mktemp)"
   _SETUP_TMP_FILES+=("$current_kit_section")
   _extract_kit_section "$current" > "$current_kit_section"
+
+  if _update_mdm_managed; then
+    local mdm_current
+    mdm_current="$(mktemp)"
+    _SETUP_TMP_FILES+=("$mdm_current")
+    cp -a "$current" "$mdm_current"
+    _replace_kit_section "$mdm_current" "$new_kit_section"
+    _mdm_atomic_replace_managed_file "$mdm_current" "$current" || return 1
+    info "$STR_CLAUDEMD_USER_PRESERVED"
+    return 0
+  fi
 
   if [[ ! -f "$snapshot_kit" ]]; then
     # No snapshot → treat as first update, replace kit section
@@ -356,6 +403,13 @@ _update_file() {
   local newkit="$3"
   local kit_owned="${4:-false}"
 
+  # MDM mode treats every distributed path as kit-owned desired state. Files
+  # outside the distribution are not visited and remain user-owned.
+  if _update_mdm_managed; then
+    _mdm_atomic_replace_managed_file "$newkit" "$current" || return 1
+    return 0
+  fi
+
   # New file from kit (not in snapshot)
   if [[ ! -f "$snapshot" ]]; then
     cp -a "$newkit" "$current"
@@ -467,7 +521,11 @@ _update_hook_feature() {
   local snap_dir="${snapshot_dir}/hooks/${feature_name}"
 
   [[ -d "$src_dir" ]] || return 0
-  mkdir -p "$dest_dir"
+  if _update_mdm_managed; then
+    _mdm_ensure_real_distribution_dir "$dest_dir" || return 1
+  else
+    mkdir -p "$dest_dir"
+  fi
 
   local src_file
   while IFS= read -r -d '' src_file; do
@@ -477,9 +535,14 @@ _update_hook_feature() {
     local snap_file="${snap_dir}/${basename_file}"
 
     if _update_file "$dest_file" "$snap_file" "$src_file" "true"; then
-      chmod +x "$dest_file" 2>/dev/null || true
+      if ! chmod +x "$dest_file" 2>/dev/null && _update_mdm_managed; then
+        return 1
+      fi
       _UPDATE_UPDATED_FILES+=("$dest_file")
     else
+      if _update_mdm_managed; then
+        return 1
+      fi
       _UPDATE_SKIPPED_FILES+=("hooks/${feature_name}/${basename_file}")
     fi
   done < <(find "$src_dir" -type f -print0 2>/dev/null)
@@ -508,7 +571,7 @@ _update_hook_scripts() {
     [[ -n "$flag" ]] || continue
     is_true "${!flag:-false}" || continue
     src_dir="$PROJECT_DIR/features/${feature_name}/scripts"
-    _update_hook_feature "$feature_name" "$src_dir" "$claude_dir" "$snapshot_dir"
+    _update_hook_feature "$feature_name" "$src_dir" "$claude_dir" "$snapshot_dir" || return 1
   done
 }
 
@@ -584,11 +647,44 @@ _strip_retired_hook_entries() {
   fi
 }
 
+_retired_relative_path_is_safe() {
+  local rel="$1"
+  [[ -n "$rel" && "$rel" != /* && ! "$rel" =~ [[:cntrl:]] ]] || return 1
+  case "/$rel/" in
+    */../*|*/./*|*//*) return 1 ;;
+  esac
+  return 0
+}
+
+# Refuse to traverse a symlinked directory supplied through a user-writable
+# manifest/snapshot tree. The final path itself may be a symlink: rm -f then
+# removes the link rather than its referent, but every parent must be real.
+_retired_path_has_real_parents() {
+  local root="$1" rel="$2" parent_rel current rest segment
+  [[ -d "$root" && ! -L "$root" ]] || return 1
+  case "$rel" in
+    */*) parent_rel="${rel%/*}" ;;
+    *) return 0 ;;
+  esac
+  current="$root"
+  rest="$parent_rel"
+  while [[ -n "$rest" ]]; do
+    segment="${rest%%/*}"
+    rest="${rest#"$segment"}"
+    rest="${rest#/}"
+    current="$current/$segment"
+    [[ -d "$current" && ! -L "$current" ]] || return 1
+  done
+  return 0
+}
+
 _remove_retired_managed_files() {
   local claude_dir="$1"
   local snapshot_dir="$2"
   local manifest="${claude_dir}/.starter-kit-manifest.json"
   [[ -f "$manifest" ]] || return 0
+
+  _mdm_reconcile_absent_managed_files "$claude_dir" "$snapshot_dir" || return 1
 
   # Retired = the CURRENT KIT no longer ships the path. Compare against the
   # full kit enumeration, NOT the on-disk-filtered managed_files_json():
@@ -611,7 +707,7 @@ _remove_retired_managed_files() {
   local manifest_root
   manifest_root="$(jq -r '.claude_dir // empty' "$manifest" 2>/dev/null)"
 
-  local old_file rel_file target baseline
+  local old_file rel_file target baseline baseline_trusted
   while IFS= read -r old_file; do
     [[ -n "$old_file" ]] || continue
     rel_file=""
@@ -623,6 +719,10 @@ _remove_retired_managed_files() {
       rel_file="${old_file#"$HOME"/.claude/}"
     fi
     [[ -n "$rel_file" ]] || continue
+    if ! _retired_relative_path_is_safe "$rel_file"; then
+      warn "Keeping invalid retired manifest path"
+      continue
+    fi
     case "$rel_file" in
       settings.json|CLAUDE.md) continue ;;
     esac
@@ -631,10 +731,34 @@ _remove_retired_managed_files() {
     fi
     target="$claude_dir/$rel_file"
     baseline="$snapshot_dir/$rel_file"
+    if ! _retired_path_has_real_parents "$claude_dir" "$rel_file"; then
+      warn "Keeping retired manifest path with unsafe parent: $rel_file"
+      continue
+    fi
+    if _update_mdm_managed; then
+      # Current-checkout disabled paths were reconciled above. A path removed
+      # from the checkout has no byte oracle, so target-user manifest/snapshot
+      # data alone is not deletion authority. Preserve it and fail closed
+      # instead of issuing a success receipt that ignores active stale content.
+      if [[ -n "${_MDM_UNIVERSE_SOURCE_BY_REL[$rel_file]+set}" \
+        || -n "${_MDM_PRIOR_REL_SET[$rel_file]+set}" ]]; then
+        continue
+      fi
+      if [[ -e "$target" || -L "$target" || -e "$baseline" || -L "$baseline" ]]; then
+        warn "Ambiguous retired MDM managed file: $rel_file"
+        return 1
+      fi
+      continue
+    fi
+    baseline_trusted=false
+    if [[ -f "$baseline" && ! -L "$baseline" ]] \
+      && _retired_path_has_real_parents "$snapshot_dir" "$rel_file"; then
+      baseline_trusted=true
+    fi
     if [[ -f "$target" ]]; then
       # Same protection policy as _update_file: never silently delete a file
       # the user customized; without a baseline we can't prove it's pristine.
-      if [[ ! -f "$baseline" ]]; then
+      if [[ "$baseline_trusted" != "true" ]]; then
         warn "Keeping retired kit file (no baseline to verify local changes): $rel_file"
         continue
       fi
@@ -649,8 +773,10 @@ _remove_retired_managed_files() {
       _prune_empty_dirs "$(dirname "$baseline")" "$snapshot_dir"
     else
       # Already absent on disk — drop only the stale baseline.
-      rm -f "$baseline"
-      _prune_empty_dirs "$(dirname "$baseline")" "$snapshot_dir"
+      if [[ "$baseline_trusted" == "true" ]]; then
+        rm -f "$baseline"
+        _prune_empty_dirs "$(dirname "$baseline")" "$snapshot_dir"
+      fi
     fi
   done < <(jq -r '.files[]? // empty' "$manifest" 2>/dev/null)
 }
@@ -729,6 +855,11 @@ _update_phase_settings() {
   local current_settings="${claude_dir}/settings.json"
   local snapshot_settings="${snapshot_dir}/settings.json"
 
+  if _update_mdm_managed; then
+    _mdm_distribution_target_is_safe "$current_settings" || return 1
+    _mdm_distribution_target_is_safe "$snapshot_settings" || return 1
+  fi
+
   if [[ -f "$snapshot_settings" ]] && [[ -f "$current_settings" ]]; then
     if [[ "${_SNAPSHOT_BOOTSTRAPPED:-false}" == "true" ]]; then
       # Snapshot was bootstrapped from current — no real baseline.
@@ -736,7 +867,7 @@ _update_phase_settings() {
       # kit-only keys, prompt on value differences (interactive only).
       info "$STR_UPDATE_SETTINGS_MERGING"
       if [[ -n "${_BACKUP_TIMESTAMP:-}" ]]; then
-        info "Restore from backup if needed: ~/.claude.backup.${_BACKUP_TIMESTAMP}"
+        info "Restore from backup if needed: ${_BACKUP_PATH:-$HOME/.claude.backup.${_BACKUP_TIMESTAMP}}"
       fi
       _merge_settings_bootstrap "$current_settings" "$new_settings" "$current_settings"
       _UPDATE_ALL_UPDATED_FILES+=("$current_settings")
@@ -747,14 +878,18 @@ _update_phase_settings() {
       fi
     elif ! _file_changed "$snapshot_settings" "$current_settings"; then
       # User didn't change settings → safe to overwrite
-      cp -a "$new_settings" "$current_settings"
+      if _update_mdm_managed; then
+        _mdm_atomic_replace_managed_file "$new_settings" "$current_settings" || return 1
+      else
+        cp -a "$new_settings" "$current_settings"
+      fi
       _UPDATE_ALL_UPDATED_FILES+=("$current_settings")
       if [[ "$_dr" == "true" ]]; then
         info "settings.json will be updated"
       else
         ok "$STR_UPDATE_SETTINGS_UPDATED"
       fi
-    elif ! _file_changed "$snapshot_settings" "$new_settings"; then
+    elif ! _update_mdm_managed && ! _file_changed "$snapshot_settings" "$new_settings"; then
       # Kit didn't change → keep current
       if [[ "$_dr" == "true" ]]; then
         info "settings.json — no kit changes"
@@ -774,7 +909,11 @@ _update_phase_settings() {
     fi
   else
     # No snapshot → treat as fresh install for settings
-    cp -a "$new_settings" "$current_settings"
+    if _update_mdm_managed; then
+      _mdm_atomic_replace_managed_file "$new_settings" "$current_settings" || return 1
+    else
+      cp -a "$new_settings" "$current_settings"
+    fi
     _UPDATE_ALL_UPDATED_FILES+=("$current_settings")
     if [[ "$_dr" == "true" ]]; then
       info "settings.json will be created"
@@ -889,7 +1028,11 @@ _update_phase_content() {
       continue
     fi
 
-    mkdir -p "$dest_dir"
+    if _update_mdm_managed; then
+      _mdm_ensure_real_distribution_dir "$dest_dir" || return 1
+    else
+      mkdir -p "$dest_dir"
+    fi
 
     local src_file
     while IFS= read -r -d '' src_file; do
@@ -902,11 +1045,18 @@ _update_phase_content() {
       local snap_file="${snap_dir}/${rel_file}"
 
       # Ensure parent directory exists for nested files (e.g. skills/subdir/file.md)
-      mkdir -p "$(dirname "$dest_file")"
+      if _update_mdm_managed; then
+        _mdm_ensure_real_distribution_dir "$(dirname "$dest_file")" || return 1
+      else
+        mkdir -p "$(dirname "$dest_file")"
+      fi
 
       if _update_file "$dest_file" "$snap_file" "$src_file"; then
         _UPDATE_ALL_UPDATED_FILES+=("$dest_file")
       else
+        if _update_mdm_managed; then
+          return 1
+        fi
         _UPDATE_ALL_SKIPPED_FILES+=("${dir}/${rel_file}")
       fi
     done < <(_find_update_content_files "$src_dir")
@@ -924,10 +1074,10 @@ _update_phase_hooks() {
   if [[ "$_hook_total" -gt 0 ]]; then
     _progress_summary "Hook scripts" "${_hook_total} files to check"
   fi
-  _update_hook_scripts "$claude_dir" "$snapshot_dir"
+  _update_hook_scripts "$claude_dir" "$snapshot_dir" || return 1
   _UPDATE_ALL_UPDATED_FILES+=("${_UPDATE_UPDATED_FILES[@]+"${_UPDATE_UPDATED_FILES[@]}"}")
   _UPDATE_ALL_SKIPPED_FILES+=("${_UPDATE_SKIPPED_FILES[@]+"${_UPDATE_SKIPPED_FILES[@]}"}")
-  _remove_retired_managed_files "$claude_dir" "$snapshot_dir"
+  _remove_retired_managed_files "$claude_dir" "$snapshot_dir" || return 1
 }
 
 # --- Phase 5/5: Snapshot refresh for each updated file -------------------------
@@ -954,8 +1104,13 @@ _update_phase_snapshot() {
     elif [[ "$_basename" == "settings.json" ]]; then
       # Snapshot the kit-generated version, not the merge result
       local _snap_dest="${snapshot_dir}/settings.json"
-      mkdir -p "$snapshot_dir"
-      cp "$_UPDATE_NEW_SETTINGS_FILE" "$_snap_dest"
+      if _update_mdm_managed; then
+        _mdm_atomic_replace_managed_file \
+          "$_UPDATE_NEW_SETTINGS_FILE" "$_snap_dest" || return 1
+      else
+        mkdir -p "$snapshot_dir"
+        cp "$_UPDATE_NEW_SETTINGS_FILE" "$_snap_dest"
+      fi
       if [[ "$_dr" != "true" ]]; then
         info "Snapshot updated: settings.json (kit baseline)"
       fi
@@ -966,13 +1121,31 @@ _update_phase_snapshot() {
       # unchanged" and silently roll runtime updates back to the kit state.
       local _wc_rel="${file#"$claude_dir"/}"
       if [[ -f "${PROJECT_DIR}/${_wc_rel}" ]]; then
-        mkdir -p "$(dirname "${snapshot_dir}/${_wc_rel}")"
-        cp -a "${PROJECT_DIR}/${_wc_rel}" "${snapshot_dir}/${_wc_rel}"
+        if _update_mdm_managed; then
+          _mdm_atomic_replace_managed_file \
+            "${PROJECT_DIR}/${_wc_rel}" "${snapshot_dir}/${_wc_rel}" || return 1
+        else
+          mkdir -p "$(dirname "${snapshot_dir}/${_wc_rel}")"
+          cp -a "${PROJECT_DIR}/${_wc_rel}" "${snapshot_dir}/${_wc_rel}"
+        fi
       fi
     else
       _update_snapshot_file "$claude_dir" "$file"
     fi
   done
+  if _update_mdm_managed; then
+    # MDM compliance attests deterministic owner-only modes. Normalize the
+    # complete enabled managed set, including files whose content was already
+    # current and therefore did not otherwise need a snapshot refresh.
+    collect_managed_target_files
+    local _managed _snapshot_file
+    for _managed in "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}"; do
+      [[ -f "$_managed" ]] || continue
+      _normalize_mdm_managed_modes "$_managed"
+      _snapshot_file="$snapshot_dir/${_managed#"$claude_dir"/}"
+      _normalize_mdm_managed_modes "$_snapshot_file"
+    done
+  fi
   if [[ "$_dr" != "true" ]]; then
     ok "$STR_UPDATE_SNAPSHOT_DONE"
   fi

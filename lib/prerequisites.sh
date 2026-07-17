@@ -59,6 +59,18 @@ _brew_is_usable() {
   [[ -n "$prefix" && -w "$prefix" ]]
 }
 
+_prereq_mdm_managed() {
+  case "${KIT_MDM_MANAGED:-}" in
+    true|TRUE|1|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_prereq_mdm_fail_mode() {
+  _prereq_mdm_managed || return 1
+  [[ "${KIT_MDM_PREREQ_MODE:-auto}" == "fail" ]]
+}
+
 # Ensure Homebrew is installed, in PATH, and writable by the current user.
 # On Apple Silicon, brew lives at /opt/homebrew/bin/brew.
 # On Intel, it lives at /usr/local/bin/brew.
@@ -81,6 +93,13 @@ _ensure_homebrew() {
 
   # If brew is found and usable (writable), we're done
   if _brew_is_usable; then
+    return 0
+  fi
+
+  # The privileged MDM wrapper is the sole Homebrew provisioning authority.
+  # Never fall back to Homebrew's curl installer from target-user setup.
+  if _prereq_mdm_managed; then
+    warn "Homebrew is unavailable or not writable in MDM managed mode"
     return 0
   fi
 
@@ -116,6 +135,10 @@ _ensure_homebrew() {
 
 # Install packages via the appropriate system package manager
 _pkg_install() {
+  if _prereq_mdm_fail_mode; then
+    warn "MDM prerequisite mode is fail; will not install: $*"
+    return 1
+  fi
   case "$DISTRO_FAMILY" in
     macos)
       if _brew_is_usable; then
@@ -161,8 +184,12 @@ check_git() {
     return 1
   fi
   info "Installing git..."
-  _pkg_install git
-  ok "git installed"
+  if _pkg_install git && command -v git &>/dev/null; then
+    ok "git installed"
+    return 0
+  fi
+  warn "Failed to install git automatically."
+  return 1
 }
 
 check_jq() {
@@ -187,8 +214,12 @@ check_jq() {
     fi
   fi
   info "Installing jq..."
-  _pkg_install jq
-  ok "jq installed"
+  if _pkg_install jq && command -v jq &>/dev/null; then
+    ok "jq installed"
+    return 0
+  fi
+  warn "Failed to install jq automatically."
+  return 1
 }
 
 check_curl() {
@@ -197,8 +228,12 @@ check_curl() {
     return 0
   fi
   info "Installing curl..."
-  _pkg_install curl
-  ok "curl installed"
+  if _pkg_install curl && command -v curl &>/dev/null; then
+    ok "curl installed"
+    return 0
+  fi
+  warn "Failed to install curl automatically."
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -369,6 +404,13 @@ check_node() {
 }
 
 _install_node_via_nvm() {
+  # MDM setup must not execute an independently downloaded shell installer.
+  # The wrapper provisions a target-user-writable Homebrew first; if that path
+  # cannot install Node, fail and let remediation report the error.
+  if _prereq_mdm_managed; then
+    warn "nvm bootstrap is disabled in MDM managed mode"
+    return 1
+  fi
   info "Installing Node.js via nvm (no admin required)..."
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   mkdir -p "$NVM_DIR"
@@ -408,6 +450,10 @@ ZSHRC
 }
 
 _install_node() {
+  if _prereq_mdm_fail_mode; then
+    warn "MDM prerequisite mode is fail; will not install Node.js"
+    return 1
+  fi
   case "$DISTRO_FAMILY" in
     macos)
       if _brew_is_usable; then
@@ -623,6 +669,11 @@ _detect_bash4() {
 _install_bash4() {
   if [[ "${DRY_RUN:-false}" == "true" ]]; then
     warn "Dry-run: Bash 4+ is missing; skipping automatic Bash install"
+    return 1
+  fi
+
+  if _prereq_mdm_fail_mode; then
+    warn "MDM prerequisite mode is fail; will not install Bash 4+"
     return 1
   fi
 

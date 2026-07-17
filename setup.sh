@@ -20,6 +20,14 @@ _script_dir() {
   cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd
 }
 
+_setup_prerequisite_exit_code() {
+  if _prereq_mdm_managed; then
+    printf '10'
+  else
+    printf '1'
+  fi
+}
+
 PROJECT_DIR="$(_script_dir)"
 CLAUDE_DIR="$HOME/.claude"
 
@@ -67,7 +75,9 @@ parse_cli_args "$@"
 # Prerequisites + Bash 4+ check
 # ---------------------------------------------------------------------------
 detect_os
-check_prerequisites
+if ! check_prerequisites; then
+  return "$(_setup_prerequisite_exit_code)"
+fi
 
 # Check for Bash 4+ and re-exec if needed
 check_bash4 || {
@@ -77,7 +87,7 @@ check_bash4 || {
   else
     info "  sudo apt-get install bash  (or equivalent)"
   fi
-  exit 1
+  return "$(_setup_prerequisite_exit_code)"
 }
 }
 
@@ -123,7 +133,7 @@ run_wizard
 
 case "${WIZARD_RESULT:-cancel}" in
   save)
-    save_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+    save_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}" || return 1
     ok "Saved configuration to ${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
     exit 0
     ;;
@@ -141,7 +151,15 @@ esac
 }
 
 ensure_dirs() {
-  mkdir -p "$CLAUDE_DIR"/{agents,rules,commands,skills,hooks}
+  if _deploy_mdm_managed; then
+    _prepare_mdm_claude_root
+    local dir
+    for dir in agents rules commands skills hooks; do
+      _mdm_ensure_real_distribution_dir "$CLAUDE_DIR/$dir" || return 1
+    done
+  else
+    mkdir -p "$CLAUDE_DIR"/{agents,rules,commands,skills,hooks}
+  fi
 }
 
 should_auto_install_biome() {
@@ -204,9 +222,17 @@ deploy_hook_scripts() {
     [[ -d "$src" ]] || continue
 
     local dest="$CLAUDE_DIR/hooks/$name"
-    mkdir -p "$dest"
+    if _deploy_mdm_managed; then
+      _mdm_ensure_real_distribution_dir "$dest" || return 1
+    else
+      mkdir -p "$dest"
+    fi
 
-    if [[ "$mode" == "simple" ]]; then
+    if _deploy_mdm_managed; then
+      _copy_distribution_tree "$src" "$dest" overwrite || return 1
+      _mdm_make_distribution_scripts_executable "$src" "$dest" || return 1
+      ok "Installed $name hooks"
+    elif [[ "$mode" == "simple" ]]; then
       cp -a "$src"/. "$dest"/
       _make_hooks_executable "$dest"
       ok "Installed $name hooks"
@@ -278,6 +304,7 @@ maybe_install_cc_safety_net
 # Deploy
 # ---------------------------------------------------------------------------
 setup_deploy() {
+_prepare_mdm_claude_root || return 1
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
   # Remove legacy 24h update cache so the old auto-update.sh (pre-v0.39.0)
   # won't skip the next check. Once the new hook scripts are deployed by this
@@ -287,7 +314,7 @@ if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
   if _has_user_customizations "$CLAUDE_DIR"; then
     _offer_dryrun_preview "$STR_DRYRUN_OFFER_EXISTING"
   fi
-  backup_existing
+  backup_existing || return 1
   if ! _snapshot_exists "$CLAUDE_DIR"; then
     bootstrap_snapshot_from_current
   fi
@@ -305,7 +332,7 @@ if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
   _validate_dismissed_features
 
   # Update mode: run update with merge logic
-  run_update "$PROJECT_DIR" "$CLAUDE_DIR"
+  run_update "$PROJECT_DIR" "$CLAUDE_DIR" || return 1
 
   # Detect new features and write pending notification (non-fatal)
   _detect_and_write_pending_features "$CLAUDE_DIR" || true
@@ -314,28 +341,31 @@ else
   section "Deploying Claude Code Starter Kit"
   warn_existing_claude_reconfigure
 
-  backup_existing
-  ensure_dirs
+  backup_existing || return 1
+  ensure_dirs || return 1
 
   if [[ -f "$CLAUDE_DIR/settings.json" ]] && [[ ! -f "$CLAUDE_DIR/.starter-kit-manifest.json" ]]; then
     # Existing Claude Code user without starter-kit: merge-aware deploy
     _offer_dryrun_preview "$STR_DRYRUN_OFFER_EXISTING"
-    _deploy_fresh_with_existing
+    _deploy_fresh_with_existing || return 1
   else
     # Clean slate: original behavior
-    copy_if_enabled "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents"
-    copy_if_enabled "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules"
-    copy_if_enabled "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands"
-    copy_if_enabled "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills"
+    copy_if_enabled "$INSTALL_AGENTS"  "$PROJECT_DIR/agents"   "$CLAUDE_DIR/agents" || return 1
+    copy_if_enabled "$INSTALL_RULES"   "$PROJECT_DIR/rules"    "$CLAUDE_DIR/rules" || return 1
+    copy_if_enabled "$INSTALL_COMMANDS" "$PROJECT_DIR/commands" "$CLAUDE_DIR/commands" || return 1
+    copy_if_enabled "$INSTALL_SKILLS"  "$PROJECT_DIR/skills"   "$CLAUDE_DIR/skills" || return 1
 
-    build_claude_md
+    build_claude_md || return 1
 
-    build_settings_file "$CLAUDE_DIR/settings.json"
-    deploy_hook_scripts
+    _build_settings_managed_file "$CLAUDE_DIR/settings.json" || return 1
+    deploy_hook_scripts || return 1
   fi
 
+  _mdm_reconcile_absent_managed_files \
+    "$CLAUDE_DIR" "$CLAUDE_DIR/.starter-kit-snapshot" || return 1
+
   # Write snapshot for future updates
-  write_managed_snapshot
+  write_managed_snapshot || return 1
   ok "Created snapshot for future updates"
 fi
 
@@ -639,10 +669,10 @@ if is_true "${ENABLE_FONTS_SETUP:-false}"; then
   setup_fonts
 fi
 
-write_manifest
+write_manifest || return 1
 
 # Save config for re-runs
-save_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+save_config "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}" || return 1
 
 section "Setup Complete"
 ok "Deployed to $CLAUDE_DIR"

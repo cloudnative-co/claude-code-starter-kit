@@ -26,6 +26,11 @@ printf "\n══ Unit Tests ══\n\n"
 # If full isolation is needed in the future, run each file in a subshell.
 for test_file in "$SCRIPT_DIR"/unit/test-*.sh; do
   [[ -f "$test_file" ]] || continue
+  # MDM tests need Bash 3.2 coverage and process-isolated failure propagation.
+  # tests/run-mdm-tests.sh is their single execution path.
+  case "$(basename "$test_file")" in
+    test-mdm-*.sh) continue ;;
+  esac
   printf "── %s ──\n" "$(basename "$test_file")"
   # shellcheck source=/dev/null
   source "$test_file"
@@ -33,3 +38,9 @@ for test_file in "$SCRIPT_DIR"/unit/test-*.sh; do
 done
 
 print_summary
+
+# MDM tests require process isolation and must also run under macOS system
+# Bash 3.2. Keep them behind the standard unit-test entrypoint so the documented
+# local validation command cannot silently omit the MDM suite.
+MDM_TEST_BASH="${MDM_TEST_BASH:-/bin/bash}" \
+  /bin/bash "$SCRIPT_DIR/run-mdm-tests.sh"

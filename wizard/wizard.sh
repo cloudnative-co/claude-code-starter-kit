@@ -313,7 +313,10 @@ _sanitize_config_value() {
 
 save_config() {
   local file="${1:-$HOME/.claude-starter-kit.conf}"
-  {
+  local file_dir tmp_file
+  file_dir="$(dirname "$file")"
+  tmp_file="$(mktemp "$file_dir/.starter-kit-conf.XXXXXX")" || return 1
+  if ! {
     printf '# Claude Code Starter Kit - Wizard Config\n'
     local _key
     for _key in "${_CONFIG_SAVE_KEYS[@]}"; do
@@ -329,9 +332,15 @@ save_config() {
         printf '%s="%s"\n' "$_key" "$(_sanitize_config_value "$_val")"
       fi
     done
-  } > "$file"
+  } > "$tmp_file"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
   # Restrict config file permissions (contains user preferences)
-  chmod 600 "$file"
+  if ! chmod 600 "$tmp_file" || ! mv -f "$tmp_file" "$file"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -443,7 +452,7 @@ _restore_cli_overrides() {
 # 再適用し、管理端末では MDM 管理者の設定を最優先にする。
 # 対象は _CONFIG_KEYS の非空 env 値のみ（KIT_MDM_MANAGED 未設定なら何もしない）。
 #
-# ★R3-Medium: 結果はグローバル配列 _MDM_ENV_OVERRIDES へ直接構築する
+# 結果はグローバル配列 _MDM_ENV_OVERRIDES へ直接構築する
 # （改行区切り stdout → read -r 方式は、値に改行を含めると別代入を注入できる
 # ため廃止。非 root MDM 経路は環境を継承するので外部注入の恐れがある）。
 # 制御文字を含む値は不正として除外する（設定値に改行等は正当でない）。
@@ -462,6 +471,63 @@ _capture_mdm_env_overrides() {
     fi
     _MDM_ENV_OVERRIDES[${#_MDM_ENV_OVERRIDES[@]}]="${_var}=${_val}"
   done
+}
+
+_wizard_mdm_managed() {
+  [[ "$(_bool_normalize "${KIT_MDM_MANAGED:-}")" == "true" ]]
+}
+
+# Rebuild the managed profile from the current MDM invocation only. Saved
+# config and manifest values are inputs for normal updates, but they are not
+# explicit MDM policy and therefore must not override a newly selected profile.
+# Order: profile preset -> MDM-only defaults -> current explicit MDM values.
+_apply_mdm_managed_profile() {
+  _wizard_mdm_managed || return 0
+
+  local _pair _key _value _profile="standard" _var
+  for _pair in "$@"; do
+    _key="${_pair%%=*}"
+    _value="${_pair#*=}"
+    if [[ "$_key" == "PROFILE" ]]; then
+      _profile="$_value"
+    fi
+  done
+  case "$_profile" in
+    minimal|standard|full) ;;
+    *) _profile="standard" ;;
+  esac
+
+  # Remove every value restored from an older manifest/config before expanding
+  # the selected profile. Retired settings and non-feature choices must not be
+  # accidentally treated as current MDM policy.
+  for _var in "${_CONFIG_KEYS[@]+"${_CONFIG_KEYS[@]}"}"; do
+    printf -v "$_var" '%s' ""
+  done
+
+  PROFILE="$_profile"
+  load_profile_config "$PROFILE"
+
+  # GUI/font side effects are opt-in. Self-mutating updaters are always off:
+  # the pinned checkout and byte-attested deployment may change only when the
+  # MDM authority distributes a new full SHA.
+  ENABLE_AUTO_UPDATE="false"
+  ENABLE_WEB_CONTENT_UPDATE="false"
+  ENABLE_GHOSTTY_SETUP="false"
+  ENABLE_FONTS_SETUP="false"
+
+  _restore_cli_overrides "$@"
+  # User-scope Claude plugins mutate the same settings.json that MDM attests.
+  # Keep plugin installation outside this authoritative deployment until those
+  # CLI-owned keys have an independently validated expected-state schema.
+  ENABLE_AUTO_UPDATE="false"
+  ENABLE_WEB_CONTENT_UPDATE="false"
+  ENABLE_CODEX_PLUGIN="false"
+  SELECTED_PLUGINS=""
+  _normalize_formatter_hooks
+  _normalize_codex_state
+
+  # _restore_config_from_manifest may already have loaded the old language.
+  load_strings "${LANGUAGE:-en}"
 }
 
 _load_config_preserving_cli_overrides() {
@@ -543,15 +609,23 @@ run_wizard() {
   if [[ "$UPDATE_MODE" == "true" ]]; then
     _restore_config_from_manifest
     _restore_cli_overrides "${_saved_cli[@]+"${_saved_cli[@]}"}"
-    _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
-    _normalize_codex_state
+    if _wizard_mdm_managed; then
+      _apply_mdm_managed_profile "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
+    else
+      _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
+      _normalize_codex_state
+    fi
     WIZARD_RESULT="deploy"
     return
   fi
 
   _load_config_preserving_cli_overrides "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
-  _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
-  _normalize_codex_state
+  if _wizard_mdm_managed; then
+    _apply_mdm_managed_profile "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
+  else
+    _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
+    _normalize_codex_state
+  fi
 
   # Non-interactive mode: fill defaults and return
   if [[ "$WIZARD_NONINTERACTIVE" == "true" ]]; then

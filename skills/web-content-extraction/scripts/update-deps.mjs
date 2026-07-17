@@ -28,6 +28,7 @@ const IN_PROGRESS_FILE = join(LOG_DIR, '.update-in-progress')
 const STAMP_FILE = join(LOG_DIR, '.last-update-check')
 const PKG_JSON = join(SKILL_DIR, 'package.json')
 const LOCK_JSON = join(SKILL_DIR, 'package-lock.json')
+const KIT_MANIFEST = join(SKILL_DIR, '..', '..', '.starter-kit-manifest.json')
 
 const TARGETS = ['defuddle', 'jsdom', 'pdfjs-dist']
 const THROTTLE_MS = 24 * 60 * 60 * 1000 // next check after a clean run
@@ -193,7 +194,21 @@ function stampOutcome(outcome) {
   writeFileSync(STAMP_FILE, String(Date.now() + delay))
 }
 
+function isMdmManaged() {
+  try {
+    return JSON.parse(readFileSync(KIT_MANIFEST, 'utf8')).mdm_managed === true
+  } catch {
+    return false
+  }
+}
+
 function main() {
+  // MDM compliance attests package.json and package-lock.json byte-for-byte.
+  // Runtime dependency mutation would create a permanent remediation loop.
+  if (isMdmManaged()) {
+    log('skip: dependency versions are pinned by MDM expected state')
+    return 0
+  }
   if (throttled()) return 0
   if (!acquireLock()) {
     log('skip: another update run is active (lock held)')

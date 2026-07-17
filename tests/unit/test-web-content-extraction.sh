@@ -182,6 +182,32 @@ if command -v node >/dev/null 2>&1; then
   else
     fail "web-content-update: interrupted update recovery is missing"
   fi
+
+  _wce_mdm_home="$_wce_tmp/mdm-home"
+  _wce_mdm_skill="$_wce_mdm_home/.claude/skills/web-content-extraction"
+  _wce_mdm_bin="$_wce_tmp/mdm-bin"
+  mkdir -p "$_wce_mdm_skill/scripts" "$_wce_mdm_bin"
+  cp "$WCE_DIR/scripts/update-deps.mjs" "$_wce_mdm_skill/scripts/update-deps.mjs"
+  printf '{"version":"2","mdm_managed":true}\n' \
+    > "$_wce_mdm_home/.claude/.starter-kit-manifest.json"
+  cat > "$_wce_mdm_bin/npm" <<EOF
+#!/bin/sh
+: > "$_wce_tmp/mdm-npm-called"
+exit 99
+EOF
+  chmod +x "$_wce_mdm_bin/npm"
+  _wce_node="$(command -v node)"
+  _wce_mdm_rc=0
+  PATH="$_wce_mdm_bin:/usr/bin:/bin" \
+    "$_wce_node" "$_wce_mdm_skill/scripts/update-deps.mjs" --force \
+    >/dev/null 2>&1 || _wce_mdm_rc=$?
+  if [[ "$_wce_mdm_rc" -eq 0 && ! -e "$_wce_tmp/mdm-npm-called" ]] \
+    && grep -q 'pinned by MDM expected state' \
+      "$_wce_mdm_skill/logs/update.log"; then
+    pass "web-content-update: MDM expected state では package mutation をスキップ"
+  else
+    fail "web-content-update: MDM managed package を runtime 更新し得る"
+  fi
 else
   skip "web-content-extraction: node --check" "node not available"
 fi
@@ -239,4 +265,4 @@ else
 fi
 
 rm -rf "$_wce_tmp"
-unset WCE_DIR _wce_tmp _wce_missing _wce_check_ok _wce_tracked _wce_dist_src _wce_dist_dest _wce_managed _wce_pkg_cur _wce_pkg_snap _wce_pkg_new
+unset WCE_DIR _wce_tmp _wce_missing _wce_check_ok _wce_tracked _wce_dist_src _wce_dist_dest _wce_managed _wce_pkg_cur _wce_pkg_snap _wce_pkg_new _wce_mdm_home _wce_mdm_skill _wce_mdm_bin _wce_node _wce_mdm_rc

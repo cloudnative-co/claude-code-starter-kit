@@ -24,6 +24,25 @@
 }
 
 {
+  test_name="setup-refactor: MDM prerequisite failures retain exit 10"
+  if (
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/setup.sh"
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/lib/prerequisites.sh"
+    unset KIT_MDM_MANAGED
+    [[ "$(_setup_prerequisite_exit_code)" == 1 ]] || exit 1
+    export KIT_MDM_MANAGED=true
+    [[ "$(_setup_prerequisite_exit_code)" == 10 ]] || exit 1
+    [[ "$(grep -cF 'return "$(_setup_prerequisite_exit_code)"' "$PROJECT_DIR/setup.sh")" -eq 2 ]]
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
   test_name="setup-refactor: Claude CLI install path is centralized"
   if grep -q '^_need_claude_cli_install()' "$PROJECT_DIR/setup.sh" \
     && grep -q '^_install_claude_cli()' "$PROJECT_DIR/setup.sh" \

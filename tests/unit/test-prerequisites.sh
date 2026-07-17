@@ -13,6 +13,125 @@ detect_os
 # shellcheck source=lib/prerequisites.sh
 source "$PROJECT_DIR/lib/prerequisites.sh"
 
+# MDM setup must never fall back to independently downloaded shell installers.
+_mdm_prereq_original_brew="$(declare -f _brew_is_usable)"
+_mdm_prereq_original_curl="$(declare -f curl 2>/dev/null || true)"
+_mdm_prereq_original_brew_command="$(declare -f brew 2>/dev/null || true)"
+_mdm_prereq_saved_distro="$DISTRO_FAMILY"
+_mdm_prereq_saved_nvm="${NVM_DIR:-}"
+_mdm_prereq_saved_dry_run="${DRY_RUN:-}"
+_mdm_prereq_dry_run_set=0
+[[ -n "${DRY_RUN+x}" ]] && _mdm_prereq_dry_run_set=1
+_mdm_prereq_managed_set=0
+[[ -n "${KIT_MDM_MANAGED+x}" ]] && _mdm_prereq_managed_set=1
+_mdm_prereq_saved_managed="${KIT_MDM_MANAGED:-}"
+_mdm_prereq_mode_set=0
+[[ -n "${KIT_MDM_PREREQ_MODE+x}" ]] && _mdm_prereq_mode_set=1
+_mdm_prereq_saved_mode="${KIT_MDM_PREREQ_MODE:-}"
+export KIT_MDM_MANAGED=true
+DISTRO_FAMILY=macos
+_tmp_mdm_prereq="$(mktemp -d)"
+_brew_is_usable() { return 1; }
+curl() { : > "$_tmp_mdm_prereq/curl-called"; return 0; }
+if _ensure_homebrew >/dev/null 2>&1 \
+  && [[ ! -e "$_tmp_mdm_prereq/curl-called" ]]; then
+  pass "prerequisites: MDM mode disables Homebrew curl bootstrap"
+else
+  fail "prerequisites: MDM mode attempted Homebrew curl bootstrap"
+fi
+
+export NVM_DIR="$_tmp_mdm_prereq/nvm"
+if ! _install_node_via_nvm >/dev/null 2>&1 \
+  && [[ ! -e "$_tmp_mdm_prereq/curl-called" && ! -e "$NVM_DIR" ]]; then
+  pass "prerequisites: MDM mode disables nvm curl bootstrap"
+else
+  fail "prerequisites: MDM mode attempted nvm curl bootstrap"
+fi
+
+export KIT_MDM_PREREQ_MODE=fail DRY_RUN=false
+_brew_is_usable() { return 0; }
+brew() { : > "$_tmp_mdm_prereq/brew-called"; return 0; }
+if ! _pkg_install jq >/dev/null 2>&1 \
+  && ! _install_node >/dev/null 2>&1 \
+  && [[ ! -e "$_tmp_mdm_prereq/brew-called" ]]; then
+  pass "prerequisites: MDM fail mode blocks package-manager and direct Node installs"
+else
+  fail "prerequisites: MDM fail mode attempted a package or Node install"
+fi
+
+_mdm_prereq_original_pkg_install="$(declare -f _pkg_install)"
+_pkg_install() { : > "$_tmp_mdm_prereq/pkg-called"; return 0; }
+if ! _install_bash4 >/dev/null 2>&1 \
+  && [[ ! -e "$_tmp_mdm_prereq/pkg-called" ]]; then
+  pass "prerequisites: MDM fail mode blocks Bash 4 installation"
+else
+  fail "prerequisites: MDM fail mode attempted Bash 4 installation"
+fi
+eval "$_mdm_prereq_original_pkg_install"
+
+# Positive regression: outside MDM, the existing Homebrew and nvm download
+# fallbacks must remain reachable.
+unset KIT_MDM_MANAGED KIT_MDM_PREREQ_MODE
+_brew_is_usable() { return 1; }
+curl() {
+  : > "$_tmp_mdm_prereq/non-mdm-curl-called"
+  printf ': > "%s"\n' "$_tmp_mdm_prereq/non-mdm-homebrew-installer"
+}
+_ensure_homebrew >/dev/null 2>&1 || true
+if [[ -e "$_tmp_mdm_prereq/non-mdm-curl-called" \
+  && -e "$_tmp_mdm_prereq/non-mdm-homebrew-installer" ]]; then
+  pass "prerequisites: non-MDM Homebrew curl bootstrap remains enabled"
+else
+  fail "prerequisites: non-MDM Homebrew curl bootstrap regressed"
+fi
+
+rm -f "$_tmp_mdm_prereq/non-mdm-curl-called"
+export NVM_DIR="$_tmp_mdm_prereq/non-mdm-nvm"
+curl() {
+  : > "$_tmp_mdm_prereq/non-mdm-curl-called"
+  printf 'exit 1\n'
+}
+_install_node_via_nvm >/dev/null 2>&1 || true
+if [[ -e "$_tmp_mdm_prereq/non-mdm-curl-called" && -d "$NVM_DIR" ]]; then
+  pass "prerequisites: non-MDM nvm curl fallback remains enabled"
+else
+  fail "prerequisites: non-MDM nvm curl fallback regressed"
+fi
+
+rm -rf "$_tmp_mdm_prereq"
+eval "$_mdm_prereq_original_brew"
+if [[ -n "$_mdm_prereq_original_curl" ]]; then
+  eval "$_mdm_prereq_original_curl"
+else
+  unset -f curl
+fi
+if [[ -n "$_mdm_prereq_original_brew_command" ]]; then
+  eval "$_mdm_prereq_original_brew_command"
+else
+  unset -f brew
+fi
+DISTRO_FAMILY="$_mdm_prereq_saved_distro"
+if [[ "$_mdm_prereq_managed_set" -eq 1 ]]; then
+  export KIT_MDM_MANAGED="$_mdm_prereq_saved_managed"
+else
+  unset KIT_MDM_MANAGED
+fi
+if [[ "$_mdm_prereq_mode_set" -eq 1 ]]; then
+  export KIT_MDM_PREREQ_MODE="$_mdm_prereq_saved_mode"
+else
+  unset KIT_MDM_PREREQ_MODE
+fi
+if [[ -n "$_mdm_prereq_saved_nvm" ]]; then
+  export NVM_DIR="$_mdm_prereq_saved_nvm"
+else
+  unset NVM_DIR
+fi
+if [[ "$_mdm_prereq_dry_run_set" -eq 1 ]]; then
+  DRY_RUN="$_mdm_prereq_saved_dry_run"
+else
+  unset DRY_RUN
+fi
+
 # ── _get_shell_rc_file returns a valid path ───────────────────────────────
 
 run_func _get_shell_rc_file

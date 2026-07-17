@@ -368,7 +368,12 @@ _fill_noninteractive_defaults() {
     ENABLE_GHOSTTY_SETUP="false"
   fi
 
-  if [[ -z "$SELECTED_PLUGINS" ]]; then
+  if _wizard_mdm_managed; then
+    ENABLE_AUTO_UPDATE="false"
+    ENABLE_WEB_CONTENT_UPDATE="false"
+    ENABLE_CODEX_PLUGIN="false"
+    SELECTED_PLUGINS=""
+  elif [[ -z "$SELECTED_PLUGINS" ]]; then
     _load_plugins
     _init_plugins_for_profile "$PROFILE"
     _compute_selected_plugins

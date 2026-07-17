@@ -307,6 +307,13 @@ pass() {
 fail() {
   _TEST_COUNT=$((_TEST_COUNT + 1))
   _TEST_FAIL=$((_TEST_FAIL + 1))
+  # MDM tests are executed one file per process.  Some assertions run in a
+  # subshell, where the in-memory counter cannot propagate to the parent.
+  # The dedicated runner supplies this sentinel so any nested failure is
+  # still observable after the test process exits.
+  if [[ -n "${TEST_FAILURE_SENTINEL:-}" ]]; then
+    printf '%s\n' "$1" >> "$TEST_FAILURE_SENTINEL"
+  fi
   printf "  \033[0;31mFAIL\033[0m  %s\n" "$1"
 }
 
