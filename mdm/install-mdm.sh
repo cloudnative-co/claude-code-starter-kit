@@ -798,6 +798,37 @@ _mdm_run_user_phase() {
   return 0
 }
 
+# ログ出力先を決定して MDM_LOG_FILE を設定する（最終レビュー High#3）。
+# ★設定確定（mdm_config_apply）と R2 のユーザー/home 解決の**後**に呼ぶこと。
+# 旧実装は設定読込前に KIT_MDM_LOG_DIR を参照していたため、管理設定ファイル
+# からの指定がログパスに反映されなかった。
+# - 既定: root は /Library/Logs/ClaudeCodeStarterKit、
+#         ユーザーモードは <home>/Library/Logs/ClaudeCodeStarterKit（spec §8.2）
+# - KIT_MDM_LOG_DIR は許可プレフィックス（/Library/Logs または
+#   <home>/Library/Logs）配下のみ許可（spec §9.2）。違反は exit 50
+_mdm_setup_log_file() {
+  local _euid="$1" _home="$2"
+  local _default_dir
+  if [[ "$_euid" -eq 0 ]]; then
+    _default_dir="/Library/Logs/ClaudeCodeStarterKit"
+  else
+    _default_dir="$_home/Library/Logs/ClaudeCodeStarterKit"
+  fi
+  local _dir="${KIT_MDM_LOG_DIR:-$_default_dir}"
+  case "$_dir" in
+    *..*)
+      mdm_log R1 "KIT_MDM_LOG_DIR に .. を含む: $_dir"
+      return "$MDM_EXIT_CONFIG" ;;
+    /Library/Logs|/Library/Logs/*|"$_home/Library/Logs"|"$_home/Library/Logs/"*) : ;;
+    *)
+      mdm_log R1 "KIT_MDM_LOG_DIR が許可プレフィックス配下でない: $_dir"
+      return "$MDM_EXIT_CONFIG" ;;
+  esac
+  MDM_LOG_FILE="$_dir/install-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run).log"
+  mkdir -p "$_dir" 2>/dev/null || true
+  return 0
+}
+
 # MDM 配布固有の既定値を適用する（本体 profiles/*.conf の既定と異なる値を
 # MDM 配布でだけ上書きする場所）。mdm_config_apply の**後**に呼ぶこと —
 # conf/env で既に明示された値（既存 env 値）は変更せず、未設定のキーにのみ
@@ -826,12 +857,12 @@ mdm_main() {
     exit "$_boot_rc"
   fi
 
-  # R1: 設定読込
+  # R1: 設定読込（CLI 引数 > env > 管理設定ファイル > 既定。High#3 staging 検証）。
+  # ログファイルは設定確定 + R2 の home 解決後に開くため、ここでの失敗は
+  # stderr（MDM 側が捕捉）と終了コードのみで報告される。
   # shellcheck source=mdm/lib-mdm-config.sh
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib-mdm-config.sh"
-  MDM_LOG_FILE="${KIT_MDM_LOG_DIR:-/Library/Logs/ClaudeCodeStarterKit}/install-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run).log"
-  mkdir -p "$(dirname "$MDM_LOG_FILE")" 2>/dev/null || true
-  mdm_config_apply "$(_mdm_config_path)" || { mdm_log R1 "設定エラー"; exit "$MDM_EXIT_CONFIG"; }
+  mdm_config_apply "$(_mdm_config_path)" "$@" || { mdm_log R1 "設定エラー"; exit "$MDM_EXIT_CONFIG"; }
   _mdm_apply_mdm_defaults
 
   # R2: ユーザー・home 解決
@@ -844,6 +875,9 @@ mdm_main() {
     _user="$(id -un)"; _home="$HOME"     # ユーザーモード
   fi
   MDM_RCPT_TARGET_USER="$_user"
+
+  # ログ開始（設定確定後 = KIT_MDM_LOG_DIR が管理設定/CLI からも効く。High#3）
+  _mdm_setup_log_file "$_euid" "$_home" || exit "$MDM_EXIT_CONFIG"
 
   # R3: 前提ブートストラップ（root 時のみ）
   if [[ "$_euid" -eq 0 ]]; then

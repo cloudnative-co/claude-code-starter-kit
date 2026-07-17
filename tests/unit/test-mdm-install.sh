@@ -394,6 +394,56 @@ EOF
 )
 rm -rf "$_brew_tmpd"
 
+# ── ログ出力先の決定（最終レビュー High#3: 設定確定後に決定・許可プレフィックス制約）──
+_tmpd="$(mktemp -d)"; _tmpd="$(cd "$_tmpd" && pwd -P)"
+_loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
+(
+  # 非 root（ユーザーモード）の既定は ~/Library/Logs 配下（spec §8.2）
+  unset KIT_MDM_LOG_DIR
+  MDM_LOG_FILE=""
+  _mdm_setup_log_file 501 "$_loghome" 2>/dev/null || fail "mdm-install: ログ既定パスの決定に失敗"
+  case "$MDM_LOG_FILE" in
+    "$_loghome/Library/Logs/ClaudeCodeStarterKit/install-"*.log)
+      pass "mdm-install: ユーザーモードのログ既定が ~/Library/Logs 配下" ;;
+    *)
+      fail "mdm-install: ユーザーモードのログ既定が不正 (got '$MDM_LOG_FILE')" ;;
+  esac
+)
+(
+  # root の既定は /Library/Logs 配下
+  unset KIT_MDM_LOG_DIR
+  MDM_LOG_FILE=""
+  _mdm_setup_log_file 0 "$_loghome" 2>/dev/null || fail "mdm-install: root ログ既定の決定に失敗"
+  case "$MDM_LOG_FILE" in
+    "/Library/Logs/ClaudeCodeStarterKit/install-"*.log)
+      pass "mdm-install: root のログ既定が /Library/Logs 配下" ;;
+    *)
+      fail "mdm-install: root のログ既定が不正 (got '$MDM_LOG_FILE')" ;;
+  esac
+)
+(
+  # KIT_MDM_LOG_DIR の明示指定（許可プレフィックス配下）は尊重される
+  export KIT_MDM_LOG_DIR="$_loghome/Library/Logs/CustomDir"
+  MDM_LOG_FILE=""
+  _mdm_setup_log_file 501 "$_loghome" 2>/dev/null || fail "mdm-install: LOG_DIR 明示指定の決定に失敗"
+  case "$MDM_LOG_FILE" in
+    "$_loghome/Library/Logs/CustomDir/install-"*.log)
+      pass "mdm-install: KIT_MDM_LOG_DIR 明示指定がログパスに反映される" ;;
+    *)
+      fail "mdm-install: KIT_MDM_LOG_DIR 明示指定が反映されない (got '$MDM_LOG_FILE')" ;;
+  esac
+)
+(
+  # 許可プレフィックス外の KIT_MDM_LOG_DIR は exit 50（spec §9.2: root 書込先の制約）
+  export KIT_MDM_LOG_DIR="/etc/evil-logs"
+  _rc=0
+  _mdm_setup_log_file 0 "$_loghome" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "許可外 LOG_DIR は exit 50" \
+    && pass "mdm-install: 許可プレフィックス外の LOG_DIR を拒否" \
+    || fail "mdm-install: 許可外 LOG_DIR を拒否すべき (got $_rc)"
+)
+rm -rf "$_tmpd"
+
 # ── MDM 既定値の適用（Ghostty は MDM 既定 off・spec §5.6）─────
 # mdm_config_apply と同じ「既存 env 値は上書きしない」優先順位を踏襲する
 # ことを確認する: 未設定時のみ false を既定にし、conf/env で明示済みの

@@ -158,4 +158,71 @@ chmod 600 "$_conf"
     && pass "mdm-config: 不正 enum 値で exit 50" \
     || fail "mdm-config: 不正 enum 値で exit 50 を返すべき"
 )
+
+# ══ staging 一括検証（最終レビュー High#3）══
+# 優先順位 CLI > env > config を staging に集めて確定後、全入力源の値を
+# 一括で型検証する。env / CLI 由来の値も無検証で通過してはならない。
+
+# env 由来の不正値も exit 50（旧実装は既存 env 値を無検証で保持していた）
+(
+  export PROFILE="nonsense" MDM_CONFIG_SKIP_OWNER_CHECK=1
+  _rc=0
+  mdm_config_apply "/nonexistent-mdm-config" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code 50 "$_rc" "env 不正値は exit 50" \
+    && pass "mdm-config: env 由来の不正値も exit 50" \
+    || fail "mdm-config: env 由来の不正値を検証すべき (got $_rc)"
+)
+
+# env 由来の値も正規化されて export される（YES -> true）
+(
+  export ENABLE_STATUSLINE="YES" MDM_CONFIG_SKIP_OWNER_CHECK=1
+  mdm_config_apply "/nonexistent-mdm-config" >/dev/null 2>&1 || true
+  [[ "$ENABLE_STATUSLINE" == "true" ]] \
+    && pass "mdm-config: env 値が正規化される (YES -> true)" \
+    || fail "mdm-config: env 値の正規化が効かない (got '$ENABLE_STATUSLINE')"
+)
+
+# CLI 引数（KEY=VALUE）は env より優先
+(
+  export PROFILE="minimal" MDM_CONFIG_SKIP_OWNER_CHECK=1
+  mdm_config_apply "/nonexistent-mdm-config" "PROFILE=full" >/dev/null 2>&1 || true
+  [[ "$PROFILE" == "full" ]] \
+    && pass "mdm-config: CLI 引数が env より優先" \
+    || fail "mdm-config: CLI > env の優先順位違反 (got '$PROFILE')"
+)
+
+# CLI 引数の不正値は exit 50
+(
+  export MDM_CONFIG_SKIP_OWNER_CHECK=1
+  _rc=0
+  mdm_config_apply "/nonexistent-mdm-config" "PROFILE=nonsense" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code 50 "$_rc" "CLI 不正値は exit 50" \
+    && pass "mdm-config: CLI 引数の不正値で exit 50" \
+    || fail "mdm-config: CLI 引数の不正値を検証すべき (got $_rc)"
+)
+
+# CLI 引数の未知キーは警告して無視（config ファイルの未知キーと同じ方針）、
+# 空引数は無視（Jamf の未使用スクリプトパラメータ対策）
+(
+  unset PROFILE
+  export MDM_CONFIG_SKIP_OWNER_CHECK=1
+  _rc=0
+  mdm_config_apply "/nonexistent-mdm-config" "" "UNKNOWN_KEY=x" "PROFILE=standard" >/dev/null 2>&1 || _rc=$?
+  [[ "$_rc" -eq 0 && "${PROFILE:-}" == "standard" ]] \
+    && pass "mdm-config: CLI 未知キー/空引数を無視して続行" \
+    || fail "mdm-config: CLI 未知キー/空引数の扱いが不正 (rc=$_rc PROFILE='${PROFILE:-}')"
+)
+
+# config ファイル値が env に上書きされる場合、負けた config 値は結果に影響しない
+(
+  cat > "$_conf" <<'CONF'
+PROFILE="minimal"
+CONF
+  chmod 600 "$_conf"
+  export PROFILE="full" MDM_CONFIG_SKIP_OWNER_CHECK=1
+  mdm_config_apply "$_conf" >/dev/null 2>&1 || true
+  [[ "$PROFILE" == "full" ]] \
+    && pass "mdm-config: env が config ファイルより優先（staging 後も維持）" \
+    || fail "mdm-config: env > config の優先順位違反 (got '$PROFILE')"
+)
 rm -rf "$_tmpd"

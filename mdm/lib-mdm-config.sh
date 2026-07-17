@@ -110,36 +110,87 @@ _mdm_validate_key() {
   esac
 }
 
-# 設定ファイルを読み、allowlist + 型検証し、未設定のキーのみ export（優先順位: 既存 env 値は保持）。
-# 不正値は exit 50、ファイル不安全は exit 50。
+# 設定を staging 方式で解決する（最終レビュー High#3）:
+#   1) 管理設定ファイル → 2) 環境変数 → 3) CLI 引数（KEY=VALUE）の順に
+#   staging 変数へ重ね（後勝ち = CLI > env > config の優先順位）、
+#   優先順位確定後に**全入力源の値を一括で型検証**して export する。
+# 旧実装は config ファイル値のみ検証し、既存 env 値は無検証で通過していた。
+# 不正値（どの入力源でも）は exit 50、ファイル不安全は exit 50。
+# 未知キーは config / CLI とも警告して無視。空の CLI 引数は無視
+# （Jamf 等が未使用スクリプトパラメータを空文字で渡すため）。
+# Bash 3.2 互換: 連想配列を使わず printf -v + 間接展開で staging する。
 mdm_config_apply() {
-  local _f="$1"
-  [[ -f "$_f" ]] || return 0                    # ファイルなしは何もしない
-  mdm_config_file_is_secure "$_f" || return 50
-  local _line _k _v _norm
-  while IFS= read -r _line || [[ -n "$_line" ]]; do
-    case "$_line" in
-      ''|'#'*) continue ;;
-    esac
-    case "$_line" in
+  local _f="$1"; shift || true
+  local _k _v _line _norm
+
+  # staging 領域を初期化（同一プロセスでの再呼び出しに備える）
+  for _k in $_MDM_ALLOWED_KEYS; do
+    unset "_MDM_STAGE_${_k}" "_MDM_STAGE_SET_${_k}"
+  done
+
+  # 1) 管理設定ファイル（最初の一致行が勝つ = 旧実装と同じ）
+  if [[ -f "$_f" ]]; then
+    mdm_config_file_is_secure "$_f" || return 50
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+      case "$_line" in
+        ''|'#'*) continue ;;
+      esac
+      case "$_line" in
+        *=*) : ;;
+        *)   continue ;;
+      esac
+      _k="${_line%%=*}"
+      _v="${_line#*=}"
+      _v="${_v%\"}"; _v="${_v#\"}"               # 両端のダブルクォート除去
+      if ! _mdm_key_is_allowed "$_k"; then
+        printf '[mdm-config] WARN: unknown key ignored: %s\n' "$_k" >&2
+        continue
+      fi
+      local _set_flag="_MDM_STAGE_SET_${_k}"
+      if [[ -z "${!_set_flag:-}" ]]; then
+        printf -v "_MDM_STAGE_${_k}" '%s' "$_v"
+        printf -v "$_set_flag" '%s' 1
+      fi
+    done < "$_f"
+  fi
+
+  # 2) 環境変数（非空のみ。config より優先）
+  for _k in $_MDM_ALLOWED_KEYS; do
+    if [[ -n "${!_k:-}" ]]; then
+      printf -v "_MDM_STAGE_${_k}" '%s' "${!_k}"
+      printf -v "_MDM_STAGE_SET_${_k}" '%s' 1
+    fi
+  done
+
+  # 3) CLI 引数（KEY=VALUE 形式。env より優先）
+  local _arg
+  for _arg in "$@"; do
+    [[ -z "$_arg" ]] && continue
+    case "$_arg" in
       *=*) : ;;
-      *)   continue ;;
+      *)
+        printf '[mdm-config] WARN: unknown CLI arg ignored: %s\n' "$_arg" >&2
+        continue ;;
     esac
-    _k="${_line%%=*}"
-    _v="${_line#*=}"
-    _v="${_v%\"}"; _v="${_v#\"}"                 # 両端のダブルクォート除去
+    _k="${_arg%%=*}"
+    _v="${_arg#*=}"
     if ! _mdm_key_is_allowed "$_k"; then
-      printf '[mdm-config] WARN: unknown key ignored: %s\n' "$_k" >&2
+      printf '[mdm-config] WARN: unknown CLI key ignored: %s\n' "$_k" >&2
       continue
     fi
-    if ! _norm="$(_mdm_validate_key "$_k" "$_v")"; then
+    printf -v "_MDM_STAGE_${_k}" '%s' "$_v"
+    printf -v "_MDM_STAGE_SET_${_k}" '%s' 1
+  done
+
+  # 4) 優先順位確定後に一括検証 → export（正規化値）
+  for _k in $_MDM_ALLOWED_KEYS; do
+    local _set_var="_MDM_STAGE_SET_${_k}" _val_var="_MDM_STAGE_${_k}"
+    [[ -n "${!_set_var:-}" ]] || continue
+    if ! _norm="$(_mdm_validate_key "$_k" "${!_val_var}")"; then
       printf '[mdm-config] ERROR: invalid value for %s\n' "$_k" >&2
       return 50
     fi
-    # 優先順位: 既に非空の値が環境にあれば上書きしない（Bash 3.2 互換の間接展開。eval は使わない）
-    if [[ -z "${!_k:-}" ]]; then
-      export "$_k=$_norm"
-    fi
-  done < "$_f"
+    export "$_k=$_norm"
+  done
   return 0
 }
