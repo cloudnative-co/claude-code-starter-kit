@@ -46,13 +46,20 @@ MDM_RCPT_INSTALL_DIR=""; MDM_RCPT_REQUIRED_COMPONENTS='["kit"]'; MDM_RCPT_PROFIL
 MDM_RCPT_TARGET_USER=""; MDM_RCPT_PARTIAL='[]'; MDM_RCPT_TIMESTAMP=""; MDM_RCPT_LOG_PATH=""
 
 MDM_LOG_FILE="${MDM_LOG_FILE:-}"
+# ログは検証済みの保持 fd（fd 7）へ書く（R4-High）。ファイルを一度だけ排他
+# 作成して fd 7 に束縛し、以降の追記はパスでなく fd へ行うことで、lstat 後の
+# symlink 差し替えや予測パスへの先置きの影響を受けない。MDM_LOG_FD_OPEN=1 の
+# ときのみ fd 7 を使う（未確立時＝早期の失敗ログは stderr のみ）。
+MDM_LOG_FD_OPEN="${MDM_LOG_FD_OPEN:-0}"
 
 mdm_log() {
   local _phase="$1"; shift
   local _msg="$*"
   local _line="[$_phase] $_msg"
   printf '%s\n' "$_line" >&2
-  if [[ -n "$MDM_LOG_FILE" ]]; then
+  if [[ "$MDM_LOG_FD_OPEN" == "1" ]]; then
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')" "$_line" >&7 2>/dev/null || true
+  elif [[ -n "$MDM_LOG_FILE" ]]; then
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')" "$_line" >> "$MDM_LOG_FILE" 2>/dev/null || true
   fi
 }
@@ -1090,6 +1097,13 @@ _mdm_setup_log_file() {
     mdm_log R1 "ログディレクトリが symlink: $_dir"
     return "$MDM_EXIT_CONFIG"
   fi
+  # root 経路: 信頼起点 /Library/Log の健全性を検証（R4-High）。/Library/Logs
+  # が非 symlink・root 所有・group/other 書込不可なら、その配下は root しか
+  # 作成できず、攻撃者所有の中間/最終ディレクトリを差し込めない。
+  if [[ "$_euid" -eq 0 ]] && ! _mdm_log_trusted_root_base; then
+    mdm_log R1 "ログの信頼起点 /Library/Logs が健全でない"
+    return "$MDM_EXIT_CONFIG"
+  fi
   if ! mkdir -p "$_dir" 2>/dev/null; then
     mdm_log R1 "ログディレクトリを作成できない: $_dir"
     return "$MDM_EXIT_CONFIG"
@@ -1099,31 +1113,67 @@ _mdm_setup_log_file() {
     mdm_log R1 "ログディレクトリの権限を設定できない: $_dir"
     return "$MDM_EXIT_CONFIG"
   fi
-  local _log _ts
+  local _ts
   _ts="$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run)"
-  _log="$_dir/install-$_ts.log"
-  # ログファイルを実体で先行作成し、以降の追記（mdm_log の >>）が先置き
-  # symlink を辿らないようにする（R3-High）。既存 symlink は除去 → noclobber
-  # 排他作成 → lstat 検証。同秒再実行での既存実ファイル再利用は許容。
-  [[ -L "$_log" ]] && { rm -f "$_log" 2>/dev/null || true; }
-  if [[ -L "$_log" ]]; then
-    mdm_log R1 "ログファイルの symlink を除去できない: $_log"
+  _mdm_open_log_fd "$_dir/install-$_ts.log"
+}
+
+# root 実行時のログ信頼起点 /Library/Logs の健全性検証（R4-High）。
+# テスト（非 root）では MDM_LOG_SKIP_OWNER_CHECK=1 で owner 検査を無効化。
+_mdm_log_trusted_root_base() {
+  local _base="/Library/Logs"
+  [[ -d "$_base" && ! -L "$_base" ]] || return 1
+  local _mode
+  _mode="$(stat -f '%Lp' "$_base" 2>/dev/null || stat -c '%a' "$_base" 2>/dev/null || echo '')"
+  _mdm_boot_mode_is_safe "$_mode" || return 1
+  if [[ "${MDM_LOG_SKIP_OWNER_CHECK:-0}" != "1" ]]; then
+    local _owner
+    _owner="$(stat -f '%Su' "$_base" 2>/dev/null || stat -c '%U' "$_base" 2>/dev/null || echo '')"
+    [[ "$_owner" == "root" ]] || return 1
+  fi
+  return 0
+}
+
+# ログファイルを新規排他作成して fd 7 に束縛する（R4-High）。
+# ★既存ファイルは一切再利用しない。攻撃者が予測パスに先置きした regular file
+# は noclobber で拒否 → 別名（-1, -2 …）へ。symlink は事前に除去してから
+# 新規作成する（symlink 追随を断つ）。以降 mdm_log は fd 7 へ書くため、
+# 検証後のパス差し替えの影響を受けない（パス再オープンを避ける）。
+# chmod 644 失敗は fail-closed。
+_mdm_open_log_fd() {
+  local _base="$1" _cand="$1" _n=0 _opened=0
+  local _noclob=0
+  [[ -o noclobber ]] && _noclob=1
+  while [[ "$_n" -le 50 ]]; do
+    # symlink 先置きは自身を除去（noclobber は dangling symlink を追随作成し得るため）
+    [[ -L "$_cand" ]] && rm -f "$_cand" 2>/dev/null
+    if [[ ! -L "$_cand" ]]; then
+      set -o noclobber
+      if exec 7>"$_cand" 2>/dev/null; then
+        _opened=1
+      fi
+      [[ "$_noclob" -eq 0 ]] && set +o noclobber
+    fi
+    [[ "$_opened" -eq 1 ]] && break
+    _n=$((_n + 1))
+    _cand="$_base.$_n"
+  done
+  if [[ "$_opened" -ne 1 ]]; then
+    mdm_log R1 "ログファイルを安全に作成できない（先置き衝突が解消しない）: $_base"
     return "$MDM_EXIT_CONFIG"
   fi
-  if ( set -C; : > "$_log" ) 2>/dev/null; then
-    :
-  elif [[ -f "$_log" && ! -L "$_log" ]]; then
-    : # 同秒再実行の既存実ファイル（root 755 dir 内で他者は作れない）— 追記継続
-  else
-    mdm_log R1 "ログファイルを安全に作成できない: $_log"
+  if [[ -L "$_cand" || ! -f "$_cand" ]]; then
+    exec 7>&- 2>/dev/null || true
+    mdm_log R1 "作成したログファイルの実体が不正: $_cand"
     return "$MDM_EXIT_CONFIG"
   fi
-  if [[ -L "$_log" || ! -f "$_log" ]]; then
-    mdm_log R1 "作成したログファイルの実体が不正: $_log"
+  if ! chmod 644 "$_cand" 2>/dev/null; then
+    exec 7>&- 2>/dev/null || true
+    mdm_log R1 "ログファイルの権限を設定できない: $_cand"
     return "$MDM_EXIT_CONFIG"
   fi
-  chmod 644 "$_log" 2>/dev/null || true
-  MDM_LOG_FILE="$_log"
+  MDM_LOG_FILE="$_cand"
+  MDM_LOG_FD_OPEN=1
   return 0
 }
 

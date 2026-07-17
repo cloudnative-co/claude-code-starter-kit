@@ -663,31 +663,31 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
     && pass "mdm-install: 非 root 時にシステム領域の LOG_DIR を拒否" \
     || fail "mdm-install: 非 root 時のシステム LOG_DIR を拒否すべき (got $_rc)"
 )
-# ── ログファイルは umask 非依存で実体作成され、先置き symlink を辿らない（R3-High）──
+# ── ログファイルは umask 非依存で実体作成され、fd を保持する（R3/R4-High）──
 (
   umask 000
   unset KIT_MDM_LOG_DIR
-  MDM_LOG_FILE=""
+  MDM_LOG_FILE=""; MDM_LOG_FD_OPEN=0
   _mdm_setup_log_file 501 "$_loghome" 2>/dev/null || fail "mdm-install: ログ準備に失敗"
   _dmode="$(stat -f '%Lp' "$(dirname "$MDM_LOG_FILE")" 2>/dev/null || stat -c '%a' "$(dirname "$MDM_LOG_FILE")" 2>/dev/null)"
   [[ "$_dmode" == "755" ]] \
     && pass "mdm-install: umask 000 でもログ dir は 755" \
     || fail "mdm-install: umask 000 でログ dir が ${_dmode}"
   [[ -f "$MDM_LOG_FILE" && ! -L "$MDM_LOG_FILE" ]] \
-    && pass "mdm-install: ログファイルが実体で先行作成される" \
+    && pass "mdm-install: ログファイルが実体で作成される" \
     || fail "mdm-install: ログファイルが実体作成されない"
   _fmode="$(stat -f '%Lp' "$MDM_LOG_FILE" 2>/dev/null || stat -c '%a' "$MDM_LOG_FILE" 2>/dev/null)"
   [[ "$_fmode" == "644" ]] \
     && pass "mdm-install: umask 000 でもログファイルは 644" \
     || fail "mdm-install: umask 000 でログファイルが ${_fmode}"
+  [[ "$MDM_LOG_FD_OPEN" == "1" ]] \
+    && pass "mdm-install: ログは保持 fd 経由（MDM_LOG_FD_OPEN=1）" \
+    || fail "mdm-install: ログ fd が保持されていない"
+  exec 7>&- 2>/dev/null || true
+  MDM_LOG_FD_OPEN=0
 )
 (
-  # ログパスに先置きされた symlink は辿らず拒否（exit 50）
-  _lsdir="$_loghome/Library/Logs/ClaudeCodeStarterKit"
-  mkdir -p "$_lsdir"
-  printf 'victim\n' > "$_loghome/log-victim"
-  # 実装が使う予測可能なファイル名に合わせるのは困難なため、ディレクトリ自体を
-  # symlink にして「シンボリックリンク経由のログ dir」を拒否することを検証する
+  # ログパスに symlink dir を指定したら拒否（exit 50）
   _evildir="$_loghome/Library/Logs/EvilLink"
   ln -s "/etc" "$_evildir"
   export KIT_MDM_LOG_DIR="$_evildir"
@@ -697,6 +697,46 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
   assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "symlink のログ dir は exit 50" \
     && pass "mdm-install: symlink のログディレクトリを拒否" \
     || fail "mdm-install: symlink のログディレクトリを拒否すべき (got $_rc)"
+)
+
+# ── _mdm_open_log_fd: 既存 regular file は再利用せず別名・symlink は辿らない（R4-High）──
+(
+  _od="$_loghome/Library/Logs/openfd"; mkdir -p "$_od"
+  MDM_LOG_FILE=""; MDM_LOG_FD_OPEN=0
+  _mdm_open_log_fd "$_od/install-x.log" 2>/dev/null || fail "mdm-install: open_log_fd 失敗"
+  [[ "$MDM_LOG_FILE" == "$_od/install-x.log" && -f "$MDM_LOG_FILE" && ! -L "$MDM_LOG_FILE" ]] \
+    && pass "mdm-install: open_log_fd が新規ログを排他作成" \
+    || fail "mdm-install: open_log_fd の新規作成が不正 (got '$MDM_LOG_FILE')"
+  exec 7>&- 2>/dev/null || true; MDM_LOG_FD_OPEN=0
+)
+(
+  # 攻撃者が予測パスに regular file を先置き → 再利用せず別名を作る
+  _od="$_loghome/Library/Logs/openfd2"; mkdir -p "$_od"
+  printf 'attacker\n' > "$_od/install-y.log"
+  MDM_LOG_FILE=""; MDM_LOG_FD_OPEN=0
+  _mdm_open_log_fd "$_od/install-y.log" 2>/dev/null || fail "mdm-install: open_log_fd(既存) 失敗"
+  if [[ "$MDM_LOG_FILE" != "$_od/install-y.log" && -f "$MDM_LOG_FILE" ]] \
+     && [[ "$(cat "$_od/install-y.log")" == "attacker" ]]; then
+    pass "mdm-install: 既存 regular file を再利用せず別名で作成（先置き無視）"
+  else
+    fail "mdm-install: 既存ファイルを再利用してしまう (got '$MDM_LOG_FILE')"
+  fi
+  exec 7>&- 2>/dev/null || true; MDM_LOG_FD_OPEN=0
+)
+(
+  # 攻撃者が予測パスに symlink を先置き → 辿らず標的無傷・実体化
+  _od="$_loghome/Library/Logs/openfd3"; mkdir -p "$_od"
+  printf 'victim\n' > "$_od/victim"
+  ln -s "$_od/victim" "$_od/install-z.log"
+  MDM_LOG_FILE=""; MDM_LOG_FD_OPEN=0
+  _mdm_open_log_fd "$_od/install-z.log" 2>/dev/null || fail "mdm-install: open_log_fd(symlink) 失敗"
+  if [[ ! -L "$MDM_LOG_FILE" && -f "$MDM_LOG_FILE" ]] \
+     && [[ "$(cat "$_od/victim")" == "victim" ]]; then
+    pass "mdm-install: 先置き symlink を辿らず実体化（標的無傷）"
+  else
+    fail "mdm-install: 先置き symlink を辿る/実体化しない"
+  fi
+  exec 7>&- 2>/dev/null || true; MDM_LOG_FD_OPEN=0
 )
 rm -rf "$_tmpd"
 
