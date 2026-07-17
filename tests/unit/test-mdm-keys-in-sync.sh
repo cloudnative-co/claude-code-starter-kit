@@ -24,3 +24,34 @@ for _bad in EDITOR ENABLE_GHOSTTY; do
     pass "mdm-keys: 誤名 '$_bad' は含まれない"
   fi
 done
+
+# ── フル照合（Medium）: 代表キーだけでなく全キーの乖離を検出する ──
+# (1) _MDM_ALLOWED_KEYS の非 KIT_MDM_ キーはすべて本体 _CONFIG_KEYS に実在すること
+_drift=""
+for _k in $_MDM_ALLOWED_KEYS; do
+  case "$_k" in KIT_MDM_*) continue ;; esac
+  _found=0
+  for _ck in "${_CONFIG_KEYS[@]}"; do
+    [[ "$_ck" == "$_k" ]] && _found=1 && break
+  done
+  [[ "$_found" -eq 0 ]] && _drift="$_drift $_k"
+done
+if [[ -z "$_drift" ]]; then
+  pass "mdm-keys: allowlist の全非 KIT キーが本体 _CONFIG_KEYS に実在（フル照合）"
+else
+  fail "mdm-keys: 本体 _CONFIG_KEYS に無いキーが allowlist に混入:$_drift"
+fi
+
+# (2) install-mdm.sh の _MDM_PASSTHROUGH_KEYS（proxy 変数を除く）は
+#     すべて _MDM_ALLOWED_KEYS に含まれること（伝搬キーと許可キーの整合）
+MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
+_drift2=""
+for _k in $_MDM_PASSTHROUGH_KEYS; do
+  case "$_k" in HTTP_PROXY|HTTPS_PROXY|NO_PROXY) continue ;; esac
+  printf '%s' "$_MDM_ALLOWED_KEYS" | grep -qw "$_k" || _drift2="$_drift2 $_k"
+done
+if [[ -z "$_drift2" ]]; then
+  pass "mdm-keys: passthrough キーが allowlist と整合（フル照合）"
+else
+  fail "mdm-keys: allowlist に無い passthrough キー:$_drift2"
+fi

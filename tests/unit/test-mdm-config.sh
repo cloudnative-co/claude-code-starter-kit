@@ -119,6 +119,27 @@ else
   pass "mdm-config: symlink を reject"
 fi
 
+# 親ディレクトリが group/other 書込可なら reject（Medium・spec §9.2:
+# 書込可能な親では他者が symlink/差し替えを植えられる）
+_openparent="$_tmpd/open-parent"
+mkdir -p "$_openparent"
+chmod 777 "$_openparent"
+cat > "$_openparent/mdm-config.conf" <<'CONF'
+PROFILE="standard"
+CONF
+chmod 600 "$_openparent/mdm-config.conf"
+if mdm_config_file_is_secure "$_openparent/mdm-config.conf"; then
+  fail "mdm-config: 書込可能な親ディレクトリを reject すべき"
+else
+  pass "mdm-config: 書込可能な親ディレクトリを reject"
+fi
+chmod 755 "$_openparent"
+if mdm_config_file_is_secure "$_openparent/mdm-config.conf"; then
+  pass "mdm-config: 安全な親ディレクトリ（755）は許容"
+else
+  fail "mdm-config: 755 の親ディレクトリが reject される"
+fi
+
 # ── 読込・優先順位・型検証 ──────────────────────────────────
 ( # subshell で環境汚染を隔離
   unset PROFILE LANGUAGE KIT_MDM_INSTALL_HOMEBREW

@@ -73,6 +73,52 @@ else
 fi
 rm -rf "$_tmpd"
 
+# ── JSON エスケープ: 制御文字（Medium: 無検証環境値の改行等で JSON が壊れない）──
+(
+  out="$(mdm_json_escape "$(printf 'a\nb\tc')")"
+  if [[ "$out" == 'a\nb\tc' ]]; then
+    pass "mdm-install: JSON エスケープが改行/タブを \\n \\t に変換"
+  else
+    fail "mdm-install: 制御文字のエスケープが不正 (got '$out')"
+  fi
+)
+
+# ── 終了コード契約: CLT 不足=10 / Homebrew 失敗=11 を区別（Medium・spec §8.1）──
+(
+  export MDM_CLT_PRESENT_OVERRIDE=0 KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE=false
+  _rc=0
+  _mdm_bootstrap_prereqs jane >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_PREREQ" "$_rc" "CLT 不足は exit 10" \
+    && pass "mdm-install: CLT 不足を exit 10（前提不足）で返す" \
+    || fail "mdm-install: CLT 不足の終了コードが不正 (got $_rc)"
+)
+(
+  export MDM_CLT_PRESENT_OVERRIDE=1 MDM_BREW_PRESENT_OVERRIDE=0
+  export MDM_BREW_RELEASES_JSON_OVERRIDE=/nonexistent-brew-json
+  _rc=0
+  _mdm_bootstrap_prereqs jane >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_BREW" "$_rc" "brew 失敗は exit 11" \
+    && pass "mdm-install: Homebrew 失敗を exit 11 で返す" \
+    || fail "mdm-install: Homebrew 失敗の終了コードが不正 (got $_rc)"
+)
+
+# ── 設定・ユーザー解決失敗時の best-effort _unresolved レシート（Medium・spec §8.3(a)）──
+(
+  _tmpu="$(mktemp -d)"
+  export MDM_UNRESOLVED_RCPT_DIR_OVERRIDE="$_tmpu"
+  _rc=0
+  ( MDM_LOG_FILE=""; _mdm_fail_unresolved 50 ) >/dev/null 2>&1 || _rc=$?
+  assert_exit_code 50 "$_rc" "_mdm_fail_unresolved は指定コードで exit" \
+    && pass "mdm-install: _mdm_fail_unresolved が指定コードで終了" \
+    || fail "mdm-install: _mdm_fail_unresolved の exit code 不一致 (got $_rc)"
+  if assert_json_field "$_tmpu/receipt-_unresolved.json" ".result" "failure" "result=failure" 2>/dev/null; then
+    pass "mdm-install: _unresolved レシートが best-effort で書かれる"
+  else
+    fail "mdm-install: _unresolved レシートが生成されない"
+  fi
+  rm -rf "$_tmpu"
+)
+
 # ── 対象ユーザー解決（モック）────────────────────────────
 # spec §5.4: 実在するローカルアカウント（dscl 実在確認）かつ UID >= 501 を要求。
 # テストは MDM_DSCL_UID_OVERRIDE で UID をモックする。

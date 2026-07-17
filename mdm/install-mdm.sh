@@ -53,12 +53,17 @@ mdm_log() {
   fi
 }
 
-# JSON 文字列値のエスケープ（backslash と double-quote のみ。改行等は呼び出し側が渡さない）
+# JSON 文字列値のエスケープ。backslash / double-quote に加え、改行・CR・タブは
+# \n \r \t へ変換し、残る制御文字（JSON で不正）は除去する（Medium 対応:
+# 想定外の値が混じってもレシートが不正 JSON にならない）。
 mdm_json_escape() {
   local _s="$1"
   _s="${_s//\\/\\\\}"
   _s="${_s//\"/\\\"}"
-  printf '%s' "$_s"
+  _s="${_s//$'\n'/\\n}"
+  _s="${_s//$'\r'/\\r}"
+  _s="${_s//$'\t'/\\t}"
+  printf '%s' "$_s" | LC_ALL=C tr -d '[:cntrl:]'
 }
 
 # jq 非依存でレシート JSON を書く。required_components / partial は既に JSON 配列文字列。
@@ -330,23 +335,38 @@ _mdm_boot_validate_gitref() {
   /usr/bin/git check-ref-format --branch "$_ref" >/dev/null 2>&1
 }
 
-# 管理設定ファイルの安全性検証（lib の mdm_config_file_is_secure と同一契約の複製）。
-_mdm_boot_config_file_is_secure() {
-  local _f="$1"
-  [[ -e "$_f" ]] || return 1
-  [[ -L "$_f" ]] && return 1
-  local _mode
-  _mode="$(stat -f '%Lp' "$_f" 2>/dev/null || stat -c '%a' "$_f" 2>/dev/null || echo '')"
+# mode 文字列の group/other 書込ビット検査（lib の _mdm_mode_is_safe と同一契約の複製）。
+_mdm_boot_mode_is_safe() {
+  local _mode="$1"
+  [[ -z "$_mode" ]] && return 1
+  while [[ ${#_mode} -gt 3 ]]; do _mode="${_mode#?}"; done
   case "$_mode" in
     *[2367])  return 1 ;;
   esac
   case "$_mode" in
     ?[2367]?) return 1 ;;
   esac
+  return 0
+}
+
+# 管理設定ファイルの安全性検証（lib の mdm_config_file_is_secure と同一契約の複製。
+# 親ディレクトリの検証を含む — 書込可能な親では他者が差し替えを植えられる）。
+_mdm_boot_config_file_is_secure() {
+  local _f="$1"
+  [[ -e "$_f" ]] || return 1
+  [[ -L "$_f" ]] && return 1
+  local _mode _dir _dmode
+  _mode="$(stat -f '%Lp' "$_f" 2>/dev/null || stat -c '%a' "$_f" 2>/dev/null || echo '')"
+  _mdm_boot_mode_is_safe "$_mode" || return 1
+  _dir="$(dirname "$_f")"
+  _dmode="$(stat -f '%Lp' "$_dir" 2>/dev/null || stat -c '%a' "$_dir" 2>/dev/null || echo '')"
+  _mdm_boot_mode_is_safe "$_dmode" || return 1
   if [[ "${MDM_CONFIG_SKIP_OWNER_CHECK:-0}" != "1" ]]; then
-    local _owner
+    local _owner _downer
     _owner="$(stat -f '%Su' "$_f" 2>/dev/null || stat -c '%U' "$_f" 2>/dev/null || echo '')"
     [[ "$_owner" == "root" ]] || return 1
+    _downer="$(stat -f '%Su' "$_dir" 2>/dev/null || stat -c '%U' "$_dir" 2>/dev/null || echo '')"
+    [[ "$_downer" == "root" ]] || return 1
   fi
   return 0
 }
@@ -488,6 +508,21 @@ _mdm_finish() {
   exit "$_code"
 }
 
+# 設定・ユーザー解決失敗時の best-effort レシート（spec §8.3(a)・Medium 対応）。
+# 対象ユーザーが未確定のため root 領域の receipt-_unresolved.json へ書く。
+# 非 root 等で書けなければレシートは諦め、ログ + 終了コードのみを
+# シグナルとする（無条件の「必ず receipt」保証はしない契約）。
+_mdm_fail_unresolved() {
+  local _code="$1"
+  MDM_RCPT_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+  MDM_RCPT_LOG_PATH="$MDM_LOG_FILE"
+  MDM_RCPT_PROFILE="${PROFILE:-standard}"
+  local _dir="${MDM_UNRESOLVED_RCPT_DIR_OVERRIDE:-/Library/Application Support/ClaudeCodeStarterKit}"
+  mdm_receipt_write "$_dir/receipt-_unresolved.json" failure "$_code" 2>/dev/null || true
+  mdm_log R4 "完了: result=failure exit=$_code (unresolved)"
+  exit "$_code"
+}
+
 # MDM_DROP_ARGV（mdm_build_drop_argv が直接構築）を環境分離降格で実行する
 # 共通ヘルパー（spec §5.3）。launchctl/sudo/env は絶対パス固定（最終レビュー High#4）。
 #   /bin/launchctl asuser <uid> /usr/bin/sudo -u <user> -H /usr/bin/env -i ... <cmd...>
@@ -530,12 +565,20 @@ _mdm_run_maybe_as_user() {
   fi
 }
 
+# CLT の存在確認（テスト時は MDM_CLT_PRESENT_OVERRIDE でモック可能）。
+_mdm_clt_present() {
+  if [[ -n "${MDM_CLT_PRESENT_OVERRIDE:-}" ]]; then
+    [[ "$MDM_CLT_PRESENT_OVERRIDE" == "1" ]]; return
+  fi
+  [[ -d /Library/Developer/CommandLineTools/usr/bin ]] || xcode-select -p >/dev/null 2>&1
+}
+
 # Xcode Command Line Tools の導入確認（spec §5.2）。root 実行前提。
 # 既定では不在時に MDM baseline での pkg 事前配布を要求して失敗を返す。
 # KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE=true のときのみ、Apple 公式手順として
 # 文書化されていない softwareupdate 経由の導入をベストエフォートで試みる。
 _mdm_ensure_clt() {
-  if [[ -d /Library/Developer/CommandLineTools/usr/bin ]] || xcode-select -p >/dev/null 2>&1; then
+  if _mdm_clt_present; then
     return 0
   fi
   if [[ "$(mdm_validate_bool "${KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE:-false}" 2>/dev/null || echo false)" != "true" ]]; then
@@ -553,7 +596,7 @@ _mdm_ensure_clt() {
     mdm_log R3 "softwareupdate に CLT の候補が見つからない"
   fi
   rm -f "$_marker" 2>/dev/null || true
-  if [[ -d /Library/Developer/CommandLineTools/usr/bin ]] || xcode-select -p >/dev/null 2>&1; then
+  if _mdm_clt_present; then
     mdm_log R3 "CLT 導入を確認"
     return 0
   fi
@@ -672,7 +715,7 @@ _mdm_write_brew_pkg_user_plist() {
 # リスクを避けるため）。pkg 方式が不可能な場合は暗黙フォールバックせず失敗を返す。
 _mdm_bootstrap_homebrew() {
   local _user="$1"
-  [[ -x /opt/homebrew/bin/brew || -x /usr/local/bin/brew ]] && return 0
+  _mdm_brew_present && return 0
 
   local _pkg_url
   _pkg_url="$(_mdm_resolve_brew_pkg_url)" || {
@@ -739,10 +782,12 @@ _mdm_bootstrap_homebrew() {
 # CLT のコンパイラ/git に依存するため）。
 # NOTE: Homebrew は pkg + HOMEBREW_PKG_USER 方式のため対象ユーザーの home は
 # 不要（_user のみ渡す）。
+# 終了コード契約（spec §8.1・Medium 対応）: CLT 不足=10（前提不足）と
+# Homebrew 導入失敗=11 を区別して返す。
 _mdm_bootstrap_prereqs() {
   local _user="$1"
-  _mdm_ensure_clt || return 1
-  _mdm_bootstrap_homebrew "$_user" || return 1
+  _mdm_ensure_clt || return "$MDM_EXIT_PREREQ"
+  _mdm_bootstrap_homebrew "$_user" || return "$MDM_EXIT_BREW"
   return 0
 }
 
@@ -940,28 +985,34 @@ mdm_main() {
   # stderr（MDM 側が捕捉）と終了コードのみで報告される。
   # shellcheck source=mdm/lib-mdm-config.sh
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib-mdm-config.sh"
-  mdm_config_apply "$(_mdm_config_path)" "$@" || { mdm_log R1 "設定エラー"; exit "$MDM_EXIT_CONFIG"; }
+  mdm_config_apply "$(_mdm_config_path)" "$@" || { mdm_log R1 "設定エラー"; _mdm_fail_unresolved "$MDM_EXIT_CONFIG"; }
   _mdm_apply_mdm_defaults
 
-  # R2: ユーザー・home 解決
+  # R2: ユーザー・home 解決（失敗時も best-effort で _unresolved レシートを試す）
   local _euid; _euid="$(id -u)"
   local _user _home
   if [[ "$_euid" -eq 0 ]]; then
-    _user="$(mdm_resolve_target_user)" || exit "$MDM_EXIT_USER"
-    _home="$(mdm_validate_user_home "$_user")" || exit "$MDM_EXIT_USER"
+    _user="$(mdm_resolve_target_user)" || _mdm_fail_unresolved "$MDM_EXIT_USER"
+    _home="$(mdm_validate_user_home "$_user")" || _mdm_fail_unresolved "$MDM_EXIT_USER"
   else
     _user="$(id -un)"; _home="$HOME"     # ユーザーモード
   fi
   MDM_RCPT_TARGET_USER="$_user"
 
   # ログ開始（設定確定後 = KIT_MDM_LOG_DIR が管理設定/CLI からも効く。High#3）
-  _mdm_setup_log_file "$_euid" "$_home" || exit "$MDM_EXIT_CONFIG"
+  _mdm_setup_log_file "$_euid" "$_home" || _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_CONFIG"
 
-  # R3: 前提ブートストラップ（root 時のみ）
+  # R3: 前提ブートストラップ（root 時のみ）。CLT 不足=10 / brew 失敗=11 を
+  # _mdm_bootstrap_prereqs の戻り値のままレシートへ反映する（spec §8.1）
   if [[ "$_euid" -eq 0 ]]; then
+    local _prereq_rc=0
     case "$(mdm_prereq_plan)" in
       fail) mdm_log R3 "前提不足かつ導入無効"; _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_PREREQ" ;;
-      bootstrap) _mdm_bootstrap_prereqs "$_user" || _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_BREW" ;;
+      bootstrap)
+        _mdm_bootstrap_prereqs "$_user" || _prereq_rc=$?
+        if [[ "$_prereq_rc" -ne 0 ]]; then
+          _mdm_finish "$_user" "$_home" failure "$_prereq_rc"
+        fi ;;
     esac
   fi
 

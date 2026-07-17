@@ -55,7 +55,24 @@ mdm_validate_abspath() {
   printf '%s' "$_p"; return 0
 }
 
+# mode 文字列（8進）の group/other 書込ビット検査。setuid/sticky 付きの
+# 4 桁 mode でも下 3 桁で判定できるよう正規化する。書込可なら exit 1。
+_mdm_mode_is_safe() {
+  local _mode="$1"
+  [[ -z "$_mode" ]] && return 1
+  while [[ ${#_mode} -gt 3 ]]; do _mode="${_mode#?}"; done
+  case "$_mode" in
+    *[2367])  return 1 ;;                       # other 書込
+  esac
+  case "$_mode" in
+    ?[2367]?) return 1 ;;                       # group 書込
+  esac
+  return 0
+}
+
 # 設定ファイルの安全性検証（読み取り直前に呼ぶ）。
+# ファイル自身に加え、親ディレクトリも検証する（spec §9.2: 書込可能な親では
+# 他ローカルユーザーが symlink/差し替えを植えられるため）。
 mdm_config_file_is_secure() {
   local _f="$1"
   [[ -e "$_f" ]] || return 1
@@ -63,16 +80,18 @@ mdm_config_file_is_secure() {
   # group/other 書込ビットが立っていたら拒否（stat はBSD/GNU両対応）
   local _mode
   _mode="$(stat -f '%Lp' "$_f" 2>/dev/null || stat -c '%a' "$_f" 2>/dev/null || echo '')"
-  case "$_mode" in
-    *[2367])  return 1 ;;                       # other 書込
-  esac
-  case "$_mode" in
-    ?[2367]?) return 1 ;;                       # group 書込
-  esac
+  _mdm_mode_is_safe "$_mode" || return 1
+  # 親ディレクトリの group/other 書込拒否
+  local _dir _dmode
+  _dir="$(dirname "$_f")"
+  _dmode="$(stat -f '%Lp' "$_dir" 2>/dev/null || stat -c '%a' "$_dir" 2>/dev/null || echo '')"
+  _mdm_mode_is_safe "$_dmode" || return 1
   if [[ "${MDM_CONFIG_SKIP_OWNER_CHECK:-0}" != "1" ]]; then
-    local _owner
+    local _owner _downer
     _owner="$(stat -f '%Su' "$_f" 2>/dev/null || stat -c '%U' "$_f" 2>/dev/null || echo '')"
     [[ "$_owner" == "root" ]] || return 1
+    _downer="$(stat -f '%Su' "$_dir" 2>/dev/null || stat -c '%U' "$_dir" 2>/dev/null || echo '')"
+    [[ "$_downer" == "root" ]] || return 1
   fi
   return 0
 }
@@ -130,7 +149,23 @@ mdm_config_apply() {
 
   # 1) 管理設定ファイル（最初の一致行が勝つ = 旧実装と同じ）
   if [[ -f "$_f" ]]; then
+    # TOCTOU 回避（spec §9.2）: 検査した inode と読む inode を一致させる。
+    # 手順: 事前に dev:inode を記録 → 安全性検証 → open → fd の dev:inode を
+    # 照合 → fd から読む。検査と open の間に差し替え/symlink 化されると
+    # dev:inode が一致せず拒否される。
+    # NOTE: macOS の /dev/fd/N は fd のアクセスモードで mode がマスクされる
+    # （読み取り fd では 640 が 440 に見える・実測）ため、open 後の mode
+    # 再検証には使えない。dev:inode 照合で「検査した実体 = 読む実体」を保証する。
+    local _pre_id _fd_id
+    _pre_id="$(stat -f '%d:%i' "$_f" 2>/dev/null || stat -c '%d:%i' "$_f" 2>/dev/null || echo 'pre-fail')"
     mdm_config_file_is_secure "$_f" || return 50
+    exec 9<"$_f" || return 50
+    _fd_id="$(stat -Lf '%d:%i' /dev/fd/9 2>/dev/null || stat -Lc '%d:%i' /dev/fd/9 2>/dev/null || echo 'fd-fail')"
+    if [[ "$_pre_id" != "$_fd_id" ]]; then
+      exec 9<&-
+      printf '[mdm-config] ERROR: config file changed between check and read (TOCTOU)\n' >&2
+      return 50
+    fi
     while IFS= read -r _line || [[ -n "$_line" ]]; do
       case "$_line" in
         ''|'#'*) continue ;;
@@ -151,7 +186,8 @@ mdm_config_apply() {
         printf -v "_MDM_STAGE_${_k}" '%s' "$_v"
         printf -v "$_set_flag" '%s' 1
       fi
-    done < "$_f"
+    done <&9
+    exec 9<&-
   fi
 
   # 2) 環境変数（非空のみ。config より優先）
