@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.73.0] - 2026-07-17
+
+MDM（Jamf / Intune / Workspace ONE / Ivanti 等）から macOS 管理端末へキットをゼロタッチ配布するサイレントインストール機能を追加（設計仕様: `docs/superpowers/specs/2026-07-16-mdm-silent-install-design.md`。Windows 版は別 Plan で今後実装）。
+
+### Added
+- **`mdm/install-mdm.sh`（macOS MDM サイレントインストーラ）**: root コンテキストから対象ユーザーを解決・検証（コンソールユーザー自動検出 / `dscl` 実在確認 / UID>=501 / home 所有者・symlink 検証）し、前提ブートストラップ（Xcode CLT は MDM baseline 前提・Homebrew は公式 pkg + `HOMEBREW_PKG_USER` 方式で自動導入）→ `KIT_MDM_GIT_REF` の SHA 確定 checkout → `setup.sh --non-interactive` を環境分離降格（`launchctl asuser` + `sudo -u` + `env -i`・絶対パス固定）で直接実行する。既存インストール検出時は `setup.sh --update` で本体の update パスに接続。単一ファイル配布用の自己ブートストラップ launcher を内蔵（lib 非依存で ref 検証・固定後の実体のみ実行）
+- **`mdm/detect-mdm.sh`（検知スクリプト）**: レシートの実体照合（`result` / `target_user` 一致 / clone の `HEAD == resolved_sha` / 必須時のみ対象ユーザー home の Claude CLI）で compliant / non-compliant を 1 行報告。root 実行時の既定対象はコンソールユーザー。`--user` / `--min-version` 対応。Jamf EA・Intune Custom Attribute・Workspace ONE Sensor にそのまま載せられる
+- **`mdm/lib-mdm-config.sh`（管理設定の型検証パーサ）**: `CLI 引数（KEY=VALUE）> 環境変数 > 管理設定ファイル > 既定値` の優先順位を staging 方式で解決し、全入力源の値を一括型検証（boolean / enum / git ref / username / 絶対パス。不正値は `exit 50`）。設定ファイルは所有者・パーミッション・親ディレクトリ・symlink を検証し、dev:inode 束縛の fd 読み取りで TOCTOU を排除
+- **機械可読な運用契約**: 固定終了コード表（0/10/11/20/30/40/50/60）、タイムスタンプ付きログ（root: `/Library/Logs/ClaudeCodeStarterKit`・ユーザーモード: `~/Library/Logs/...`）、JSON レシート（`/Library/Application Support/ClaudeCodeStarterKit/receipt-<user>.json`、失敗時は best-effort で `receipt-_unresolved.json`）
+- **`docs/mdm/README.md`**: 配布単位（MDM baseline + mdm/ bundle）、設定キー、終了コード、レシート契約、Jamf / Intune / Workspace ONE / Ivanti / 汎用 MDM の製品別手順（ja。英語版は follow-up）
+- **テスト/CI**: mdm ユニットテスト群（bootstrap 固定・設定 staging・ユーザー検証・argv 構築・Homebrew 経路・detect 実体照合）、本体 `_CONFIG_KEYS` との乖離検出テスト（フル照合）、macOS system Bash 3.2 での実行検証 CI ステップ、shellcheck 対象への `mdm/*.sh` 追加
+
+### Security
+- MDM 層は最終レビュー（Codex gpt-5.6-sol + Claude 独立クロスレビュー）の指摘を全件反映済み: 自己ブートストラップの ref 固定前コード実行排除、root の git 操作を検証済みユーザーへ降格（`.git/config` 経由の権限昇格排除）、`KIT_MDM_INSTALL_DIR` の home 配下制約、argv シリアライズ廃止によるコマンド注入排除、Homebrew pkg の URL 制約 + 署名 Team ID pin（`927JGANW46`）+ plist 排他作成、環境変数/CLI 値を含む全設定入力の型検証
+
+### Changed
+- `setup.sh`: `KIT_MDM_INSTALL_CLAUDE_CLI=false`（MDM ラッパーが注入）のとき Claude CLI 導入をスキップする最小強化（未設定・不正値は従来どおり導入 = fail-closed）
+
 ## [0.72.2] - 2026-07-17
 
 総合レビュー（Phase 0〜7）に基づくセキュリティ・信頼性・鮮度の修正。新規機能・破壊的変更なし。各修正は Codex（gpt-5.6-sol）クロスレビューを通過。
