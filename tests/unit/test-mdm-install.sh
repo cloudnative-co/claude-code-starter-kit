@@ -267,6 +267,70 @@ rm -rf "$_tmpd"
     || fail "mdm-install: sudo が絶対パスでない"
 )
 
+# ══ CRITICAL 回帰（最終レビュー #2）: root は対象ユーザー所有 repo を直接
+#    git 操作しない。git は _mdm_git 経由で検証済みユーザーへ降格する ══
+(
+  # 降格コンテキスト設定時: /usr/bin/git が sudo -u <user> 配下で組み立てられる
+  export MDM_EXEC_AS_USER_DRYRUN=1
+  _MDM_GIT_DROP_UID=501; _MDM_GIT_DROP_USER=jane; _MDM_GIT_DROP_HOME=/Users/jane
+  # NOTE: 未実装時（関数未定義 = 127）に set -e でサブシェルごと即死しないよう捕捉
+  out="$(_mdm_git -C /Users/jane/.claude-starter-kit fetch origin main 2>/dev/null)" || true
+  printf '%s\n' "$out" | grep -q '^/usr/bin/sudo$' \
+    && printf '%s\n' "$out" | grep -q '^/usr/bin/git$' \
+    && pass "mdm-install: _mdm_git が root 時に降格 argv で git を実行" \
+    || fail "mdm-install: _mdm_git の降格が効いていない (out: $out)"
+  printf '%s\n' "$out" | grep -q '^-u$' && printf '%s\n' "$out" | grep -q '^jane$' \
+    && pass "mdm-install: _mdm_git の降格先が対象ユーザー" \
+    || fail "mdm-install: _mdm_git の降格先が不正"
+)
+(
+  # 降格コンテキスト未設定時（非 root）: 直接実行される
+  _MDM_GIT_DROP_UID=""
+  out="$(_mdm_git --version 2>/dev/null)" || true
+  printf '%s' "$out" | grep -q 'git version' \
+    && pass "mdm-install: _mdm_git が非 root 時は直接実行" \
+    || fail "mdm-install: _mdm_git の直接実行が失敗 (out: $out)"
+)
+# chown -R は撤去済み（clone を初回からユーザー実行するため不要になった）
+if grep -q 'chown -R' "$PROJECT_DIR/mdm/install-mdm.sh"; then
+  fail "mdm-install: chown -R が残存している（root の任意 repo chown 経路）"
+else
+  pass "mdm-install: chown -R が撤去されている"
+fi
+
+# ── KIT_MDM_INSTALL_DIR は対象ユーザーの canonical home 配下に制約 ──
+_tmpd="$(mktemp -d)"; _tmpd="$(cd "$_tmpd" && pwd -P)"
+_fakehome="$_tmpd/Users/jane"; mkdir -p "$_fakehome"
+(
+  export KIT_MDM_INSTALL_DIR="$_tmpd/outside-home"
+  export MDM_KIT_REPO_URL_OVERRIDE="$_tmpd/no-such-repo"
+  _rc=0
+  _mdm_run_user_phase 501 jane "$_fakehome" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "home 外 install_dir は exit 50" \
+    && pass "mdm-install: home 外の KIT_MDM_INSTALL_DIR を拒否" \
+    || fail "mdm-install: home 外の KIT_MDM_INSTALL_DIR を拒否すべき (got $_rc)"
+)
+(
+  export KIT_MDM_INSTALL_DIR="$_fakehome/../escape"
+  export MDM_KIT_REPO_URL_OVERRIDE="$_tmpd/no-such-repo"
+  _rc=0
+  _mdm_run_user_phase 501 jane "$_fakehome" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" ".. 含みの install_dir は exit 50" \
+    && pass "mdm-install: .. を含む KIT_MDM_INSTALL_DIR を拒否" \
+    || fail "mdm-install: .. を含む KIT_MDM_INSTALL_DIR を拒否すべき (got $_rc)"
+)
+(
+  # home そのもの（配下でなく一致）も拒否
+  export KIT_MDM_INSTALL_DIR="$_fakehome"
+  export MDM_KIT_REPO_URL_OVERRIDE="$_tmpd/no-such-repo"
+  _rc=0
+  _mdm_run_user_phase 501 jane "$_fakehome" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "home 自体は exit 50" \
+    && pass "mdm-install: home 自体を install_dir にするのを拒否" \
+    || fail "mdm-install: home 自体の install_dir を拒否すべき (got $_rc)"
+)
+rm -rf "$_tmpd"
+
 # ── Homebrew pkg URL 解決（GitHub API レスポンスのモック。jq 非依存 grep/sed）──
 _brew_tmpd="$(mktemp -d)"
 _brew_fixture_ok="$_brew_tmpd/release-ok.json"

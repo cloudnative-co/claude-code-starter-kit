@@ -176,15 +176,16 @@ mdm_resolve_ref_sha() {
   # が非空になる）ため、後段の `[[ -z "$_sha" ]]` チェックをすり抜けて
   # 未解決 ref をそのまま「確定 SHA」として誤って返してしまう（実機検証済み）。
   # --verify は失敗時に stdout を空にする。
+  # git は _mdm_git 経由（root 時は検証済みユーザーへ降格。Critical#2）
   if printf '%s' "$_ref" | grep -qE '^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$'; then
-    _sha="$(git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
+    _sha="$(_mdm_git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
   else
     # 明示 fetch → FETCH_HEAD の commit を真実とする（ローカル ref を更新しないことがあるため）
-    if ! git -C "$_repo" fetch --quiet origin "$_ref" 2>/dev/null; then
+    if ! _mdm_git -C "$_repo" fetch --quiet origin "$_ref" 2>/dev/null; then
       # origin が無い（初回 clone 前のローカルテスト）場合はローカル ref 解決にフォールバック
-      _sha="$(git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
+      _sha="$(_mdm_git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
     else
-      _sha="$(git -C "$_repo" rev-parse --verify "FETCH_HEAD^{commit}" 2>/dev/null || true)"
+      _sha="$(_mdm_git -C "$_repo" rev-parse --verify "FETCH_HEAD^{commit}" 2>/dev/null || true)"
     fi
   fi
   if [[ -z "$_sha" ]]; then
@@ -495,6 +496,33 @@ _mdm_exec_as_user() {
   /bin/launchctl asuser "$_uid" /usr/bin/sudo -u "$_user" -H "${MDM_DROP_ARGV[@]}"
 }
 
+# ── git 実行ディスパッチャ（最終レビュー Critical#2）──────────
+# ★root が対象ユーザー所有の git repo を直接操作すると、ユーザーが仕込んだ
+# .git/config（core.fsmonitor / filter / credential helper 等）経由で
+# 冪等再実行時に root コード実行になる。降格コンテキスト（下記グローバル）
+# が設定されているとき、git は必ず検証済み対象ユーザーへ env -i 降格して実行する。
+# コンテキストは _mdm_run_user_phase が root フェーズ開始時に設定する。
+_MDM_GIT_DROP_UID=""
+_MDM_GIT_DROP_USER=""
+_MDM_GIT_DROP_HOME=""
+_mdm_git() {
+  if [[ -n "$_MDM_GIT_DROP_UID" ]]; then
+    _mdm_exec_as_user "$_MDM_GIT_DROP_UID" "$_MDM_GIT_DROP_USER" "$_MDM_GIT_DROP_HOME" /usr/bin/git "$@"
+  else
+    git "$@"
+  fi
+}
+
+# root なら検証済みユーザーへ降格して実行、非 root なら直接実行する汎用版
+# （mkdir/chmod 等、repo 配下を触る git 以外の操作に使う）。
+_mdm_run_maybe_as_user() {
+  if [[ -n "$_MDM_GIT_DROP_UID" ]]; then
+    _mdm_exec_as_user "$_MDM_GIT_DROP_UID" "$_MDM_GIT_DROP_USER" "$_MDM_GIT_DROP_HOME" "$@"
+  else
+    "$@"
+  fi
+}
+
 # Xcode Command Line Tools の導入確認（spec §5.2）。root 実行前提。
 # 既定では不在時に MDM baseline での pkg 事前配布を要求して失敗を返す。
 # KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE=true のときのみ、Apple 公式手順として
@@ -656,9 +684,13 @@ _mdm_cli_present_for_home() {
 
 # U1b→U2→U3: キット取得+refピン留め → setup.sh --non-interactive 実行 →
 # Claude Code CLI 導入確認（spec §5.1・§5.5）。
-# root 実行時は setup.sh の実行のみ環境分離降格し、clone/checkout はここで
-# 直接行った上で対象ユーザーへ chown する。
-# 戻り値: 0=成功 / MDM_EXIT_CLI=CLIのみ欠如（部分失敗） / 1=それ以外の失敗
+# ★root 実行時は clone を含む全 git 操作を初回から検証済み対象ユーザーへ
+# env -i 降格して行う（Critical#2）。root が対象ユーザー所有 repo を直接
+# 操作すると .git/config 経由の root コード実行境界になるため、「root で
+# clone してから所有権を対象ユーザーへ再帰変更する」旧方式は廃止
+# （ユーザー実行の clone なら所有権は最初から正しい）。
+# 戻り値: 0=成功 / MDM_EXIT_CLI=CLIのみ欠如（部分失敗）/
+#         MDM_EXIT_CONFIG=install_dir 制約違反 / 1=それ以外の失敗
 _mdm_run_user_phase() {
   local _euid="$1" _user="$2" _home="$3"
   local _ref="${KIT_MDM_GIT_REF:-main}"
@@ -667,11 +699,37 @@ _mdm_run_user_phase() {
   MDM_RCPT_GIT_REF="$_ref"
   MDM_RCPT_INSTALL_DIR="$_install_dir"
 
+  # install_dir は対象ユーザーの canonical home 「配下」に制約する（spec §5.4/§7.4）。
+  # home 一致（配下でない）と .. 含み（glob 前方一致をすり抜ける相対脱出）は拒否。
+  case "$_install_dir" in
+    *..*)
+      mdm_log U1b "KIT_MDM_INSTALL_DIR に .. を含む: $_install_dir"
+      return "$MDM_EXIT_CONFIG" ;;
+    "$_home"/*) : ;;
+    *)
+      mdm_log U1b "KIT_MDM_INSTALL_DIR が対象ユーザーの home 配下でない: $_install_dir"
+      return "$MDM_EXIT_CONFIG" ;;
+  esac
+
+  # root 時: 以降の git / ファイル操作を検証済みユーザーへ降格するコンテキストを設定
+  local _uid=""
+  if [[ "$_euid" -eq 0 ]]; then
+    _uid="$(id -u "$_user" 2>/dev/null || true)"
+    if [[ -z "$_uid" ]]; then
+      mdm_log U1b "対象ユーザーの UID を解決できない"
+      return 1
+    fi
+    _MDM_GIT_DROP_UID="$_uid"
+    _MDM_GIT_DROP_USER="$_user"
+    _MDM_GIT_DROP_HOME="$_home"
+  fi
+
   # U1b: キット取得 + ref ピン留め（spec §5.5）
+  local _repo_url="${MDM_KIT_REPO_URL_OVERRIDE:-$_MDM_KIT_REPO_URL}"
   if [[ ! -d "$_install_dir/.git" ]]; then
     mdm_log U1b "キットを取得中: $_install_dir"
-    mkdir -p "$(dirname "$_install_dir")" 2>/dev/null || true
-    if ! git clone --quiet "$_MDM_KIT_REPO_URL" "$_install_dir" 2>/dev/null; then
+    _mdm_run_maybe_as_user /bin/mkdir -p "$(dirname "$_install_dir")" 2>/dev/null || true
+    if ! _mdm_git clone --quiet "$_repo_url" "$_install_dir" 2>/dev/null; then
       mdm_log U1b "clone に失敗: $_install_dir"
       return 1
     fi
@@ -685,23 +743,19 @@ _mdm_run_user_phase() {
     mdm_log U1b "ref を解決できない: $_ref"
     return 1
   fi
-  if ! git -C "$_install_dir" checkout --quiet --detach "$_sha" 2>/dev/null; then
+  if ! _mdm_git -C "$_install_dir" checkout --quiet --detach "$_sha" 2>/dev/null; then
     mdm_log U1b "checkout に失敗: $_sha"
     return 1
   fi
   local _head_sha
-  _head_sha="$(git -C "$_install_dir" rev-parse HEAD 2>/dev/null || true)"
+  _head_sha="$(_mdm_git -C "$_install_dir" rev-parse HEAD 2>/dev/null || true)"
   if [[ "$_head_sha" != "$_sha" ]]; then
     mdm_log U1b "checkout 後の HEAD が解決 SHA と不一致: $_head_sha != $_sha"
     return 1
   fi
   MDM_RCPT_RESOLVED_SHA="$_sha"
-  MDM_RCPT_KIT_VERSION="$(git -C "$_install_dir" describe --tags --always 2>/dev/null || echo unknown)"
-  chmod +x "$_install_dir/setup.sh" 2>/dev/null || true
-
-  if [[ "$_euid" -eq 0 ]]; then
-    chown -R "$_user" "$_install_dir" 2>/dev/null || mdm_log U1b "chown 失敗（続行）: $_install_dir"
-  fi
+  MDM_RCPT_KIT_VERSION="$(_mdm_git -C "$_install_dir" describe --tags --always 2>/dev/null || echo unknown)"
+  _mdm_run_maybe_as_user /bin/chmod +x "$_install_dir/setup.sh" 2>/dev/null || true
 
   # required_components: kit は常時、claude_cli は KIT_MDM_INSTALL_CLAUDE_CLI!=false のとき（既定 true）
   local _cli_required="true"
@@ -720,12 +774,6 @@ _mdm_run_user_phase() {
   mdm_build_setup_argv
   mdm_log U2 "setup.sh を実行: ${MDM_SETUP_ARGV[*]}"
   if [[ "$_euid" -eq 0 ]]; then
-    local _uid
-    _uid="$(id -u "$_user" 2>/dev/null || true)"
-    if [[ -z "$_uid" ]]; then
-      mdm_log U2 "対象ユーザーの UID を解決できない"
-      return 1
-    fi
     if ! _mdm_exec_as_user "$_uid" "$_user" "$_home" /bin/bash "$_install_dir/setup.sh" "${MDM_SETUP_ARGV[@]}"; then
       mdm_log U2 "setup.sh の実行に失敗"
       return 1
@@ -811,6 +859,9 @@ mdm_main() {
   if [[ "$_user_rc" -eq "$MDM_EXIT_CLI" ]]; then
     # キット配備自体は成功したが必須 CLI が欠如（spec §10: 部分失敗として報告）
     _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_CLI"
+  elif [[ "$_user_rc" -eq "$MDM_EXIT_CONFIG" ]]; then
+    # install_dir 制約違反等の設定エラーは 30 に潰さず 50 を維持（spec §8.1）
+    _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_CONFIG"
   elif [[ "$_user_rc" -ne 0 ]]; then
     _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_SETUP"
   fi
