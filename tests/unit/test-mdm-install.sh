@@ -476,6 +476,96 @@ rm -rf "$_tmpd"
   fi
 )
 
+# ══ update 経路 + CLI 無効化の setup.sh 接続（最終レビュー High#5）══
+
+# 既存インストール（対象ユーザーの manifest）検出時は --update を付与（spec §8.5）
+_tmpd="$(mktemp -d)"; _tmpd="$(cd "$_tmpd" && pwd -P)"
+_updhome="$_tmpd/Users/jane"
+mkdir -p "$_updhome/.claude"
+(
+  unset KIT_MDM_DRY_RUN
+  mdm_build_setup_argv "$_updhome" 2>/dev/null || true
+  _found=0
+  for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == '--update' ]] && _found=1; done
+  if [[ "$_found" -eq 1 ]]; then
+    fail "mdm-install: manifest 無しなのに --update が付与された"
+  else
+    pass "mdm-install: manifest 無しでは --update を付けない"
+  fi
+)
+touch "$_updhome/.claude/.starter-kit-manifest.json"
+(
+  unset KIT_MDM_DRY_RUN
+  mdm_build_setup_argv "$_updhome" 2>/dev/null || true
+  _found=0
+  for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == '--update' ]] && _found=1; done
+  [[ "$_found" -eq 1 ]] \
+    && pass "mdm-install: 既存 manifest 検出で --update を付与" \
+    || fail "mdm-install: 既存 manifest 検出でも --update が付かない (argv: ${MDM_SETUP_ARGV[*]})"
+)
+
+# root 実行時の CLI 確認は root の PATH を成功扱いにしない
+(
+  export MDM_EUID_OVERRIDE=0
+  _rc=0
+  _mdm_cli_present_for_home "$_updhome" >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -ne 0 ]]; then
+    pass "mdm-install: root 時は PATH 上の claude を成功扱いにしない"
+  else
+    fail "mdm-install: root 時に root PATH の claude で成功扱いになる"
+  fi
+)
+(
+  export MDM_EUID_OVERRIDE=0
+  mkdir -p "$_updhome/.local/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$_updhome/.local/bin/claude"
+  chmod +x "$_updhome/.local/bin/claude"
+  _rc=0
+  _mdm_cli_present_for_home "$_updhome" >/dev/null 2>&1 || _rc=$?
+  [[ "$_rc" -eq 0 ]] \
+    && pass "mdm-install: root 時も対象ユーザー home の claude は検出する" \
+    || fail "mdm-install: 対象ユーザー home の claude を検出できない"
+)
+rm -rf "$_tmpd"
+
+# setup.sh: KIT_MDM_INSTALL_CLAUDE_CLI=false で CLI 導入をスキップ（spec §11(a)）。
+# 隔離 bash プロセスで setup.sh を source し、導入関数をスタブして挙動を検証する。
+_setup_cli_probe() {  # $1 = KIT_MDM_INSTALL_CLAUDE_CLI の値（"__unset__" で未設定）
+  PROJECT_DIR="$PROJECT_DIR" KIT_CLI_VAL="$1" bash -c '
+    source "$PROJECT_DIR/setup.sh"
+    set +u   # STR_*（i18n）はスタブ実行では未ロードのため
+    info(){ :; }; ok(){ :; }; warn(){ :; }
+    _need_claude_cli_install(){ return 0; }
+    _install_claude_cli(){ echo INSTALL_CALLED; }
+    _add_to_path_now_and_persist(){ :; }
+    if [[ "$KIT_CLI_VAL" != "__unset__" ]]; then
+      export KIT_MDM_INSTALL_CLAUDE_CLI="$KIT_CLI_VAL"
+    fi
+    install_claude_cli_if_needed
+  ' 2>/dev/null
+}
+(
+  out="$(_setup_cli_probe false)" || true
+  if printf '%s' "$out" | grep -q 'INSTALL_CALLED'; then
+    fail "mdm-install: KIT_MDM_INSTALL_CLAUDE_CLI=false でも CLI 導入が実行される"
+  else
+    pass "mdm-install: KIT_MDM_INSTALL_CLAUDE_CLI=false で CLI 導入をスキップ"
+  fi
+)
+(
+  out="$(_setup_cli_probe __unset__)" || true
+  printf '%s' "$out" | grep -q 'INSTALL_CALLED' \
+    && pass "mdm-install: KIT_MDM_INSTALL_CLAUDE_CLI 未設定では従来どおり導入" \
+    || fail "mdm-install: 未設定なのに CLI 導入がスキップされた"
+)
+(
+  # 不正値は fail-closed（導入する）— 検証済みでない値で機能を黙って無効化しない
+  out="$(_setup_cli_probe garbage)" || true
+  printf '%s' "$out" | grep -q 'INSTALL_CALLED' \
+    && pass "mdm-install: KIT_MDM_INSTALL_CLAUDE_CLI 不正値は fail-closed で導入" \
+    || fail "mdm-install: 不正値で CLI 導入がスキップされた（fail-open）"
+)
+
 # ── setup.sh 引数の組み立て（グローバル配列 MDM_SETUP_ARGV へ直接構築）──
 # 実 setup.sh 実行は副作用があるため、argv 組み立て (mdm_build_setup_argv)
 # のみを検証する。mdm_validate_bool は test-mdm-config.sh（アルファベット順

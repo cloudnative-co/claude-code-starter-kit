@@ -401,6 +401,15 @@ _install_claude_cli() {
 
 install_claude_cli_if_needed() {
   local mode="${1:-normal}"
+  # MDM 配布（spec §11(a)・mdm/install-mdm.sh が環境変数で注入）:
+  # KIT_MDM_INSTALL_CLAUDE_CLI が明示的に false のときのみ CLI 導入を行わない。
+  # 不正値・未設定は fail-closed（従来どおり導入）— 無検証の値で機能を黙って
+  # 無効化しない。false 判定は MDM 層の bool 正規化と同じ語彙に限定する。
+  case "$(printf '%s' "${KIT_MDM_INSTALL_CLAUDE_CLI:-}" | tr '[:upper:]' '[:lower:]')" in
+    false|0|no|off)
+      [[ "$mode" == "quiet" || "$mode" == "safety" ]] || info "Skipping Claude CLI install (KIT_MDM_INSTALL_CLAUDE_CLI=false)"
+      return 0 ;;
+  esac
   if ! _need_claude_cli_install; then
     [[ "$mode" == "quiet" || "$mode" == "safety" ]] || ok "$STR_CLI_ALREADY"
     _add_to_path_now_and_persist "$HOME/.local/bin"

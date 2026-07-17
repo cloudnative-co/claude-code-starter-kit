@@ -286,9 +286,16 @@ mdm_build_drop_argv() {
 
 # setup.sh へ渡す引数をグローバル配列 MDM_SETUP_ARGV へ直接構築する
 # （KIT_MDM_DRY_RUN=true のとき --dry-run を追加。spec §7.3）。
+# $1（任意）= 対象ユーザーの canonical home。既存インストール
+# （manifest 存在）を検出した場合は --update を付与し本体の update パス
+# を通す（spec §8.5、最終レビュー High#5）。
 MDM_SETUP_ARGV=()
 mdm_build_setup_argv() {
+  local _home="${1:-}"
   MDM_SETUP_ARGV=(--non-interactive)
+  if [[ -n "$_home" && -f "$_home/.claude/.starter-kit-manifest.json" ]]; then
+    MDM_SETUP_ARGV[${#MDM_SETUP_ARGV[@]}]='--update'
+  fi
   if [[ "$(mdm_validate_bool "${KIT_MDM_DRY_RUN:-false}" 2>/dev/null || echo false)" == "true" ]]; then
     MDM_SETUP_ARGV[${#MDM_SETUP_ARGV[@]}]='--dry-run'
   fi
@@ -675,10 +682,16 @@ _mdm_bootstrap_prereqs() {
   return 0
 }
 
-# 対象ユーザーの home 配下（または PATH）に claude CLI が存在するか。
+# 対象ユーザーの home 配下に claude CLI が存在するか。
+# ★root 実行時は root の PATH 上の claude（system-wide の別導入等）を成功
+# 扱いにしない — 対象ユーザーへの導入保証にならないため（最終レビュー High#5）。
+# PATH フォールバックは非 root（ユーザーモード = 自分自身の PATH）のみ。
 _mdm_cli_present_for_home() {
   local _home="$1"
   [[ -x "$_home/.local/bin/claude" ]] && return 0
+  local _euid
+  _euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
+  [[ "$_euid" -eq 0 ]] && return 1
   command -v claude >/dev/null 2>&1
 }
 
@@ -770,8 +783,9 @@ _mdm_run_user_phase() {
 
   # U2: setup.sh を直接実行（root 時のみ環境分離降格。spec §5.1/§5.3）。
   # 引数は mdm_build_setup_argv がグローバル配列 MDM_SETUP_ARGV へ直接構築する
-  # （KIT_MDM_DRY_RUN=true なら --dry-run も付与。改行シリアライズは行わない）。
-  mdm_build_setup_argv
+  # （既存 manifest 検出で --update、KIT_MDM_DRY_RUN=true で --dry-run を付与。
+  # 改行シリアライズは行わない）。
+  mdm_build_setup_argv "$_home"
   mdm_log U2 "setup.sh を実行: ${MDM_SETUP_ARGV[*]}"
   if [[ "$_euid" -eq 0 ]]; then
     if ! _mdm_exec_as_user "$_uid" "$_user" "$_home" /bin/bash "$_install_dir/setup.sh" "${MDM_SETUP_ARGV[@]}"; then
