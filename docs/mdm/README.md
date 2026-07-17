@@ -60,7 +60,7 @@
 | `KIT_MDM_INSTALL_CLAUDE_CLI` | `true` | Claude Code CLI 導入を必須とするか。`false` ならレシートの `required_components` に `claude_cli` を含めず、`detect-mdm.sh` も CLI 有無を確認せず、`setup.sh` 側の CLI 導入処理もスキップされる |
 | `KIT_MDM_GIT_REF` | `main` | 配布バージョン固定（ブランチ/タグ/40 or 64 桁 SHA）。fleet ではタグまたは SHA 固定を強く推奨（`main` は mutable）。単一ファイル配布の自己ブートストラップにもこの ref が適用される |
 | `KIT_MDM_INSTALL_DIR` | `<対象ユーザーの canonical home>/.claude-starter-kit` | clone 先の絶対パス。**対象ユーザーの home 配下のみ許可**（home 外・`..` 含みは `exit 50`） |
-| `KIT_MDM_LOG_DIR` | root: `/Library/Logs/ClaudeCodeStarterKit` / ユーザーモード: `<home>/Library/Logs/ClaudeCodeStarterKit` | ログ出力先の上書き。許可プレフィックス（`/Library/Logs` または `<home>/Library/Logs`）配下のみ（違反は `exit 50`） |
+| `KIT_MDM_LOG_DIR` | root: `/Library/Logs/ClaudeCodeStarterKit` / ユーザーモード: `<home>/Library/Logs/ClaudeCodeStarterKit` | ログ出力先の上書き。許可プレフィックスは実行モードで異なる: root は `/Library/Logs` 配下のみ（ユーザー書込可能領域への root 書込を防ぐ）、ユーザーモードは `<home>/Library/Logs` 配下のみ。違反は `exit 50` |
 | `KIT_MDM_DRY_RUN` | `false` | `true` で本体 `setup.sh` の `--dry-run` に伝搬（実ファイルを変更しないプレビュー実行） |
 
 ---

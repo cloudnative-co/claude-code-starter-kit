@@ -226,8 +226,8 @@ mdm_prereq_plan() {
   return 0
 }
 
-# 対象ユーザーへ降格するための argv を構築（env -i で root 環境を継承しない）。
-# 実行は _mdm_exec_as_user（後述）。ここでは組み立てのみ（テスト可能に stdout へ改行区切りで出力）。
+# 降格実行時に対象ユーザーへ引き継ぐ環境変数の許可リスト（env -i で root 環境を
+# 継承しないため、渡すものだけを明示列挙する。spec §5.3）。
 _MDM_PASSTHROUGH_KEYS="PROFILE LANGUAGE EDITOR_CHOICE COMMIT_ATTRIBUTION \
 ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_STATUSLINE ENABLE_SAFETY_NET \
 ENABLE_AUTO_UPDATE ENABLE_DOC_SIZE_GUARD ENABLE_FEATURE_RECOMMENDATION \
@@ -604,8 +604,8 @@ _mdm_ensure_clt() {
   return 1
 }
 
-# GitHub API から Homebrew 公式 pkg（アセット名 Homebrew-<version>.pkg）の
-# browser_download_url を解決する（spec §5.2 第一選択の一部）。
+# GitHub API から Homebrew 公式 pkg（アセット名 Homebrew.pkg / 旧 Homebrew-<version>.pkg）
+# の browser_download_url を解決する（spec §5.2 第一選択の一部）。
 # 出典: https://github.com/Homebrew/brew/releases/latest （2026-07-16 確認）。
 # root フェーズの前提導入より前に呼ばれるため jq が使える保証が無く、
 # jq 非依存で grep/sed により JSON から値を抜き出す。
@@ -702,11 +702,13 @@ _mdm_write_brew_pkg_user_plist() {
 # ユーザーのパスワードなし sudo に依存しない）。
 #
 # 手順（各ステップの一次情報根拠は上記 docs.brew.sh/Installation の記載）:
-#   1. GitHub API から pkg の browser_download_url を解決（_mdm_resolve_brew_pkg_url）
+#   1. GitHub API から pkg の browser_download_url を解決し公式配布パスに制約
+#      （_mdm_resolve_brew_pkg_url）
 #   2. 代替インストールユーザーを /var/tmp/.homebrew_pkg_user.plist に書く
-#      （`defaults write /var/tmp/.homebrew_pkg_user HOMEBREW_PKG_USER <user>`。
+#      （_mdm_write_brew_pkg_user_plist による排他作成・root 所有 0600。
 #      ファイルと対象ユーザーは install 前に存在必須 — 対象ユーザーは R2 で検証済み）
-#   3. pkg をダウンロードし pkgutil --check-signature で Developer ID 署名を確認
+#   3. pkg をダウンロードし pkgutil --check-signature で Homebrew の Team ID に
+#      pin した Developer ID 署名を確認
 #      （検証失敗時は導入せず終了 — 呼び出し元経由で exit 11 = MDM_EXIT_BREW）
 #   4. installer -pkg <pkg> -target / で導入（root 実行）
 #   5. 一時ファイル（pkg・plist）をクリーンアップし、brew バイナリの存在で成否判定
@@ -938,15 +940,29 @@ _mdm_setup_log_file() {
     _default_dir="$_home/Library/Logs/ClaudeCodeStarterKit"
   fi
   local _dir="${KIT_MDM_LOG_DIR:-$_default_dir}"
+  # 許可プレフィックスは実行モードで分ける: root は /Library/Logs のみ
+  # （ユーザー home 配下を許すと、ユーザーが植えた symlink を root が辿って
+  # 任意ファイルへ append する経路になる）。非 root は自分の home 配下のみ。
   case "$_dir" in
     *..*)
       mdm_log R1 "KIT_MDM_LOG_DIR に .. を含む: $_dir"
       return "$MDM_EXIT_CONFIG" ;;
-    /Library/Logs|/Library/Logs/*|"$_home/Library/Logs"|"$_home/Library/Logs/"*) : ;;
-    *)
-      mdm_log R1 "KIT_MDM_LOG_DIR が許可プレフィックス配下でない: $_dir"
-      return "$MDM_EXIT_CONFIG" ;;
   esac
+  if [[ "$_euid" -eq 0 ]]; then
+    case "$_dir" in
+      /Library/Logs|/Library/Logs/*) : ;;
+      *)
+        mdm_log R1 "KIT_MDM_LOG_DIR が root の許可プレフィックス（/Library/Logs）配下でない: $_dir"
+        return "$MDM_EXIT_CONFIG" ;;
+    esac
+  else
+    case "$_dir" in
+      "$_home/Library/Logs"|"$_home/Library/Logs/"*) : ;;
+      *)
+        mdm_log R1 "KIT_MDM_LOG_DIR がユーザーの許可プレフィックス（~/Library/Logs）配下でない: $_dir"
+        return "$MDM_EXIT_CONFIG" ;;
+    esac
+  fi
   MDM_LOG_FILE="$_dir/install-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run).log"
   mkdir -p "$_dir" 2>/dev/null || true
   return 0
@@ -1016,7 +1032,8 @@ mdm_main() {
     esac
   fi
 
-  # U1b..U3: キット取得(ref 固定) + setup 実行 + CLI 導入の確認。root 時は setup.sh 実行のみ降格。
+  # U1b..U3: キット取得(ref 固定) + setup 実行 + CLI 導入の確認。
+  # root 時は git 操作・setup.sh 実行とも検証済みユーザーへ環境分離降格（Critical#2）。
   local _user_rc=0
   _mdm_run_user_phase "$_euid" "$_user" "$_home" || _user_rc=$?
   if [[ "$_user_rc" -eq "$MDM_EXIT_CLI" ]]; then

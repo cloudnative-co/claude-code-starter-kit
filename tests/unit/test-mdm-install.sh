@@ -587,6 +587,25 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
     && pass "mdm-install: 許可プレフィックス外の LOG_DIR を拒否" \
     || fail "mdm-install: 許可外 LOG_DIR を拒否すべき (got $_rc)"
 )
+(
+  # root はユーザー home 配下の LOG_DIR を指定できない（ユーザーが植えた
+  # symlink を root が辿って任意 append する経路を塞ぐ）
+  export KIT_MDM_LOG_DIR="$_loghome/Library/Logs/UserControlled"
+  _rc=0
+  _mdm_setup_log_file 0 "$_loghome" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "root は home 配下 LOG_DIR 不可" \
+    && pass "mdm-install: root 時にユーザー home 配下の LOG_DIR を拒否" \
+    || fail "mdm-install: root 時の home 配下 LOG_DIR を拒否すべき (got $_rc)"
+)
+(
+  # 非 root はシステム領域 /Library/Logs を指定できない（書けないだけでなく契約外）
+  export KIT_MDM_LOG_DIR="/Library/Logs/ClaudeCodeStarterKit"
+  _rc=0
+  _mdm_setup_log_file 501 "$_loghome" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "非rootはシステム LOG_DIR 不可" \
+    && pass "mdm-install: 非 root 時にシステム領域の LOG_DIR を拒否" \
+    || fail "mdm-install: 非 root 時のシステム LOG_DIR を拒否すべき (got $_rc)"
+)
 rm -rf "$_tmpd"
 
 # ── MDM 既定値の適用（Ghostty は MDM 既定 off・spec §5.6）─────
