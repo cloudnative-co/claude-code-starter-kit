@@ -17,6 +17,17 @@ mkdir -p "$_mdm_detect_install" "$_mdm_detect_snapshot" \
   "$_mdm_detect_receipts" "$_mdm_detect_private_base"
 chmod 700 "$_mdm_detect_trust_base" "$_mdm_detect_private_base"
 chmod 755 "$_mdm_detect_receipts"
+(
+  unset MDM_DETECT_HOME_OVERRIDE
+  _mdm_detect_read_user_home_record() {
+    printf 'NFSHomeDirectory: /Users/Jane Doe\n'
+  }
+  if [[ "$(_mdm_detect_user_home jane)" == "/Users/Jane Doe" ]]; then
+    pass "mdm-detect: dscl home の内部空白を保持"
+  else
+    fail "mdm-detect: 空白を含む dscl home の解析が不正"
+  fi
+)
 /usr/bin/git -C "$_mdm_detect_install" init -q
 printf 'fixture\n' > "$_mdm_detect_install/file"
 /usr/bin/git -C "$_mdm_detect_install" add -A

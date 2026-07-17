@@ -345,14 +345,28 @@ _mdm_receipt_is_trusted() { # <receipt> <target-user>
   [[ "$_canonical" == "$_receipt" ]]
 }
 
+_mdm_detect_read_user_home_record() {
+  /usr/bin/dscl . -read "/Users/$1" NFSHomeDirectory 2>/dev/null
+}
+
+_mdm_detect_parse_user_home() {
+  /usr/bin/awk '
+    /^NFSHomeDirectory:[[:space:]]*/ {
+      sub(/^NFSHomeDirectory:[[:space:]]*/, "")
+      print
+      exit
+    }
+  '
+}
+
 _mdm_detect_user_home() {
   local _user="$1" _override
   if _override="$(_mdm_test_value MDM_DETECT_HOME_OVERRIDE)"; then
     printf '%s' "$_override"
     return 0
   fi
-  /usr/bin/dscl . -read "/Users/$_user" NFSHomeDirectory 2>/dev/null \
-    | /usr/bin/awk '{print $2; exit}' || true
+  _mdm_detect_read_user_home_record "$_user" \
+    | _mdm_detect_parse_user_home || true
 }
 
 _mdm_detect_user_uid() {

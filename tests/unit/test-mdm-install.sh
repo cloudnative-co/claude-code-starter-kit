@@ -726,6 +726,19 @@ mkdir -p "$_fakehome"
   fi
 )
 (
+  _space_home="$_tmpd/Users/Jane Doe"
+  mkdir -p "$_space_home"
+  unset MDM_DSCL_HOME_OVERRIDE
+  export MDM_VALIDATE_HOME_SKIP_OWNER=1
+  dscl() { printf 'NFSHomeDirectory: %s\n' "$_space_home"; }
+  if out="$(mdm_validate_user_home "jane" 2>/dev/null)" \
+    && [[ "$out" == "$_space_home" ]]; then
+    pass "mdm-install: dscl home の内部空白を保持"
+  else
+    fail "mdm-install: 空白を含む dscl home の解析が不正 (got '$out')"
+  fi
+)
+(
   export MDM_DSCL_HOME_OVERRIDE="$_tmpd/Users/nonexistent"
   export MDM_VALIDATE_HOME_SKIP_OWNER=1
   _rc=0

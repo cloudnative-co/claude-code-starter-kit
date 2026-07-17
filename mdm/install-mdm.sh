@@ -671,12 +671,23 @@ mdm_resolve_target_user() {
 }
 
 # 対象ユーザーの canonical home を取得・検証。dscl はモック可能。
+_mdm_parse_dscl_home() {
+  awk '
+    /^NFSHomeDirectory:[[:space:]]*/ {
+      sub(/^NFSHomeDirectory:[[:space:]]*/, "")
+      print
+      exit
+    }
+  '
+}
+
 mdm_validate_user_home() {
   local _user="$1" _home _canonical
   if [[ -n "${MDM_DSCL_HOME_OVERRIDE:-}" ]]; then
     _home="$MDM_DSCL_HOME_OVERRIDE"
   else
-    _home="$(dscl . -read "/Users/$_user" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true)"
+    _home="$(dscl . -read "/Users/$_user" NFSHomeDirectory 2>/dev/null \
+      | _mdm_parse_dscl_home || true)"
   fi
   if [[ -z "$_home" || ! -d "$_home" ]]; then
     mdm_log R2 "home が存在しない: '$_home'"
