@@ -129,6 +129,27 @@ else
   fail "mdm-managed: run_wizard の MDM env 再適用配線が無い/不完全"
 fi
 
+# ── production context: _CONFIG_KEYS の空 separator で errexit しない ──
+set +e
+_mdm_errexit_output="$(
+  PROJECT_DIR="$PROJECT_DIR" "$BASH" --noprofile --norc -c '
+    set -euo pipefail
+    source "$PROJECT_DIR/wizard/wizard.sh"
+    source "$PROJECT_DIR/lib/colors.sh"
+    load_strings en
+    KIT_MDM_MANAGED=true
+    _apply_mdm_managed_profile
+    printf "profile=%s\n" "$PROFILE"
+  ' 2>&1
+)"
+_mdm_errexit_rc=$?
+set -e
+if [[ "$_mdm_errexit_rc" -eq 0 && "$_mdm_errexit_output" == "profile=standard" ]]; then
+  pass "mdm-managed: production errexit 文脈で空 config separator を安全に無視"
+else
+  fail "mdm-managed: production errexit 文脈で profile 適用に失敗 (rc=$_mdm_errexit_rc output=$_mdm_errexit_output)"
+fi
+
 (
   _reset_mdm_config_vars
   export KIT_MDM_MANAGED=true

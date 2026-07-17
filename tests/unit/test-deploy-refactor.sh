@@ -79,3 +79,72 @@ EOF
     fail "$test_name"
   fi
 }
+
+{
+  test_name="deploy: manifest render failure preserves the existing manifest"
+  if (
+    _manifest_tmp="$(mktemp -d)"
+    CLAUDE_DIR="$_manifest_tmp/.claude"
+    mkdir -p "$CLAUDE_DIR"
+    printf '{"sentinel":true}\n' > "$CLAUDE_DIR/.starter-kit-manifest.json"
+    KIT_MDM_MANAGED=false
+    managed_files_json() { printf 'invalid-json'; }
+    cleanup_paths_json() { printf '[]'; }
+    _manifest_rc=0
+    write_manifest >/dev/null 2>&1 || _manifest_rc=$?
+    [[ "$_manifest_rc" -ne 0 ]] \
+      && [[ "$(< "$CLAUDE_DIR/.starter-kit-manifest.json")" == '{"sentinel":true}' ]]
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="deploy: manifest input producer failures preserve the existing manifest"
+  if (
+    _manifest_tmp="$(mktemp -d)"
+    CLAUDE_DIR="$_manifest_tmp/.claude"
+    mkdir -p "$CLAUDE_DIR"
+    printf '{"sentinel":true}\n' > "$CLAUDE_DIR/.starter-kit-manifest.json"
+    KIT_MDM_MANAGED=false
+    managed_files_json() { printf '[]'; return 42; }
+    cleanup_paths_json() { printf '[]'; }
+    _manifest_rc=0
+    write_manifest >/dev/null 2>&1 || _manifest_rc=$?
+    [[ "$_manifest_rc" -ne 0 ]] || exit 1
+    [[ "$(< "$CLAUDE_DIR/.starter-kit-manifest.json")" == '{"sentinel":true}' ]] || exit 1
+    managed_files_json() { printf '[]'; }
+    cleanup_paths_json() { printf '[]'; return 43; }
+    _manifest_rc=0
+    write_manifest >/dev/null 2>&1 || _manifest_rc=$?
+    [[ "$_manifest_rc" -ne 0 ]] \
+      && [[ "$(< "$CLAUDE_DIR/.starter-kit-manifest.json")" == '{"sentinel":true}' ]]
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="deploy: manifest destination must be a regular non-symlink file"
+  if (
+    _manifest_tmp="$(mktemp -d)"
+    CLAUDE_DIR="$_manifest_tmp/.claude"
+    mkdir -p "$CLAUDE_DIR/.starter-kit-manifest.json"
+    KIT_MDM_MANAGED=false
+    managed_files_json() { printf '[]'; }
+    cleanup_paths_json() { printf '[]'; }
+    _manifest_rc=0
+    write_manifest >/dev/null 2>&1 || _manifest_rc=$?
+    [[ "$_manifest_rc" -ne 0 ]] \
+      && [[ -d "$CLAUDE_DIR/.starter-kit-manifest.json" ]] \
+      && [[ -z "$(find "$CLAUDE_DIR/.starter-kit-manifest.json" -mindepth 1 -print -quit)" ]]
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}

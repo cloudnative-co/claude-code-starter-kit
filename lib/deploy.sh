@@ -1368,8 +1368,11 @@ _deploy_fresh_with_existing() {
 # ---------------------------------------------------------------------------
 write_manifest() {
   local manifest="$CLAUDE_DIR/.starter-kit-manifest.json"
+  if [[ -e "$manifest" || -L "$manifest" ]]; then
+    [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
+  fi
   local ts
-  ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" || return 1
 
   local kit_version
   kit_version="$(git -C "$PROJECT_DIR" describe --tags --always 2>/dev/null || echo "unknown")"
@@ -1379,9 +1382,9 @@ write_manifest() {
 
   # Only track files that the starter kit itself manages.
   local files_json
-  files_json="$(managed_files_json)"
+  files_json="$(managed_files_json)" || return 1
   local cleanup_paths
-  cleanup_paths="$(cleanup_paths_json)"
+  cleanup_paths="$(cleanup_paths_json)" || return 1
   local mdm_absent_files='[]'
   local mdm_managed=false
   if _deploy_mdm_managed; then
@@ -1389,13 +1392,15 @@ write_manifest() {
     mdm_absent_files="$(mdm_absent_files_json)" || return 1
   fi
 
-  local manifest_out="$manifest"
+  local manifest_out
   if _deploy_mdm_managed; then
-    manifest_out="$(mktemp)"
-    _SETUP_TMP_FILES+=("$manifest_out")
+    manifest_out="$(mktemp)" || return 1
+  else
+    manifest_out="$(mktemp "${manifest}.tmp.XXXXXX")" || return 1
   fi
+  _SETUP_TMP_FILES+=("$manifest_out")
 
-  jq -n \
+  if ! jq -n \
     --arg version "2" \
     --arg ts "$ts" \
     --arg kit_version "$kit_version" \
@@ -1431,11 +1436,19 @@ write_manifest() {
       mdm_managed: $mdm_managed,
       snapshot_dir: $snapshot_dir,
       claude_dir: $claude_dir
-    }' > "$manifest_out"
+    }' > "$manifest_out"; then
+    rm -f "$manifest_out"
+    return 1
+  fi
 
   if _deploy_mdm_managed; then
-    _mdm_atomic_replace_managed_file "$manifest_out" "$manifest" || return 1
+    _mdm_atomic_replace_managed_file "$manifest_out" "$manifest" \
+      || { rm -f "$manifest_out"; return 1; }
+  else
+    mv -f "$manifest_out" "$manifest" \
+      || { rm -f "$manifest_out"; return 1; }
   fi
+  return 0
 }
 
 # ---------------------------------------------------------------------------

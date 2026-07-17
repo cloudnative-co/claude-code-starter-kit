@@ -972,7 +972,17 @@ _update_phase_claude_md() {
   local current_claude_md="${claude_dir}/CLAUDE.md"
   local snapshot_claude_md="${snapshot_dir}/CLAUDE.md"
 
-  if _update_claude_md "$current_claude_md" "$snapshot_claude_md" "$new_claude_md"; then
+  local _updated=false
+  if _update_mdm_managed; then
+    # MDM always converges CLAUDE.md to desired state. Keep this call out of
+    # an `if` condition so errexit remains active throughout its call tree.
+    _update_claude_md "$current_claude_md" "$snapshot_claude_md" "$new_claude_md"
+    _updated=true
+  elif _update_claude_md "$current_claude_md" "$snapshot_claude_md" "$new_claude_md"; then
+    _updated=true
+  fi
+
+  if [[ "$_updated" == "true" ]]; then
     _UPDATE_ALL_UPDATED_FILES+=("$current_claude_md")
     if [[ "$_dr" == "true" ]]; then
       info "CLAUDE.md kit section will be updated"
@@ -1224,6 +1234,8 @@ run_update() {
   _UPDATE_ALL_SKIPPED_FILES=()
   _UPDATE_NEW_SETTINGS_FILE=""
 
+  # These must remain simple commands. `cmd || return` would disable errexit
+  # inside each phase and could turn an I/O failure into a successful update.
   _update_phase_settings "$claude_dir" "$snapshot_dir"
   _update_phase_claude_md "$claude_dir" "$snapshot_dir"
   _update_phase_content "$project_dir" "$claude_dir" "$snapshot_dir"

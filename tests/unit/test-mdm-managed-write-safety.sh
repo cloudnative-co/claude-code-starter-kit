@@ -157,6 +157,27 @@ load_strings en
 )
 
 (
+  export KIT_MDM_MANAGED=true
+  _tmp="$(mktemp -d)"
+  CLAUDE_DIR="$_tmp/claude"
+  mkdir -p "$CLAUDE_DIR"
+  printf '{"sentinel":true}\n' > "$CLAUDE_DIR/.starter-kit-manifest.json"
+  _SETUP_TMP_FILES=()
+  managed_files_json() { printf 'invalid-json'; }
+  cleanup_paths_json() { printf '[]'; }
+  mdm_absent_files_json() { printf '[]'; }
+  _rc=0
+  write_manifest >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -ne 0 ]] \
+    && [[ "$(< "$CLAUDE_DIR/.starter-kit-manifest.json")" == '{"sentinel":true}' ]]; then
+    pass "mdm-write: manifest render 失敗時も既存 manifest を保持"
+  else
+    fail "mdm-write: manifest render 失敗で既存 manifest を破損"
+  fi
+  rm -rf "$_tmp"
+)
+
+(
   _tmp="$(mktemp -d)"
   printf 'external config\n' > "$_tmp/external.conf"
   ln -s "$_tmp/external.conf" "$_tmp/config.conf"

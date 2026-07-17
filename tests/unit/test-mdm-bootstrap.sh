@@ -46,6 +46,31 @@ HTTP_PROXY="https://proxy.example:8443"
 CONF
 chmod 600 "$_conf"
 
+if [[ "$(_mdm_stat_owner "$_conf")" == "$(/usr/bin/id -un)" ]]; then
+  pass "mdm-bootstrap: config owner stat adapter は実所有者を返す"
+else
+  fail "mdm-bootstrap: config owner stat adapter が実所有者と不一致"
+fi
+
+for _owner_case in file directory; do
+  (
+    unset MDM_CONFIG_SKIP_OWNER_CHECK
+    _mdm_stat_owner() {
+      if [[ "$_owner_case" == file && "$1" == "$_conf" ]] \
+        || [[ "$_owner_case" == directory && "$1" == "$_tmpd" ]]; then
+        printf 'nobody'
+      else
+        printf 'root'
+      fi
+    }
+    _owner_rc=0
+    _mdm_root_config_apply "$_conf" >/dev/null 2>&1 || _owner_rc=$?
+    [[ "$_owner_rc" -eq "$MDM_EXIT_CONFIG" ]] \
+      && pass "mdm-bootstrap: non-root owner の管理設定 $_owner_case を拒否" \
+      || fail "mdm-bootstrap: non-root owner の管理設定 $_owner_case を許可 (rc=$_owner_rc)"
+  )
+done
+
 (
   export MDM_CONFIG_SKIP_OWNER_CHECK=1
   export PROFILE=full GIT_EXEC_PATH=/tmp/attacker BASH_ENV=/tmp/attacker-env
@@ -111,6 +136,24 @@ if [[ ! -e "$_canary" && "$_rc" -eq "$_expected_rc" ]]; then
   pass "mdm-bootstrap: direct launcher は BASH_ENV を起動前に無効化"
 else
   fail "mdm-bootstrap: BASH_ENV executed or launcher exit changed (rc=$_rc expected=$_expected_rc)"
+fi
+
+if [[ "$(/usr/bin/uname -s)" == Darwin && "$(/usr/bin/id -u)" -ne 0 ]]; then
+  printf 'UNKNOWN_ROOT_KEY=true\n' > "$_tmpd/override-config.conf"
+  chmod 600 "$_tmpd/override-config.conf"
+  _rc=0
+  MDM_SOURCE_ONLY=1 MDM_EUID_OVERRIDE=0 MDM_CONFIG_SKIP_OWNER_CHECK=1 \
+    MDM_CONFIG_PATH_OVERRIDE="$_tmpd/override-config.conf" \
+    MDM_DSCL_UID_OVERRIDE=501 MDM_CLT_PRESENT_OVERRIDE=1 \
+    KIT_MDM_DRY_RUN=true "$PROJECT_DIR/mdm/install-mdm.sh" \
+    >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq "$MDM_EXIT_CONTEXT" ]]; then
+    pass "mdm-bootstrap: production entrypoint は MDM override 群を破棄"
+  else
+    fail "mdm-bootstrap: production override isolation が不正 (rc=$_rc)"
+  fi
+else
+  skip "mdm-bootstrap: production override isolation" "Darwin non-root contract"
 fi
 
 rm -rf "$_tmpd"

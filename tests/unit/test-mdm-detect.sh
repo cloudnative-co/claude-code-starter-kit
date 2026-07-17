@@ -1005,6 +1005,29 @@ for _mdm_detect_bad_args in \
   fi
 done
 
+for _mdm_detect_valid_user in John.Smith alice@corp; do
+  _mdm_detect_main_rc=0
+  mdm_detect_main --user "$_mdm_detect_valid_user" >/dev/null 2>&1 \
+    || _mdm_detect_main_rc=$?
+  if [[ "$_mdm_detect_main_rc" -eq 1 ]]; then
+    pass "mdm-detect: macOS short name を引数として受理 ($_mdm_detect_valid_user)"
+  else
+    fail "mdm-detect: 有効な short name の引数判定が不正 ($_mdm_detect_valid_user rc=$_mdm_detect_main_rc)"
+  fi
+done
+
+for _mdm_detect_bad_user in .john john. john..smith @john john@ \
+  123456789012345678901234567890123; do
+  _mdm_detect_main_rc=0
+  mdm_detect_main --user "$_mdm_detect_bad_user" >/dev/null 2>&1 \
+    || _mdm_detect_main_rc=$?
+  if [[ "$_mdm_detect_main_rc" -eq 2 ]]; then
+    pass "mdm-detect: path-like username を拒否 ($_mdm_detect_bad_user)"
+  else
+    fail "mdm-detect: 不正 username を許可 ($_mdm_detect_bad_user rc=$_mdm_detect_main_rc)"
+  fi
+done
+
 _mdm_detect_main_rc=0
 mdm_detect_main --min-version 0.74.0 >/dev/null 2>&1 || _mdm_detect_main_rc=$?
 if [[ "$_mdm_detect_main_rc" -eq 1 ]]; then

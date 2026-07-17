@@ -634,6 +634,14 @@ _mdm_user_uid() {
   dscl . -read "/Users/$_user" UniqueID 2>/dev/null | awk '{print $2; exit}' || true
 }
 
+# MDM artifact 名へ安全に埋め込める macOS short name の対応範囲。
+# 大文字・数字先頭・dot/@ 区切りを許可し、path-like な区切りは拒否する。
+_mdm_username_is_safe() {
+  local _user="$1"
+  [[ ${#_user} -ge 1 && ${#_user} -le 32 ]] || return 1
+  [[ "$_user" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*([.@][A-Za-z0-9_-]+)*$ ]]
+}
+
 # 対象ユーザー契約: 予約名 denylist に加えて、username 文字種・dscl 実在確認・
 # UID >= 501（システムアカウント除外）を必須とする（最終レビュー High#8）。
 mdm_resolve_target_user() {
@@ -644,7 +652,7 @@ mdm_resolve_target_user() {
       mdm_log R2 "対象ユーザーを解決できない（'$_u' は無効）"
       return "$MDM_EXIT_USER" ;;
   esac
-  if ! printf '%s' "$_u" | grep -qE '^[a-z_][a-z0-9_-]{0,31}$'; then
+  if ! _mdm_username_is_safe "$_u"; then
     mdm_log R2 "対象ユーザー名の文字種が不正: '$_u'"
     return "$MDM_EXIT_USER"
   fi
@@ -1006,7 +1014,7 @@ _mdm_root_value() {
     ENABLE_*|COMMIT_ATTRIBUTION|KIT_MDM_INSTALL_HOMEBREW|KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE|KIT_MDM_INSTALL_CLAUDE_CLI|KIT_MDM_DRY_RUN)
       _mdm_root_bool "$_value" ;;
     KIT_MDM_TARGET_USER)
-      [[ "$_value" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || return 1
+      _mdm_username_is_safe "$_value" || return 1
       printf '%s' "$_value" ;;
     KIT_MDM_GIT_REF) _mdm_root_gitref_syntax "$_value" ;;
     KIT_MDM_INSTALL_DIR|KIT_MDM_LOG_DIR)
@@ -1298,6 +1306,22 @@ _mdm_check_dryrun_prerequisites() {
   return "$MDM_EXIT_PREREQ"
 }
 
+# softwareupdate -l の旧形式（"* Command Line Tools ..."）と現行形式
+#（"* Label: Command Line Tools ..."）を同じ install label に正規化する。
+_mdm_select_clt_label() {
+  local _label _version
+  sed -nE '/\*.*Command Line Tools/ {
+    s/^[^*]*\*[[:space:]]*//
+    s/^Label:[[:space:]]*//
+    p
+  }' | while IFS= read -r _label; do
+    _version="${_label##*Xcode}"
+    _version="${_version# }"
+    _version="${_version#-}"
+    printf '%s\t%s\n' "$_version" "$_label"
+  done | sort -V | tail -n1 | cut -f2-
+}
+
 # Xcode Command Line Tools の導入確認。root 実行前提。
 # 既定では不在時に MDM baseline での pkg 事前配布を要求して失敗を返す。
 # KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE=true のときのみ、Apple 公式手順として
@@ -1319,7 +1343,7 @@ _mdm_ensure_clt() {
     return 1
   fi
   local _label
-  _label="$(softwareupdate -l 2>/dev/null | grep -E '\*.*Command Line Tools' | tail -n1 | sed -E 's/^[^*]*\*[[:space:]]*//' || true)"
+  _label="$(softwareupdate -l 2>/dev/null | _mdm_select_clt_label || true)"
   if [[ -n "$_label" ]]; then
     softwareupdate -i "$_label" --verbose >/dev/null 2>&1 || true
   else

@@ -501,6 +501,7 @@ _apply_mdm_managed_profile() {
   # the selected profile. Retired settings and non-feature choices must not be
   # accidentally treated as current MDM policy.
   for _var in "${_CONFIG_KEYS[@]+"${_CONFIG_KEYS[@]}"}"; do
+    [[ -n "$_var" ]] || continue
     printf -v "$_var" '%s' ""
   done
 

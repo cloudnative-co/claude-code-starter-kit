@@ -332,7 +332,9 @@ if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
   _validate_dismissed_features
 
   # Update mode: run update with merge logic
-  run_update "$PROJECT_DIR" "$CLAUDE_DIR" || return 1
+  # Keep this as a simple command. Placing a function call on the left side of
+  # `||` disables errexit throughout its dynamic call tree in Bash.
+  run_update "$PROJECT_DIR" "$CLAUDE_DIR"
 
   # Detect new features and write pending notification (non-fatal)
   _detect_and_write_pending_features "$CLAUDE_DIR" || true

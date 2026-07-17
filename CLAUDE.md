@@ -241,8 +241,9 @@ Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and 
    - `setup.sh --update` / `/update-kit`
    - saved config reuse in `wizard/wizard.sh`
    Missing keys on older installs should receive the intended default for that profile, but existing explicit user choices must win.
-11. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Write the entry directly under the version heading (`## [x.y.z]`) that will be tagged on merge — do not use an `[Unreleased]` section. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
-12. **Feature recommendation**: Ensure `feature.json` has `displayName` and `description` fields for the notification display. If the feature should NOT be recommended (special-case features), verify it is excluded from `_FEATURE_FLAGS` or is handled by `_detect_and_write_pending_features()` exclusion logic.
+11. Run the MDM expected-state parity suite (`tests/run-mdm-tests.sh`). Registry-backed features are discovered automatically; update `mdm/render-expected.py` only when adding a new source shape, special partial, root output, or override that its static allowlist does not already model, and extend the parity fixture in the same change.
+12. Update `CHANGELOG.md` in the same PR when the feature changes user-visible behavior, default presets, commands, docs, generated files, or upgrade behavior. Write the entry directly under the version heading (`## [x.y.z]`) that will be tagged on merge — do not use an `[Unreleased]` section. Follow the existing Keep a Changelog structure and write the entry at the level users will notice.
+13. **Feature recommendation**: Ensure `feature.json` has `displayName` and `description` fields for the notification display. If the feature should NOT be recommended (special-case features), verify it is excluded from `_FEATURE_FLAGS` or is handled by `_detect_and_write_pending_features()` exclusion logic.
 
 Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCompact`) — `merge_deep()` concatenates arrays instead of replacing them.
 

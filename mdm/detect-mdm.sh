@@ -15,6 +15,12 @@ _mdm_launcher_mode_safe() {
   return 0
 }
 
+_mdm_username_is_safe() {
+  local _user="$1"
+  [[ ${#_user} -ge 1 && ${#_user} -le 32 ]] || return 1
+  [[ "$_user" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*([.@][A-Za-z0-9_-]+)*$ ]]
+}
+
 _mdm_launcher_stat_owner() {
   if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]]; then
     /usr/bin/stat -f '%u' "$1" 2>/dev/null
@@ -1029,7 +1035,7 @@ mdm_detect_main() {
       _user="$(/usr/bin/id -un 2>/dev/null || true)"
     fi
   fi
-  if ! [[ "$_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+  if ! _mdm_username_is_safe "$_user"; then
     if [[ "$_user_explicit" == "1" ]]; then _mdm_detect_usage; return 2; fi
     printf 'non-compliant: invalid target user (%s)\n' "$_user"
     return 1

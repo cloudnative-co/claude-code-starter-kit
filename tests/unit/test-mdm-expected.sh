@@ -43,6 +43,7 @@ set -euo pipefail
 PROJECT_DIR="$1"
 case_root="$2"
 logical_home="$3"
+source "$PROJECT_DIR/setup.sh"
 render_case() (
 profile="$1"
 language="$2"
@@ -85,15 +86,7 @@ for pair in \
   is_true "${!flag:-false}" || continue
   _copy_distribution_tree "$PROJECT_DIR/$source_dir" "$CLAUDE_DIR/$source_dir" overwrite
 done
-for feature in "${_FEATURE_SCRIPT_ORDER[@]}"; do
-  [[ "${_FEATURE_HAS_SCRIPTS[$feature]+set}" ]] || continue
-  flag="${_FEATURE_FLAGS[$feature]}"
-  is_true "${!flag:-false}" || continue
-  destination="$CLAUDE_DIR/hooks/$feature"
-  _copy_distribution_tree "$PROJECT_DIR/features/$feature/scripts" "$destination" overwrite
-  chmod +x "$destination"/*.sh 2>/dev/null || true
-  chmod +x "$destination"/*.py 2>/dev/null || true
-done
+deploy_hook_scripts simple >/dev/null
 collect_managed_target_files
 _normalize_mdm_managed_modes "${_MANAGED_TARGET_FILES[@]}"
 

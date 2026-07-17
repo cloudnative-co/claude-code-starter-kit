@@ -71,6 +71,103 @@
 }
 
 {
+  test_name="update: production simple-command context stops on an internal phase failure"
+  _update_tmp="$(mktemp -d)"
+  _update_failure_probe="$_update_tmp/after-failure"
+  _update_later_probe="$_update_tmp/later-phase"
+  _update_rc=0
+  PROJECT_DIR="$PROJECT_DIR" \
+    UPDATE_FAILURE_PROBE="$_update_failure_probe" \
+    UPDATE_LATER_PROBE="$_update_later_probe" \
+    "$BASH" --noprofile --norc -c '
+      set -euo pipefail
+      source "$PROJECT_DIR/setup.sh"
+      source "$PROJECT_DIR/lib/update.sh"
+      _cleanup_tmp() { :; }
+      _prepare_mdm_claude_root() { return 0; }
+      _has_user_customizations() { return 1; }
+      backup_existing() { return 0; }
+      _snapshot_exists() { return 0; }
+      _validate_dismissed_features() { return 0; }
+      _detect_and_write_pending_features() { return 0; }
+      _check_major_upgrade() { return 0; }
+      section() { return 0; }
+      _update_phase_settings() {
+        false
+        : > "$UPDATE_FAILURE_PROBE"
+      }
+      _update_phase_claude_md() { : > "$UPDATE_LATER_PROBE"; }
+      _update_phase_content() { return 0; }
+      _update_phase_hooks() { return 0; }
+      _update_phase_snapshot() { return 0; }
+      _update_report() { return 0; }
+      UPDATE_MODE=true
+      CLAUDE_DIR=/nonexistent-claude
+      _CONFIG_ALLOWED_KEYS=""
+      STR_UPDATE_TITLE=Update
+      setup_deploy
+    ' >/dev/null 2>&1 || _update_rc=$?
+  if [[ "$_update_rc" -ne 0 \
+    && ! -e "$_update_failure_probe" \
+    && ! -e "$_update_later_probe" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -rf "$_update_tmp"
+}
+
+{
+  test_name="update: MDM CLAUDE phase keeps errexit active inside the real updater"
+  _update_tmp="$(mktemp -d)"
+  _update_extract_probe="$_update_tmp/after-extract-failure"
+  _update_later_probe="$_update_tmp/later-phase"
+  _update_rc=0
+  PROJECT_DIR="$PROJECT_DIR" \
+    UPDATE_TEST_ROOT="$_update_tmp" \
+    UPDATE_EXTRACT_PROBE="$_update_extract_probe" \
+    UPDATE_LATER_PROBE="$_update_later_probe" \
+    "$BASH" --noprofile --norc -c '
+      set -euo pipefail
+      source "$PROJECT_DIR/setup.sh"
+      source "$PROJECT_DIR/lib/update.sh"
+      KIT_MDM_MANAGED=true
+      DRY_RUN=false
+      _RESET_MERGE_PREFS=false
+      STR_UPDATE_TITLE=Update
+      STR_UPDATE_CLAUDEMD=CLAUDE
+      STR_CLAUDEMD_KIT_UPDATED=updated
+      _check_major_upgrade() { return 0; }
+      section() { return 0; }
+      _progress_step() { return 0; }
+      info() { return 0; }
+      ok() { return 0; }
+      _update_phase_settings() { return 0; }
+      _update_phase_content() { : > "$UPDATE_LATER_PROBE"; }
+      _update_phase_hooks() { return 0; }
+      _update_phase_snapshot() { return 0; }
+      _update_report() { return 0; }
+      build_claude_md_to_file() { printf "fixture\n" > "$1"; }
+      _extract_kit_section() {
+        false
+        : > "$UPDATE_EXTRACT_PROBE"
+      }
+      _mdm_distribution_target_is_safe() { return 0; }
+      _mdm_atomic_replace_managed_file() { return 0; }
+      mkdir -p "$UPDATE_TEST_ROOT/claude"
+      run_update "$PROJECT_DIR" "$UPDATE_TEST_ROOT/claude"
+    ' >/dev/null 2>&1 || _update_rc=$?
+  if [[ "$_update_rc" -ne 0 \
+    && ! -e "$_update_extract_probe" \
+    && ! -e "$_update_later_probe" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -rf "$_update_tmp"
+}
+
+{
   test_name="update-refactor: merge entry points share the _resolve_key_3way core"
   core_calls="$(grep -c '_resolve_key_3way "' "$PROJECT_DIR/lib/merge.sh" || true)"
   if grep -q '_resolve_key_3way() {' "$PROJECT_DIR/lib/merge.sh" \

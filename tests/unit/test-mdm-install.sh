@@ -348,6 +348,74 @@ rm -rf "$_tmpd"
   rm -rf "$_launcher_tmp"
 )
 (
+  _launcher_tmp="$(mktemp -d)"
+  _launcher_script="$_launcher_tmp/install-mdm.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$_launcher_script"
+  chmod 755 "$_launcher_script"
+  _mdm_launcher_stat_uid() {
+    [[ "$1" == */install-mdm.sh ]] && printf '501' || printf '0'
+  }
+  _mdm_launcher_stat_mode() { printf '755'; }
+  _mdm_launcher_acl_safe() { return 0; }
+  if _mdm_launcher_path_trusted "$_launcher_script"; then
+    fail "mdm-install: non-root owner の launcher を許可"
+  else
+    pass "mdm-install: non-root owner の launcher を拒否"
+  fi
+  rm -rf "$_launcher_tmp"
+)
+(
+  _launcher_tmp="$(mktemp -d)"
+  _launcher_script="$_launcher_tmp/install-mdm.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$_launcher_script"
+  chmod 755 "$_launcher_script"
+  _mdm_launcher_stat_uid() { printf '0'; }
+  _mdm_launcher_stat_mode() {
+    [[ "$1" == */install-mdm.sh ]] && printf '775' || printf '755'
+  }
+  _mdm_launcher_acl_safe() { return 0; }
+  if _mdm_launcher_path_trusted "$_launcher_script"; then
+    fail "mdm-install: group-writable launcher を許可"
+  else
+    pass "mdm-install: group-writable launcher を拒否"
+  fi
+  rm -rf "$_launcher_tmp"
+)
+(
+  _launcher_tmp="$(mktemp -d)"
+  _launcher_script="$_launcher_tmp/install-mdm.sh"
+  _launcher_link="$_launcher_tmp/install-link.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$_launcher_script"
+  chmod 755 "$_launcher_script"
+  ln -s "$_launcher_script" "$_launcher_link"
+  _mdm_launcher_stat_uid() { printf '0'; }
+  _mdm_launcher_stat_mode() { printf '755'; }
+  _mdm_launcher_acl_safe() { return 0; }
+  if _mdm_launcher_path_trusted "$_launcher_link"; then
+    fail "mdm-install: symlink launcher を許可"
+  else
+    pass "mdm-install: symlink launcher を拒否"
+  fi
+  rm -rf "$_launcher_tmp"
+)
+(
+  _launcher_tmp="$(mktemp -d)"
+  _launcher_script="$_launcher_tmp/install-mdm.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$_launcher_script"
+  chmod 755 "$_launcher_script"
+  _mdm_launcher_stat_uid() { printf '0'; }
+  _mdm_launcher_stat_mode() { printf '755'; }
+  _mdm_launcher_acl_safe() {
+    [[ "$1" != */install-mdm.sh ]]
+  }
+  if _mdm_launcher_path_trusted "$_launcher_script"; then
+    fail "mdm-install: extended ACL launcher を許可"
+  else
+    pass "mdm-install: extended ACL launcher を拒否"
+  fi
+  rm -rf "$_launcher_tmp"
+)
+(
   _launcher_sticky_base=/tmp
   [[ -d /private/tmp && ! -L /private/tmp ]] && _launcher_sticky_base=/private/tmp
   _launcher_mode="$(_mdm_launcher_stat_mode "$_launcher_sticky_base")"
@@ -593,6 +661,32 @@ fi
 )
 # username 文字種違反は拒否（injection/パス操作防止）
 (
+  export MDM_DSCL_UID_OVERRIDE=501
+  _username_ok=true
+  for KIT_MDM_TARGET_USER in John.Smith 123.user alice@corp; do
+    export KIT_MDM_TARGET_USER
+    if [[ "$(mdm_resolve_target_user 2>/dev/null)" != "$KIT_MDM_TARGET_USER" ]] \
+      || [[ "$(_mdm_root_value KIT_MDM_TARGET_USER "$KIT_MDM_TARGET_USER")" != "$KIT_MDM_TARGET_USER" ]]; then
+      _username_ok=false
+    fi
+  done
+  [[ "$_username_ok" == true ]] \
+    && pass "mdm-install: 大文字・数字先頭・dot/@ 区切りの short name を許可" \
+    || fail "mdm-install: 有効な macOS short name を拒否"
+)
+(
+  _username_bad_accepted=false
+  for _username_bad in .john john. john..smith @john john@ 'bad;user' \
+    'john/smith' 'john smith' $'john\nsmith' 123456789012345678901234567890123; do
+    if _mdm_username_is_safe "$_username_bad"; then
+      _username_bad_accepted=true
+    fi
+  done
+  [[ "$_username_bad_accepted" == false ]] \
+    && pass "mdm-install: path-like / injection username を拒否" \
+    || fail "mdm-install: 不正な username を許可"
+)
+(
   export KIT_MDM_TARGET_USER='bad;user' MDM_DSCL_UID_OVERRIDE=501
   _rc=0
   mdm_resolve_target_user >/dev/null 2>&1 || _rc=$?
@@ -659,9 +753,59 @@ mkdir -p "$_fakehome"
     && pass "mdm-install: .. を含む非canonical home を拒否" \
     || fail "mdm-install: 非canonical home を拒否すべき"
 )
+(
+  export MDM_DSCL_HOME_OVERRIDE="$_fakehome"
+  unset MDM_VALIDATE_HOME_SKIP_OWNER
+  _actual_owner="$(_mdm_stat_owner "$_fakehome")"
+  _expected_owner=root
+  [[ "$_actual_owner" == root ]] && _expected_owner=nobody
+  _rc=0
+  mdm_validate_user_home "$_expected_owner" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_USER" "$_rc" "owner mismatch は exit USER" \
+    && pass "mdm-install: 対象ユーザー以外が所有する home を拒否" \
+    || fail "mdm-install: home owner mismatch を許可 (rc=$_rc)"
+)
 rm -rf "$_tmpd"
 
 # ── CLT marker の安全な作成（R2-High: /tmp 固定パスの symlink 追随排除）──
+(
+  _clt_labels="$(_mdm_select_clt_label <<'EOF'
+Software Update Tool
+* Command Line Tools for Xcode-15.0
+* Label: Command Line Tools for Xcode 16.4-16.4
+EOF
+)"
+  [[ "$_clt_labels" == "Command Line Tools for Xcode 16.4-16.4" ]] \
+    && pass "mdm-install: softwareupdate の現行 Label 形式を正規化して最新 CLT を選択" \
+    || fail "mdm-install: softwareupdate の CLT label 抽出が不正 (got '$_clt_labels')"
+)
+(
+  _clt_tmpd="$(mktemp -d)"
+  export MDM_CLT_MARKER_OVERRIDE="$_clt_tmpd/marker"
+  export KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE=true
+  _clt_checks=0
+  _mdm_clt_present() {
+    _clt_checks=$((_clt_checks + 1))
+    [[ "$_clt_checks" -gt 1 ]]
+  }
+  softwareupdate() {
+    if [[ "$1" == "-l" ]]; then
+      printf '%s\n' '* Label: Command Line Tools for Xcode 16.4-16.4'
+    else
+      printf '%s\n' "$*" > "$_clt_tmpd/install-args"
+    fi
+  }
+  _clt_rc=0
+  _mdm_ensure_clt >/dev/null 2>&1 || _clt_rc=$?
+  if [[ "$_clt_rc" -eq 0 ]] \
+    && [[ "$(< "$_clt_tmpd/install-args")" == '-i Command Line Tools for Xcode 16.4-16.4 --verbose' ]] \
+    && [[ ! -e "$MDM_CLT_MARKER_OVERRIDE" ]]; then
+    pass "mdm-install: 正規化した CLT label を softwareupdate -i へ渡す"
+  else
+    fail "mdm-install: softwareupdate CLT positive 経路が不正 (rc=$_clt_rc)"
+  fi
+  rm -rf "$_clt_tmpd"
+)
 (
   _mk_tmpd="$(mktemp -d)"
   printf 'victim\n' > "$_mk_tmpd/victim"
