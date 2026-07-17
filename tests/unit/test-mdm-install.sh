@@ -615,16 +615,13 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
   esac
 )
 (
-  # root の既定は /Library/Logs 配下
+  # root の既定は /Library/Logs 配下（実 I/O を伴わない dir 決定のみ検証。
+  # 実ファイル準備は root 権限が要り非 root テスト環境では走らせられない）
   unset KIT_MDM_LOG_DIR
-  MDM_LOG_FILE=""
-  _mdm_setup_log_file 0 "$_loghome" 2>/dev/null || fail "mdm-install: root ログ既定の決定に失敗"
-  case "$MDM_LOG_FILE" in
-    "/Library/Logs/ClaudeCodeStarterKit/install-"*.log)
-      pass "mdm-install: root のログ既定が /Library/Logs 配下" ;;
-    *)
-      fail "mdm-install: root のログ既定が不正 (got '$MDM_LOG_FILE')" ;;
-  esac
+  out="$(_mdm_log_dir_for 0 "$_loghome" 2>/dev/null)" || fail "mdm-install: root ログ dir 決定に失敗"
+  [[ "$out" == "/Library/Logs/ClaudeCodeStarterKit" ]] \
+    && pass "mdm-install: root のログ既定が /Library/Logs 配下" \
+    || fail "mdm-install: root のログ既定が不正 (got '$out')"
 )
 (
   # KIT_MDM_LOG_DIR の明示指定（許可プレフィックス配下）は尊重される
@@ -665,6 +662,41 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
   assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "非rootはシステム LOG_DIR 不可" \
     && pass "mdm-install: 非 root 時にシステム領域の LOG_DIR を拒否" \
     || fail "mdm-install: 非 root 時のシステム LOG_DIR を拒否すべき (got $_rc)"
+)
+# ── ログファイルは umask 非依存で実体作成され、先置き symlink を辿らない（R3-High）──
+(
+  umask 000
+  unset KIT_MDM_LOG_DIR
+  MDM_LOG_FILE=""
+  _mdm_setup_log_file 501 "$_loghome" 2>/dev/null || fail "mdm-install: ログ準備に失敗"
+  _dmode="$(stat -f '%Lp' "$(dirname "$MDM_LOG_FILE")" 2>/dev/null || stat -c '%a' "$(dirname "$MDM_LOG_FILE")" 2>/dev/null)"
+  [[ "$_dmode" == "755" ]] \
+    && pass "mdm-install: umask 000 でもログ dir は 755" \
+    || fail "mdm-install: umask 000 でログ dir が ${_dmode}"
+  [[ -f "$MDM_LOG_FILE" && ! -L "$MDM_LOG_FILE" ]] \
+    && pass "mdm-install: ログファイルが実体で先行作成される" \
+    || fail "mdm-install: ログファイルが実体作成されない"
+  _fmode="$(stat -f '%Lp' "$MDM_LOG_FILE" 2>/dev/null || stat -c '%a' "$MDM_LOG_FILE" 2>/dev/null)"
+  [[ "$_fmode" == "644" ]] \
+    && pass "mdm-install: umask 000 でもログファイルは 644" \
+    || fail "mdm-install: umask 000 でログファイルが ${_fmode}"
+)
+(
+  # ログパスに先置きされた symlink は辿らず拒否（exit 50）
+  _lsdir="$_loghome/Library/Logs/ClaudeCodeStarterKit"
+  mkdir -p "$_lsdir"
+  printf 'victim\n' > "$_loghome/log-victim"
+  # 実装が使う予測可能なファイル名に合わせるのは困難なため、ディレクトリ自体を
+  # symlink にして「シンボリックリンク経由のログ dir」を拒否することを検証する
+  _evildir="$_loghome/Library/Logs/EvilLink"
+  ln -s "/etc" "$_evildir"
+  export KIT_MDM_LOG_DIR="$_evildir"
+  MDM_LOG_FILE=""
+  _rc=0
+  _mdm_setup_log_file 501 "$_loghome" >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "symlink のログ dir は exit 50" \
+    && pass "mdm-install: symlink のログディレクトリを拒否" \
+    || fail "mdm-install: symlink のログディレクトリを拒否すべき (got $_rc)"
 )
 rm -rf "$_tmpd"
 

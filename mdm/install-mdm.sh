@@ -1042,7 +1042,12 @@ _mdm_run_user_phase() {
 #         ユーザーモードは <home>/Library/Logs/ClaudeCodeStarterKit（spec §8.2）
 # - KIT_MDM_LOG_DIR は許可プレフィックス（/Library/Logs または
 #   <home>/Library/Logs）配下のみ許可（spec §9.2）。違反は exit 50
-_mdm_setup_log_file() {
+# ログ出力先ディレクトリを決定し許可プレフィックスを検証して stdout へ返す
+# （ファイル I/O を伴わないためテスト可能。違反は exit 50）。
+# 許可プレフィックスは実行モードで分ける: root は /Library/Logs のみ
+# （ユーザー home 配下を許すと、ユーザーが植えた symlink を root が辿って
+# 任意ファイルへ append する経路になる）。非 root は自分の home 配下のみ。
+_mdm_log_dir_for() {
   local _euid="$1" _home="$2"
   local _default_dir
   if [[ "$_euid" -eq 0 ]]; then
@@ -1051,9 +1056,6 @@ _mdm_setup_log_file() {
     _default_dir="$_home/Library/Logs/ClaudeCodeStarterKit"
   fi
   local _dir="${KIT_MDM_LOG_DIR:-$_default_dir}"
-  # 許可プレフィックスは実行モードで分ける: root は /Library/Logs のみ
-  # （ユーザー home 配下を許すと、ユーザーが植えた symlink を root が辿って
-  # 任意ファイルへ append する経路になる）。非 root は自分の home 配下のみ。
   case "$_dir" in
     *..*)
       mdm_log R1 "KIT_MDM_LOG_DIR に .. を含む: $_dir"
@@ -1074,9 +1076,54 @@ _mdm_setup_log_file() {
         return "$MDM_EXIT_CONFIG" ;;
     esac
   fi
-  MDM_LOG_FILE="$_dir/install-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run).log"
-  mkdir -p "$_dir" 2>/dev/null || true
-  chmod 755 "$_dir" 2>/dev/null || true    # umask 汚染対策（spec §9.3）
+  printf '%s' "$_dir"
+  return 0
+}
+
+_mdm_setup_log_file() {
+  local _euid="$1" _home="$2"
+  local _dir _dir_rc=0
+  _dir="$(_mdm_log_dir_for "$_euid" "$_home")" || _dir_rc=$?
+  [[ "$_dir_rc" -eq 0 ]] || return "$_dir_rc"
+  # ログ dir が symlink 経由なら拒否（root が symlink を辿って任意領域へ書くのを防ぐ。R3-High）
+  if [[ -L "$_dir" ]]; then
+    mdm_log R1 "ログディレクトリが symlink: $_dir"
+    return "$MDM_EXIT_CONFIG"
+  fi
+  if ! mkdir -p "$_dir" 2>/dev/null; then
+    mdm_log R1 "ログディレクトリを作成できない: $_dir"
+    return "$MDM_EXIT_CONFIG"
+  fi
+  # dir 権限を umask に依存させない。chmod 失敗は fail-closed（spec §9.3・R3-High）
+  if ! chmod 755 "$_dir" 2>/dev/null; then
+    mdm_log R1 "ログディレクトリの権限を設定できない: $_dir"
+    return "$MDM_EXIT_CONFIG"
+  fi
+  local _log _ts
+  _ts="$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run)"
+  _log="$_dir/install-$_ts.log"
+  # ログファイルを実体で先行作成し、以降の追記（mdm_log の >>）が先置き
+  # symlink を辿らないようにする（R3-High）。既存 symlink は除去 → noclobber
+  # 排他作成 → lstat 検証。同秒再実行での既存実ファイル再利用は許容。
+  [[ -L "$_log" ]] && { rm -f "$_log" 2>/dev/null || true; }
+  if [[ -L "$_log" ]]; then
+    mdm_log R1 "ログファイルの symlink を除去できない: $_log"
+    return "$MDM_EXIT_CONFIG"
+  fi
+  if ( set -C; : > "$_log" ) 2>/dev/null; then
+    :
+  elif [[ -f "$_log" && ! -L "$_log" ]]; then
+    : # 同秒再実行の既存実ファイル（root 755 dir 内で他者は作れない）— 追記継続
+  else
+    mdm_log R1 "ログファイルを安全に作成できない: $_log"
+    return "$MDM_EXIT_CONFIG"
+  fi
+  if [[ -L "$_log" || ! -f "$_log" ]]; then
+    mdm_log R1 "作成したログファイルの実体が不正: $_log"
+    return "$MDM_EXIT_CONFIG"
+  fi
+  chmod 644 "$_log" 2>/dev/null || true
+  MDM_LOG_FILE="$_log"
   return 0
 }
 

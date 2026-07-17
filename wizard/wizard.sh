@@ -429,6 +429,8 @@ _restore_cli_overrides() {
     if [[ -n "$_pair" ]]; then
       _restore_key="${_pair%%=*}"
       _restore_val="${_pair#*=}"
+      # 不正なキー名で printf -v が失敗し set -e 即死するのを防ぐ（R3-M）
+      [[ "$_restore_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
       printf -v "$_restore_key" '%s' "$_restore_val"
     fi
   done
@@ -440,15 +442,25 @@ _restore_cli_overrides() {
 # 無条件に上書きするため、復元後に _restore_cli_overrides でこの capture を
 # 再適用し、管理端末では MDM 管理者の設定を最優先にする。
 # 対象は _CONFIG_KEYS の非空 env 値のみ（KIT_MDM_MANAGED 未設定なら何もしない）。
+#
+# ★R3-Medium: 結果はグローバル配列 _MDM_ENV_OVERRIDES へ直接構築する
+# （改行区切り stdout → read -r 方式は、値に改行を含めると別代入を注入できる
+# ため廃止。非 root MDM 経路は環境を継承するので外部注入の恐れがある）。
+# 制御文字を含む値は不正として除外する（設定値に改行等は正当でない）。
+_MDM_ENV_OVERRIDES=()
 _capture_mdm_env_overrides() {
+  _MDM_ENV_OVERRIDES=()
   [[ "$(_bool_normalize "${KIT_MDM_MANAGED:-}")" == "true" ]] || return 0
   local _var _val
   for _var in "${_CONFIG_KEYS[@]+"${_CONFIG_KEYS[@]}"}"; do
     [[ -z "$_var" ]] && continue
     _val="${!_var:-}"
-    if [[ -n "$_val" ]]; then
-      printf '%s\n' "${_var}=${_val}"
+    [[ -z "$_val" ]] && continue
+    if [[ "$_val" =~ [[:cntrl:]] ]]; then
+      printf '[mdm] WARN: dropping MDM env with control chars: %s\n' "$_var" >&2
+      continue
     fi
+    _MDM_ENV_OVERRIDES[${#_MDM_ENV_OVERRIDES[@]}]="${_var}=${_val}"
   done
 }
 
@@ -523,11 +535,10 @@ run_wizard() {
   done < <(_capture_cli_overrides)
 
   # MDM 管理モード（KIT_MDM_MANAGED=true）: 復元によるクロバーの前に
-  # MDM 注入 env を capture しておき、復元後に再適用する（R2-High）
-  local _saved_mdm=()
-  while IFS= read -r _override; do
-    [[ -n "$_override" ]] && _saved_mdm+=("$_override")
-  done < <(_capture_mdm_env_overrides)
+  # MDM 注入 env を capture しておき、復元後に再適用する（R2-High）。
+  # capture はグローバル配列 _MDM_ENV_OVERRIDES へ直接構築される（R3-M）。
+  _capture_mdm_env_overrides
+  local _saved_mdm=("${_MDM_ENV_OVERRIDES[@]+"${_MDM_ENV_OVERRIDES[@]}"}")
 
   if [[ "$UPDATE_MODE" == "true" ]]; then
     _restore_config_from_manifest
