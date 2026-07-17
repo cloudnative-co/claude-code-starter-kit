@@ -433,19 +433,32 @@ _mdm_boot_config_file_is_secure() {
 # 管理設定ファイルから KIT_MDM_GIT_REF のみを安全に読む（単一ファイル配布時、
 # 設定ファイルの ref 固定を launcher にも効かせるため）。
 # ファイル無し: 空出力 + exit 0 / 不安全: exit 50 / 値は最初の一致行（parser と同じ優先）。
+# 読み取りは lib の mdm_config_apply と同じ inode 束縛 fd 読み（spec §9.2・
+# R2-Medium）: 事前 inode → 検証 → open → fd inode 照合 → fd から読む。
 _mdm_boot_config_git_ref() {
   local _f="$1" _line _v
   [[ -f "$_f" ]] || return 0
+  local _pre_ino _fd_ino
+  _pre_ino="$(stat -f '%i' "$_f" 2>/dev/null || stat -c '%i' "$_f" 2>/dev/null || echo 'pre-fail')"
   _mdm_boot_config_file_is_secure "$_f" || return "$MDM_EXIT_CONFIG"
+  exec 8<"$_f" || return "$MDM_EXIT_CONFIG"
+  _fd_ino="$(stat -Lf '%i' /dev/fd/8 2>/dev/null || stat -Lc '%i' /dev/fd/8 2>/dev/null || echo 'fd-fail')"
+  if [[ "$_pre_ino" != "$_fd_ino" ]]; then
+    exec 8<&-
+    mdm_log U1a "管理設定ファイルが検査と読込の間に差し替えられた（TOCTOU）"
+    return "$MDM_EXIT_CONFIG"
+  fi
   while IFS= read -r _line || [[ -n "$_line" ]]; do
     case "$_line" in
       KIT_MDM_GIT_REF=*)
         _v="${_line#KIT_MDM_GIT_REF=}"
         _v="${_v%\"}"; _v="${_v#\"}"
+        exec 8<&-
         printf '%s' "$_v"
         return 0 ;;
     esac
-  done < "$_f"
+  done <&8
+  exec 8<&-
   return 0
 }
 
