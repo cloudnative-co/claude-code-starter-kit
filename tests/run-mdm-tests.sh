@@ -7,6 +7,15 @@ MDM_TEST_BASH="${MDM_TEST_BASH:-${BASH:-/bin/bash}}"
 readonly MIN_MDM_TEST_FILES=7
 readonly MIN_MDM_ASSERTIONS=270
 
+MDM_TEST_SYSTEM_PYTHON=""
+if [[ -x /usr/bin/python3 ]]; then
+  MDM_TEST_SYSTEM_PYTHON="$(/usr/bin/python3 -I -B -c \
+    'import os, sys; print(os.path.realpath(sys.executable))' 2>/dev/null || true)"
+  [[ "$MDM_TEST_SYSTEM_PYTHON" == /* \
+    && -x "$MDM_TEST_SYSTEM_PYTHON" \
+    && ! -L "$MDM_TEST_SYSTEM_PYTHON" ]] || MDM_TEST_SYSTEM_PYTHON=""
+fi
+
 _find_bash4() {
   local candidate major
   for candidate in "${MDM_TEST_BASH4:-}" "$MDM_TEST_BASH" \
@@ -81,6 +90,8 @@ for test_file in "$SCRIPT_DIR"/unit/test-mdm-*.sh; do
   set +e
   TEST_FAILURE_SENTINEL="$sentinel" \
     TEST_COMPLETION_SENTINEL="$completion" \
+    MDM_SYSTEM_PYTHON_OVERRIDE="$MDM_TEST_SYSTEM_PYTHON" \
+    MDM_DETECT_PYTHON_OVERRIDE="$MDM_TEST_SYSTEM_PYTHON" \
     "$test_bash" -c '
     source "$1"
     source "$2"

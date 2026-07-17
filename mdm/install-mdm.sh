@@ -76,8 +76,11 @@ _mdm_launcher_path_trusted() {
 
 _mdm_launcher_snapshot() {
   local _source="$1" _before _opened _tmp_base _tmp _old_umask
-  _before="$(/usr/bin/stat -f '%i:%z' "$_source" 2>/dev/null \
-    || /usr/bin/stat -c '%i:%s' "$_source" 2>/dev/null)" || return 1
+  if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]]; then
+    _before="$(/usr/bin/stat -f '%i:%z' "$_source" 2>/dev/null)" || return 1
+  else
+    _before="$(/usr/bin/stat -c '%i:%s' "$_source" 2>/dev/null)" || return 1
+  fi
   exec 9<"$_source" || return 1
   if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]]; then
     _opened="$(/usr/bin/stat -Lf '%i:%z' /dev/fd/9 2>/dev/null)" \
@@ -290,7 +293,10 @@ _mdm_stat_fd_inode() {
   if _mdm_is_darwin; then
     /usr/bin/stat -Lf '%i' "/dev/fd/$_fd" 2>/dev/null
   else
-    /usr/bin/stat -Lc '%i' "/proc/$$/fd/$_fd" 2>/dev/null
+    # Command substitutions preserve $$ from the parent shell, and access to
+    # that process via /proc can be restricted even for the same UID.  The
+    # inherited /dev/fd entry binds directly to the descriptor in this child.
+    /usr/bin/stat -Lc '%i' "/dev/fd/$_fd" 2>/dev/null
   fi
 }
 
@@ -614,7 +620,7 @@ _mdm_console_user() {
   # scutil の ConsoleUser、フォールバック stat /dev/console
   local _u
   _u="$(printf 'show State:/Users/ConsoleUser\n' | scutil 2>/dev/null | awk '/Name :/{print $3; exit}' || true)"
-  [[ -z "$_u" ]] && _u="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+  [[ -z "$_u" ]] && _u="$(_mdm_stat_owner /dev/console 2>/dev/null || true)"
   printf '%s' "$_u"
 }
 
@@ -679,7 +685,7 @@ mdm_validate_user_home() {
     return "$MDM_EXIT_USER"
   fi
   if [[ "${MDM_VALIDATE_HOME_SKIP_OWNER:-0}" != "1" ]]; then
-    local _owner; _owner="$(stat -f '%Su' "$_home" 2>/dev/null || echo '')"
+    local _owner; _owner="$(_mdm_stat_owner "$_home" 2>/dev/null || true)"
     if [[ "$_owner" != "$_user" ]]; then
       mdm_log R2 "home の所有者が対象ユーザーでない: $_owner"
       return "$MDM_EXIT_USER"
@@ -1244,7 +1250,7 @@ _mdm_create_clt_marker() {
     return 1
   fi
   local _owner
-  _owner="$(stat -f '%u' "$_marker" 2>/dev/null || stat -c '%u' "$_marker" 2>/dev/null || echo '')"
+  _owner="$(_mdm_stat_uid "$_marker" 2>/dev/null || true)"
   [[ "$_owner" == "$(id -u)" ]] || return 1
   return 0
 }
@@ -1408,8 +1414,8 @@ _mdm_write_brew_pkg_user_plist() {
     return 1
   fi
   local _owner _mode
-  _owner="$(stat -f '%u' "$_plist" 2>/dev/null || stat -c '%u' "$_plist" 2>/dev/null || echo '')"
-  _mode="$(stat -f '%Lp' "$_plist" 2>/dev/null || stat -c '%a' "$_plist" 2>/dev/null || echo '')"
+  _owner="$(_mdm_stat_uid "$_plist" 2>/dev/null || true)"
+  _mode="$(_mdm_stat_mode "$_plist" 2>/dev/null || true)"
   if [[ "$_owner" != "$(id -u)" || "$_mode" != "600" ]]; then
     mdm_log R3 "作成した plist の所有者/mode が不正: owner=$_owner mode=$_mode"
     rm -f "$_plist" 2>/dev/null || true

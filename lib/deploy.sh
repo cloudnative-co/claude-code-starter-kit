@@ -547,13 +547,19 @@ _mdm_load_prior_inventory() {
     *) return 1 ;;
   esac
   [[ -f "$inventory" && ! -L "$inventory" ]] || return 1
-  owner="$(stat -f '%u' "$inventory" 2>/dev/null \
-    || stat -c '%u' "$inventory" 2>/dev/null)" || return 1
+  if [[ "$(uname -s 2>/dev/null || true)" == Darwin ]]; then
+    owner="$(stat -f '%u' "$inventory" 2>/dev/null)" || return 1
+  else
+    owner="$(stat -c '%u' "$inventory" 2>/dev/null)" || return 1
+  fi
   if [[ "${MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK:-0}" != 1 ]]; then
     [[ "$owner" == 0 ]] || return 1
   fi
-  mode="$(stat -f '%Mp%Lp' "$inventory" 2>/dev/null \
-    || stat -c '%a' "$inventory" 2>/dev/null)" || return 1
+  if [[ "$(uname -s 2>/dev/null || true)" == Darwin ]]; then
+    mode="$(stat -f '%Mp%Lp' "$inventory" 2>/dev/null)" || return 1
+  else
+    mode="$(stat -c '%a' "$inventory" 2>/dev/null)" || return 1
+  fi
   [[ "$mode" =~ ^[0-7]+$ ]] || return 1
   while [[ ${#mode} -gt 3 ]]; do mode="${mode#?}"; done
   case "$mode" in *[2367]|?[2367]?) return 1 ;; esac
@@ -806,7 +812,11 @@ _normalize_mdm_managed_modes() {
   for file in "$@"; do
     [[ -f "$file" ]] || continue
     _mdm_distribution_target_is_safe "$file" || return 1
-    link_count="$(stat -f '%l' "$file" 2>/dev/null || stat -c '%h' "$file" 2>/dev/null || true)"
+    if [[ "$(uname -s 2>/dev/null || true)" == Darwin ]]; then
+      link_count="$(stat -f '%l' "$file" 2>/dev/null || true)"
+    else
+      link_count="$(stat -c '%h' "$file" 2>/dev/null || true)"
+    fi
     if [[ ! "$link_count" =~ ^[0-9]+$ || "$link_count" -ne 1 ]]; then
       warn "Refusing to chmod a hard-linked MDM managed file: ${file#"$CLAUDE_DIR"/}"
       return 1

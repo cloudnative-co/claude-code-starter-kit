@@ -15,6 +15,17 @@ _ORIG_HOME="${HOME:-}"
 _ORIG_PATH="${PATH:-}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Portable mode lookup for assertions.  GNU stat accepts -f but can emit
+# filesystem details before returning failure, so command-level fallback would
+# concatenate that output with the Linux result.
+test_stat_mode() {
+  if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+    /usr/bin/stat -f '%Lp' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%a' "$1" 2>/dev/null
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # setup_test_env - Create an isolated test environment
 #

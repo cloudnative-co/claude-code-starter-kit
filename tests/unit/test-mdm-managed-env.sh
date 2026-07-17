@@ -460,10 +460,10 @@ JSON
   _snapshot_claude_md() { :; }
   _rc=0
   write_managed_snapshot >/dev/null 2>&1 || _rc=$?
-  _plain_mode="$(stat -f '%Lp' "$CLAUDE_DIR/settings.json" 2>/dev/null || stat -c '%a' "$CLAUDE_DIR/settings.json")"
-  _exec_mode="$(stat -f '%Lp' "$CLAUDE_DIR/hooks/test/run.sh" 2>/dev/null || stat -c '%a' "$CLAUDE_DIR/hooks/test/run.sh")"
-  _snap_plain_mode="$(stat -f '%Lp' "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" 2>/dev/null || stat -c '%a' "$CLAUDE_DIR/.starter-kit-snapshot/settings.json")"
-  _snap_exec_mode="$(stat -f '%Lp' "$CLAUDE_DIR/.starter-kit-snapshot/hooks/test/run.sh" 2>/dev/null || stat -c '%a' "$CLAUDE_DIR/.starter-kit-snapshot/hooks/test/run.sh")"
+  _plain_mode="$(test_stat_mode "$CLAUDE_DIR/settings.json")"
+  _exec_mode="$(test_stat_mode "$CLAUDE_DIR/hooks/test/run.sh")"
+  _snap_plain_mode="$(test_stat_mode "$CLAUDE_DIR/.starter-kit-snapshot/settings.json")"
+  _snap_exec_mode="$(test_stat_mode "$CLAUDE_DIR/.starter-kit-snapshot/hooks/test/run.sh")"
   if [[ "$_rc" -eq 0 && "$_plain_mode" == 600 && "$_exec_mode" == 700 \
     && "$_snap_plain_mode" == 600 && "$_snap_exec_mode" == 700 ]]; then
     pass "mdm-managed: live/snapshot modeを0600/0700へ正規化"

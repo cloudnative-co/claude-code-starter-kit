@@ -16,8 +16,11 @@ _mdm_launcher_mode_safe() {
 }
 
 _mdm_launcher_stat_owner() {
-  /usr/bin/stat -f '%u' "$1" 2>/dev/null \
-    || /usr/bin/stat -c '%u' "$1" 2>/dev/null
+  if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]]; then
+    /usr/bin/stat -f '%u' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%u' "$1" 2>/dev/null
+  fi
 }
 
 _mdm_launcher_stat_mode() {
@@ -70,8 +73,11 @@ _mdm_launcher_path_trusted() {
 
 _mdm_launcher_snapshot() {
   local _source="$1" _before _opened _tmp_base _tmp _old_umask
-  _before="$(/usr/bin/stat -f '%i:%z' "$_source" 2>/dev/null \
-    || /usr/bin/stat -c '%i:%s' "$_source" 2>/dev/null)" || return 1
+  if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]]; then
+    _before="$(/usr/bin/stat -f '%i:%z' "$_source" 2>/dev/null)" || return 1
+  else
+    _before="$(/usr/bin/stat -c '%i:%s' "$_source" 2>/dev/null)" || return 1
+  fi
   exec 9<"$_source" || return 1
   if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]]; then
     _opened="$(/usr/bin/stat -Lf '%i:%z' /dev/fd/9 2>/dev/null)" \
@@ -361,7 +367,7 @@ _mdm_detect_console_user() {
   _user="$(printf 'show State:/Users/ConsoleUser\n' \
     | /usr/sbin/scutil 2>/dev/null \
     | /usr/bin/awk '/Name :/{print $3; exit}' || true)"
-  [[ -n "$_user" ]] || _user="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+  [[ -n "$_user" ]] || _user="$(_mdm_stat_owner /dev/console 2>/dev/null || true)"
   printf '%s' "$_user"
 }
 

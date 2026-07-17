@@ -97,8 +97,8 @@ fi
   umask 000
   _u0dir="$_tmpd/umask0/sub"
   mdm_receipt_write "$_u0dir/receipt-jane.json" success 0
-  _fmode="$(stat -f '%Lp' "$_u0dir/receipt-jane.json" 2>/dev/null || stat -c '%a' "$_u0dir/receipt-jane.json" 2>/dev/null)"
-  _dmode="$(stat -f '%Lp' "$_u0dir" 2>/dev/null || stat -c '%a' "$_u0dir" 2>/dev/null)"
+  _fmode="$(test_stat_mode "$_u0dir/receipt-jane.json")"
+  _dmode="$(test_stat_mode "$_u0dir")"
   [[ "$_fmode" == "644" ]] \
     && pass "mdm-install: umask 000 でもレシートは 644" \
     || fail "mdm-install: umask 000 でレシートが ${_fmode}（書換可能な contract 違反）"
@@ -1153,7 +1153,7 @@ EOF
   grep -q '<string>jane</string>' "$MDM_BREW_PLIST_OVERRIDE" 2>/dev/null \
     && pass "mdm-install: plist に対象ユーザーが記録される" \
     || fail "mdm-install: plist の内容が不正"
-  _mode="$(stat -f '%Lp' "$MDM_BREW_PLIST_OVERRIDE" 2>/dev/null || stat -c '%a' "$MDM_BREW_PLIST_OVERRIDE" 2>/dev/null)"
+  _mode="$(test_stat_mode "$MDM_BREW_PLIST_OVERRIDE")"
   [[ "$_mode" == "600" ]] \
     && pass "mdm-install: plist が mode 600 で作成される（brew 側の受理条件）" \
     || fail "mdm-install: plist の mode が 600 でない (got $_mode)"
@@ -1231,14 +1231,14 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
   unset KIT_MDM_LOG_DIR
   MDM_LOG_FILE=""; MDM_LOG_FD_OPEN=0
   _mdm_setup_log_file 501 "$_loghome" 2>/dev/null || fail "mdm-install: ログ準備に失敗"
-  _dmode="$(stat -f '%Lp' "$(dirname "$MDM_LOG_FILE")" 2>/dev/null || stat -c '%a' "$(dirname "$MDM_LOG_FILE")" 2>/dev/null)"
+  _dmode="$(test_stat_mode "$(dirname "$MDM_LOG_FILE")")"
   [[ "$_dmode" == "755" ]] \
     && pass "mdm-install: umask 000 でもログ dir は 755" \
     || fail "mdm-install: umask 000 でログ dir が ${_dmode}"
   [[ -f "$MDM_LOG_FILE" && ! -L "$MDM_LOG_FILE" ]] \
     && pass "mdm-install: ログファイルが実体で作成される" \
     || fail "mdm-install: ログファイルが実体作成されない"
-  _fmode="$(stat -f '%Lp' "$MDM_LOG_FILE" 2>/dev/null || stat -c '%a' "$MDM_LOG_FILE" 2>/dev/null)"
+  _fmode="$(test_stat_mode "$MDM_LOG_FILE")"
   [[ "$_fmode" == "644" ]] \
     && pass "mdm-install: umask 000 でもログファイルは 644" \
     || fail "mdm-install: umask 000 でログファイルが ${_fmode}"
@@ -1661,6 +1661,7 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   _post_uid="$(/usr/bin/id -u)"
   _post_expected="$_post_tmp/expected"
   export MDM_AUTH_OWNER_UID_OVERRIDE="$_post_uid"
+  export MDM_AUTH_TMPDIR_OVERRIDE="$_post_tmp"
   _MDM_EXPECTED_OUTPUT="$_post_expected"
   mkdir -p "$_post_snapshot" "$_post_expected/tree"
   printf '{}\n' > "$_post_claude/settings.json"

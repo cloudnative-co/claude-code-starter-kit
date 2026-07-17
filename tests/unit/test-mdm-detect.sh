@@ -839,9 +839,13 @@ fi
 (
   _mdm_stat_metadata() {
     if [[ "$1" == "$_mdm_detect_manifest" ]]; then
-      _mdm_detect_actual_metadata="$(/usr/bin/stat \
-        -f '%i:%HT:%z:%u:%Mp%Lp:%l' "$1" 2>/dev/null \
-        || /usr/bin/stat -c '%i:%F:%s:%u:%a:%h' "$1" 2>/dev/null)"
+      if _mdm_is_darwin; then
+        _mdm_detect_actual_metadata="$(/usr/bin/stat \
+          -f '%i:%HT:%z:%u:%Mp%Lp:%l' "$1" 2>/dev/null)"
+      else
+        _mdm_detect_actual_metadata="$(/usr/bin/stat \
+          -c '%i:%F:%s:%u:%a:%h' "$1" 2>/dev/null)"
+      fi
       printf '0:%s' "${_mdm_detect_actual_metadata#*:}"
     elif _mdm_is_darwin; then
       /usr/bin/stat -f '%i:%HT:%z:%u:%Mp%Lp:%l' "$1" 2>/dev/null
