@@ -241,6 +241,33 @@ mkdir -p "$_fakehome"
 )
 rm -rf "$_tmpd"
 
+# ── CLT marker の安全な作成（R2-High: /tmp 固定パスの symlink 追随排除）──
+(
+  _mk_tmpd="$(mktemp -d)"
+  printf 'victim\n' > "$_mk_tmpd/victim"
+  export MDM_CLT_MARKER_OVERRIDE="$_mk_tmpd/marker"
+  ln -s "$_mk_tmpd/victim" "$MDM_CLT_MARKER_OVERRIDE"
+  _rc=0
+  _mdm_create_clt_marker >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq 0 && ! -L "$MDM_CLT_MARKER_OVERRIDE" && -f "$MDM_CLT_MARKER_OVERRIDE" ]] \
+     && [[ "$(cat "$_mk_tmpd/victim")" == "victim" ]]; then
+    pass "mdm-install: CLT marker が先置き symlink を辿らず実体作成される"
+  else
+    fail "mdm-install: CLT marker 作成が symlink を辿る/失敗する (rc=$_rc)"
+  fi
+  rm -rf "$_mk_tmpd"
+)
+(
+  _mk_tmpd="$(mktemp -d)"
+  export MDM_CLT_MARKER_OVERRIDE="$_mk_tmpd/marker"
+  _rc=0
+  _mdm_create_clt_marker >/dev/null 2>&1 || _rc=$?
+  [[ "$_rc" -eq 0 && -f "$MDM_CLT_MARKER_OVERRIDE" ]] \
+    && pass "mdm-install: CLT marker の通常作成が成功する" \
+    || fail "mdm-install: CLT marker の通常作成に失敗 (rc=$_rc)"
+  rm -rf "$_mk_tmpd"
+)
+
 # ── 前提方針判定 ─────────────────────────────────────────
 ( export MDM_BREW_PRESENT_OVERRIDE=1
   out="$(mdm_prereq_plan 2>/dev/null)"

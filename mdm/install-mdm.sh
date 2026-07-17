@@ -624,6 +624,37 @@ _mdm_run_maybe_as_user() {
   fi
 }
 
+# CLT on-demand marker の固定パス（Apple の機構が定める。テスト時は override）。
+_mdm_clt_marker_path() {
+  printf '%s' "${MDM_CLT_MARKER_OVERRIDE:-/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress}"
+}
+
+# CLT marker を安全に作成する（R2-High）。/tmp は sticky のため他ユーザーが
+# symlink を先置きでき、旧実装の touch は root 権限で任意パスの作成/
+# タイムスタンプ更新に悪用できた。rm → noclobber 排他作成 → lstat 検証。
+_mdm_create_clt_marker() {
+  local _marker
+  _marker="$(_mdm_clt_marker_path)"
+  rm -f "$_marker" 2>/dev/null || true
+  if [[ -e "$_marker" || -L "$_marker" ]]; then
+    return 1
+  fi
+  if ! ( set -C; : > "$_marker" ) 2>/dev/null; then
+    return 1
+  fi
+  if [[ -L "$_marker" || ! -f "$_marker" ]]; then
+    return 1
+  fi
+  local _owner
+  _owner="$(stat -f '%u' "$_marker" 2>/dev/null || stat -c '%u' "$_marker" 2>/dev/null || echo '')"
+  [[ "$_owner" == "$(id -u)" ]] || return 1
+  return 0
+}
+
+_mdm_remove_clt_marker() {
+  rm -f "$(_mdm_clt_marker_path)" 2>/dev/null || true
+}
+
 # CLT の存在確認（テスト時は MDM_CLT_PRESENT_OVERRIDE でモック可能）。
 _mdm_clt_present() {
   if [[ -n "${MDM_CLT_PRESENT_OVERRIDE:-}" ]]; then
@@ -645,8 +676,13 @@ _mdm_ensure_clt() {
     return 1
   fi
   mdm_log R3 "非公式フォールバック: softwareupdate 経由で CLT 導入を試みる（Apple 公式手順として文書化されていない・spec §5.2）"
-  local _marker="/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
-  touch "$_marker" 2>/dev/null || true
+  # marker パスは Apple の on-demand 機構が定める固定パス（/tmp = sticky で
+  # 他ユーザーが symlink を先置きできる）。安全に作成できなければこの
+  # opt-in 経路自体を中止する（fail-closed。R2-High）
+  if ! _mdm_create_clt_marker; then
+    mdm_log R3 "CLT marker を安全に作成できない（symlink 先置き等）。非公式フォールバックを中止"
+    return 1
+  fi
   local _label
   _label="$(softwareupdate -l 2>/dev/null | grep -E '\*.*Command Line Tools' | tail -n1 | sed -E 's/^[^*]*\*[[:space:]]*//' || true)"
   if [[ -n "$_label" ]]; then
@@ -654,7 +690,7 @@ _mdm_ensure_clt() {
   else
     mdm_log R3 "softwareupdate に CLT の候補が見つからない"
   fi
-  rm -f "$_marker" 2>/dev/null || true
+  _mdm_remove_clt_marker
   if _mdm_clt_present; then
     mdm_log R3 "CLT 導入を確認"
     return 0
