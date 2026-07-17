@@ -74,8 +74,10 @@ fi
 rm -rf "$_tmpd"
 
 # ── 対象ユーザー解決（モック）────────────────────────────
+# spec §5.4: 実在するローカルアカウント（dscl 実在確認）かつ UID >= 501 を要求。
+# テストは MDM_DSCL_UID_OVERRIDE で UID をモックする。
 (
-  export KIT_MDM_TARGET_USER="jane"
+  export KIT_MDM_TARGET_USER="jane" MDM_DSCL_UID_OVERRIDE=501
   if out="$(mdm_resolve_target_user 2>/dev/null)" && [[ "$out" == "jane" ]]; then
     pass "mdm-install: KIT_MDM_TARGET_USER が優先される"
   else
@@ -84,12 +86,40 @@ rm -rf "$_tmpd"
 )
 (
   unset KIT_MDM_TARGET_USER
-  export MDM_CONSOLE_USER_OVERRIDE="alice"   # テスト用フック
+  export MDM_CONSOLE_USER_OVERRIDE="alice" MDM_DSCL_UID_OVERRIDE=502   # テスト用フック
   if out="$(mdm_resolve_target_user 2>/dev/null)" && [[ "$out" == "alice" ]]; then
     pass "mdm-install: コンソールユーザーにフォールバック"
   else
     fail "mdm-install: コンソールユーザー解決失敗 (got '$out')"
   fi
+)
+# UID < 501（システムアカウント）は明示指定でも拒否（最終レビュー High#8）
+(
+  export KIT_MDM_TARGET_USER="svcaccount" MDM_DSCL_UID_OVERRIDE=89
+  _rc=0
+  mdm_resolve_target_user >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_USER" "$_rc" "UID<501 は exit USER" \
+    && pass "mdm-install: UID<501 のシステムアカウントを拒否" \
+    || fail "mdm-install: UID<501 を拒否すべき (got $_rc)"
+)
+# 実在しないユーザー（dscl 解決不能 = UID 空）は拒否
+(
+  export KIT_MDM_TARGET_USER="mdm-no-such-user-x"
+  unset MDM_DSCL_UID_OVERRIDE
+  _rc=0
+  mdm_resolve_target_user >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_USER" "$_rc" "実在しないユーザーは exit USER" \
+    && pass "mdm-install: 実在しないユーザーを拒否" \
+    || fail "mdm-install: 実在しないユーザーを拒否すべき (got $_rc)"
+)
+# username 文字種違反は拒否（injection/パス操作防止）
+(
+  export KIT_MDM_TARGET_USER='bad;user' MDM_DSCL_UID_OVERRIDE=501
+  _rc=0
+  mdm_resolve_target_user >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_USER" "$_rc" "文字種違反は exit USER" \
+    && pass "mdm-install: username 文字種違反を拒否" \
+    || fail "mdm-install: username 文字種違反を拒否すべき (got $_rc)"
 )
 (
   unset KIT_MDM_TARGET_USER

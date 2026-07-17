@@ -97,6 +97,18 @@ _mdm_console_user() {
   printf '%s' "$_u"
 }
 
+# 対象ユーザーの UID を dscl で取得（実在確認を兼ねる）。
+# テスト時は MDM_DSCL_UID_OVERRIDE でモック可能。解決不能なら空を返す。
+_mdm_user_uid() {
+  local _user="$1"
+  if [[ -n "${MDM_DSCL_UID_OVERRIDE:-}" ]]; then
+    printf '%s' "$MDM_DSCL_UID_OVERRIDE"; return 0
+  fi
+  dscl . -read "/Users/$_user" UniqueID 2>/dev/null | awk '{print $2; exit}' || true
+}
+
+# spec §5.4: 予約名 denylist に加えて、username 文字種・dscl 実在確認・
+# UID >= 501（システムアカウント除外）を必須とする（最終レビュー High#8）。
 mdm_resolve_target_user() {
   local _u="${KIT_MDM_TARGET_USER:-}"
   [[ -z "$_u" ]] && _u="$(_mdm_console_user)"
@@ -105,6 +117,20 @@ mdm_resolve_target_user() {
       mdm_log R2 "対象ユーザーを解決できない（'$_u' は無効）"
       return "$MDM_EXIT_USER" ;;
   esac
+  if ! printf '%s' "$_u" | grep -qE '^[a-z_][a-z0-9_-]{0,31}$'; then
+    mdm_log R2 "対象ユーザー名の文字種が不正: '$_u'"
+    return "$MDM_EXIT_USER"
+  fi
+  local _uid
+  _uid="$(_mdm_user_uid "$_u")"
+  if ! printf '%s' "$_uid" | grep -qE '^[0-9]+$'; then
+    mdm_log R2 "対象ユーザーが実在しない（dscl で解決不能）: '$_u'"
+    return "$MDM_EXIT_USER"
+  fi
+  if [[ "$_uid" -lt 501 ]]; then
+    mdm_log R2 "対象ユーザーの UID がシステム領域（<501）: '$_u' (uid=$_uid)"
+    return "$MDM_EXIT_USER"
+  fi
   printf '%s' "$_u"
   return 0
 }
