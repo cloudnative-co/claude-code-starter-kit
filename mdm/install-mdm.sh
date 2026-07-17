@@ -240,40 +240,56 @@ _mdm_lang_to_locale() {
   esac
 }
 
+# 降格 argv をグローバル配列 MDM_DROP_ARGV へ直接構築する（最終レビュー High#4）。
+# ★旧実装の「改行区切り stdout → read -r で配列化」は、改行を含む値（env 由来
+# EDITOR_CHOICE 等）が env のコマンド位置に落ちて任意コマンド実行になり得たため
+# 廃止。シリアライズ/再パースを一切行わず、値は常に単一の配列要素として保持する。
+# 多層防御として、制御文字（改行/CR/タブ等）を含む passthrough 値は拒否する。
+# 引数 $4 以降は実行するコマンド argv（インタプリタ込みで呼び出し側が絶対パス指定）。
+MDM_DROP_ARGV=()
 mdm_build_drop_argv() {
   local _uid="$1" _user="$2" _home="$3"; shift 3
   local _brewbin=""
   [[ -x /opt/homebrew/bin/brew ]] && _brewbin="/opt/homebrew/bin:"
   [[ -x /usr/local/bin/brew ]] && _brewbin="${_brewbin}/usr/local/bin:"
-  {
-    printf '%s\n' 'env'
-    printf '%s\n' '-i'
-    printf '%s\n' "HOME=$_home"
-    printf '%s\n' "USER=$_user"
-    printf '%s\n' "LOGNAME=$_user"
-    printf '%s\n' "PATH=${_brewbin}/usr/bin:/bin:/usr/sbin:/sbin"
-    [[ -n "${LANGUAGE:-}" ]] && printf '%s\n' "LANG=$(_mdm_lang_to_locale "$LANGUAGE")" || true
-    local _k
-    for _k in $_MDM_PASSTHROUGH_KEYS; do
-      if [[ -n "${!_k:-}" ]]; then
-        printf '%s\n' "$_k=${!_k}"
-      fi
-    done
-    # 実行するスクリプトと引数
-    printf '%s\n' /bin/bash
-    local _a
-    for _a in "$@"; do printf '%s\n' "$_a"; done
-  }
+  MDM_DROP_ARGV=(
+    /usr/bin/env -i
+    "HOME=$_home"
+    "USER=$_user"
+    "LOGNAME=$_user"
+    "PATH=${_brewbin}/usr/bin:/bin:/usr/sbin:/sbin"
+  )
+  if [[ -n "${LANGUAGE:-}" ]]; then
+    MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="LANG=$(_mdm_lang_to_locale "$LANGUAGE")"
+  fi
+  local _k _v
+  for _k in $_MDM_PASSTHROUGH_KEYS; do
+    _v="${!_k:-}"
+    [[ -z "$_v" ]] && continue
+    # 制御文字を含む値は不正として拒否（多層防御。printf %q 等での温存もしない）。
+    # NOTE: grep は改行を行区切りとして扱い改行そのものを検出できないため、
+    # 文字列全体を対象にする bash の =~ で判定する（Bash 3.2 対応）。
+    if [[ "$_v" =~ [[:cntrl:]] ]]; then
+      mdm_log R1 "passthrough 値に制御文字が含まれる: $_k"
+      MDM_DROP_ARGV=()
+      return 1
+    fi
+    MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="$_k=$_v"
+  done
+  local _a
+  for _a in "$@"; do
+    MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="$_a"
+  done
+  return 0
 }
 
-# setup.sh へ渡す引数を組み立てる（KIT_MDM_DRY_RUN=true のとき --dry-run を
-# 追加。spec §7.3: KIT_MDM_DRY_RUN は本体の --dry-run へ伝搬する契約）。
-# stdout へ改行区切りで出力し、呼び出し側で配列化する（mdm_build_drop_argv
-# と同じ形式・_mdm_exec_as_user 経由の呼び出しにもそのまま渡せる）。
+# setup.sh へ渡す引数をグローバル配列 MDM_SETUP_ARGV へ直接構築する
+# （KIT_MDM_DRY_RUN=true のとき --dry-run を追加。spec §7.3）。
+MDM_SETUP_ARGV=()
 mdm_build_setup_argv() {
-  printf '%s\n' '--non-interactive'
+  MDM_SETUP_ARGV=(--non-interactive)
   if [[ "$(mdm_validate_bool "${KIT_MDM_DRY_RUN:-false}" 2>/dev/null || echo false)" == "true" ]]; then
-    printf '%s\n' '--dry-run'
+    MDM_SETUP_ARGV[${#MDM_SETUP_ARGV[@]}]='--dry-run'
   fi
 }
 
@@ -464,15 +480,19 @@ _mdm_finish() {
   exit "$_code"
 }
 
-# mdm_build_drop_argv の出力（改行区切り argv）を配列化し、環境分離降格で
-# 実行する共通ヘルパー（spec §5.3）。
-#   launchctl asuser <uid> sudo -u <user> -H <mdm_build_drop_argv の出力>
+# MDM_DROP_ARGV（mdm_build_drop_argv が直接構築）を環境分離降格で実行する
+# 共通ヘルパー（spec §5.3）。launchctl/sudo/env は絶対パス固定（最終レビュー High#4）。
+#   /bin/launchctl asuser <uid> /usr/bin/sudo -u <user> -H /usr/bin/env -i ... <cmd...>
+# MDM_EXEC_AS_USER_DRYRUN=1 のとき実行せず argv を1行1要素で表示のみ
+# （テスト用。表示は再パースされない）。
 _mdm_exec_as_user() {
   local _uid="$1" _user="$2" _home="$3"; shift 3
-  local -a _argv=()
-  local _line
-  while IFS= read -r _line; do _argv+=("$_line"); done < <(mdm_build_drop_argv "$_uid" "$_user" "$_home" "$@")
-  launchctl asuser "$_uid" sudo -u "$_user" -H "${_argv[@]}"
+  mdm_build_drop_argv "$_uid" "$_user" "$_home" "$@" || return 1
+  if [[ "${MDM_EXEC_AS_USER_DRYRUN:-0}" == "1" ]]; then
+    printf '%s\n' /bin/launchctl asuser "$_uid" /usr/bin/sudo -u "$_user" -H "${MDM_DROP_ARGV[@]}"
+    return 0
+  fi
+  /bin/launchctl asuser "$_uid" /usr/bin/sudo -u "$_user" -H "${MDM_DROP_ARGV[@]}"
 }
 
 # Xcode Command Line Tools の導入確認（spec §5.2）。root 実行前提。
@@ -695,11 +715,10 @@ _mdm_run_user_phase() {
   fi
 
   # U2: setup.sh を直接実行（root 時のみ環境分離降格。spec §5.1/§5.3）。
-  # 引数は mdm_build_setup_argv で組み立てる（KIT_MDM_DRY_RUN=true なら --dry-run も付与）。
-  local -a _setup_argv=()
-  local _sa_line
-  while IFS= read -r _sa_line; do _setup_argv+=("$_sa_line"); done < <(mdm_build_setup_argv)
-  mdm_log U2 "setup.sh を実行: ${_setup_argv[*]}"
+  # 引数は mdm_build_setup_argv がグローバル配列 MDM_SETUP_ARGV へ直接構築する
+  # （KIT_MDM_DRY_RUN=true なら --dry-run も付与。改行シリアライズは行わない）。
+  mdm_build_setup_argv
+  mdm_log U2 "setup.sh を実行: ${MDM_SETUP_ARGV[*]}"
   if [[ "$_euid" -eq 0 ]]; then
     local _uid
     _uid="$(id -u "$_user" 2>/dev/null || true)"
@@ -707,12 +726,12 @@ _mdm_run_user_phase() {
       mdm_log U2 "対象ユーザーの UID を解決できない"
       return 1
     fi
-    if ! _mdm_exec_as_user "$_uid" "$_user" "$_home" "$_install_dir/setup.sh" "${_setup_argv[@]}"; then
+    if ! _mdm_exec_as_user "$_uid" "$_user" "$_home" /bin/bash "$_install_dir/setup.sh" "${MDM_SETUP_ARGV[@]}"; then
       mdm_log U2 "setup.sh の実行に失敗"
       return 1
     fi
   else
-    if ! /bin/bash "$_install_dir/setup.sh" "${_setup_argv[@]}"; then
+    if ! /bin/bash "$_install_dir/setup.sh" "${MDM_SETUP_ARGV[@]}"; then
       mdm_log U2 "setup.sh の実行に失敗"
       return 1
     fi

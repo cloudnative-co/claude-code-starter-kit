@@ -177,25 +177,58 @@ rm -rf "$_tmpd"
   out="$(mdm_prereq_plan 2>/dev/null)"
   [[ "$out" == "skip" ]] && pass "mdm-install: PREREQ_MODE=skip は skip" || fail "mdm-install: skip 期待 (got '$out')" )
 
-# ── 降格 argv 構築 ───────────────────────────────────────
+# ── 降格 argv 構築（グローバル配列 MDM_DROP_ARGV へ直接構築。最終レビュー High#4）──
+# 旧実装の「改行区切り stdout → read -r で配列化」は、改行を含む値（env 由来
+# EDITOR_CHOICE 等）で env のコマンド位置に任意コマンドを注入できたため廃止。
 (
   export PROFILE="standard" LANGUAGE="ja" KIT_MDM_GIT_REF="main"
-  argv="$(mdm_build_drop_argv 501 jane /Users/jane /path/to/setup.sh --non-interactive 2>/dev/null)"
-  # env -i と固定変数、許可された設定変数が含まれ、root の無関係な変数は含まれない
-  echo "$argv" | grep -q 'env' || fail "mdm-install: env -i が無い"
-  echo "$argv" | grep -q 'HOME=/Users/jane' && pass "mdm-install: HOME を固定" || fail "mdm-install: HOME 固定なし"
-  echo "$argv" | grep -q 'USER=jane' && pass "mdm-install: USER を固定" || fail "mdm-install: USER 固定なし"
-  echo "$argv" | grep -q 'PROFILE=standard' && pass "mdm-install: PROFILE を伝搬" || fail "mdm-install: PROFILE 伝搬なし"
-  echo "$argv" | grep -q 'LANGUAGE=ja' && pass "mdm-install: LANGUAGE を伝搬" || fail "mdm-install: LANGUAGE 伝搬なし"
+  mdm_build_drop_argv 501 jane /Users/jane /bin/bash /path/to/setup.sh --non-interactive 2>/dev/null \
+    || fail "mdm-install: mdm_build_drop_argv が失敗した"
+  [[ "${MDM_DROP_ARGV[0]}" == "/usr/bin/env" && "${MDM_DROP_ARGV[1]}" == "-i" ]] \
+    && pass "mdm-install: /usr/bin/env -i を絶対パスで先頭に置く" \
+    || fail "mdm-install: env -i が絶対パスで先頭に無い (got '${MDM_DROP_ARGV[0]}' '${MDM_DROP_ARGV[1]:-}')"
+  _has() { local _e; for _e in "${MDM_DROP_ARGV[@]}"; do [[ "$_e" == "$1" ]] && return 0; done; return 1; }
+  _has 'HOME=/Users/jane' && pass "mdm-install: HOME を固定" || fail "mdm-install: HOME 固定なし"
+  _has 'USER=jane' && pass "mdm-install: USER を固定" || fail "mdm-install: USER 固定なし"
+  _has 'PROFILE=standard' && pass "mdm-install: PROFILE を伝搬" || fail "mdm-install: PROFILE 伝搬なし"
+  _has 'LANGUAGE=ja' && pass "mdm-install: LANGUAGE を伝搬" || fail "mdm-install: LANGUAGE 伝搬なし"
+  # 実行コマンドは呼び出し側指定の位置に単一要素で並ぶ
+  _has '/bin/bash' && _has '/path/to/setup.sh' && _has '--non-interactive' \
+    && pass "mdm-install: 実行コマンドと引数が argv に含まれる" \
+    || fail "mdm-install: 実行コマンド/引数が argv に無い"
 )
 (
   unset PROFILE
-  argv="$(mdm_build_drop_argv 501 jane /Users/jane /path/to/setup.sh 2>/dev/null)"
-  if echo "$argv" | grep -q 'PROFILE='; then
+  mdm_build_drop_argv 501 jane /Users/jane /bin/bash /path/to/setup.sh 2>/dev/null || true
+  _found=0
+  for _e in "${MDM_DROP_ARGV[@]}"; do case "$_e" in PROFILE=*) _found=1 ;; esac; done
+  if [[ "$_found" -eq 1 ]]; then
     fail "mdm-install: 未設定の PROFILE は渡さない"
   else
     pass "mdm-install: 未設定変数は伝搬しない"
   fi
+)
+# ★注入回帰: 改行を含む passthrough 値は拒否する（env のコマンド位置注入防止）
+(
+  export EDITOR_CHOICE=$'none\n/usr/bin/id'
+  _rc=0
+  mdm_build_drop_argv 501 jane /Users/jane /bin/bash /path/to/setup.sh >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -ne 0 ]]; then
+    pass "mdm-install: 改行を含む passthrough 値を拒否"
+  else
+    fail "mdm-install: 改行を含む passthrough 値が argv に混入し得る（注入回帰）"
+  fi
+)
+# 空白を含む値は単一の argv 要素のまま保持される（word splitting されない）
+(
+  export EDITOR_CHOICE='none plus extra'
+  mdm_build_drop_argv 501 jane /Users/jane /bin/bash /path/to/setup.sh 2>/dev/null \
+    || fail "mdm-install: 空白入り値で失敗した"
+  _found=0
+  for _e in "${MDM_DROP_ARGV[@]}"; do [[ "$_e" == 'EDITOR_CHOICE=none plus extra' ]] && _found=1; done
+  [[ "$_found" -eq 1 ]] \
+    && pass "mdm-install: 空白入り値が単一要素で保持される" \
+    || fail "mdm-install: 空白入り値が単一要素で保持されない"
 )
 
 # ── LANG マッピング回帰テスト（Task 8 バグ修正）─────────────
@@ -204,17 +237,34 @@ rm -rf "$_tmpd"
 # en->en_US.UTF-8 / ja->ja_JP.UTF-8 に正しくマップされることを確認する。
 (
   export LANGUAGE="en"
-  argv="$(mdm_build_drop_argv 501 jane /Users/jane /path/to/setup.sh 2>/dev/null)"
-  echo "$argv" | grep -q '^LANG=en_US.UTF-8$' \
+  mdm_build_drop_argv 501 jane /Users/jane /bin/bash /path/to/setup.sh 2>/dev/null || true
+  _found=0
+  for _e in "${MDM_DROP_ARGV[@]}"; do [[ "$_e" == 'LANG=en_US.UTF-8' ]] && _found=1; done
+  [[ "$_found" -eq 1 ]] \
     && pass "mdm-install: LANGUAGE=en は LANG=en_US.UTF-8 にマップ" \
-    || fail "mdm-install: LANGUAGE=en の LANG マッピングが不正 (argv: $argv)"
+    || fail "mdm-install: LANGUAGE=en の LANG マッピングが不正"
 )
 (
   export LANGUAGE="ja"
-  argv="$(mdm_build_drop_argv 501 jane /Users/jane /path/to/setup.sh 2>/dev/null)"
-  echo "$argv" | grep -q '^LANG=ja_JP.UTF-8$' \
+  mdm_build_drop_argv 501 jane /Users/jane /bin/bash /path/to/setup.sh 2>/dev/null || true
+  _found=0
+  for _e in "${MDM_DROP_ARGV[@]}"; do [[ "$_e" == 'LANG=ja_JP.UTF-8' ]] && _found=1; done
+  [[ "$_found" -eq 1 ]] \
     && pass "mdm-install: LANGUAGE=ja は LANG=ja_JP.UTF-8 にマップ" \
-    || fail "mdm-install: LANGUAGE=ja の LANG マッピングが不正 (argv: $argv)"
+    || fail "mdm-install: LANGUAGE=ja の LANG マッピングが不正"
+)
+
+# ── _mdm_exec_as_user は launchctl/sudo を絶対パスで組み立てる ──
+# MDM_EXEC_AS_USER_DRYRUN=1 で実行せず argv を表示のみ（表示は再パースされない）。
+(
+  export MDM_EXEC_AS_USER_DRYRUN=1
+  out="$(_mdm_exec_as_user 501 jane /Users/jane /bin/bash /path/to/setup.sh --non-interactive 2>/dev/null)"
+  printf '%s' "$out" | head -1 | grep -q '^/bin/launchctl$' \
+    && pass "mdm-install: launchctl を絶対パスで起動" \
+    || fail "mdm-install: launchctl が絶対パスでない (out: $(printf '%s' "$out" | head -1))"
+  printf '%s\n' "$out" | grep -q '^/usr/bin/sudo$' \
+    && pass "mdm-install: sudo を絶対パスで起動" \
+    || fail "mdm-install: sudo が絶対パスでない"
 )
 
 # ── Homebrew pkg URL 解決（GitHub API レスポンスのモック。jq 非依存 grep/sed）──
@@ -312,18 +362,19 @@ rm -rf "$_brew_tmpd"
   fi
 )
 
-# ── setup.sh 引数の組み立て（KIT_MDM_DRY_RUN -> --dry-run 配線）──
+# ── setup.sh 引数の組み立て（グローバル配列 MDM_SETUP_ARGV へ直接構築）──
 # 実 setup.sh 実行は副作用があるため、argv 組み立て (mdm_build_setup_argv)
 # のみを検証する。mdm_validate_bool は test-mdm-config.sh（アルファベット順
 # でこのファイルより先に実行される）が共有プロセスへ source 済みの前提
 # （mdm_prereq_plan の既存テストと同じ依存関係）。
+_setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "$1" ]] && return 0; done; return 1; }
 (
   unset KIT_MDM_DRY_RUN
-  argv="$(mdm_build_setup_argv 2>/dev/null)"
-  echo "$argv" | grep -q -- '--non-interactive' \
+  mdm_build_setup_argv 2>/dev/null
+  _setup_argv_has '--non-interactive' \
     && pass "mdm-install: setup.sh argv に --non-interactive を含む" \
-    || fail "mdm-install: setup.sh argv に --non-interactive が無い (argv: $argv)"
-  if echo "$argv" | grep -q -- '--dry-run'; then
+    || fail "mdm-install: setup.sh argv に --non-interactive が無い (argv: ${MDM_SETUP_ARGV[*]})"
+  if _setup_argv_has '--dry-run'; then
     fail "mdm-install: KIT_MDM_DRY_RUN 未設定なのに --dry-run が含まれる"
   else
     pass "mdm-install: KIT_MDM_DRY_RUN 未設定時は --dry-run を含まない"
@@ -331,15 +382,15 @@ rm -rf "$_brew_tmpd"
 )
 (
   export KIT_MDM_DRY_RUN=true
-  argv="$(mdm_build_setup_argv 2>/dev/null)"
-  echo "$argv" | grep -q -- '--dry-run' \
+  mdm_build_setup_argv 2>/dev/null
+  _setup_argv_has '--dry-run' \
     && pass "mdm-install: KIT_MDM_DRY_RUN=true で --dry-run を配線" \
-    || fail "mdm-install: KIT_MDM_DRY_RUN=true なのに --dry-run が無い (argv: $argv)"
+    || fail "mdm-install: KIT_MDM_DRY_RUN=true なのに --dry-run が無い (argv: ${MDM_SETUP_ARGV[*]})"
 )
 (
   export KIT_MDM_DRY_RUN=false
-  argv="$(mdm_build_setup_argv 2>/dev/null)"
-  if echo "$argv" | grep -q -- '--dry-run'; then
+  mdm_build_setup_argv 2>/dev/null
+  if _setup_argv_has '--dry-run'; then
     fail "mdm-install: KIT_MDM_DRY_RUN=false なのに --dry-run が含まれる"
   else
     pass "mdm-install: KIT_MDM_DRY_RUN=false 時は --dry-run を含まない"
