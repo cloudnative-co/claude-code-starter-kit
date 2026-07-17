@@ -2033,10 +2033,71 @@ _MDM_EXPECTED_OUTPUT=""
 _MDM_PRIOR_INVENTORY=""
 _MDM_RUN_LOCK_FILE=""
 _MDM_RUN_LOCK_BASE=""
+_MDM_RUN_LOCK_MODE=""
+_MDM_RUN_LOCK_HOLDER_PID=""
+_MDM_RUN_LOCK_WORKER_PID=""
+_MDM_RUN_LOCK_CONTROL_DIR=""
+
+_mdm_process_parent_pid() { # <pid>
+  local _pid="$1"
+  [[ "$_pid" =~ ^[0-9]+$ ]] || return 1
+  /bin/ps -p "$_pid" -o ppid= 2>/dev/null | /usr/bin/tr -d '[:space:]'
+}
+
+_mdm_lock_control_cleanup() { # <base> <control-dir>
+  local _base="$1" _control="$2" _entry
+  [[ -n "$_control" ]] || return 0
+  case "$_control" in "$_base"/.remediation-lock.*) : ;; *) return 1 ;; esac
+  [[ ! -L "$_control" ]] || return 1
+  [[ -e "$_control" ]] || return 0
+  [[ -d "$_control" ]] || return 1
+  _mdm_component_trusted "$_control" || return 1
+  for _entry in owner ready release; do
+    [[ ! -L "$_control/$_entry" ]] || return 1
+    [[ ! -e "$_control/$_entry" || -f "$_control/$_entry" ]] || return 1
+  done
+  /bin/rm -f "$_control/owner" "$_control/ready" "$_control/release" || return 1
+  /bin/rmdir "$_control" 2>/dev/null || [[ ! -e "$_control" ]]
+}
+
+_mdm_wait_lock_holder() { # <holder-pid>
+  local _holder="$1" _watchdog _wait_rc=0
+  [[ "$_holder" =~ ^[0-9]+$ ]] || return 1
+  (
+    trap 'exit 0' TERM
+    _watch_count=0
+    while [[ "$_watch_count" -lt 500 ]]; do
+      /bin/sleep 0.01
+      _watch_count=$((_watch_count + 1))
+    done
+    /bin/kill -TERM "$_holder" 2>/dev/null || exit 0
+    /bin/sleep 0.2
+    /bin/kill -KILL "$_holder" 2>/dev/null || true
+  ) &
+  _watchdog=$!
+  wait "$_holder" 2>/dev/null || _wait_rc=$?
+  /bin/kill -TERM "$_watchdog" 2>/dev/null || true
+  wait "$_watchdog" 2>/dev/null || true
+  return "$_wait_rc"
+}
+
+_mdm_abort_legacy_lock_holder() { # <base> <control-dir> <holder-pid> <worker-pid>
+  local _base="$1" _control="$2" _holder="$3" _worker="$4"
+  if [[ "$_worker" =~ ^[0-9]+$ ]]; then
+    /bin/kill -TERM "$_worker" 2>/dev/null || true
+  fi
+  if [[ "$_holder" =~ ^[0-9]+$ ]]; then
+    /bin/kill -TERM "$_holder" 2>/dev/null || true
+    _mdm_wait_lock_holder "$_holder" || true
+  fi
+  _mdm_lock_control_cleanup "$_base" "$_control" || true
+}
 
 _mdm_acquire_run_lock() { # <user> <home>
   local _user="$1" _home="$2" _base _lock _lockf=/usr/bin/lockf
-  local _old_umask _path_identity _fd_identity
+  local _old_umask _path_identity _fd_identity _lock_rc=0
+  local _control="" _owner_file _ready _release _holder="" _worker="" _reported_holder
+  local _owner_pid _ready_line _wait_count=0
   _base="$(_mdm_receipt_dir_for "$_home")"
   if [[ "${_MDM_TEST_MODE:-0}" == 1 && -n "${MDM_SYSTEM_RCPT_DIR_OVERRIDE:-}" ]]; then
     [[ -d "$_base" ]] || /bin/mkdir -p "$_base" || return 1
@@ -2063,7 +2124,91 @@ _mdm_acquire_run_lock() { # <user> <home>
   _path_identity="$(_mdm_stat_identity "$_lock")" || { exec 19>&-; return 1; }
   _fd_identity="$(_mdm_stat_fd_identity 19)" || { exec 19>&-; return 1; }
   [[ "$_path_identity" == "$_fd_identity" ]] || { exec 19>&-; return 1; }
-  if ! "$_lockf" -s -t 0 19; then
+
+  # shell_cmds-319 added lockf's fd-only form.  Keep that race-free form on
+  # current macOS, but fall back to the traditional command form on older
+  # managed releases where a missing command exits with EX_USAGE (64).
+  "$_lockf" -s -t 0 19 >/dev/null 2>&1 || _lock_rc=$?
+  if [[ "$_lock_rc" -eq 0 ]]; then
+    _MDM_RUN_LOCK_MODE="fd"
+  elif [[ "$_lock_rc" -eq 64 ]]; then
+    exec 19>&-
+    _old_umask="$(umask)"; umask 077
+    _control="$(/usr/bin/mktemp -d "$_base/.remediation-lock.XXXXXX" 2>/dev/null)" \
+      || { umask "$_old_umask"; return 1; }
+    umask "$_old_umask"
+    case "$_control" in "$_base"/.remediation-lock.*) : ;; *) return 1 ;; esac
+    [[ -d "$_control" && ! -L "$_control" ]] || return 1
+    /bin/chmod 700 "$_control" || return 1
+    _mdm_component_trusted "$_control" || return 1
+    _owner_file="$_control/owner"
+    _ready="$_control/ready"
+    _release="$_control/release"
+    _old_umask="$(umask)"; umask 077
+    /bin/sh -c 'printf "%s\n" "$PPID"' > "$_owner_file"
+    _lock_rc=$?
+    umask "$_old_umask"
+    if [[ "$_lock_rc" -ne 0 || ! -f "$_owner_file" || -L "$_owner_file" ]] \
+      || ! _mdm_component_trusted "$_owner_file"; then
+      _mdm_lock_control_cleanup "$_base" "$_control" || true
+      return 1
+    fi
+    _owner_pid="$(/bin/cat "$_owner_file" 2>/dev/null || true)"
+    /bin/rm -f "$_owner_file" || return 1
+    [[ "$_owner_pid" =~ ^[0-9]+$ ]] \
+      || { _mdm_lock_control_cleanup "$_base" "$_control" || true; return 1; }
+
+    "$_lockf" -k -n -s -t 0 "$_lock" /bin/sh -c '
+      _owner_pid=$1
+      _control=$2
+      _ready=$3
+      _release=$4
+      _lockf_pid=$PPID
+      _cleanup() {
+        /bin/rm -f "$_control/owner" "$_ready" "$_release"
+        /bin/rmdir "$_control" 2>/dev/null || :
+      }
+      trap _cleanup EXIT
+      trap "exit 0" INT TERM
+      umask 077
+      printf "%s:%s\n" "$$" "$_lockf_pid" > "$_ready" || exit 1
+      while [ ! -e "$_release" ]; do
+        _parent="$(/bin/ps -p "$_lockf_pid" -o ppid= 2>/dev/null \
+          | /usr/bin/tr -d "[:space:]")"
+        [ "$_parent" = "$_owner_pid" ] || break
+        /bin/sleep 0.1
+      done
+    ' mdm-lock-holder "$_owner_pid" "$_control" "$_ready" "$_release" &
+    _holder=$!
+
+    while [[ ! -e "$_ready" && "$_wait_count" -lt 500 ]]; do
+      /bin/kill -0 "$_holder" 2>/dev/null || break
+      /bin/sleep 0.01
+      _wait_count=$((_wait_count + 1))
+    done
+    if [[ ! -f "$_ready" || -L "$_ready" ]] \
+      || ! _mdm_component_trusted "$_ready"; then
+      _mdm_abort_legacy_lock_holder "$_base" "$_control" "$_holder" "$_worker"
+      return 1
+    fi
+    _ready_line="$(/bin/cat "$_ready" 2>/dev/null || true)"
+    if [[ ! "$_ready_line" =~ ^[0-9]+:[0-9]+$ ]]; then
+      _mdm_abort_legacy_lock_holder "$_base" "$_control" "$_holder" "$_worker"
+      return 1
+    fi
+    _worker="${_ready_line%%:*}"
+    _reported_holder="${_ready_line#*:}"
+    if [[ "$_reported_holder" != "$_holder" ]] \
+      || [[ "$(_mdm_process_parent_pid "$_holder" || true)" != "$_owner_pid" ]] \
+      || [[ "$(_mdm_process_parent_pid "$_worker" || true)" != "$_holder" ]]; then
+      _mdm_abort_legacy_lock_holder "$_base" "$_control" "$_holder" "$_worker"
+      return 1
+    fi
+    _MDM_RUN_LOCK_MODE="legacy"
+    _MDM_RUN_LOCK_HOLDER_PID="$_holder"
+    _MDM_RUN_LOCK_WORKER_PID="$_worker"
+    _MDM_RUN_LOCK_CONTROL_DIR="$_control"
+  else
     exec 19>&-
     return 1
   fi
@@ -2074,12 +2219,38 @@ _mdm_acquire_run_lock() { # <user> <home>
 
 _mdm_release_run_lock() {
   local _lock="${_MDM_RUN_LOCK_FILE:-}" _base="${_MDM_RUN_LOCK_BASE:-}"
+  local _mode="${_MDM_RUN_LOCK_MODE:-}" _control="${_MDM_RUN_LOCK_CONTROL_DIR:-}"
+  local _holder="${_MDM_RUN_LOCK_HOLDER_PID:-}" _worker="${_MDM_RUN_LOCK_WORKER_PID:-}"
+  local _release _old_umask _wait_rc=0
   [[ -n "$_lock" ]] || return 0
   [[ -n "$_base" && "$_lock" == "$_base"/remediation-*.lock \
     && -f "$_lock" && ! -L "$_lock" ]] || return 1
-  exec 19>&- || return 1
+  case "$_mode" in
+    fd)
+      exec 19>&- || return 1 ;;
+    legacy)
+      [[ "$_holder" =~ ^[0-9]+$ && "$_worker" =~ ^[0-9]+$ ]] || return 1
+      [[ -n "$_control" ]] || return 1
+      case "$_control" in "$_base"/.remediation-lock.*) : ;; *) return 1 ;; esac
+      [[ -d "$_control" && ! -L "$_control" ]] || return 1
+      _mdm_component_trusted "$_control" || return 1
+      _release="$_control/release"
+      [[ ! -e "$_release" && ! -L "$_release" ]] || return 1
+      _old_umask="$(umask)"; umask 077
+      (set -o noclobber; : > "$_release") 2>/dev/null \
+        || { umask "$_old_umask"; return 1; }
+      umask "$_old_umask"
+      _mdm_wait_lock_holder "$_holder" || _wait_rc=$?
+      _mdm_lock_control_cleanup "$_base" "$_control" || return 1
+      [[ "$_wait_rc" -eq 0 ]] || return 1 ;;
+    *) return 1 ;;
+  esac
   _MDM_RUN_LOCK_FILE=""
   _MDM_RUN_LOCK_BASE=""
+  _MDM_RUN_LOCK_MODE=""
+  _MDM_RUN_LOCK_HOLDER_PID=""
+  _MDM_RUN_LOCK_WORKER_PID=""
+  _MDM_RUN_LOCK_CONTROL_DIR=""
 }
 _mdm_cleanup_auth_entry_list() {
   local _path="${_MDM_AUTH_ENTRY_LIST:-}" _base _uid
