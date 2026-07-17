@@ -2,6 +2,10 @@
 # mdm/install-mdm.sh — macOS 向け MDM サイレントインストーラ兼自己ブートストラップ launcher
 # 詳細契約: docs/superpowers/specs/2026-07-16-mdm-silent-install-design.md
 set -euo pipefail
+# MDM agent の umask（000 のことがある）を継承しない（spec §9.3: dir 755 /
+# file 644。レシート/ログが group/other 書込可で生成されると detect の
+# compliant 偽装に直結する。R2-High）。setup.sh は自身で umask 077 を設定する。
+umask 022
 
 # ── 終了コード定数（固定契約 spec §8.1）────────────────────
 # 後続タスク(mdm_main / 各フェーズ、Task 4-9 で本ファイルに追加)で参照される契約定数。
@@ -67,10 +71,24 @@ mdm_json_escape() {
 }
 
 # jq 非依存でレシート JSON を書く。required_components / partial は既に JSON 配列文字列。
+# R2-High 対応:
+#   - dir/file の権限を umask に依存させない（明示 chmod 755 / 644。spec §9.3）
+#   - 既存パスの symlink は辿らず除去（root の書込を別ファイルへ誘導させない）
+#   - 同一 dir の一時ファイルへ書いてから mv -f（atomic rename・部分書込を晒さない）
 mdm_receipt_write() {
   local _path="$1" _result="$2" _exit="$3"
   local _dir; _dir="$(dirname "$_path")"
   mkdir -p "$_dir" 2>/dev/null || true
+  chmod 755 "$_dir" 2>/dev/null || true
+  if [[ -L "$_path" ]]; then
+    rm -f "$_path" 2>/dev/null || true
+    if [[ -L "$_path" || -e "$_path" ]]; then
+      mdm_log R4 "レシートパスの symlink を除去できない: $_path"
+      return 1
+    fi
+  fi
+  local _tmp
+  _tmp="$(mktemp "$_dir/.receipt-tmp.XXXXXX" 2>/dev/null)" || return 1
   {
     printf '{\n'
     printf '  "schema_version": 1,\n'
@@ -87,7 +105,10 @@ mdm_receipt_write() {
     printf '  "timestamp": "%s",\n'    "$(mdm_json_escape "$MDM_RCPT_TIMESTAMP")"
     printf '  "log_path": "%s"\n'      "$(mdm_json_escape "$MDM_RCPT_LOG_PATH")"
     printf '}\n'
-  } > "$_path"
+  } > "$_tmp" || { rm -f "$_tmp" 2>/dev/null || true; return 1; }
+  chmod 644 "$_tmp" 2>/dev/null || true
+  mv -f "$_tmp" "$_path" 2>/dev/null || { rm -f "$_tmp" 2>/dev/null || true; return 1; }
+  return 0
 }
 
 # コンソールユーザーを取得（テスト時は MDM_CONSOLE_USER_OVERRIDE を優先）
@@ -1006,6 +1027,7 @@ _mdm_setup_log_file() {
   fi
   MDM_LOG_FILE="$_dir/install-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run).log"
   mkdir -p "$_dir" 2>/dev/null || true
+  chmod 755 "$_dir" 2>/dev/null || true    # umask 汚染対策（spec §9.3）
   return 0
 }
 

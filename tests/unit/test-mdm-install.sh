@@ -71,6 +71,38 @@ if jq -e . "$_tmpd/receipt.json" >/dev/null 2>&1; then
 else
   fail "mdm-install: レシートが不正な JSON"
 fi
+
+# ══ R2-High: レシートは umask に依存せず 644/755 で作成され、symlink を辿らない ══
+(
+  # MDM agent の umask が 000 でもレシート 644 / ディレクトリ 755（spec §9.3）。
+  # 666 のレシートは一般ユーザーが書き換え可能になり detect-mdm の compliant
+  # 偽装（任意 repo を導入済みキットとして通す）に直結する。
+  umask 000
+  _u0dir="$_tmpd/umask0/sub"
+  mdm_receipt_write "$_u0dir/receipt-jane.json" success 0
+  _fmode="$(stat -f '%Lp' "$_u0dir/receipt-jane.json" 2>/dev/null || stat -c '%a' "$_u0dir/receipt-jane.json" 2>/dev/null)"
+  _dmode="$(stat -f '%Lp' "$_u0dir" 2>/dev/null || stat -c '%a' "$_u0dir" 2>/dev/null)"
+  [[ "$_fmode" == "644" ]] \
+    && pass "mdm-install: umask 000 でもレシートは 644" \
+    || fail "mdm-install: umask 000 でレシートが ${_fmode}（書換可能な contract 違反）"
+  [[ "$_dmode" == "755" ]] \
+    && pass "mdm-install: umask 000 でもレシート dir は 755" \
+    || fail "mdm-install: umask 000 でレシート dir が $_dmode"
+)
+(
+  # レシートパスに先置きされた symlink を辿らない（標的ファイル無傷 + 実体化）
+  _sldir="$_tmpd/rcpt-symlink"
+  mkdir -p "$_sldir"
+  printf 'victim\n' > "$_sldir/victim-file"
+  ln -s "$_sldir/victim-file" "$_sldir/receipt-jane.json"
+  mdm_receipt_write "$_sldir/receipt-jane.json" success 0
+  if [[ ! -L "$_sldir/receipt-jane.json" && -f "$_sldir/receipt-jane.json" ]] \
+     && [[ "$(cat "$_sldir/victim-file")" == "victim" ]]; then
+    pass "mdm-install: レシート書込は symlink を辿らない（標的無傷・実体化）"
+  else
+    fail "mdm-install: レシート書込が symlink を辿る/実体化しない"
+  fi
+)
 rm -rf "$_tmpd"
 
 # ── JSON エスケープ: 制御文字（Medium: 無検証環境値の改行等で JSON が壊れない）──
