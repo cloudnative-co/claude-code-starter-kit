@@ -53,7 +53,7 @@ MDM_RCPT_PARTIAL='[]'
 MDM_RCPT_TIMESTAMP="2026-07-16T00:00:00Z"
 # shellcheck disable=SC2034
 MDM_RCPT_LOG_PATH="/Library/Logs/ClaudeCodeStarterKit/install.log"
-mdm_receipt_write "$_tmpd/receipt.json" "success" "0"
+MDM_EUID_OVERRIDE=501 mdm_receipt_write "$_tmpd/receipt.json" "success" "0"
 
 # NOTE: assert_json_field は field を `jq -r "$field"` にそのまま渡すため、
 # フィルタ式として先頭ドット (.result 等) が必須。ドット無し ("result") は
@@ -96,7 +96,7 @@ fi
   # 偽装（任意 repo を導入済みキットとして通す）に直結する。
   umask 000
   _u0dir="$_tmpd/umask0/sub"
-  mdm_receipt_write "$_u0dir/receipt-jane.json" success 0
+  MDM_EUID_OVERRIDE=501 mdm_receipt_write "$_u0dir/receipt-jane.json" success 0
   _fmode="$(test_stat_mode "$_u0dir/receipt-jane.json")"
   _dmode="$(test_stat_mode "$_u0dir")"
   [[ "$_fmode" == "644" ]] \
@@ -112,7 +112,7 @@ fi
   mkdir -p "$_sldir"
   printf 'victim\n' > "$_sldir/victim-file"
   ln -s "$_sldir/victim-file" "$_sldir/receipt-jane.json"
-  mdm_receipt_write "$_sldir/receipt-jane.json" success 0
+  MDM_EUID_OVERRIDE=501 mdm_receipt_write "$_sldir/receipt-jane.json" success 0
   if [[ ! -L "$_sldir/receipt-jane.json" && -f "$_sldir/receipt-jane.json" ]] \
      && [[ "$(cat "$_sldir/victim-file")" == "victim" ]]; then
     pass "mdm-install: レシート書込は symlink を辿らない（標的無傷・実体化）"
