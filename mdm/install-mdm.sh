@@ -27,7 +27,14 @@ MDM_EXIT_OS=60
 
 # 配布元リポジトリ（install.sh と同一 URL。KIT_MDM_GIT_REF で SHA を固定する
 # ため URL 自体は固定でよい。spec §9.1）。
+# テスト時は MDM_KIT_REPO_URL_OVERRIDE でローカル fixture repo に差し替え可能
+# （参照箇所で call-time に解決する — source 時点の環境に縛られない）。
 _MDM_KIT_REPO_URL="https://github.com/cloudnative-co/claude-code-starter-kit.git"
+
+# 管理設定ファイルの固定パス（spec §7.2）。テスト時は MDM_CONFIG_PATH_OVERRIDE。
+_mdm_config_path() {
+  printf '%s' "${MDM_CONFIG_PATH_OVERRIDE:-/Library/Application Support/ClaudeCodeStarterKit/mdm-config.conf}"
+}
 
 # ── レシート用グローバル（各フェーズが埋める）──────────────
 MDM_RCPT_KIT_VERSION=""; MDM_RCPT_GIT_REF=""; MDM_RCPT_RESOLVED_SHA=""
@@ -253,55 +260,139 @@ mdm_needs_bootstrap() {
   return 0
 }
 
+# ── 自己ブートストラップ launcher 専用ヘルパー（lib 非依存・自己完結）────
+# ★CRITICAL 修正（最終レビュー #1）: 旧実装は clone 直後の default branch の
+# lib-mdm-config.sh を ref 固定**前**に root で source していた。default branch
+# が侵害されると KIT_MDM_GIT_REF の SHA/tag 固定を無視して pin 前のコードが
+# root 実行される。launcher は取得物のコードを一切 source せず、以下の
+# 自己完結ヘルパーだけで ref 検証 → 解決 → checkout → HEAD 照合を行い、
+# 固定後の実体のみを子プロセスとして実行する。
+# （lib-mdm-config.sh と一部ロジックが重複するのは、この信頼境界を成立させる
+# ための意図的な複製。変更時は両方を更新すること。）
+
+# git ref 形式検証（lib の mdm_validate_gitref と同一契約の複製）。
+_mdm_boot_validate_gitref() {
+  local _ref="$1"
+  [[ -z "$_ref" ]] && return 1
+  if printf '%s' "$_ref" | grep -qE '^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$'; then
+    return 0
+  fi
+  /usr/bin/git check-ref-format --branch "$_ref" >/dev/null 2>&1
+}
+
+# 管理設定ファイルの安全性検証（lib の mdm_config_file_is_secure と同一契約の複製）。
+_mdm_boot_config_file_is_secure() {
+  local _f="$1"
+  [[ -e "$_f" ]] || return 1
+  [[ -L "$_f" ]] && return 1
+  local _mode
+  _mode="$(stat -f '%Lp' "$_f" 2>/dev/null || stat -c '%a' "$_f" 2>/dev/null || echo '')"
+  case "$_mode" in
+    *[2367])  return 1 ;;
+  esac
+  case "$_mode" in
+    ?[2367]?) return 1 ;;
+  esac
+  if [[ "${MDM_CONFIG_SKIP_OWNER_CHECK:-0}" != "1" ]]; then
+    local _owner
+    _owner="$(stat -f '%Su' "$_f" 2>/dev/null || stat -c '%U' "$_f" 2>/dev/null || echo '')"
+    [[ "$_owner" == "root" ]] || return 1
+  fi
+  return 0
+}
+
+# 管理設定ファイルから KIT_MDM_GIT_REF のみを安全に読む（単一ファイル配布時、
+# 設定ファイルの ref 固定を launcher にも効かせるため）。
+# ファイル無し: 空出力 + exit 0 / 不安全: exit 50 / 値は最初の一致行（parser と同じ優先）。
+_mdm_boot_config_git_ref() {
+  local _f="$1" _line _v
+  [[ -f "$_f" ]] || return 0
+  _mdm_boot_config_file_is_secure "$_f" || return "$MDM_EXIT_CONFIG"
+  while IFS= read -r _line || [[ -n "$_line" ]]; do
+    case "$_line" in
+      KIT_MDM_GIT_REF=*)
+        _v="${_line#KIT_MDM_GIT_REF=}"
+        _v="${_v%\"}"; _v="${_v#\"}"
+        printf '%s' "$_v"
+        return 0 ;;
+    esac
+  done < "$_f"
+  return 0
+}
+
+# ref を確定 SHA に解決（lib の mdm_resolve_ref_sha と同一手順の複製。
+# 形式検証は呼び出し側で実施済みの前提）。
+_mdm_boot_resolve_sha() {
+  local _repo="$1" _ref="$2" _sha=""
+  if printf '%s' "$_ref" | grep -qE '^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$'; then
+    _sha="$(/usr/bin/git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
+  else
+    if /usr/bin/git -C "$_repo" fetch --quiet origin "$_ref" 2>/dev/null; then
+      _sha="$(/usr/bin/git -C "$_repo" rev-parse --verify "FETCH_HEAD^{commit}" 2>/dev/null || true)"
+    else
+      _sha="$(/usr/bin/git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
+    fi
+  fi
+  [[ -z "$_sha" ]] && return 1
+  printf '%s' "$_sha"
+  return 0
+}
+
 # 単一ファイル配布時の自己ブートストラップ launcher（spec §3.1・§5.1 U1a）。
 # lib-mdm-config.sh が隣に無い状態で起動された場合、KIT_MDM_GIT_REF 固定で
 # 一時ディレクトリへ mdm/ を含むリポジトリを取得し、取得実体の install-mdm.sh
 # を子プロセスとして実行して結果を引き継ぐ。
-#
-# NOTE: ref 解決 (mdm_resolve_ref_sha) は lib-mdm-config.sh の mdm_validate_gitref
-# に依存するが、このパスに入る時点では隣接 lib が無い（＝まだ source されていない）。
-# git clone 直後はデフォルトブランチの working tree が展開されており、そこに
-# 含まれる mdm/lib-mdm-config.sh を「一時的に」source することで mdm_resolve_ref_sha
-# を使えるようにする。対象 ref 固有の実装差異は無視できるほど小さい前提（実際の
-# インストールは再実行後、対象 ref で checkout された install-mdm.sh が担う）。
+# ref の優先順位は §7.1 と同じ: CLI 引数（KEY=VALUE 形式）> 環境変数 > 管理設定ファイル > main。
 _mdm_bootstrap_and_reexec() {
-  local _ref="${KIT_MDM_GIT_REF:-main}"
+  local _ref="" _arg
+  for _arg in "$@"; do
+    case "$_arg" in
+      KIT_MDM_GIT_REF=*) _ref="${_arg#KIT_MDM_GIT_REF=}" ;;
+    esac
+  done
+  [[ -z "$_ref" ]] && _ref="${KIT_MDM_GIT_REF:-}"
+  if [[ -z "$_ref" ]]; then
+    local _cfg_rc=0
+    _ref="$(_mdm_boot_config_git_ref "$(_mdm_config_path)")" || _cfg_rc=$?
+    if [[ $_cfg_rc -ne 0 ]]; then
+      mdm_log U1a "管理設定ファイルの安全性検証に失敗（launcher）"
+      return "$MDM_EXIT_CONFIG"
+    fi
+  fi
+  [[ -z "$_ref" ]] && _ref="main"
+  if ! _mdm_boot_validate_gitref "$_ref"; then
+    mdm_log U1a "不正な git ref 形式: $_ref"
+    return "$MDM_EXIT_CONFIG"
+  fi
+
   local _bootstrap_dir
   _bootstrap_dir="$(mktemp -d "${TMPDIR:-/tmp}/mdm-bootstrap.XXXXXX" 2>/dev/null)" || {
     mdm_log U1a "bootstrap 一時ディレクトリの作成に失敗"
     return "$MDM_EXIT_SETUP"
   }
 
+  local _repo_url="${MDM_KIT_REPO_URL_OVERRIDE:-$_MDM_KIT_REPO_URL}"
   mdm_log U1a "mdm/ 一式を取得中 (ref=$_ref)"
-  if ! git clone --quiet "$_MDM_KIT_REPO_URL" "$_bootstrap_dir" 2>/dev/null; then
-    mdm_log U1a "リポジトリの取得に失敗: $_MDM_KIT_REPO_URL"
+  if ! /usr/bin/git clone --quiet "$_repo_url" "$_bootstrap_dir" 2>/dev/null; then
+    mdm_log U1a "リポジトリの取得に失敗: $_repo_url"
     rm -rf "$_bootstrap_dir"
     return "$MDM_EXIT_SETUP"
   fi
-  if [[ ! -f "$_bootstrap_dir/mdm/lib-mdm-config.sh" ]]; then
-    mdm_log U1a "取得したリポジトリに mdm/lib-mdm-config.sh が無い"
-    rm -rf "$_bootstrap_dir"
-    return "$MDM_EXIT_SETUP"
-  fi
-  # shellcheck source=mdm/lib-mdm-config.sh
-  source "$_bootstrap_dir/mdm/lib-mdm-config.sh"
 
-  local _sha _rc=0
-  _sha="$(mdm_resolve_ref_sha "$_bootstrap_dir" "$_ref")" || _rc=$?
-  if [[ $_rc -ne 0 || -z "$_sha" ]]; then
-    [[ "$_rc" -eq 0 ]] && _rc="$MDM_EXIT_SETUP"
+  local _sha
+  if ! _sha="$(_mdm_boot_resolve_sha "$_bootstrap_dir" "$_ref")" || [[ -z "$_sha" ]]; then
     mdm_log U1a "ref を解決できない: $_ref"
     rm -rf "$_bootstrap_dir"
-    return "$_rc"
+    return "$MDM_EXIT_SETUP"
   fi
-  if ! git -C "$_bootstrap_dir" checkout --quiet --detach "$_sha" 2>/dev/null; then
+  if ! /usr/bin/git -C "$_bootstrap_dir" checkout --quiet --detach "$_sha" 2>/dev/null; then
     mdm_log U1a "checkout に失敗: $_sha"
     rm -rf "$_bootstrap_dir"
     return "$MDM_EXIT_SETUP"
   fi
   local _head_sha
-  _head_sha="$(git -C "$_bootstrap_dir" rev-parse HEAD 2>/dev/null || true)"
-  if [[ "$_head_sha" != "$_sha" ]]; then
+  _head_sha="$(/usr/bin/git -C "$_bootstrap_dir" rev-parse --verify HEAD 2>/dev/null || true)"
+  if [[ -z "$_head_sha" || "$_head_sha" != "$_sha" ]]; then
     mdm_log U1a "checkout 後の HEAD が解決 SHA と不一致: $_head_sha != $_sha"
     rm -rf "$_bootstrap_dir"
     return "$MDM_EXIT_SETUP"
@@ -312,7 +403,7 @@ _mdm_bootstrap_and_reexec() {
     return "$MDM_EXIT_SETUP"
   fi
 
-  mdm_log U1a "取得実体から再実行: $_bootstrap_dir/mdm/install-mdm.sh"
+  mdm_log U1a "取得実体から再実行: $_bootstrap_dir/mdm/install-mdm.sh (sha=$_sha)"
   local _exec_rc=0
   /bin/bash "$_bootstrap_dir/mdm/install-mdm.sh" "$@" || _exec_rc=$?
   rm -rf "$_bootstrap_dir"
@@ -647,8 +738,7 @@ mdm_main() {
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib-mdm-config.sh"
   MDM_LOG_FILE="${KIT_MDM_LOG_DIR:-/Library/Logs/ClaudeCodeStarterKit}/install-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run).log"
   mkdir -p "$(dirname "$MDM_LOG_FILE")" 2>/dev/null || true
-  local _conf="/Library/Application Support/ClaudeCodeStarterKit/mdm-config.conf"
-  mdm_config_apply "$_conf" || { mdm_log R1 "設定エラー"; exit "$MDM_EXIT_CONFIG"; }
+  mdm_config_apply "$(_mdm_config_path)" || { mdm_log R1 "設定エラー"; exit "$MDM_EXIT_CONFIG"; }
   _mdm_apply_mdm_defaults
 
   # R2: ユーザー・home 解決
