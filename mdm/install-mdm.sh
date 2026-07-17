@@ -583,7 +583,69 @@ _mdm_resolve_brew_pkg_url() {
     | head -n1 \
     | sed -E 's/^"browser_download_url"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
   [[ -z "$_url" ]] && return 1
+  # 解決した URL を公式リリース配布パスに制約する（最終レビュー High#7）。
+  # API 応答の改ざん/汚染があっても github.com/Homebrew/brew 以外へ飛ばない。
+  # アセット名は Homebrew-<version>.pkg（旧）と Homebrew.pkg（6.0.11 で実測の現行）
+  # の両方を許容する。
+  if ! printf '%s' "$_url" | grep -qE '^https://github\.com/Homebrew/brew/releases/download/[^/[:space:]]+/Homebrew[^/[:space:]]*\.pkg$'; then
+    mdm_log R3 "Homebrew pkg URL が公式リリース配布パスでない: $_url"
+    return 1
+  fi
   printf '%s' "$_url"
+  return 0
+}
+
+# pkgutil --check-signature の出力を検証する（最終レビュー High#7）。
+# 汎用の "Developer ID Installer" 一致だけでは Apple 発行の任意の Developer ID
+# 証明書で署名した悪性 pkg を通してしまうため、Homebrew の Team ID に pin する。
+# Team ID 927JGANW46 は 2026-07-17 に release 6.0.11 の実 pkg を
+# `pkgutil --check-signature` して確認した一次情報
+# （"Developer ID Installer: Patrick Linnane (927JGANW46)"・notarized）。
+# 証明書のローテーションで Team ID が変わった場合は fail-closed になる（導入失敗
+# として exit 11 → ログで判別可能）。
+_MDM_BREW_TEAM_ID="927JGANW46"
+_mdm_check_brew_signature_output() {
+  local _out="$1"
+  printf '%s' "$_out" | grep -q 'Developer ID Installer' || return 1
+  printf '%s' "$_out" | grep -q "Developer ID Installer: .*(${_MDM_BREW_TEAM_ID})" || return 1
+  return 0
+}
+
+# HOMEBREW_PKG_USER plist を安全に作成する（最終レビュー High#7）。
+# /var/tmp は world-writable + sticky のため、他ローカルユーザーが先回りで
+# symlink を置け、旧実装（defaults write）は root がそれを辿って任意ファイルへ
+# 書き込む経路になった。rm → noclobber 排他作成 → lstat 検証で排除する。
+# Homebrew 側の homebrew-package-user は「非 symlink 通常ファイル・root 所有・
+# mode 0600・ACL 無し」の場合のみ plist を尊重する（Homebrew/brew
+# Library/Homebrew/utils/macos_user.sh で確認済み）ため mode 600 で作成する。
+# 値は defaults read 互換の XML plist（username は R2 で文字種検証済み = XML 安全）。
+_mdm_write_brew_pkg_user_plist() {
+  local _user="$1"
+  local _plist="${MDM_BREW_PLIST_OVERRIDE:-/var/tmp/.homebrew_pkg_user.plist}"
+  rm -f "$_plist" 2>/dev/null || true
+  if [[ -e "$_plist" || -L "$_plist" ]]; then
+    mdm_log R3 "既存の plist を除去できない: $_plist"
+    return 1
+  fi
+  # noclobber（set -C）で排他的に作成: rm と作成の間に他者が再作成した場合は
+  # 上書きせず失敗する。umask 177 で最初から 600
+  if ! ( set -C; umask 177; printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n\t<key>HOMEBREW_PKG_USER</key>\n\t<string>%s</string>\n</dict>\n</plist>\n' "$_user" > "$_plist" ) 2>/dev/null; then
+    mdm_log R3 "plist の排他作成に失敗: $_plist"
+    return 1
+  fi
+  # 作成後の実体検証（symlink でない・通常ファイル・自分所有・mode 600）
+  if [[ -L "$_plist" || ! -f "$_plist" ]]; then
+    mdm_log R3 "作成した plist の実体が不正: $_plist"
+    return 1
+  fi
+  local _owner _mode
+  _owner="$(stat -f '%u' "$_plist" 2>/dev/null || stat -c '%u' "$_plist" 2>/dev/null || echo '')"
+  _mode="$(stat -f '%Lp' "$_plist" 2>/dev/null || stat -c '%a' "$_plist" 2>/dev/null || echo '')"
+  if [[ "$_owner" != "$(id -u)" || "$_mode" != "600" ]]; then
+    mdm_log R3 "作成した plist の所有者/mode が不正: owner=$_owner mode=$_mode"
+    rm -f "$_plist" 2>/dev/null || true
+    return 1
+  fi
   return 0
 }
 
@@ -636,20 +698,22 @@ _mdm_bootstrap_homebrew() {
     return 1
   fi
 
-  # 署名検証: exit code に加えて証明書チェーンに "Developer ID Installer" が
-  # 含まれることを確認してから installer にかける（spec 要求）。
+  # 署名検証: exit code + 証明書チェーンの Developer ID Installer を Homebrew の
+  # Team ID (927JGANW46) に pin して確認してから installer にかける（High#7）。
   local _sig_out _sig_rc=0
   _sig_out="$(pkgutil --check-signature "$_pkg" 2>&1)" || _sig_rc=$?
-  if [[ $_sig_rc -ne 0 ]] || ! printf '%s' "$_sig_out" | grep -q 'Developer ID Installer'; then
-    mdm_log R3 "Homebrew pkg の署名検証に失敗（Developer ID 署名を確認できない）"
+  if [[ $_sig_rc -ne 0 ]] || ! _mdm_check_brew_signature_output "$_sig_out"; then
+    mdm_log R3 "Homebrew pkg の署名検証に失敗（Team ID ${_MDM_BREW_TEAM_ID} の Developer ID Installer 署名を確認できない）"
     rm -f "$_pkg" 2>/dev/null || true
     return 1
   fi
 
   # 代替インストールユーザーの指定（install 直前に作成。ファイルと対象
-  # ユーザーは install 前に存在必須 — 一次情報の記載どおり）
-  if ! defaults write /var/tmp/.homebrew_pkg_user HOMEBREW_PKG_USER "$_user" 2>/dev/null; then
-    mdm_log R3 "Homebrew 導入: /var/tmp/.homebrew_pkg_user.plist の作成に失敗"
+  # ユーザーは install 前に存在必須 — 一次情報の記載どおり）。
+  # symlink 追随を排除した排他作成 + root 所有 0600（brew 側の受理条件）
+  local _plist_path="${MDM_BREW_PLIST_OVERRIDE:-/var/tmp/.homebrew_pkg_user.plist}"
+  if ! _mdm_write_brew_pkg_user_plist "$_user"; then
+    mdm_log R3 "Homebrew 導入: $_plist_path の安全な作成に失敗"
     rm -f "$_pkg" 2>/dev/null || true
     return 1
   fi
@@ -657,7 +721,7 @@ _mdm_bootstrap_homebrew() {
   mdm_log R3 "Homebrew pkg を導入中 (HOMEBREW_PKG_USER=$_user)"
   local _rc=0
   installer -pkg "$_pkg" -target / >/dev/null 2>&1 || _rc=$?
-  rm -f "$_pkg" /var/tmp/.homebrew_pkg_user.plist 2>/dev/null || true
+  rm -f "$_pkg" "$_plist_path" 2>/dev/null || true
   if [[ $_rc -ne 0 ]]; then
     mdm_log R3 "Homebrew pkg の導入に失敗 (exit=$_rc)"
     return 1

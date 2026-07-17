@@ -392,6 +392,105 @@ EOF
     fail "mdm-install: 空応答なのに成功してしまう"
   fi
 )
+
+# ══ Homebrew 導入経路の固定（最終レビュー High#7）══
+
+# URL は https://github.com/Homebrew/brew/releases/download/ 配下の
+# Homebrew*.pkg のみ許可（API 応答が改ざん/汚染されても他ホストへ飛ばない）
+_brew_fixture_evil="$_brew_tmpd/release-evil.json"
+cat > "$_brew_fixture_evil" <<'EOF'
+{
+  "assets": [
+    {
+      "name": "Homebrew-4.6.15.pkg",
+      "browser_download_url": "https://evil.example.com/Homebrew-4.6.15.pkg"
+    }
+  ]
+}
+EOF
+(
+  export MDM_BREW_RELEASES_JSON_OVERRIDE="$_brew_fixture_evil"
+  _rc=0
+  _mdm_resolve_brew_pkg_url >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -ne 0 ]]; then
+    pass "mdm-install: 公式リリース URL 以外の .pkg を拒否"
+  else
+    fail "mdm-install: 非公式ホストの .pkg URL を許容してしまう"
+  fi
+)
+# 現行リリースの実アセット名（バージョンなし Homebrew.pkg・6.0.11 で実測）も許可
+_brew_fixture_new="$_brew_tmpd/release-new.json"
+cat > "$_brew_fixture_new" <<'EOF'
+{
+  "assets": [
+    {
+      "name": "Homebrew.pkg",
+      "browser_download_url": "https://github.com/Homebrew/brew/releases/download/6.0.11/Homebrew.pkg"
+    }
+  ]
+}
+EOF
+(
+  export MDM_BREW_RELEASES_JSON_OVERRIDE="$_brew_fixture_new"
+  out="$(_mdm_resolve_brew_pkg_url 2>/dev/null)" || true
+  [[ "$out" == "https://github.com/Homebrew/brew/releases/download/6.0.11/Homebrew.pkg" ]] \
+    && pass "mdm-install: バージョンなしアセット名 Homebrew.pkg を許容" \
+    || fail "mdm-install: 現行アセット名 Homebrew.pkg が拒否される (got '$out')"
+)
+
+# 署名検証は Homebrew の Team ID (927JGANW46) に pin する
+# （2026-07-17 に release 6.0.11 の pkgutil --check-signature で実測:
+#  "Developer ID Installer: Patrick Linnane (927JGANW46)" + notarized）
+(
+  _sig_ok='Package "Homebrew.pkg":
+   Status: signed by a developer certificate issued by Apple for distribution
+   Notarization: trusted by the Apple notary service
+   Certificate Chain:
+    1. Developer ID Installer: Patrick Linnane (927JGANW46)'
+  _rc=0
+  _mdm_check_brew_signature_output "$_sig_ok" >/dev/null 2>&1 || _rc=$?
+  [[ "$_rc" -eq 0 ]] \
+    && pass "mdm-install: 正規 Team ID の署名を許容" \
+    || fail "mdm-install: 正規 Team ID の署名が拒否される"
+)
+(
+  _sig_evil='Package "Homebrew.pkg":
+   Status: signed by a developer certificate issued by Apple for distribution
+   Certificate Chain:
+    1. Developer ID Installer: Evil Corp (EVIL123456)'
+  _rc=0
+  _mdm_check_brew_signature_output "$_sig_evil" >/dev/null 2>&1 || _rc=$?
+  [[ "$_rc" -ne 0 ]] \
+    && pass "mdm-install: 別 Team ID の Developer ID 署名を拒否" \
+    || fail "mdm-install: 別 Team ID の署名を許容してしまう（pin 不成立）"
+)
+
+# HOMEBREW_PKG_USER plist は symlink を辿らず root 所有 0600 で安全に作成する
+# （Homebrew 側 homebrew-package-user は「非symlink 通常ファイル・root 所有・
+#  mode 0600・ACL 無し」の場合のみ plist を尊重する — brew 実装で確認済み）
+(
+  _pl_tmpd="$(mktemp -d)"
+  _victim="$_pl_tmpd/victim-file"
+  printf 'original\n' > "$_victim"
+  export MDM_BREW_PLIST_OVERRIDE="$_pl_tmpd/pkg_user.plist"
+  ln -s "$_victim" "$MDM_BREW_PLIST_OVERRIDE"
+  _rc=0
+  _mdm_write_brew_pkg_user_plist "jane" >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq 0 && ! -L "$MDM_BREW_PLIST_OVERRIDE" && -f "$MDM_BREW_PLIST_OVERRIDE" ]] \
+     && [[ "$(cat "$_victim")" == "original" ]]; then
+    pass "mdm-install: 先回り symlink を辿らず plist を作成（標的ファイル無傷）"
+  else
+    fail "mdm-install: plist 作成が symlink を辿る/失敗する (rc=$_rc)"
+  fi
+  grep -q '<string>jane</string>' "$MDM_BREW_PLIST_OVERRIDE" 2>/dev/null \
+    && pass "mdm-install: plist に対象ユーザーが記録される" \
+    || fail "mdm-install: plist の内容が不正"
+  _mode="$(stat -f '%Lp' "$MDM_BREW_PLIST_OVERRIDE" 2>/dev/null || stat -c '%a' "$MDM_BREW_PLIST_OVERRIDE" 2>/dev/null)"
+  [[ "$_mode" == "600" ]] \
+    && pass "mdm-install: plist が mode 600 で作成される（brew 側の受理条件）" \
+    || fail "mdm-install: plist の mode が 600 でない (got $_mode)"
+  rm -rf "$_pl_tmpd"
+)
 rm -rf "$_brew_tmpd"
 
 # ── ログ出力先の決定（最終レビュー High#3: 設定確定後に決定・許可プレフィックス制約）──
