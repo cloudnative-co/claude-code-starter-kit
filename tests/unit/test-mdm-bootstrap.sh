@@ -3,6 +3,34 @@
 
 MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
 
+# ══ R7-High: root 時は未検証の TMPDIR ではなく /private/tmp（sticky root 領域）──
+(
+  export MDM_EUID_OVERRIDE=0 TMPDIR=/Users/attacker/tmp
+  out="$(_mdm_safe_tmpdir)"
+  [[ "$out" == "/private/tmp" ]] \
+    && pass "mdm-bootstrap: root 時は TMPDIR を無視して /private/tmp を使う" \
+    || fail "mdm-bootstrap: root の一時領域が不正 (got '$out')"
+)
+(
+  export MDM_EUID_OVERRIDE=501 TMPDIR=/custom/tmp
+  out="$(_mdm_safe_tmpdir)"
+  [[ "$out" == "/custom/tmp" ]] \
+    && pass "mdm-bootstrap: 非 root は TMPDIR を尊重" \
+    || fail "mdm-bootstrap: 非 root の一時領域が不正 (got '$out')"
+)
+# self-bootstrap と Homebrew pkg が _mdm_safe_tmpdir を使う（static 確認）
+if [[ "$(grep -c '_mdm_safe_tmpdir' "$PROJECT_DIR/mdm/install-mdm.sh")" -ge 3 ]]; then
+  pass "mdm-bootstrap: self-bootstrap/Homebrew が安全な一時領域を使う配線"
+else
+  fail "mdm-bootstrap: 一時領域の安全化配線が不足"
+fi
+# mdm_main は root フェーズ前に PATH を固定する（R7-High）
+if grep -q 'PATH="/usr/bin:/bin:/usr/sbin:/sbin"' "$PROJECT_DIR/mdm/install-mdm.sh"; then
+  pass "mdm-bootstrap: root フェーズ前に PATH を固定する"
+else
+  fail "mdm-bootstrap: PATH 固定が無い（対象ユーザー PATH 経由の乗っ取り）"
+fi
+
 _tmpd="$(mktemp -d)"
 # lib-mdm-config.sh が無いディレクトリ -> 要ブートストラップ
 ( export MDM_SELF_DIR="$_tmpd"

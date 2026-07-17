@@ -40,6 +40,20 @@ _mdm_config_path() {
   printf '%s' "${MDM_CONFIG_PATH_OVERRIDE:-/Library/Application Support/ClaudeCodeStarterKit/mdm-config.conf}"
 }
 
+# root が使う一時領域を安全に選ぶ（R7-High）。TMPDIR は対象ユーザー所有を
+# 指し得て、親の所有者がエントリを rename/置換できるため、root フェーズでは
+# 無視して macOS の sticky・root 管理領域 /private/tmp を使う（/tmp は
+# /private/tmp への symlink）。非 root は従来どおり TMPDIR を尊重。
+_mdm_safe_tmpdir() {
+  local _euid
+  _euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
+  if [[ "$_euid" -eq 0 ]]; then
+    printf '%s' "/private/tmp"
+  else
+    printf '%s' "${TMPDIR:-/tmp}"
+  fi
+}
+
 # ── レシート用グローバル（各フェーズが埋める）──────────────
 MDM_RCPT_KIT_VERSION=""; MDM_RCPT_GIT_REF=""; MDM_RCPT_RESOLVED_SHA=""
 MDM_RCPT_INSTALL_DIR=""; MDM_RCPT_REQUIRED_COMPONENTS='["kit"]'; MDM_RCPT_PROFILE=""
@@ -588,7 +602,7 @@ _mdm_bootstrap_and_reexec() {
   fi
 
   local _bootstrap_dir
-  _bootstrap_dir="$(mktemp -d "${TMPDIR:-/tmp}/mdm-bootstrap.XXXXXX" 2>/dev/null)" || {
+  _bootstrap_dir="$(mktemp -d "$(_mdm_safe_tmpdir)/mdm-bootstrap.XXXXXX" 2>/dev/null)" || {
     mdm_log U1a "bootstrap 一時ディレクトリの作成に失敗"
     return "$MDM_EXIT_SETUP"
   }
@@ -919,7 +933,7 @@ _mdm_bootstrap_homebrew() {
   # パスになりファイル未作成のまま以降の処理が進む重大な不具合になるため、
   # XXXXXX は末尾に置く（拡張子を付けない）。installer(1) は拡張子を要求しない。
   local _pkg
-  _pkg="$(mktemp "${TMPDIR:-/tmp}/mdm-homebrew-pkg.XXXXXX" 2>/dev/null)" || {
+  _pkg="$(mktemp "$(_mdm_safe_tmpdir)/mdm-homebrew-pkg.XXXXXX" 2>/dev/null)" || {
     mdm_log R3 "Homebrew 導入: 一時 pkg パスの作成に失敗"
     return 1
   }
@@ -1267,6 +1281,14 @@ _mdm_apply_mdm_defaults() {
 # （brew 導入・降格）を伴うため、単体テストでは mdm_needs_bootstrap と各
 # フェーズ関数を個別に検証する（実機確認は PR に手順記載）。
 mdm_main() {
+  # ★R7-High: 外部コマンド実行の前に PATH を固定する。対象ユーザーが PATH に
+  # 自分の bin を先頭挿入していると、uname/stat/git/curl/pkgutil/installer/
+  # softwareupdate 等の裸コマンドが root 権限で乗っ取られ得る（MDM の汎用契約
+  # や sudo 経路では既定環境の安全性が保証されない）。Homebrew は絶対パスで
+  # 検出するため brew bin を PATH に足す必要はない。
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+  export PATH
+
   # OS ガード
   [[ "$(uname -s)" == "Darwin" ]] || { mdm_log R1 "非対応 OS"; exit "$MDM_EXIT_OS"; }
 
