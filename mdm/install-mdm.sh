@@ -97,6 +97,9 @@ _mdm_component_trusted() {
 # 信頼起点 _base から _dir までの全構成要素（存在するもの）が信頼できるか検証
 # する（R5-High）。root 経路で root 書込領域へ書く前に、攻撃者所有の中間/最終
 # ディレクトリや中間 symlink による許可プレフィックス外への誘導を排除する。
+# ★R6-High: パス分解に word splitting / glob 展開を一切使わない（`*`/`?`/`[`
+# を含むコンポーネントが pathname expansion されて検証対象がすり替わるのを防ぐ）。
+# 文字列の prefix 削除で 1 セグメントずつリテラルに処理する。
 _mdm_verify_dir_chain() {
   local _dir="$1" _base="$2"
   case "$_dir" in
@@ -105,11 +108,11 @@ _mdm_verify_dir_chain() {
   esac
   _mdm_component_trusted "$_base" || return 1
   local _rest="${_dir#"$_base"}" _cur="$_base" _seg
-  local _oldifs="$IFS"; IFS='/'
-  # shellcheck disable=SC2086
-  set -- $_rest
-  IFS="$_oldifs"
-  for _seg in "$@"; do
+  while [[ -n "$_rest" ]]; do
+    _rest="${_rest#/}"            # 先頭スラッシュ除去
+    [[ -z "$_rest" ]] && break
+    _seg="${_rest%%/*}"           # 最初のセグメント（リテラル。glob 展開しない）
+    _rest="${_rest#"$_seg"}"      # 消費（残りは /… または空）
     [[ -z "$_seg" ]] && continue
     _cur="$_cur/$_seg"
     if [[ -e "$_cur" || -L "$_cur" ]]; then
@@ -129,15 +132,27 @@ mdm_receipt_write() {
   local _path="$1" _result="$2" _exit="$3"
   local _dir; _dir="$(dirname "$_path")"
   local _euid; _euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
+  # ★R6-Medium: root 書込（mkdir 含む）の**前**に既存コンポーネントを検証する。
+  # 中間/最終が攻撃者所有 or symlink なら、mkdir がリンク先へ作成する前に
+  # fail-closed する。成立すれば以降の mktemp/chmod/mv は攻撃者が介入できない。
+  if [[ "$_euid" -eq 0 ]] && ! _mdm_verify_dir_chain "$_dir" "/Library/Application Support"; then
+    mdm_log R4 "レシート dir の信頼チェーンが成立しない（fail-closed）: $_dir"
+    return 1
+  fi
   # umask 022 で dir を 755 作成（呼び出し時点の umask 変化に依存しない。spec §9.3）
   local _rum; _rum="$(umask)"; umask 022
   mkdir -p "$_dir" 2>/dev/null || true
   umask "$_rum"
-  # root 経路: レシート dir（/Library/Application Support 起点）の信頼チェーン検証。
-  # 成立すれば dir 内のエントリは攻撃者が操作できず、以降の mktemp/chmod/mv は安全。
-  if [[ "$_euid" -eq 0 ]] && ! _mdm_verify_dir_chain "$_dir" "/Library/Application Support"; then
-    mdm_log R4 "レシート dir の信頼チェーンが成立しない（fail-closed）: $_dir"
-    return 1
+  # 作成後の最終 dir を再検証（root 755 で作られたこと）+ 既存 dir を契約の 755 へ収束
+  if [[ "$_euid" -eq 0 ]]; then
+    if ! _mdm_component_trusted "$_dir"; then
+      mdm_log R4 "作成後のレシート dir が信頼できない（fail-closed）: $_dir"
+      return 1
+    fi
+    if ! chmod 755 "$_dir" 2>/dev/null; then
+      mdm_log R4 "レシート dir の権限（755）を設定できない（fail-closed）: $_dir"
+      return 1
+    fi
   fi
   if [[ -L "$_path" ]]; then
     rm -f "$_path" 2>/dev/null || true
@@ -1172,11 +1187,19 @@ _mdm_setup_log_file() {
     mdm_log R1 "ログディレクトリを作成できない: $_dir"
     return "$MDM_EXIT_CONFIG"
   fi
-  # root 経路: 作成後の最終 dir も信頼できること（root 755 で作られたこと）を再確認
-  if [[ "$_euid" -eq 0 ]] && ! _mdm_component_trusted "$_dir"; then
-    umask "$_um"
-    mdm_log R1 "作成後のログディレクトリが信頼できない: $_dir"
-    return "$MDM_EXIT_CONFIG"
+  # root 経路: 作成後の最終 dir も信頼できること（root 755 で作られたこと）を再確認し、
+  # 既存 dir を契約の 755 へ収束（信頼チェーン成立後なので chmod は race しない）
+  if [[ "$_euid" -eq 0 ]]; then
+    if ! _mdm_component_trusted "$_dir"; then
+      umask "$_um"
+      mdm_log R1 "作成後のログディレクトリが信頼できない: $_dir"
+      return "$MDM_EXIT_CONFIG"
+    fi
+    if ! chmod 755 "$_dir" 2>/dev/null; then
+      umask "$_um"
+      mdm_log R1 "ログディレクトリの権限（755）を設定できない: $_dir"
+      return "$MDM_EXIT_CONFIG"
+    fi
   fi
   local _ts
   _ts="$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run)"

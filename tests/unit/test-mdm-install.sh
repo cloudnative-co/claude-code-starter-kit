@@ -718,20 +718,48 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
   exec 7>&- 2>/dev/null || true; MDM_LOG_FD_OPEN=0
 )
 
-# ── 信頼チェーン検証: root 経路で祖先/最終 dir が root 所有でなければ拒否（R5-High）──
+# ── 信頼チェーン検証（R5/R6-High）──
 (
-  # 非 root 起点コンポーネントを含むチェーンは reject（owner 検査有効）
-  _cd="$_tmpd/chain"; mkdir -p "$_cd/Library/Logs/app"
+  # チェーン中の symlink コンポーネントを拒否（owner 検査は skip して symlink 判定に到達させる）
+  _cd="$_tmpd/chain"; mkdir -p "$_cd/Library/Logs"
   chmod 755 "$_cd/Library" "$_cd/Library/Logs"
-  # 最終 dir を「他ユーザー所有」に見立てるのは非 root テストでは困難なため、
-  # symlink コンポーネントで検証する（symlink は所有者に関わらず不許可）
-  rm -rf "$_cd/Library/Logs/app"
   ln -s /tmp "$_cd/Library/Logs/app"
+  export MDM_LOG_SKIP_OWNER_CHECK=1
   if _mdm_verify_dir_chain "$_cd/Library/Logs/app" "$_cd/Library/Logs"; then
     fail "mdm-install: チェーン中の symlink コンポーネントを許容してしまう"
   else
     pass "mdm-install: チェーン中の symlink コンポーネントを拒否"
   fi
+  unset MDM_LOG_SKIP_OWNER_CHECK
+)
+(
+  # owner 不一致（非 root 所有）コンポーネントを拒否（owner 検査有効）
+  _cd="$_tmpd/chain-owner"; mkdir -p "$_cd/Library/Logs/app"
+  chmod 755 "$_cd/Library" "$_cd/Library/Logs" "$_cd/Library/Logs/app"
+  # テスト実行者（非 root）所有なので owner 検査で拒否されるべき
+  if _mdm_verify_dir_chain "$_cd/Library/Logs/app" "$_cd/Library/Logs"; then
+    fail "mdm-install: 非 root 所有コンポーネントを許容してしまう"
+  else
+    pass "mdm-install: 非 root 所有コンポーネントを拒否（owner 検査）"
+  fi
+)
+(
+  # ★R6-High: glob 文字（*）を含むコンポーネントも word splitting/glob 展開で
+  # 見逃さず検証する。cwd に glob がマッチするファイルを置き、未クォート
+  # 分割なら検証対象がすり替わって symlink を見逃す状況を再現する。
+  _cd="$_tmpd/chain-glob"; mkdir -p "$_cd/Library/Logs"
+  chmod 755 "$_cd/Library" "$_cd/Library/Logs"
+  ln -s /tmp "$_cd/Library/Logs/a*b"
+  mkdir -p "$_tmpd/globcwd"; : > "$_tmpd/globcwd/aXb"
+  export MDM_LOG_SKIP_OWNER_CHECK=1
+  _rc_glob=0
+  ( cd "$_tmpd/globcwd" && _mdm_verify_dir_chain "$_cd/Library/Logs/a*b" "$_cd/Library/Logs" ) || _rc_glob=$?
+  if [[ "$_rc_glob" -eq 0 ]]; then
+    fail "mdm-install: glob 文字を含む symlink コンポーネントを見逃す（迂回可能）"
+  else
+    pass "mdm-install: glob 文字を含むコンポーネントも正しく検証"
+  fi
+  unset MDM_LOG_SKIP_OWNER_CHECK
 )
 (
   # 全コンポーネントが非 symlink（owner 検査は skip して mode のみ）なら許容
