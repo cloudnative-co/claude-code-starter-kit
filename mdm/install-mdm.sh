@@ -77,16 +77,68 @@ mdm_json_escape() {
   printf '%s' "$_s" | LC_ALL=C tr -d '[:cntrl:]'
 }
 
+# パス構成要素の信頼性検証（R5-High）: 非 symlink・root 所有・group/other
+# 書込不可。テスト（非 root）は MDM_LOG_SKIP_OWNER_CHECK=1 で owner 検査を無効化。
+# _mdm_boot_mode_is_safe は launcher ヘルパー領域で定義（実行時に解決される）。
+_mdm_component_trusted() {
+  local _p="$1"
+  [[ -L "$_p" ]] && return 1
+  local _mode
+  _mode="$(stat -f '%Lp' "$_p" 2>/dev/null || stat -c '%a' "$_p" 2>/dev/null || echo '')"
+  _mdm_boot_mode_is_safe "$_mode" || return 1
+  if [[ "${MDM_LOG_SKIP_OWNER_CHECK:-0}" != "1" ]]; then
+    local _owner
+    _owner="$(stat -f '%Su' "$_p" 2>/dev/null || stat -c '%U' "$_p" 2>/dev/null || echo '')"
+    [[ "$_owner" == "root" ]] || return 1
+  fi
+  return 0
+}
+
+# 信頼起点 _base から _dir までの全構成要素（存在するもの）が信頼できるか検証
+# する（R5-High）。root 経路で root 書込領域へ書く前に、攻撃者所有の中間/最終
+# ディレクトリや中間 symlink による許可プレフィックス外への誘導を排除する。
+_mdm_verify_dir_chain() {
+  local _dir="$1" _base="$2"
+  case "$_dir" in
+    "$_base"|"$_base"/*) : ;;
+    *) return 1 ;;
+  esac
+  _mdm_component_trusted "$_base" || return 1
+  local _rest="${_dir#"$_base"}" _cur="$_base" _seg
+  local _oldifs="$IFS"; IFS='/'
+  # shellcheck disable=SC2086
+  set -- $_rest
+  IFS="$_oldifs"
+  for _seg in "$@"; do
+    [[ -z "$_seg" ]] && continue
+    _cur="$_cur/$_seg"
+    if [[ -e "$_cur" || -L "$_cur" ]]; then
+      _mdm_component_trusted "$_cur" || return 1
+    fi
+  done
+  return 0
+}
+
 # jq 非依存でレシート JSON を書く。required_components / partial は既に JSON 配列文字列。
-# R2-High 対応:
-#   - dir/file の権限を umask に依存させない（明示 chmod 755 / 644。spec §9.3）
+# R2/R5-High 対応:
+#   - root 経路はレシート dir の信頼チェーンを検証（攻撃者所有 dir を再利用しない）
+#   - dir 権限を umask に依存させない（信頼チェーン成立で 755 を要求・chmod は不要）
 #   - 既存パスの symlink は辿らず除去（root の書込を別ファイルへ誘導させない）
 #   - 同一 dir の一時ファイルへ書いてから mv -f（atomic rename・部分書込を晒さない）
 mdm_receipt_write() {
   local _path="$1" _result="$2" _exit="$3"
   local _dir; _dir="$(dirname "$_path")"
+  local _euid; _euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
+  # umask 022 で dir を 755 作成（呼び出し時点の umask 変化に依存しない。spec §9.3）
+  local _rum; _rum="$(umask)"; umask 022
   mkdir -p "$_dir" 2>/dev/null || true
-  chmod 755 "$_dir" 2>/dev/null || true
+  umask "$_rum"
+  # root 経路: レシート dir（/Library/Application Support 起点）の信頼チェーン検証。
+  # 成立すれば dir 内のエントリは攻撃者が操作できず、以降の mktemp/chmod/mv は安全。
+  if [[ "$_euid" -eq 0 ]] && ! _mdm_verify_dir_chain "$_dir" "/Library/Application Support"; then
+    mdm_log R4 "レシート dir の信頼チェーンが成立しない（fail-closed）: $_dir"
+    return 1
+  fi
   if [[ -L "$_path" ]]; then
     rm -f "$_path" 2>/dev/null || true
     if [[ -L "$_path" || -e "$_path" ]]; then
@@ -113,7 +165,13 @@ mdm_receipt_write() {
     printf '  "log_path": "%s"\n'      "$(mdm_json_escape "$MDM_RCPT_LOG_PATH")"
     printf '}\n'
   } > "$_tmp" || { rm -f "$_tmp" 2>/dev/null || true; return 1; }
-  chmod 644 "$_tmp" 2>/dev/null || true
+  # 信頼チェーン成立 dir 内の一時ファイルなので chmod のパス指定は安全
+  # （攻撃者が dir 内エントリを差し替えられない）。失敗は fail-closed（R5-High）。
+  if ! chmod 644 "$_tmp" 2>/dev/null; then
+    rm -f "$_tmp" 2>/dev/null || true
+    mdm_log R4 "レシートの権限設定に失敗（fail-closed）: $_tmp"
+    return 1
+  fi
   mv -f "$_tmp" "$_path" 2>/dev/null || { rm -f "$_tmp" 2>/dev/null || true; return 1; }
   return 0
 }
@@ -1097,49 +1155,46 @@ _mdm_setup_log_file() {
     mdm_log R1 "ログディレクトリが symlink: $_dir"
     return "$MDM_EXIT_CONFIG"
   fi
-  # root 経路: 信頼起点 /Library/Log の健全性を検証（R4-High）。/Library/Logs
-  # が非 symlink・root 所有・group/other 書込不可なら、その配下は root しか
-  # 作成できず、攻撃者所有の中間/最終ディレクトリを差し込めない。
-  if [[ "$_euid" -eq 0 ]] && ! _mdm_log_trusted_root_base; then
-    mdm_log R1 "ログの信頼起点 /Library/Logs が健全でない"
+  # root 経路: /Library/Logs から _dir までの信頼チェーンを検証（R5-High）。
+  # 全構成要素が非 symlink・root 所有・group/other 書込不可であることを要求し、
+  # 攻撃者所有の中間/最終 dir の再利用と、中間 symlink による許可プレフィックス
+  # 外への誘導を排除する。1つでも違反すれば fail-closed。
+  if [[ "$_euid" -eq 0 ]] && ! _mdm_verify_dir_chain "$_dir" "/Library/Logs"; then
+    mdm_log R1 "ログ dir の信頼チェーンが成立しない（fail-closed）: $_dir"
     return "$MDM_EXIT_CONFIG"
   fi
+  # umask 022 で dir を 755 作成（スクリプト冒頭で umask 022 だが、呼び出し
+  # 時点の umask 変化に依存しないよう明示制御する）
+  local _um; _um="$(umask)"
+  umask 022
   if ! mkdir -p "$_dir" 2>/dev/null; then
+    umask "$_um"
     mdm_log R1 "ログディレクトリを作成できない: $_dir"
     return "$MDM_EXIT_CONFIG"
   fi
-  # dir 権限を umask に依存させない。chmod 失敗は fail-closed（spec §9.3・R3-High）
-  if ! chmod 755 "$_dir" 2>/dev/null; then
-    mdm_log R1 "ログディレクトリの権限を設定できない: $_dir"
+  # root 経路: 作成後の最終 dir も信頼できること（root 755 で作られたこと）を再確認
+  if [[ "$_euid" -eq 0 ]] && ! _mdm_component_trusted "$_dir"; then
+    umask "$_um"
+    mdm_log R1 "作成後のログディレクトリが信頼できない: $_dir"
     return "$MDM_EXIT_CONFIG"
   fi
   local _ts
   _ts="$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo run)"
-  _mdm_open_log_fd "$_dir/install-$_ts.log"
-}
-
-# root 実行時のログ信頼起点 /Library/Logs の健全性検証（R4-High）。
-# テスト（非 root）では MDM_LOG_SKIP_OWNER_CHECK=1 で owner 検査を無効化。
-_mdm_log_trusted_root_base() {
-  local _base="/Library/Logs"
-  [[ -d "$_base" && ! -L "$_base" ]] || return 1
-  local _mode
-  _mode="$(stat -f '%Lp' "$_base" 2>/dev/null || stat -c '%a' "$_base" 2>/dev/null || echo '')"
-  _mdm_boot_mode_is_safe "$_mode" || return 1
-  if [[ "${MDM_LOG_SKIP_OWNER_CHECK:-0}" != "1" ]]; then
-    local _owner
-    _owner="$(stat -f '%Su' "$_base" 2>/dev/null || stat -c '%U' "$_base" 2>/dev/null || echo '')"
-    [[ "$_owner" == "root" ]] || return 1
-  fi
-  return 0
+  local _open_rc=0
+  _mdm_open_log_fd "$_dir/install-$_ts.log" || _open_rc=$?
+  umask "$_um"
+  return "$_open_rc"
 }
 
 # ログファイルを新規排他作成して fd 7 に束縛する（R4-High）。
 # ★既存ファイルは一切再利用しない。攻撃者が予測パスに先置きした regular file
-# は noclobber で拒否 → 別名（-1, -2 …）へ。symlink は事前に除去してから
+# は noclobber で拒否 → 別名（.1, .2 …）へ。symlink は事前に除去してから
 # 新規作成する（symlink 追随を断つ）。以降 mdm_log は fd 7 へ書くため、
 # 検証後のパス差し替えの影響を受けない（パス再オープンを避ける）。
-# chmod 644 失敗は fail-closed。
+# 呼び出し側が umask 022 を設定済み前提で、ファイルは 644 で作られる（chmod 不要）。
+# ★R5-Medium: `exec 7>... 2>/dev/null` は引数なし exec のリダイレクトが現在の
+# shell の fd 2 を恒久的に /dev/null へ向けてしまう。stderr 抑制は必ず
+# `{ exec 7>...; } 2>/dev/null` のようにグループの一時リダイレクトに閉じ込める。
 _mdm_open_log_fd() {
   local _base="$1" _cand="$1" _n=0 _opened=0
   local _noclob=0
@@ -1149,7 +1204,7 @@ _mdm_open_log_fd() {
     [[ -L "$_cand" ]] && rm -f "$_cand" 2>/dev/null
     if [[ ! -L "$_cand" ]]; then
       set -o noclobber
-      if exec 7>"$_cand" 2>/dev/null; then
+      if { exec 7>"$_cand"; } 2>/dev/null; then
         _opened=1
       fi
       [[ "$_noclob" -eq 0 ]] && set +o noclobber
@@ -1163,13 +1218,8 @@ _mdm_open_log_fd() {
     return "$MDM_EXIT_CONFIG"
   fi
   if [[ -L "$_cand" || ! -f "$_cand" ]]; then
-    exec 7>&- 2>/dev/null || true
+    { exec 7>&-; } 2>/dev/null || true
     mdm_log R1 "作成したログファイルの実体が不正: $_cand"
-    return "$MDM_EXIT_CONFIG"
-  fi
-  if ! chmod 644 "$_cand" 2>/dev/null; then
-    exec 7>&- 2>/dev/null || true
-    mdm_log R1 "ログファイルの権限を設定できない: $_cand"
     return "$MDM_EXIT_CONFIG"
   fi
   MDM_LOG_FILE="$_cand"

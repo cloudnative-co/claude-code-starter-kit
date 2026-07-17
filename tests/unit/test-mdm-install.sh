@@ -699,6 +699,66 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
     || fail "mdm-install: symlink のログディレクトリを拒否すべき (got $_rc)"
 )
 
+# ── stderr が open 後も生きている（R5-Medium 回帰: exec ... 2>/dev/null の fd2 汚染）──
+(
+  _od="$_loghome/Library/Logs/stderrprobe"; mkdir -p "$_od"
+  MDM_LOG_FILE=""; MDM_LOG_FD_OPEN=0
+  _errf="$(mktemp)"
+  (
+    exec 2>"$_errf"
+    _mdm_open_log_fd "$_od/probe.log"
+    printf 'PROBE_AFTER_OPEN\n' >&2
+  )
+  if grep -q 'PROBE_AFTER_OPEN' "$_errf"; then
+    pass "mdm-install: ログ fd open 後も stderr が生きている"
+  else
+    fail "mdm-install: open 後に stderr が /dev/null へ汚染された（R5-M 回帰）"
+  fi
+  rm -f "$_errf"
+  exec 7>&- 2>/dev/null || true; MDM_LOG_FD_OPEN=0
+)
+
+# ── 信頼チェーン検証: root 経路で祖先/最終 dir が root 所有でなければ拒否（R5-High）──
+(
+  # 非 root 起点コンポーネントを含むチェーンは reject（owner 検査有効）
+  _cd="$_tmpd/chain"; mkdir -p "$_cd/Library/Logs/app"
+  chmod 755 "$_cd/Library" "$_cd/Library/Logs"
+  # 最終 dir を「他ユーザー所有」に見立てるのは非 root テストでは困難なため、
+  # symlink コンポーネントで検証する（symlink は所有者に関わらず不許可）
+  rm -rf "$_cd/Library/Logs/app"
+  ln -s /tmp "$_cd/Library/Logs/app"
+  if _mdm_verify_dir_chain "$_cd/Library/Logs/app" "$_cd/Library/Logs"; then
+    fail "mdm-install: チェーン中の symlink コンポーネントを許容してしまう"
+  else
+    pass "mdm-install: チェーン中の symlink コンポーネントを拒否"
+  fi
+)
+(
+  # 全コンポーネントが非 symlink（owner 検査は skip して mode のみ）なら許容
+  _cd="$_tmpd/chain-ok"; mkdir -p "$_cd/Library/Logs/app"
+  chmod 755 "$_cd/Library" "$_cd/Library/Logs" "$_cd/Library/Logs/app"
+  export MDM_LOG_SKIP_OWNER_CHECK=1
+  if _mdm_verify_dir_chain "$_cd/Library/Logs/app" "$_cd/Library/Logs"; then
+    pass "mdm-install: 健全なチェーン（非symlink・755）は許容"
+  else
+    fail "mdm-install: 健全なチェーンが拒否される"
+  fi
+  unset MDM_LOG_SKIP_OWNER_CHECK
+)
+(
+  # group/other 書込可のコンポーネントを拒否
+  _cd="$_tmpd/chain-writable"; mkdir -p "$_cd/Library/Logs/app"
+  chmod 755 "$_cd/Library" "$_cd/Library/Logs"
+  chmod 777 "$_cd/Library/Logs/app"
+  export MDM_LOG_SKIP_OWNER_CHECK=1
+  if _mdm_verify_dir_chain "$_cd/Library/Logs/app" "$_cd/Library/Logs"; then
+    fail "mdm-install: 777 コンポーネントを許容してしまう"
+  else
+    pass "mdm-install: 書込可能コンポーネントを拒否"
+  fi
+  unset MDM_LOG_SKIP_OWNER_CHECK
+)
+
 # ── _mdm_open_log_fd: 既存 regular file は再利用せず別名・symlink は辿らない（R4-High）──
 (
   _od="$_loghome/Library/Logs/openfd"; mkdir -p "$_od"
