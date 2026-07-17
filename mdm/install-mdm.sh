@@ -264,6 +264,9 @@ mdm_build_drop_argv() {
     "USER=$_user"
     "LOGNAME=$_user"
     "PATH=${_brewbin}/usr/bin:/bin:/usr/sbin:/sbin"
+    # MDM 管理マーカー: setup.sh（wizard）が update/fresh の設定復元後に
+    # MDM 注入 env を再適用するためのフラグ（固定値・R2-High）
+    "KIT_MDM_MANAGED=true"
   )
   if [[ -n "${LANGUAGE:-}" ]]; then
     MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="LANG=$(_mdm_lang_to_locale "$LANGUAGE")"
@@ -852,6 +855,9 @@ _mdm_cli_present_for_home() {
 #         MDM_EXIT_CONFIG=install_dir 制約違反 / 1=それ以外の失敗
 _mdm_run_user_phase() {
   local _euid="$1" _user="$2" _home="$3"
+  # MDM 管理マーカー（非 root 経路は env 継承で setup.sh へ届く。root 経路は
+  # mdm_build_drop_argv が固定要素として注入する）
+  export KIT_MDM_MANAGED=true
   local _ref="${KIT_MDM_GIT_REF:-main}"
   local _install_dir="${KIT_MDM_INSTALL_DIR:-}"
   [[ -z "$_install_dir" ]] && _install_dir="$_home/.claude-starter-kit"

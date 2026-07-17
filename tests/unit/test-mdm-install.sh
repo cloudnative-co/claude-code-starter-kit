@@ -235,6 +235,7 @@ rm -rf "$_tmpd"
     || fail "mdm-install: env -i が絶対パスで先頭に無い (got '${MDM_DROP_ARGV[0]}' '${MDM_DROP_ARGV[1]:-}')"
   _has() { local _e; for _e in "${MDM_DROP_ARGV[@]}"; do [[ "$_e" == "$1" ]] && return 0; done; return 1; }
   _has 'HOME=/Users/jane' && pass "mdm-install: HOME を固定" || fail "mdm-install: HOME 固定なし"
+  _has 'KIT_MDM_MANAGED=true' && pass "mdm-install: KIT_MDM_MANAGED を注入" || fail "mdm-install: KIT_MDM_MANAGED 注入なし（update 復元で MDM 設定が巻き戻る）"
   _has 'USER=jane' && pass "mdm-install: USER を固定" || fail "mdm-install: USER 固定なし"
   _has 'PROFILE=standard' && pass "mdm-install: PROFILE を伝搬" || fail "mdm-install: PROFILE 伝搬なし"
   _has 'LANGUAGE=ja' && pass "mdm-install: LANGUAGE を伝搬" || fail "mdm-install: LANGUAGE 伝搬なし"

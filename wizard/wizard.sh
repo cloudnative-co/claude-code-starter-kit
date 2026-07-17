@@ -434,6 +434,24 @@ _restore_cli_overrides() {
   done
 }
 
+# MDM 管理モードで注入された設定値を capture する（mdm/install-mdm.sh が
+# KIT_MDM_MANAGED=true とともに検証済み値を環境変数で渡す）。
+# manifest 復元（update）や保存済み config の再読込（fresh）は既存 env 値を
+# 無条件に上書きするため、復元後に _restore_cli_overrides でこの capture を
+# 再適用し、管理端末では MDM 管理者の設定を最優先にする。
+# 対象は _CONFIG_KEYS の非空 env 値のみ（KIT_MDM_MANAGED 未設定なら何もしない）。
+_capture_mdm_env_overrides() {
+  [[ "$(_bool_normalize "${KIT_MDM_MANAGED:-}")" == "true" ]] || return 0
+  local _var _val
+  for _var in "${_CONFIG_KEYS[@]+"${_CONFIG_KEYS[@]}"}"; do
+    [[ -z "$_var" ]] && continue
+    _val="${!_var:-}"
+    if [[ -n "$_val" ]]; then
+      printf '%s\n' "${_var}=${_val}"
+    fi
+  done
+}
+
 _load_config_preserving_cli_overrides() {
   local file="$1"
   local _saved_overrides=()
@@ -504,15 +522,24 @@ run_wizard() {
     [[ -n "$_override" ]] && _saved_cli+=("$_override")
   done < <(_capture_cli_overrides)
 
+  # MDM 管理モード（KIT_MDM_MANAGED=true）: 復元によるクロバーの前に
+  # MDM 注入 env を capture しておき、復元後に再適用する（R2-High）
+  local _saved_mdm=()
+  while IFS= read -r _override; do
+    [[ -n "$_override" ]] && _saved_mdm+=("$_override")
+  done < <(_capture_mdm_env_overrides)
+
   if [[ "$UPDATE_MODE" == "true" ]]; then
     _restore_config_from_manifest
     _restore_cli_overrides "${_saved_cli[@]+"${_saved_cli[@]}"}"
+    _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
     _normalize_codex_state
     WIZARD_RESULT="deploy"
     return
   fi
 
   _load_config_preserving_cli_overrides "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
+  _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
   _normalize_codex_state
 
   # Non-interactive mode: fill defaults and return
