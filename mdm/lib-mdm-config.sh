@@ -150,18 +150,21 @@ mdm_config_apply() {
   # 1) 管理設定ファイル（最初の一致行が勝つ = 旧実装と同じ）
   if [[ -f "$_f" ]]; then
     # TOCTOU 回避（spec §9.2）: 検査した inode と読む inode を一致させる。
-    # 手順: 事前に dev:inode を記録 → 安全性検証 → open → fd の dev:inode を
-    # 照合 → fd から読む。検査と open の間に差し替え/symlink 化されると
-    # dev:inode が一致せず拒否される。
-    # NOTE: macOS の /dev/fd/N は fd のアクセスモードで mode がマスクされる
-    # （読み取り fd では 640 が 440 に見える・実測）ため、open 後の mode
-    # 再検証には使えない。dev:inode 照合で「検査した実体 = 読む実体」を保証する。
-    local _pre_id _fd_id
-    _pre_id="$(stat -f '%d:%i' "$_f" 2>/dev/null || stat -c '%d:%i' "$_f" 2>/dev/null || echo 'pre-fail')"
+    # 手順: 事前に inode を記録 → 安全性検証 → open → fd の inode を照合 →
+    # fd から読む。検査と open の間に差し替え/symlink 化されると inode が
+    # 一致せず拒否される。
+    # NOTE(macOS 実測): /dev/fd/N への stat は (1) mode が fd のアクセス
+    # モードでマスクされる（読み取り fd では 640 が 440 に見える）、
+    # (2) デバイス番号が devfs のものになり実ファイルの st_dev と一致しない。
+    # このため mode 再検証・デバイス番号照合は使えず、inode のみで照合する
+    # （親ディレクトリの root 所有・書込不可検証と併用しており、別デバイスの
+    # 同一 inode を同パスに植える攻撃は成立しない）。
+    local _pre_ino _fd_ino
+    _pre_ino="$(stat -f '%i' "$_f" 2>/dev/null || stat -c '%i' "$_f" 2>/dev/null || echo 'pre-fail')"
     mdm_config_file_is_secure "$_f" || return 50
     exec 9<"$_f" || return 50
-    _fd_id="$(stat -Lf '%d:%i' /dev/fd/9 2>/dev/null || stat -Lc '%d:%i' /dev/fd/9 2>/dev/null || echo 'fd-fail')"
-    if [[ "$_pre_id" != "$_fd_id" ]]; then
+    _fd_ino="$(stat -Lf '%i' /dev/fd/9 2>/dev/null || stat -Lc '%i' /dev/fd/9 2>/dev/null || echo 'fd-fail')"
+    if [[ "$_pre_ino" != "$_fd_ino" ]]; then
       exec 9<&-
       printf '[mdm-config] ERROR: config file changed between check and read (TOCTOU)\n' >&2
       return 50
