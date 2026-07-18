@@ -39,8 +39,19 @@ _mdm_launcher_stat_mode() {
   fi
 }
 
+_mdm_launcher_acl_safe() {
+  local _path="$1" _listing _first _permissions
+  [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]] || return 0
+  _listing="$(LC_ALL=C /bin/ls -lde "$_path" 2>/dev/null)" || return 1
+  _first="${_listing%%$'\n'*}"
+  _permissions="${_first%%[[:space:]]*}"
+  [[ "$_first" == *[[:space:]]* \
+    && "$_permissions" =~ ^[-bcdlps][rwxStTs-]{9}[@+]?$ ]] || return 1
+  [[ "$_permissions" != *+* && "$_listing" != *$'\n'* ]]
+}
+
 _mdm_launcher_path_trusted() {
-  local _script="$1" _dir _base _canonical _path _owner _mode _line _perms
+  local _script="$1" _dir _base _canonical _path _owner _mode
   [[ -f "$_script" && ! -L "$_script" ]] || return 1
   case "$_script" in
     */*) _dir="${_script%/*}"; _base="${_script##*/}" ;;
@@ -64,11 +75,7 @@ _mdm_launcher_path_trusted() {
       # and is the only writable component accepted in the physical chain.
       [[ -d "$_path" && "$_mode" == 1777 ]] || return 1
     fi
-    if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]]; then
-      _line="$(LC_ALL=C /bin/ls -lde "$_path" 2>/dev/null || true)"
-      _perms="${_line%%[[:space:]]*}"
-      [[ -n "$_perms" && "$_perms" != *+* ]] || return 1
-    fi
+    _mdm_launcher_acl_safe "$_path" || return 1
     [[ "$_path" == / ]] && break
     _path="${_path%/*}"
     [[ -n "$_path" ]] || _path=/
@@ -220,6 +227,14 @@ _mdm_stat_owner() {
   fi
 }
 
+_mdm_stat_uid() {
+  if _mdm_is_darwin; then
+    /usr/bin/stat -f '%u' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%u' "$1" 2>/dev/null
+  fi
+}
+
 _mdm_stat_mode() {
   if _mdm_is_darwin; then
     /usr/bin/stat -f '%Lp' "$1" 2>/dev/null
@@ -253,6 +268,14 @@ _mdm_stat_fd_identity() {
   fi
 }
 
+_mdm_stat_dir_identity() {
+  if _mdm_is_darwin; then
+    /usr/bin/stat -f '%d:%i:%HT' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%d:%i:%F' "$1" 2>/dev/null
+  fi
+}
+
 _mdm_mode_normalize() {
   local _mode="$1"
   [[ "$_mode" =~ ^[0-7]{1,4}$ ]] || return 1
@@ -268,11 +291,8 @@ _mdm_mode_is_safe() {
 }
 
 _mdm_has_acl() {
-  local _listing
   _mdm_is_darwin || return 1
-  _listing="$(/bin/ls -lde "$1" 2>/dev/null)" || return 0
-  [[ "${_listing%%$'\n'*}" == *+* ]] && return 0
-  printf '%s\n' "$_listing" | /usr/bin/grep -Eq '^[[:space:]]*[0-9]+:'
+  ! _mdm_launcher_acl_safe "$1"
 }
 
 _mdm_expected_trust_owner() {
@@ -350,32 +370,132 @@ _mdm_detect_read_user_home_record() {
 }
 
 _mdm_detect_parse_user_home() {
-  /usr/bin/awk '
-    /^NFSHomeDirectory:[[:space:]]*/ {
-      sub(/^NFSHomeDirectory:[[:space:]]*/, "")
-      print
-      exit
+  LC_ALL=C /usr/bin/awk '
+    BEGIN { state = "key"; bad = 0 }
+
+    state == "key" && $0 == "NFSHomeDirectory:" {
+      state = "continuation"
+      next
+    }
+
+    state == "key" && $0 ~ /^NFSHomeDirectory:[ \t]/ {
+      value = substr($0, length("NFSHomeDirectory:") + 2)
+      if (value ~ /[[:space:]]/) bad = 1
+      state = "done"
+      next
+    }
+
+    state == "continuation" && $0 ~ /^[ \t]/ {
+      value = substr($0, 2)
+      state = "done"
+      next
+    }
+
+    { bad = 1 }
+
+    END {
+      if (!bad && state == "done" && value ~ /^\// \
+          && value !~ /[[:cntrl:]]/) {
+        print value
+        exit 0
+      }
+      exit 1
     }
   '
 }
 
 _mdm_detect_user_home() {
-  local _user="$1" _override
+  local _user="$1" _override _home
   if _override="$(_mdm_test_value MDM_DETECT_HOME_OVERRIDE)"; then
     printf '%s' "$_override"
     return 0
   fi
-  _mdm_detect_read_user_home_record "$_user" \
-    | _mdm_detect_parse_user_home || true
+  _home="$(_mdm_detect_read_user_home_record "$_user" \
+    | _mdm_detect_parse_user_home)" || return 1
+  printf '%s' "$_home"
+}
+
+_mdm_detect_read_user_uid_record() {
+  /usr/bin/dscl . -read "/Users/$1" UniqueID 2>/dev/null
+}
+
+_mdm_detect_parse_user_uid() {
+  LC_ALL=C /usr/bin/awk '
+    BEGIN { state = "key"; bad = 0 }
+
+    state == "key" && $0 == "UniqueID:" {
+      state = "continuation"
+      next
+    }
+
+    state == "key" && $0 ~ /^UniqueID:[ \t]/ {
+      value = substr($0, length("UniqueID:") + 2)
+      state = "done"
+      next
+    }
+
+    state == "continuation" && $0 ~ /^[ \t]/ {
+      value = substr($0, 2)
+      state = "done"
+      next
+    }
+
+    { bad = 1 }
+
+    END {
+      if (!bad && state == "done" && value ~ /^[0-9]+$/ \
+          && length(value) <= 10 \
+          && !(length(value) > 1 && substr(value, 1, 1) == "0")) {
+        print value
+        exit 0
+      }
+      exit 1
+    }
+  '
+}
+
+_mdm_detect_search_policy_uid() {
+  /usr/bin/id -u "$1" 2>/dev/null
 }
 
 _mdm_detect_user_uid() {
-  local _user="$1" _override
+  local _user="$1" _override _local_uid _search_uid
   if _override="$(_mdm_test_value MDM_DETECT_EXPECTED_UID_OVERRIDE)"; then
     printf '%s' "$_override"
     return 0
   fi
-  /usr/bin/id -u "$_user" 2>/dev/null
+  _local_uid="$(_mdm_detect_read_user_uid_record "$_user" \
+    | _mdm_detect_parse_user_uid)" || return 1
+  _search_uid="$(_mdm_detect_search_policy_uid "$_user")" || return 1
+  [[ "$_search_uid" =~ ^[0-9]+$ && ${#_search_uid} -le 10 ]] || return 1
+  [[ "$_local_uid" == "$_search_uid" && "$_search_uid" -ge 501 ]] || return 1
+  printf '%s' "$_search_uid"
+}
+
+_mdm_detect_read_console_user_record() {
+  printf 'show State:/Users/ConsoleUser\n' | /usr/sbin/scutil 2>/dev/null
+}
+
+_mdm_detect_parse_console_user_record() {
+  LC_ALL=C /usr/bin/awk '
+    BEGIN { seen = 0; bad = 0 }
+
+    /^[[:space:]]*Name[[:space:]]*:/ {
+      remainder = $0
+      sub(/^[[:space:]]*Name[[:space:]]*:/, "", remainder)
+      if (seen || remainder !~ /^ [^[:space:][:cntrl:]]+$/) bad = 1
+      value = substr(remainder, 2)
+      seen = 1
+    }
+
+    END {
+      if (!bad && seen == 1) {
+        print value
+        exit 0
+      }
+      exit 1
+    }
+  '
 }
 
 _mdm_detect_console_user() {
@@ -384,10 +504,12 @@ _mdm_detect_console_user() {
     printf '%s' "$_override"
     return 0
   fi
-  _user="$(printf 'show State:/Users/ConsoleUser\n' \
-    | /usr/sbin/scutil 2>/dev/null \
-    | /usr/bin/awk '/Name :/{print $3; exit}' || true)"
-  [[ -n "$_user" ]] || _user="$(_mdm_stat_owner /dev/console 2>/dev/null || true)"
+  if _user="$(_mdm_detect_read_console_user_record \
+    | _mdm_detect_parse_console_user_record)"; then
+    printf '%s' "$_user"
+    return 0
+  fi
+  _user="$(_mdm_stat_owner /dev/console 2>/dev/null || true)"
   printf '%s' "$_user"
 }
 
@@ -668,6 +790,7 @@ _mdm_snapshot_bound_file() { # <source> <snapshot> <receipt|manifest|managed|hea
   _mode_raw="${_metadata_check##*:}"; _metadata_check="${_metadata_check%:*}"
   _uid="${_metadata_check##*:}"; _before="${_metadata_check%:*}"
   _mode="$(_mdm_mode_normalize "$_mode_raw")" || return 1
+  _mdm_mode_is_safe "$_mode" || return 1
   case "$_before" in *:Regular\ File:*|*:regular\ file:*) : ;; *) return 1 ;; esac
   _size="${_before##*:}"
   case "$_label" in
@@ -679,7 +802,8 @@ _mdm_snapshot_bound_file() { # <source> <snapshot> <receipt|manifest|managed|hea
   esac
   [[ "$_size" =~ ^[0-9]+$ && "$_size" -le "$_limit" ]] || return 1
   [[ "$_label" != head || "$_size" == 41 ]] || return 1
-  if [[ "$_label" == managed || "$_label" == cli ]]; then
+  if [[ "$_label" == managed || "$_label" == cli ]] \
+    || [[ "$_label" == head && -n "$_expected_uid" ]]; then
     [[ "$_expected_uid" =~ ^[0-9]+$ && "$_uid" == "$_expected_uid" ]] || return 1
     [[ "$_nlink" == 1 ]] || return 1
     ! _mdm_has_acl "$_source" || return 1
@@ -719,7 +843,8 @@ _mdm_snapshot_bound_file() { # <source> <snapshot> <receipt|manifest|managed|hea
       /bin/chmod 600 "$_snapshot" || _mdm_copy_rc=1
     fi
     if [[ "$_mdm_copy_rc" -eq 0 \
-      && ( "$_label" == managed || "$_label" == cli ) ]]; then
+      && ( "$_label" == managed || "$_label" == cli \
+        || ( "$_label" == head && -n "$_expected_uid" ) ) ]]; then
       [[ "$(_mdm_stat_metadata "$_source")" == "$_metadata" ]] \
         && ! _mdm_has_acl "$_source" || _mdm_copy_rc=1
     fi
@@ -756,6 +881,61 @@ _mdm_snapshot_bound_file() { # <source> <snapshot> <receipt|manifest|managed|hea
   _MDM_DETECT_SNAPSHOT_SIZE="$_size"
   _MDM_DETECT_SNAPSHOT_MODE="$_mode"
   return 0
+}
+
+_MDM_DETECT_PERSISTENT_IDENTITY=""
+_MDM_DETECT_GIT_IDENTITY=""
+_mdm_target_dir_matches_identity() { # <dir> <target-uid> [dev:inode:type]
+  local _dir="$1" _expected_uid="$2" _expected_identity="${3:-}"
+  local _identity _mode
+  [[ "$_expected_uid" =~ ^[0-9]+$ && -d "$_dir" && ! -L "$_dir" ]] || return 1
+  [[ "$(_mdm_canonical_dir "$_dir")" == "$_dir" ]] || return 1
+  [[ "$(_mdm_stat_uid "$_dir")" == "$_expected_uid" ]] || return 1
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
+  _mdm_mode_is_safe "$_mode" || return 1
+  ! _mdm_has_acl "$_dir" || return 1
+  _identity="$(_mdm_stat_dir_identity "$_dir")" || return 1
+  case "$_identity" in *:Directory|*:directory) : ;; *) return 1 ;; esac
+  [[ -z "$_expected_identity" || "$_identity" == "$_expected_identity" ]]
+}
+
+_mdm_persistent_checkout_trusted() { # <install-dir> <target-uid> <workspace>
+  local _install="$1" _expected_uid="$2" _workspace="$3"
+  local _before _git_before _mode _marker _snapshot _value _extra="" _rc=1
+  local _git_dir="$_install/.git"
+  _MDM_DETECT_PERSISTENT_IDENTITY=""
+  _MDM_DETECT_GIT_IDENTITY=""
+  [[ "$_expected_uid" =~ ^[0-9]+$ && -d "$_workspace" \
+    && ! -L "$_workspace" ]] || return 1
+  _before="$(_mdm_stat_dir_identity "$_install")" || return 1
+  _mdm_target_dir_matches_identity "$_install" "$_expected_uid" "$_before" \
+    || return 1
+  _git_before="$(_mdm_stat_dir_identity "$_git_dir")" || return 1
+  _mdm_target_dir_matches_identity "$_git_dir" "$_expected_uid" \
+    "$_git_before" || return 1
+
+  _marker="$_install/.claude-starter-kit-mdm-managed"
+  _snapshot="$_workspace/persistent-marker"
+  _mdm_snapshot_bound_file "$_marker" "$_snapshot" managed \
+    "$_expected_uid" || return 1
+  _mode="$_MDM_DETECT_SNAPSHOT_MODE"
+  if [[ "$_mode" == 0444 && "$_MDM_DETECT_SNAPSHOT_SIZE" == 36 ]]; then
+    exec 6<"$_snapshot" || { /bin/rm -f "$_snapshot"; return 1; }
+    if IFS= read -r _value <&6 \
+      && ! IFS= read -r _extra <&6 \
+      && [[ -z "$_extra" ]] \
+      && [[ "$_value" == claude-code-starter-kit-mdm-user-v1 ]]; then
+      _rc=0
+    fi
+    exec 6<&-
+  fi
+  /bin/rm -f "$_snapshot"
+  [[ "$_rc" -eq 0 ]] || return 1
+  _mdm_target_dir_matches_identity "$_install" "$_expected_uid" "$_before" \
+    && _mdm_target_dir_matches_identity \
+      "$_git_dir" "$_expected_uid" "$_git_before" || return 1
+  _MDM_DETECT_PERSISTENT_IDENTITY="$_before"
+  _MDM_DETECT_GIT_IDENTITY="$_git_before"
 }
 
 _mdm_required_component_present() { # <receipt> <component>
@@ -911,7 +1091,7 @@ _mdm_detect_from_snapshots() { # <receipt-snapshot> <user> <expected-commit> <wo
   local _git_dir _head_path _head_snapshot _head_size _head
   local _home _home_canonical _manifest _manifest_from_receipt _manifest_hash
   local _manifest_snapshot _manifest_canonical _profile _language _deployment_hash
-  local _expected_uid
+  local _expected_uid _persistent_identity _git_identity
 
   _schema="$(_mdm_json_get "$_receipt" schema_version)"
   [[ "$_schema" == "2" ]] || return 1
@@ -932,26 +1112,38 @@ _mdm_detect_from_snapshots() { # <receipt-snapshot> <user> <expected-commit> <wo
   _deployment_hash="$(_mdm_json_get "$_receipt" deployment_sha256)"
   [[ "$_deployment_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
 
+  _home="$(_mdm_detect_user_home "$_user")" || return 1
+  _home_canonical="$(_mdm_canonical_dir "$_home")" || return 1
+  [[ "$_home_canonical" == "$_home" ]] || return 1
+  _expected_uid="$(_mdm_detect_user_uid "$_user")" || return 1
+  [[ "$_expected_uid" =~ ^[0-9]+$ ]] || return 1
+  [[ "$(_mdm_stat_uid "$_home")" == "$_expected_uid" ]] || return 1
+
   _install="$(_mdm_json_get "$_receipt" install_dir)"
+  [[ "$_install" == "$_home/.claude-starter-kit" ]] || return 1
   _install_canonical="$(_mdm_canonical_dir "$_install")" || return 1
   [[ "$_install_canonical" == "$_install" ]] || return 1
+  _mdm_persistent_checkout_trusted "$_install" "$_expected_uid" \
+    "$_workspace" || return 1
+  _persistent_identity="$_MDM_DETECT_PERSISTENT_IDENTITY"
+  _git_identity="$_MDM_DETECT_GIT_IDENTITY"
   _git_dir="$_install/.git"
   [[ "$(_mdm_canonical_dir "$_git_dir")" == "$_git_dir" ]] || return 1
   _head_path="$_git_dir/HEAD"
   [[ "$(_mdm_canonical_file "$_head_path")" == "$_head_path" ]] || return 1
   _head_snapshot="$_workspace/git-head"
-  _mdm_snapshot_bound_file "$_head_path" "$_head_snapshot" head || return 1
+  _mdm_snapshot_bound_file "$_head_path" "$_head_snapshot" head \
+    "$_expected_uid" || return 1
   _head_size="$(/usr/bin/wc -c < "$_head_snapshot" \
     | /usr/bin/tr -d '[:space:]')" || return 1
   [[ "$_head_size" == "41" ]] || return 1
-  _head="$(/bin/cat "$_head_snapshot")" || return 1
+  IFS= read -r _head < "$_head_snapshot" || return 1
   [[ "$_head" =~ ^[0-9a-f]{40}$ && "$_head" == "$_sha" ]] || return 1
+  _mdm_target_dir_matches_identity \
+    "$_install" "$_expected_uid" "$_persistent_identity" \
+    && _mdm_target_dir_matches_identity \
+      "$_git_dir" "$_expected_uid" "$_git_identity" || return 1
 
-  _home="$(_mdm_detect_user_home "$_user")"
-  _home_canonical="$(_mdm_canonical_dir "$_home")" || return 1
-  [[ "$_home_canonical" == "$_home" ]] || return 1
-  _expected_uid="$(_mdm_detect_user_uid "$_user")" || return 1
-  [[ "$_expected_uid" =~ ^[0-9]+$ ]] || return 1
   _manifest="$_home/.claude/.starter-kit-manifest.json"
   _manifest_from_receipt="$(_mdm_json_get "$_receipt" manifest_path)"
   [[ "$_manifest_from_receipt" == "$_manifest" ]] || return 1
@@ -989,26 +1181,121 @@ mdm_detect() { # <receipt> <target-user> [expected-commit]
   return "$_rc"
 }
 
+_mdm_semver_identifiers_are_valid() { # <dot-list> <prerelease|build>
+  local _rest="$1" _kind="$2" _identifier
+  case "$_kind" in prerelease|build) : ;; *) return 1 ;; esac
+  [[ -n "$_rest" && "$_rest" != .* && "$_rest" != *. \
+    && "$_rest" != *..* ]] || return 1
+  while :; do
+    if [[ "$_rest" == *.* ]]; then
+      _identifier="${_rest%%.*}"
+      _rest="${_rest#*.}"
+    else
+      _identifier="$_rest"
+      _rest=""
+    fi
+    [[ "$_identifier" =~ ^[0-9A-Za-z-]+$ ]] || return 1
+    if [[ "$_kind" == prerelease && "$_identifier" =~ ^[0-9]+$ \
+      && ${#_identifier} -gt 1 && "${_identifier:0:1}" == 0 ]]; then
+      return 1
+    fi
+    [[ -n "$_rest" ]] || break
+  done
+  return 0
+}
+
 _mdm_semver_is_valid() {
-  [[ "$1" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
+  local _version="${1#v}" _main _core _prerelease="" _build=""
+  local _major _minor _patch _rest _number
+  [[ -n "$_version" ]] || return 1
+  if [[ "$_version" == *+* ]]; then
+    _build="${_version#*+}"
+    _main="${_version%%+*}"
+    [[ "$_build" != *+* ]] || return 1
+    _mdm_semver_identifiers_are_valid "$_build" build || return 1
+  else
+    _main="$_version"
+  fi
+  if [[ "$_main" == *-* ]]; then
+    _prerelease="${_main#*-}"
+    _core="${_main%%-*}"
+    _mdm_semver_identifiers_are_valid "$_prerelease" prerelease || return 1
+  else
+    _core="$_main"
+  fi
+
+  _major="${_core%%.*}"
+  _rest="${_core#*.}"
+  [[ "$_rest" != "$_core" ]] || return 1
+  _minor="${_rest%%.*}"
+  _patch="${_rest#*.}"
+  [[ "$_patch" != "$_rest" && "$_patch" != *.* ]] || return 1
+  for _number in "$_major" "$_minor" "$_patch"; do
+    [[ "$_number" == 0 || "$_number" =~ ^[1-9][0-9]*$ ]] || return 1
+  done
+  return 0
+}
+
+_mdm_decimal_compare() { # <canonical-decimal-a> <canonical-decimal-b>
+  local _a="$1" _b="$2" LC_ALL=C
+  if [[ ${#_a} -lt ${#_b} ]]; then printf '%s' -1; return 0; fi
+  if [[ ${#_a} -gt ${#_b} ]]; then printf '%s' 1; return 0; fi
+  if [[ "$_a" < "$_b" ]]; then printf '%s' -1; return 0; fi
+  if [[ "$_b" < "$_a" ]]; then printf '%s' 1; return 0; fi
+  printf '%s' 0
 }
 
 _mdm_version_lt() {
-  local _a="${1#v}" _b="${2#v}" _ifs_bak="$IFS"
-  _a="${_a%%[-+]*}"
-  _b="${_b%%[-+]*}"
-  IFS=.
-  # shellcheck disable=SC2206
-  local -a _a_parts=($_a) _b_parts=($_b)
-  IFS="$_ifs_bak"
-  local _index _ai _bi
+  local _a="${1#v}" _b="${2#v}" _a_core _b_core _a_pre="" _b_pre=""
+  local _a_major _a_minor _a_patch _b_major _b_minor _b_patch
+  local _index _cmp _a_rest _b_rest _a_id _b_id _a_more _b_more
+  local LC_ALL=C
+  _a="${_a%%+*}"
+  _b="${_b%%+*}"
+  if [[ "$_a" == *-* ]]; then _a_pre="${_a#*-}"; _a_core="${_a%%-*}"; else _a_core="$_a"; fi
+  if [[ "$_b" == *-* ]]; then _b_pre="${_b#*-}"; _b_core="${_b%%-*}"; else _b_core="$_b"; fi
+  IFS=. read -r _a_major _a_minor _a_patch <<< "$_a_core"
+  IFS=. read -r _b_major _b_minor _b_patch <<< "$_b_core"
+  local -a _a_parts=("$_a_major" "$_a_minor" "$_a_patch")
+  local -a _b_parts=("$_b_major" "$_b_minor" "$_b_patch")
   for _index in 0 1 2; do
-    _ai="${_a_parts[_index]}"
-    _bi="${_b_parts[_index]}"
-    if ((10#$_ai < 10#$_bi)); then return 0; fi
-    if ((10#$_ai > 10#$_bi)); then return 1; fi
+    _cmp="$(_mdm_decimal_compare "${_a_parts[_index]}" "${_b_parts[_index]}")"
+    case "$_cmp" in -1) return 0 ;; 1) return 1 ;; esac
   done
-  return 1
+
+  [[ -n "$_a_pre" || -n "$_b_pre" ]] || return 1
+  [[ -n "$_a_pre" ]] || return 1
+  [[ -n "$_b_pre" ]] || return 0
+  _a_rest="$_a_pre"
+  _b_rest="$_b_pre"
+  while :; do
+    if [[ "$_a_rest" == *.* ]]; then
+      _a_id="${_a_rest%%.*}"; _a_rest="${_a_rest#*.}"; _a_more=1
+    else
+      _a_id="$_a_rest"; _a_rest=""; _a_more=0
+    fi
+    if [[ "$_b_rest" == *.* ]]; then
+      _b_id="${_b_rest%%.*}"; _b_rest="${_b_rest#*.}"; _b_more=1
+    else
+      _b_id="$_b_rest"; _b_rest=""; _b_more=0
+    fi
+
+    if [[ "$_a_id" =~ ^[0-9]+$ && "$_b_id" =~ ^[0-9]+$ ]]; then
+      _cmp="$(_mdm_decimal_compare "$_a_id" "$_b_id")"
+      case "$_cmp" in -1) return 0 ;; 1) return 1 ;; esac
+    elif [[ "$_a_id" =~ ^[0-9]+$ ]]; then
+      return 0
+    elif [[ "$_b_id" =~ ^[0-9]+$ ]]; then
+      return 1
+    else
+      [[ "$_a_id" < "$_b_id" ]] && return 0
+      [[ "$_b_id" < "$_a_id" ]] && return 1
+    fi
+
+    [[ "$_a_more" -eq 1 || "$_b_more" -eq 1 ]] || return 1
+    [[ "$_a_more" -eq 1 ]] || return 0
+    [[ "$_b_more" -eq 1 ]] || return 1
+  done
 }
 
 _mdm_detect_usage() {

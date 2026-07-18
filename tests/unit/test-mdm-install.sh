@@ -12,6 +12,68 @@ else
   fail "mdm-install: 終了コード定数が不正"
 fi
 
+# Exact SemVer tags preserve prerelease meaning.  Commits after a tag encode
+# git-describe distance/hash as build metadata, not as a false prerelease.
+(
+  unset HTTP_PROXY HTTPS_PROXY NO_PROXY
+  _version_tmp="$(mktemp -d)"
+  _version_repo="$_version_tmp/tagged"
+  _version_untagged="$_version_tmp/untagged"
+  /usr/bin/git -C "$_version_tmp" init -q tagged
+  printf 'one\n' > "$_version_repo/file"
+  /usr/bin/git -C "$_version_repo" add file
+  GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    /usr/bin/git -C "$_version_repo" commit -q -m one
+  /usr/bin/git -C "$_version_repo" tag v1.2.3-rc.1
+  _version_exact_rc="$(_mdm_describe_kit_version _mdm_git "$_version_repo")"
+  printf 'two\n' >> "$_version_repo/file"
+  /usr/bin/git -C "$_version_repo" add file
+  GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    /usr/bin/git -C "$_version_repo" commit -q -m two
+  _version_after_rc="$(_mdm_describe_kit_version _mdm_git "$_version_repo")"
+  _version_after_rc_auth="$(_mdm_describe_kit_version _mdm_auth_git "$_version_repo")"
+  /usr/bin/git -C "$_version_repo" tag v1.2.3
+  _version_exact_stable="$(_mdm_describe_kit_version _mdm_git "$_version_repo")"
+  printf 'three\n' >> "$_version_repo/file"
+  /usr/bin/git -C "$_version_repo" add file
+  GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    /usr/bin/git -C "$_version_repo" commit -q -m three
+  _version_after_stable="$(_mdm_describe_kit_version _mdm_git "$_version_repo")"
+  /usr/bin/git -C "$_version_repo" tag 'v1.2.4+vendor'
+  _version_exact_build="$(_mdm_describe_kit_version _mdm_git "$_version_repo")"
+  printf 'four\n' >> "$_version_repo/file"
+  /usr/bin/git -C "$_version_repo" add file
+  GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    /usr/bin/git -C "$_version_repo" commit -q -m four
+  _version_after_build="$(_mdm_describe_kit_version _mdm_git "$_version_repo")"
+
+  /usr/bin/git -C "$_version_tmp" init -q untagged
+  printf 'untagged\n' > "$_version_untagged/file"
+  /usr/bin/git -C "$_version_untagged" add file
+  GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    /usr/bin/git -C "$_version_untagged" commit -q -m untagged
+  _version_no_tag="$(_mdm_describe_kit_version _mdm_git "$_version_untagged")"
+
+  if [[ "$_version_exact_rc" == v1.2.3-rc.1 ]] \
+    && [[ "$_version_after_rc" =~ ^v1\.2\.3-rc\.1\+1\.g[0-9a-f]+$ ]] \
+    && [[ "$_version_after_rc_auth" == "$_version_after_rc" ]] \
+    && [[ "$_version_exact_stable" == v1.2.3 ]] \
+    && [[ "$_version_after_stable" =~ ^v1\.2\.3\+1\.g[0-9a-f]+$ ]] \
+    && [[ "$_version_exact_build" == v1.2.4+vendor ]] \
+    && [[ "$_version_after_build" =~ ^v1\.2\.4\+vendor\.1\.g[0-9a-f]+$ ]] \
+    && [[ "$_version_no_tag" =~ ^[0-9a-f]+$ ]]; then
+    pass "mdm-install: git describe の距離を SemVer build metadata へ正規化"
+  else
+    fail "mdm-install: kit_version の git describe 正規化が不正"
+  fi
+  rm -rf "$_version_tmp"
+)
+
 # ── JSON エスケープ ───────────────────────────────────────
 if out="$(mdm_json_escape 'a"b\c')" && [[ "$out" == 'a\"b\\c' ]]; then
   pass "mdm-install: JSON エスケープ（quote/backslash）"
@@ -416,6 +478,36 @@ rm -rf "$_tmpd"
   rm -rf "$_launcher_tmp"
 )
 (
+  _launcher_tmp="$(mktemp -d)"
+  _launcher_acl_xattr="$_launcher_tmp/acl-xattr"
+  : > "$_launcher_acl_xattr"
+  if _mdm_is_darwin \
+    && /usr/bin/xattr -w com.cloudnative.mdm-test 1 \
+      "$_launcher_acl_xattr" 2>/dev/null \
+    && /bin/chmod +a 'everyone allow write' \
+      "$_launcher_acl_xattr" 2>/dev/null; then
+    _launcher_acl_listing="$(LC_ALL=C /bin/ls -lde \
+      "$_launcher_acl_xattr")"
+    _launcher_acl_perms="${_launcher_acl_listing%%[[:space:]]*}"
+    if [[ "$_launcher_acl_perms" != *@ ]]; then
+      skip "mdm-install: xattr 併存 ACL の continuation を拒否" \
+        "ls permission token did not retain @"
+    elif ! _mdm_launcher_acl_safe "$_launcher_acl_xattr" \
+      && _mdm_has_extended_acl "$_launcher_acl_xattr"; then
+      pass "mdm-install: xattr 併存 ACL の continuation を拒否"
+    else
+      fail "mdm-install: xattr 併存 ACL を launcher/postcondition が許可"
+    fi
+    /bin/chmod -N "$_launcher_acl_xattr" 2>/dev/null || true
+    /usr/bin/xattr -d com.cloudnative.mdm-test \
+      "$_launcher_acl_xattr" 2>/dev/null || true
+  else
+    skip "mdm-install: xattr 併存 ACL の continuation を拒否" \
+      "ACL+xattr fixture unavailable on this platform"
+  fi
+  rm -rf "$_launcher_tmp"
+)
+(
   _launcher_sticky_base=/tmp
   [[ -d /private/tmp && ! -L /private/tmp ]] && _launcher_sticky_base=/private/tmp
   _launcher_mode="$(_mdm_launcher_stat_mode "$_launcher_sticky_base")"
@@ -440,7 +532,9 @@ rm -rf "$_tmpd"
 
 # ── detached HEAD は fd-bound 41 byte full SHA のみ許可 ──
 (
-  _head_tmp="$(mktemp -d)"; mkdir -p "$_head_tmp/.git"
+  _head_tmp="$(mktemp -d)"
+  _head_tmp="$(builtin cd -P "$_head_tmp" && printf '%s' "$PWD")"
+  mkdir -p "$_head_tmp/.git"
   _head_sha=0123456789abcdef0123456789abcdef01234567
   printf '%s\n' "$_head_sha" > "$_head_tmp/.git/HEAD"
   if _mdm_detached_head_matches "$_head_tmp" "$_head_sha"; then
@@ -448,6 +542,13 @@ rm -rf "$_tmpd"
   else
     fail "mdm-install: 正常な detached HEAD を拒否"
   fi
+  chmod 777 "$_head_tmp/.git"
+  if _mdm_detached_head_matches "$_head_tmp" "$_head_sha"; then
+    fail "mdm-install: writable .git directory を許可"
+  else
+    pass "mdm-install: detached HEAD の .git trust metadata を検証"
+  fi
+  chmod 755 "$_head_tmp/.git"
   printf 'ref: refs/heads/main\n' > "$_head_tmp/.git/HEAD"
   if _mdm_detached_head_matches "$_head_tmp" "$_head_sha"; then
     fail "mdm-install: symbolic HEAD を許可"
@@ -487,7 +588,9 @@ rm -rf "$_tmpd"
 # A target-user race that swaps HEAD to a FIFO must fail within the watchdog
 # window instead of blocking privileged remediation indefinitely.
 (
-  _head_fifo_tmp="$(mktemp -d)"; mkdir -p "$_head_fifo_tmp/.git"
+  _head_fifo_tmp="$(mktemp -d)"
+  _head_fifo_tmp="$(builtin cd -P "$_head_fifo_tmp" && printf '%s' "$PWD")"
+  mkdir -p "$_head_fifo_tmp/.git"
   _head_fifo_sha=0123456789abcdef0123456789abcdef01234567
   _head_fifo_path="$_head_fifo_tmp/.git/HEAD"
   _head_fifo_seen="$_head_fifo_tmp/seen"
@@ -624,11 +727,122 @@ fi
 # 実在するローカルアカウント（dscl 実在確認）かつ UID >= 501 を要求。
 # テストは MDM_DSCL_UID_OVERRIDE で UID をモックする。
 (
+  unset MDM_CONSOLE_USER_OVERRIDE
+  _mdm_read_console_user_record() {
+    printf '<dictionary> {\n  Name : wrong-user\n}\n'
+    return 42
+  }
+  _mdm_stat_owner() { printf 'fallback-user'; }
+  if [[ "$(_mdm_console_user)" == fallback-user ]]; then
+    pass "mdm-install: scutil 非0の valid-looking stdout を破棄して stat へfallback"
+  else
+    fail "mdm-install: 失敗した scutil の ConsoleUser を採用"
+  fi
+)
+(
+  _console_user=""; _console_rc=0
+  _console_user="$(_mdm_parse_console_user_record <<'EOF'
+<dictionary> {
+  Name : jane
+  Name : alice
+}
+EOF
+)" || _console_rc=$?
+  if [[ "$_console_rc" -ne 0 && -z "$_console_user" ]]; then
+    pass "mdm-install: scutil record の重複 Name を拒否"
+  else
+    fail "mdm-install: 曖昧な scutil ConsoleUser を許可"
+  fi
+)
+(
+  _console_records_rejected=true
+  for _console_record in $'Name :  jane\n' $'Name : \tjane\n'; do
+    if printf '%s' "$_console_record" | _mdm_parse_console_user_record \
+      >/dev/null 2>&1; then
+      _console_records_rejected=false
+    fi
+  done
+  [[ "$_console_records_rejected" == true ]] \
+    && pass "mdm-install: scutil Name 値の余分な空白/tabを拒否" \
+    || fail "mdm-install: malformed ConsoleUser delimiter を正規化"
+)
+(
+  if [[ "$(printf 'UniqueID: 501\n' | _mdm_parse_dscl_uid)" == 501 ]] \
+    && [[ "$(printf 'UniqueID:\n 502\n' | _mdm_parse_dscl_uid)" == 502 ]]; then
+    pass "mdm-install: dscl UniqueID の同一行/2行単一値を解析"
+  else
+    fail "mdm-install: valid な dscl UniqueID record を拒否"
+  fi
+)
+(
+  _uid_records_are_rejected=true
+  for _uid_record in $'UniqueID: 501 777\n' \
+    $'UniqueID: 501\nUniqueID: 777\n' $'Garbage: 501\n'; do
+    _uid_value=""; _uid_rc=0
+    _uid_value="$(printf '%s' "$_uid_record" | _mdm_parse_dscl_uid)" \
+      || _uid_rc=$?
+    if [[ "$_uid_rc" -eq 0 || -n "$_uid_value" ]]; then
+      _uid_records_are_rejected=false
+    fi
+  done
+  [[ "$_uid_records_are_rejected" == true ]] \
+    && pass "mdm-install: dscl UniqueID の複数値/重複/別キーを拒否" \
+    || fail "mdm-install: 曖昧な dscl UniqueID record を許可"
+)
+(
+  export KIT_MDM_TARGET_USER=jane
+  unset MDM_DSCL_UID_OVERRIDE
+  dscl() { printf 'UniqueID: 501\n'; return 42; }
+  _uid_user=""; _uid_rc=0
+  _uid_user="$(mdm_resolve_target_user 2>/dev/null)" || _uid_rc=$?
+  if [[ "$_uid_rc" -eq "$MDM_EXIT_USER" && -z "$_uid_user" ]]; then
+    pass "mdm-install: dscl 非0は valid-looking UniqueID ごと拒否"
+  else
+    fail "mdm-install: 失敗した dscl の UniqueID を採用 (rc=$_uid_rc)"
+  fi
+)
+(
+  export KIT_MDM_TARGET_USER=jane
+  unset MDM_DSCL_UID_OVERRIDE
+  dscl() { printf 'UniqueID: 501 777\n'; }
+  _uid_user=""; _uid_rc=0
+  _uid_user="$(mdm_resolve_target_user 2>/dev/null)" || _uid_rc=$?
+  if [[ "$_uid_rc" -eq "$MDM_EXIT_USER" && -z "$_uid_user" ]]; then
+    pass "mdm-install: dscl の複数 UniqueID を対象ユーザーに採用しない"
+  else
+    fail "mdm-install: 複数 UniqueID を採用 (rc=$_uid_rc)"
+  fi
+)
+(
   export KIT_MDM_TARGET_USER="jane" MDM_DSCL_UID_OVERRIDE=501
   if out="$(mdm_resolve_target_user 2>/dev/null)" && [[ "$out" == "jane" ]]; then
     pass "mdm-install: KIT_MDM_TARGET_USER が優先される"
   else
     fail "mdm-install: KIT_MDM_TARGET_USER 優先が効かない (got '$out')"
+  fi
+)
+(
+  export KIT_MDM_TARGET_USER="jane" MDM_DSCL_UID_OVERRIDE=501
+  _identity_user="" _identity_uid=""
+  if _mdm_resolve_target_identity _identity_user _identity_uid 2>/dev/null \
+    && [[ "$_identity_user" == jane && "$_identity_uid" == 501 ]]; then
+    pass "mdm-install: local identity resolver が対象 user と UID を同時に返す"
+  else
+    fail "mdm-install: 対象 user と local UID の束縛に失敗"
+  fi
+)
+(
+  _mdm_search_policy_uid() { printf '%s' "${_search_uid_fixture:?}"; }
+  _search_uid_fixture=501
+  _bound_uid="$(_mdm_bind_target_uid jane 501 2>/dev/null)" || _bound_rc=$?
+  _mismatch_rc=0
+  _search_uid_fixture=777
+  _mdm_bind_target_uid jane 501 >/dev/null 2>&1 || _mismatch_rc=$?
+  if [[ "${_bound_uid:-}" == 501 && "${_bound_rc:-0}" -eq 0 \
+    && "$_mismatch_rc" -ne 0 ]]; then
+    pass "mdm-install: local dscl UID と search-policy UID の一致だけを受理"
+  else
+    fail "mdm-install: local/search-policy UID の束縛が不正"
   fi
 )
 (
@@ -730,12 +944,56 @@ mkdir -p "$_fakehome"
   mkdir -p "$_space_home"
   unset MDM_DSCL_HOME_OVERRIDE
   export MDM_VALIDATE_HOME_SKIP_OWNER=1
-  dscl() { printf 'NFSHomeDirectory: %s\n' "$_space_home"; }
+  dscl() { printf 'NFSHomeDirectory:\n %s\n' "$_space_home"; }
   if out="$(mdm_validate_user_home "jane" 2>/dev/null)" \
     && [[ "$out" == "$_space_home" ]]; then
-    pass "mdm-install: dscl home の内部空白を保持"
+    pass "mdm-install: dscl 2行形式の home 内部空白を保持"
   else
     fail "mdm-install: 空白を含む dscl home の解析が不正 (got '$out')"
+  fi
+)
+(
+  if [[ "$(printf 'NFSHomeDirectory: /Users/jane\n' \
+    | _mdm_parse_dscl_home)" == /Users/jane ]]; then
+    pass "mdm-install: dscl 同一行形式の home を維持"
+  else
+    fail "mdm-install: dscl 同一行形式の home を拒否"
+  fi
+)
+(
+  _invalid_home=""; _invalid_rc=0
+  _invalid_home="$(_mdm_parse_dscl_home <<'EOF'
+NFSHomeDirectory:
+ /Users/jane
+ /Users/other
+EOF
+)" || _invalid_rc=$?
+  if [[ "$_invalid_rc" -ne 0 && -z "$_invalid_home" ]]; then
+    pass "mdm-install: dscl の複数 home 値を出力前に拒否"
+  else
+    fail "mdm-install: dscl の曖昧な複数 home 値を許可"
+  fi
+)
+(
+  _invalid_home=""; _invalid_rc=0
+  _invalid_home="$(printf 'NFSHomeDirectory:  /Users/jane\n' \
+    | _mdm_parse_dscl_home)" || _invalid_rc=$?
+  if [[ "$_invalid_rc" -ne 0 && -z "$_invalid_home" ]]; then
+    pass "mdm-install: dscl 同一行の余分な delimiter を拒否"
+  else
+    fail "mdm-install: dscl の曖昧な delimiter を正規化"
+  fi
+)
+(
+  unset MDM_DSCL_HOME_OVERRIDE
+  export MDM_VALIDATE_HOME_SKIP_OWNER=1
+  dscl() { printf 'NFSHomeDirectory: %s\n' "$_fakehome"; return 1; }
+  _invalid_home=""; _invalid_rc=0
+  _invalid_home="$(mdm_validate_user_home jane 2>/dev/null)" || _invalid_rc=$?
+  if [[ "$_invalid_rc" -eq "$MDM_EXIT_USER" && -z "$_invalid_home" ]]; then
+    pass "mdm-install: dscl の非0終了は valid-looking stdout ごと拒否"
+  else
+    fail "mdm-install: 失敗した dscl の stdout を home として許可"
   fi
 )
 (
@@ -777,6 +1035,16 @@ mkdir -p "$_fakehome"
   assert_exit_code "$MDM_EXIT_USER" "$_rc" "owner mismatch は exit USER" \
     && pass "mdm-install: 対象ユーザー以外が所有する home を拒否" \
     || fail "mdm-install: home owner mismatch を許可 (rc=$_rc)"
+)
+(
+  export MDM_DSCL_HOME_OVERRIDE="$_fakehome"
+  unset MDM_VALIDATE_HOME_SKIP_OWNER
+  _mdm_stat_uid() { printf '777'; }
+  _rc=0
+  mdm_validate_user_home jane 501 >/dev/null 2>&1 || _rc=$?
+  assert_exit_code "$MDM_EXIT_USER" "$_rc" "numeric owner mismatch は exit USER" \
+    && pass "mdm-install: home の数値 owner UID 不一致を拒否" \
+    || fail "mdm-install: home owner UID mismatch を許可 (rc=$_rc)"
 )
 rm -rf "$_tmpd"
 
@@ -956,11 +1224,14 @@ EOF
 )
 
 (
-  _mdm_run_root_user_phase() { return "$MDM_EXIT_PREREQ"; }
+  _mdm_run_root_user_phase() {
+    [[ "$3" == 501 ]] || return 99
+    return "$MDM_EXIT_PREREQ"
+  }
   _phase_rc=0
-  _mdm_run_user_phase 0 jane /Users/jane >/dev/null 2>&1 || _phase_rc=$?
+  _mdm_run_user_phase 0 jane /Users/jane 501 >/dev/null 2>&1 || _phase_rc=$?
   if [[ "$_phase_rc" -eq "$MDM_EXIT_PREREQ" ]]; then
-    pass "mdm-install: root user phase は setup 前提不足の exit 10 を保持"
+    pass "mdm-install: root user phase は束縛済み UID と setup exit 10 を保持"
   else
     fail "mdm-install: root user phase が exit 10 を変換 (got $_phase_rc)"
   fi
@@ -979,7 +1250,8 @@ EOF
   mdm_log() { printf '%s\n' "$*" >> "$_phase_tmp/wrapper.log"; }
   export KIT_MDM_DRY_RUN=true KIT_MDM_GIT_REF=main KIT_MDM_INSTALL_CLAUDE_CLI=false
   _phase_rc=0
-  _mdm_run_root_user_phase "$_phase_user" "$_phase_tmp/home" >/dev/null 2>&1 || _phase_rc=$?
+  _mdm_run_root_user_phase "$_phase_user" "$_phase_tmp/home" 501 \
+    >/dev/null 2>&1 || _phase_rc=$?
   if [[ "$_phase_rc" -eq "$MDM_EXIT_PREREQ" ]] \
     && grep -q 'setup.sh の実行に失敗 (exit=10)' "$_phase_tmp/wrapper.log"; then
     pass "mdm-install: authoritative setup の exit 10 を root user phase が保持"
@@ -1130,7 +1402,8 @@ _fakehome="$_tmpd/Users/jane"; mkdir -p "$_fakehome"
   export KIT_MDM_INSTALL_DIR="$_tmpd/outside-home"
   export MDM_KIT_REPO_URL_OVERRIDE="$_tmpd/no-such-repo"
   _rc=0
-  _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_fakehome" >/dev/null 2>&1 || _rc=$?
+  _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_fakehome" 501 \
+    >/dev/null 2>&1 || _rc=$?
   assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "home 外 install_dir は exit 50" \
     && pass "mdm-install: home 外の KIT_MDM_INSTALL_DIR を拒否" \
     || fail "mdm-install: home 外の KIT_MDM_INSTALL_DIR を拒否すべき (got $_rc)"
@@ -1139,7 +1412,8 @@ _fakehome="$_tmpd/Users/jane"; mkdir -p "$_fakehome"
   export KIT_MDM_INSTALL_DIR="$_fakehome/../escape"
   export MDM_KIT_REPO_URL_OVERRIDE="$_tmpd/no-such-repo"
   _rc=0
-  _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_fakehome" >/dev/null 2>&1 || _rc=$?
+  _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_fakehome" 501 \
+    >/dev/null 2>&1 || _rc=$?
   assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" ".. 含みの install_dir は exit 50" \
     && pass "mdm-install: .. を含む KIT_MDM_INSTALL_DIR を拒否" \
     || fail "mdm-install: .. を含む KIT_MDM_INSTALL_DIR を拒否すべき (got $_rc)"
@@ -1149,7 +1423,8 @@ _fakehome="$_tmpd/Users/jane"; mkdir -p "$_fakehome"
   export KIT_MDM_INSTALL_DIR="$_fakehome"
   export MDM_KIT_REPO_URL_OVERRIDE="$_tmpd/no-such-repo"
   _rc=0
-  _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_fakehome" >/dev/null 2>&1 || _rc=$?
+  _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_fakehome" 501 \
+    >/dev/null 2>&1 || _rc=$?
   assert_exit_code "$MDM_EXIT_CONFIG" "$_rc" "home 自体は exit 50" \
     && pass "mdm-install: home 自体を install_dir にするのを拒否" \
     || fail "mdm-install: home 自体の install_dir を拒否すべき (got $_rc)"
@@ -2049,6 +2324,7 @@ MD
     'printf "%s\n" "${LANGUAGE:-}" > "$HOME/root-authority-language"' \
     'printf "%s\n" "$@" > "$HOME/root-authority-args"' \
     '/usr/bin/git -C "$auth_dir" rev-parse --verify HEAD > "$HOME/root-authority-head"' \
+    'if [[ -f "$HOME/mutate-marker-on-setup" ]]; then /bin/chmod 644 "$HOME/.claude-starter-kit/.claude-starter-kit-mdm-managed"; fi' \
     'if /usr/bin/touch "$auth_dir/target-write-probe" 2>/dev/null; then exit 88; fi' \
     > "$_auth_repo/setup.sh"
   printf '# fixture\n' > "$_auth_repo/CLAUDE.md"
@@ -2084,7 +2360,8 @@ MD
   unset KIT_MDM_INSTALL_DIR
 
   _auth_rc=0
-  _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" >/dev/null 2>&1 || _auth_rc=$?
+  _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" "$_auth_uid" \
+    >/dev/null 2>&1 || _auth_rc=$?
   _auth_path="$(cat "$_auth_home/root-authority-path" 2>/dev/null || true)"
   _auth_persistent="$_auth_home/.claude-starter-kit"
   if [[ "$_auth_rc" -eq 0 && "$_auth_path" == "$_auth_base"/claude-kit-mdm-auth.*/setup.sh ]] \
@@ -2110,7 +2387,8 @@ MD
   printf 'stale\n' > "$_auth_persistent/stale-user-file"
   mkdir -p "$_auth_home/.claude"; printf '{}\n' > "$_auth_home/.claude/.starter-kit-manifest.json"
   _auth_rc=0
-  _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" >/dev/null 2>&1 || _auth_rc=$?
+  _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" "$_auth_uid" \
+    >/dev/null 2>&1 || _auth_rc=$?
   if [[ "$_auth_rc" -eq 0 && ! -e "$_auth_persistent/stale-user-file" ]] \
     && grep -qx -- --update "$_auth_home/root-authority-args" \
     && [[ "$(cat "$_auth_home/root-authority-profile")" == standard ]] \
@@ -2124,7 +2402,8 @@ MD
   _auth_head_before="$(cat "$_auth_persistent/.git/HEAD")"
   export KIT_MDM_DRY_RUN=true
   _auth_rc=0
-  _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" >/dev/null 2>&1 || _auth_rc=$?
+  _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" "$_auth_uid" \
+    >/dev/null 2>&1 || _auth_rc=$?
   _auth_dry_path="$(cat "$_auth_home/root-authority-path" 2>/dev/null || true)"
   if [[ "$_auth_rc" -eq 0 && "$(cat "$_auth_persistent/dryrun-sentinel")" == keep ]] \
     && [[ "$(cat "$_auth_persistent/.git/HEAD")" == "$_auth_head_before" ]] \
@@ -2135,6 +2414,19 @@ MD
   else
     fail "mdm-install: root dry-run が persistent を変更 (rc=$_auth_rc)"
   fi
+  export KIT_MDM_DRY_RUN=false
+  : > "$_auth_home/mutate-marker-on-setup"
+  _auth_rc=0
+  _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" "$_auth_uid" \
+    >/dev/null 2>&1 || _auth_rc=$?
+  if [[ "$_auth_rc" -ne 0 ]] \
+    && ! _mdm_persistent_marker_trusted "$_auth_persistent" "$_auth_uid"; then
+    pass "mdm-install: setup 後の persistent trust drift を成功扱いしない"
+  else
+    fail "mdm-install: setup 後の marker/mode drift を見逃す (rc=$_auth_rc)"
+  fi
+  _mdm_cleanup_auth_entry_list >/dev/null 2>&1 || true
+  _mdm_cleanup_auth_checkout >/dev/null 2>&1 || true
   rm -rf "$_auth_tmp"
 )
 
@@ -2146,12 +2438,29 @@ MD
   export KIT_MDM_DRY_RUN=false KIT_MDM_GIT_REF=0123456789abcdef0123456789abcdef01234567
   unset KIT_MDM_INSTALL_DIR
   _marker_rc=0
-  _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_marker_home" >/dev/null 2>&1 || _marker_rc=$?
+  _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_marker_home" \
+    "$(/usr/bin/id -u)" >/dev/null 2>&1 || _marker_rc=$?
   if [[ "$_marker_rc" -eq "$MDM_EXIT_CONFIG" \
     && "$(cat "$_marker_home/.claude-starter-kit/user-data")" == preserve ]]; then
     pass "mdm-install: 管理 marker 無し既存 checkout を fail-closed で保持"
   else
     fail "mdm-install: marker 無し checkout を削除/許可 (rc=$_marker_rc)"
+  fi
+  rm -rf "$_marker_tmp"
+)
+
+# marker は固定1行に見える prefix だけでなく、末尾 bytes まで照合する。
+(
+  _marker_tmp="$(mktemp -d)"
+  _marker_install="$_marker_tmp/.claude-starter-kit"
+  mkdir -p "$_marker_install"
+  printf 'claude-code-starter-kit-mdm-user-v1\n\0' \
+    > "$_marker_install/.claude-starter-kit-mdm-managed"
+  chmod 444 "$_marker_install/.claude-starter-kit-mdm-managed"
+  if _mdm_persistent_marker_trusted "$_marker_install" "$(/usr/bin/id -u)"; then
+    fail "mdm-install: marker の末尾追加データを許可"
+  else
+    pass "mdm-install: persistent marker は末尾改行を含め byte-exact"
   fi
   rm -rf "$_marker_tmp"
 )

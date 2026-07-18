@@ -50,7 +50,7 @@ production の優先順位は **CLI 引数 > root-owned 管理設定ファイル
 
 管理設定ファイルの配置: `/Library/Application Support/ClaudeCodeStarterKit/mdm-config.conf`。実装は固定パス `/Library/Application Support` を信頼起点とし、そこから最終ディレクトリまでの存在する各要素と設定ファイルが root 所有、非 symlink、group/other 書込不可、macOS ACL なしであることを検証する。読み取りは検査した inode と open 済み fd を照合して束縛し、不一致や未知キーを含む設定は `exit 50`。
 
-production では対象のローカルアカウント、UID 501 以上、対象ユーザー所有の home が必要。`dscl` の `NFSHomeDirectory` 値は canonicalize して採用するのではなく、**最初から absolute canonical physical path**（`cd -P` の結果と文字列完全一致）でなければならない。`..`、重複 `/`、末尾 `/`、symlink 祖先など別名で同じ場所を指す値も拒否し、home 解決/検証失敗として `exit 20` にする。コンソールユーザー自動検出を使う場合はユーザーセッション開始後に実行する。ADE / PreStage などがアカウントまたは home 作成前に実行した場合も `exit 20` になるため、作成後の定期 check-in で再試行させる。
+production では対象のローカルアカウントと UID 501 以上が必要。local `dscl` の `UniqueID`、macOS search policy で解決した UID、home inode の所有 UID が完全一致しなければ `exit 20` にする。`dscl` の `NFSHomeDirectory` 値は canonicalize して採用するのではなく、**最初から absolute canonical physical path**（`cd -P` の結果と文字列完全一致）でなければならない。`..`、重複 `/`、末尾 `/`、symlink 祖先など別名で同じ場所を指す値も拒否する。コンソールユーザー自動検出を使う場合はユーザーセッション開始後に実行する。ADE / PreStage などがアカウントまたは home 作成前に実行した場合も `exit 20` になるため、作成後の定期 check-in で再試行させる。
 
 ### 本体（setup.sh）のキーを流用
 
@@ -193,6 +193,7 @@ FULL_SHA=0123456789abcdef0123456789abcdef01234567
 - 準拠時: `compliant`（exit 0）
 - 非準拠時: `non-compliant: <理由>`（exit 1）
 - 使用法エラー: usage を stderr へ出力（exit 2）。未知/不足引数、不正な semver、40 桁でない `--expected-commit` が該当
+- privileged launcher 自体の owner / mode / symlink / ACL または snapshot 検証失敗: stderr へ理由を出力（exit 50）
 
 対象ユーザーの既定: **root 実行（MDM の検知コンテキスト）ではコンソールユーザーを解決**し、非 root 実行では自分自身を self-check する。どちらも system 領域の root receipt だけを信頼する。`--user` の値と解決したユーザー名は文字種検証され、不正なら non-compliant。
 
@@ -201,13 +202,13 @@ FULL_SHA=0123456789abcdef0123456789abcdef01234567
 - root-owned で非 symlink、group/other 書込不可、ACL なしの schema v2 レシートと、その root-owned な親ディレクトリ信頼チェーン
 - レシートの `result=="success"` かつ `exit_code==0`
 - レシートの `target_user` が対象ユーザーと一致（退職者アカウント等、別ユーザーのレシートを除外）
-- `resolved_sha` が小文字40桁 SHAで、`install_dir/.git/HEAD` が exact 41 bytes の detached HEAD として一致。`--expected-commit` 指定時はその SHA とも一致
+- `install_dir` が対象ユーザーの canonical home 直下の固定パス `~/.claude-starter-kit` と一致し、`resolved_sha` が小文字40桁 SHAで、保持用 checkout と `.claude-starter-kit-mdm-managed` marker が対象 UID・安全な mode・ACL なし・link count 1・固定内容の契約を満たす。`install_dir/.git/HEAD` は同じ trust 条件の exact 41 bytes detached HEAD として一致し、`--expected-commit` 指定時はその SHA とも一致
 - detector は Git を一切起動せず、HEAD を inode/size 束縛した fd から直接読むため、checkout の Git config、hook、filter を実行しない
 - `manifest_path` が対象ユーザーの固定パスで、manifest SHA-256、schema v2、`kit_commit`、`profile`、`language`、`claude_dir`、snapshot、present / absent の管理ファイル一覧が一致
 - present の各 live file / snapshot は対象ユーザー所有の regular file、link count 1、ACL なしで、absent は双方に存在しない。内容・mode・absent path から再計算した ordered digest がレシートの `deployment_sha256` と一致する。`CLAUDE.md` の user section と manifest 外のユーザーファイルは再計算対象外
 - `required_components` に `claude_cli` が含まれる場合、`~/.local/bin/claude` が `~/.local/share/claude/versions/<version>` 配下の実体への symlink であり、fd-bound snapshot に対する `codesign --verify --strict -R` が次の**明示 Apple Developer ID requirement**を満たす: identifier `com.anthropic.claude-code`、`anchor apple generic`、intermediate certificate OID `1.2.840.113635.100.6.2.6`、leaf certificate OID `1.2.840.113635.100.6.1.13`、leaf `subject.OU`（Team ID）`Q6L2SF6YDW`
 - 上記 requirement に加えて、`codesign -dv` の identifier `com.anthropic.claude-code`、Team ID `Q6L2SF6YDW`、Authority `Developer ID Application: Anthropic PBC (Q6L2SF6YDW)` も完全一致する。identifier / Team ID / Authority の表示文字列だけでは Apple の trust anchor を証明したことにならない
-- `--min-version` 指定時は `kit_version` を比較
+- `--min-version` 指定時は SemVer 2.0 precedence で `kit_version` を比較する。prerelease は同じ core の final より低く、`+` 以降の build metadata は順位に影響しない。exact tag でない commit は `git describe` の距離と hash を build metadata（例: `v1.2.3+4.gabc1234`）へ正規化し、誤って prerelease 扱いしない
 
 postcondition と detector が証明するのは、対象ユーザー所有ツリーを検査した**時点の観測結果**であり、ツリー全体の永続的・原子的な snapshot ではない。per-user lock はキットの remediation 同士だけを直列化し、対象ユーザーが検査と同時に意図的な rename / write を続ける状況までは排他しない。通常の変更は次回 detector で non-compliant になる。hostile な同時変更まで防ぐ必要がある環境では、root-owned write-protected subtree または APFS snapshot など別の端末統制が必要で、本実装の非破壊な user-owned 配備契約の範囲外。
 

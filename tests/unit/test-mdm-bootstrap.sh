@@ -5,9 +5,17 @@ MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
 
 (
   export MDM_EUID_OVERRIDE=0 TMPDIR=/Users/attacker/tmp
+  _mdm_is_darwin() { return 0; }
   [[ "$(_mdm_safe_tmpdir)" == "/private/tmp" ]] \
-    && pass "mdm-bootstrap: root は user TMPDIR を使わない" \
-    || fail "mdm-bootstrap: root temporary directory is unsafe"
+    && pass "mdm-bootstrap: macOS root は user TMPDIR を使わない" \
+    || fail "mdm-bootstrap: macOS root temporary directory is unsafe"
+)
+(
+  export MDM_EUID_OVERRIDE=0 TMPDIR=/Users/attacker/tmp
+  _mdm_is_darwin() { return 1; }
+  [[ "$(_mdm_safe_tmpdir)" == "/tmp" ]] \
+    && pass "mdm-bootstrap: Linux root は /private/tmp に依存しない" \
+    || fail "mdm-bootstrap: Linux root temporary directory is unsafe"
 )
 (
   export MDM_EUID_OVERRIDE=501 TMPDIR=/custom/tmp

@@ -5,8 +5,8 @@ MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/detect-mdm.sh"
 
 _mdm_detect_tmp="$(mktemp -d)"
 _mdm_detect_tmp="$(cd "$_mdm_detect_tmp" && pwd -P)"
-_mdm_detect_install="$_mdm_detect_tmp/kit"
 _mdm_detect_home="$_mdm_detect_tmp/Users/jane"
+_mdm_detect_install="$_mdm_detect_home/.claude-starter-kit"
 _mdm_detect_claude="$_mdm_detect_home/.claude"
 _mdm_detect_snapshot="$_mdm_detect_claude/.starter-kit-snapshot"
 _mdm_detect_trust_base="$_mdm_detect_tmp/trust-base"
@@ -17,15 +17,168 @@ mkdir -p "$_mdm_detect_install" "$_mdm_detect_snapshot" \
   "$_mdm_detect_receipts" "$_mdm_detect_private_base"
 chmod 700 "$_mdm_detect_trust_base" "$_mdm_detect_private_base"
 chmod 755 "$_mdm_detect_receipts"
+_mdm_detect_plus_path="$_mdm_detect_tmp/no-acl+path"
+mkdir "$_mdm_detect_plus_path"
+_mdm_is_darwin && chmod -N "$_mdm_detect_plus_path" 2>/dev/null || true
+if _mdm_has_acl "$_mdm_detect_plus_path"; then
+  fail "mdm-detect: path 中の + を ACL marker と誤認"
+else
+  pass "mdm-detect: ACL 判定は path 中の + を無視"
+fi
+/bin/rmdir "$_mdm_detect_plus_path"
+_mdm_detect_acl_xattr_path="$_mdm_detect_tmp/acl-xattr"
+: > "$_mdm_detect_acl_xattr_path"
+if _mdm_is_darwin \
+  && /usr/bin/xattr -w com.cloudnative.mdm-test 1 \
+    "$_mdm_detect_acl_xattr_path" 2>/dev/null \
+  && /bin/chmod +a 'everyone allow write' \
+    "$_mdm_detect_acl_xattr_path" 2>/dev/null; then
+  _mdm_detect_acl_listing="$(LC_ALL=C /bin/ls -lde \
+    "$_mdm_detect_acl_xattr_path")"
+  _mdm_detect_acl_perms="${_mdm_detect_acl_listing%%[[:space:]]*}"
+  if [[ "$_mdm_detect_acl_perms" != *@ ]]; then
+    skip "mdm-detect: xattr 併存 ACL の continuation を拒否" \
+      "ls permission token did not retain @"
+  elif ! _mdm_launcher_acl_safe "$_mdm_detect_acl_xattr_path" \
+    && _mdm_has_acl "$_mdm_detect_acl_xattr_path"; then
+    pass "mdm-detect: xattr 併存 ACL の continuation を拒否"
+  else
+    fail "mdm-detect: xattr 併存 ACL を launcher/main が許可"
+  fi
+  /bin/chmod -N "$_mdm_detect_acl_xattr_path" 2>/dev/null || true
+  /usr/bin/xattr -d com.cloudnative.mdm-test \
+    "$_mdm_detect_acl_xattr_path" 2>/dev/null || true
+else
+  skip "mdm-detect: xattr 併存 ACL の continuation を拒否" \
+    "ACL+xattr fixture unavailable on this platform"
+fi
+/bin/rm -f "$_mdm_detect_acl_xattr_path"
 (
   unset MDM_DETECT_HOME_OVERRIDE
   _mdm_detect_read_user_home_record() {
-    printf 'NFSHomeDirectory: /Users/Jane Doe\n'
+    printf 'NFSHomeDirectory:\n /Users/Jane Doe\n'
   }
   if [[ "$(_mdm_detect_user_home jane)" == "/Users/Jane Doe" ]]; then
-    pass "mdm-detect: dscl home の内部空白を保持"
+    pass "mdm-detect: dscl 2行形式の home 内部空白を保持"
   else
     fail "mdm-detect: 空白を含む dscl home の解析が不正"
+  fi
+)
+(
+  if [[ "$(printf 'NFSHomeDirectory: /Users/jane\n' \
+    | _mdm_detect_parse_user_home)" == /Users/jane ]]; then
+    pass "mdm-detect: dscl 同一行形式の home を維持"
+  else
+    fail "mdm-detect: dscl 同一行形式の home を拒否"
+  fi
+)
+(
+  _invalid_home=""; _invalid_rc=0
+  _invalid_home="$(printf 'NFSHomeDirectory:  /Users/jane\n' \
+    | _mdm_detect_parse_user_home)" || _invalid_rc=$?
+  if [[ "$_invalid_rc" -ne 0 && -z "$_invalid_home" ]]; then
+    pass "mdm-detect: dscl 同一行の余分な delimiter を拒否"
+  else
+    fail "mdm-detect: dscl の曖昧な delimiter を正規化"
+  fi
+)
+(
+  unset MDM_DETECT_HOME_OVERRIDE
+  _mdm_detect_read_user_home_record() {
+    printf 'NFSHomeDirectory: /Users/jane\n'
+    return 1
+  }
+  _invalid_home=""; _invalid_rc=0
+  _invalid_home="$(_mdm_detect_user_home jane)" || _invalid_rc=$?
+  if [[ "$_invalid_rc" -ne 0 && -z "$_invalid_home" ]]; then
+    pass "mdm-detect: dscl の非0終了は valid-looking stdout ごと拒否"
+  else
+    fail "mdm-detect: 失敗した dscl の stdout を home として許可"
+  fi
+)
+(
+  _invalid_home=""; _invalid_rc=0
+  _invalid_home="$(_mdm_detect_parse_user_home <<'EOF'
+NFSHomeDirectory:
+ /Users/jane
+ /Users/other
+EOF
+)" || _invalid_rc=$?
+  if [[ "$_invalid_rc" -ne 0 && -z "$_invalid_home" ]]; then
+    pass "mdm-detect: dscl の複数 home 値を出力前に拒否"
+  else
+    fail "mdm-detect: dscl の曖昧な複数 home 値を許可"
+  fi
+)
+(
+  unset MDM_CONSOLE_USER_OVERRIDE
+  _mdm_detect_read_console_user_record() {
+    printf '<dictionary> {\n  Name : wrong-user\n}\n'
+    return 42
+  }
+  _mdm_stat_owner() { printf 'fallback-user'; }
+  if [[ "$(_mdm_detect_console_user)" == fallback-user ]]; then
+    pass "mdm-detect: scutil 非0の valid-looking stdout を破棄して stat へfallback"
+  else
+    fail "mdm-detect: 失敗した scutil の ConsoleUser を採用"
+  fi
+)
+(
+  _console_user=""; _console_rc=0
+  _console_user="$(_mdm_detect_parse_console_user_record <<'EOF'
+<dictionary> {
+  Name : jane
+  Name : alice
+}
+EOF
+)" || _console_rc=$?
+  if [[ "$_console_rc" -ne 0 && -z "$_console_user" ]]; then
+    pass "mdm-detect: scutil record の重複 Name を拒否"
+  else
+    fail "mdm-detect: 曖昧な scutil ConsoleUser を許可"
+  fi
+)
+(
+  _console_records_rejected=true
+  for _console_record in $'Name :  jane\n' $'Name : \tjane\n'; do
+    if printf '%s' "$_console_record" | _mdm_detect_parse_console_user_record \
+      >/dev/null 2>&1; then
+      _console_records_rejected=false
+    fi
+  done
+  [[ "$_console_records_rejected" == true ]] \
+    && pass "mdm-detect: scutil Name 値の余分な空白/tabを拒否" \
+    || fail "mdm-detect: malformed ConsoleUser delimiter を正規化"
+)
+(
+  unset MDM_DETECT_EXPECTED_UID_OVERRIDE
+  _mdm_detect_read_user_uid_record() { printf 'UniqueID: 501\n'; }
+  _mdm_detect_search_policy_uid() { printf '%s' "${_search_uid_fixture:?}"; }
+  _search_uid_fixture=501
+  _bound_uid="$(_mdm_detect_user_uid jane)" || _bound_rc=$?
+  _mismatch_rc=0
+  _search_uid_fixture=777
+  _mdm_detect_user_uid jane >/dev/null 2>&1 || _mismatch_rc=$?
+  if [[ "${_bound_uid:-}" == 501 && "${_bound_rc:-0}" -eq 0 \
+    && "$_mismatch_rc" -ne 0 ]]; then
+    pass "mdm-detect: local dscl UID と search-policy UID の一致だけを受理"
+  else
+    fail "mdm-detect: local/search-policy UID の束縛が不正"
+  fi
+)
+(
+  unset MDM_DETECT_EXPECTED_UID_OVERRIDE
+  _mdm_detect_read_user_uid_record() {
+    printf 'UniqueID: 501\n'
+    return 42
+  }
+  _mdm_detect_search_policy_uid() { printf '501'; }
+  _uid=""; _uid_rc=0
+  _uid="$(_mdm_detect_user_uid jane)" || _uid_rc=$?
+  if [[ "$_uid_rc" -ne 0 && -z "$_uid" ]]; then
+    pass "mdm-detect: dscl UID producer 非0の stdout を破棄"
+  else
+    fail "mdm-detect: 失敗した dscl の UID を採用"
   fi
 )
 /usr/bin/git -C "$_mdm_detect_install" init -q
@@ -36,6 +189,9 @@ printf 'fixture\n' > "$_mdm_detect_install/file"
 _mdm_detect_sha="$(/usr/bin/git -C "$_mdm_detect_install" rev-parse HEAD)"
 /usr/bin/git -C "$_mdm_detect_install" checkout -q --detach "$_mdm_detect_sha"
 _mdm_detect_short="${_mdm_detect_sha:0:7}"
+_mdm_detect_persistent_marker="$_mdm_detect_install/.claude-starter-kit-mdm-managed"
+printf 'claude-code-starter-kit-mdm-user-v1\n' > "$_mdm_detect_persistent_marker"
+chmod 444 "$_mdm_detect_persistent_marker"
 
 printf '{"managed":true}\n' > "$_mdm_detect_claude/settings.json"
 printf '%s\n# managed\n%s\n# user\npersonal\n' \
@@ -122,18 +278,20 @@ _mdm_detect_fixture_deployment_sha() {
 }
 
 _mdm_detect_receipt="$_mdm_detect_receipts/receipt-jane.json"
-_mdm_detect_write_receipt() { # <schema> <result> <sha> <target> <components>
+_mdm_detect_write_receipt() { # <schema> <result> <sha> <target> <components> [version]
   local _schema="$1" _result="$2" _sha="$3" _target="$4" _components="$5"
+  local _kit_version="${6:-0.73.0}"
+  local _receipt_install="${7:-$_mdm_detect_install}"
   local _manifest_hash _deployment_hash
   _manifest_hash="$(_mdm_sha256 "$_mdm_detect_manifest")"
   _deployment_hash="$(_mdm_detect_fixture_deployment_sha)"
   cat > "$_mdm_detect_receipt" <<JSON
 {
   "schema_version": $_schema,
-  "kit_version": "0.73.0",
+  "kit_version": "$_kit_version",
   "git_ref": "main",
   "resolved_sha": "$_sha",
-  "install_dir": "$_mdm_detect_install",
+  "install_dir": "$_receipt_install",
   "manifest_path": "$_mdm_detect_manifest",
   "manifest_sha256": "$_manifest_hash",
   "deployment_sha256": "$_deployment_hash",
@@ -170,6 +328,21 @@ export MDM_DETECT_HOME_OVERRIDE="$_mdm_detect_home"
   fi
 )
 
+# A root receipt cannot redirect compliance to a trust-valid checkout outside
+# the fixed per-user path used by the production installer.
+_mdm_detect_alt_install="$_mdm_detect_tmp/kit-outside-home"
+/bin/cp -R "$_mdm_detect_install" "$_mdm_detect_alt_install"
+_mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane \
+  '["kit","claude_cli"]' 0.73.0 "$_mdm_detect_alt_install"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: receipt の home 外 install_dir を許可"
+else
+  pass "mdm-detect: install_dir は対象 home の固定パスに束縛"
+fi
+/bin/rm -rf "$_mdm_detect_alt_install"
+_mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane \
+  '["kit","claude_cli"]'
+
 # CLI is enforced only when the receipt declares it as required.
 (
   export MDM_DETECT_CLI_PRESENT_OVERRIDE=0
@@ -188,6 +361,125 @@ _mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane '["kit"]'
     fail "mdm-detect: optional CLI was treated as required"
   fi
 )
+
+# The retained checkout is compliant only while its target-user marker and
+# detached HEAD satisfy the same trust contract used by remediation.
+mv "$_mdm_detect_persistent_marker" "$_mdm_detect_persistent_marker.saved"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: markerless persistent checkout was accepted"
+else
+  pass "mdm-detect: persistent checkout requires the management marker"
+fi
+mv "$_mdm_detect_persistent_marker.saved" "$_mdm_detect_persistent_marker"
+
+chmod 644 "$_mdm_detect_persistent_marker"
+printf 'claude-code-starter-kit-mdm-user-v1\ntrailing-junk' \
+  > "$_mdm_detect_persistent_marker"
+chmod 444 "$_mdm_detect_persistent_marker"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: invalid persistent marker content was accepted"
+else
+  pass "mdm-detect: persistent marker content is byte-constrained"
+fi
+chmod 644 "$_mdm_detect_persistent_marker"
+printf 'claude-code-starter-kit-mdm-user-v1\n\0' \
+  > "$_mdm_detect_persistent_marker"
+chmod 444 "$_mdm_detect_persistent_marker"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: persistent marker の NUL suffix を許可"
+else
+  pass "mdm-detect: persistent marker は NUL suffix も拒否"
+fi
+chmod 644 "$_mdm_detect_persistent_marker"
+printf 'claude-code-starter-kit-mdm-user-v1\n' > "$_mdm_detect_persistent_marker"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: writable persistent marker was accepted"
+else
+  pass "mdm-detect: persistent marker requires mode 0444"
+fi
+chmod 444 "$_mdm_detect_persistent_marker"
+
+ln "$_mdm_detect_persistent_marker" "$_mdm_detect_persistent_marker.peer"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: hardlinked persistent marker was accepted"
+else
+  pass "mdm-detect: persistent marker requires link count one"
+fi
+rm "$_mdm_detect_persistent_marker.peer"
+
+mv "$_mdm_detect_persistent_marker" "$_mdm_detect_persistent_marker.real"
+ln -s "${_mdm_detect_persistent_marker##*/}.real" \
+  "$_mdm_detect_persistent_marker"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: symlink persistent marker was accepted"
+else
+  pass "mdm-detect: symlink persistent marker is rejected"
+fi
+rm "$_mdm_detect_persistent_marker"
+mv "$_mdm_detect_persistent_marker.real" "$_mdm_detect_persistent_marker"
+
+chmod 777 "$_mdm_detect_install"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: writable persistent checkout was accepted"
+else
+  pass "mdm-detect: persistent checkout owner and mode are verified"
+fi
+chmod 755 "$_mdm_detect_install"
+
+chmod 777 "$_mdm_detect_install/.git"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: writable .git directory was accepted"
+else
+  pass "mdm-detect: persistent .git owner/mode/ACL is verified"
+fi
+chmod 755 "$_mdm_detect_install/.git"
+
+(
+  export MDM_DETECT_EXPECTED_UID_OVERRIDE
+  MDM_DETECT_EXPECTED_UID_OVERRIDE=$(( $(/usr/bin/id -u) + 1 ))
+  if mdm_detect "$_mdm_detect_receipt" jane; then
+    fail "mdm-detect: wrong-owner persistent checkout was accepted"
+  else
+    pass "mdm-detect: persistent checkout must belong to the target UID"
+  fi
+)
+
+chmod 666 "$_mdm_detect_install/.git/HEAD"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: writable detached HEAD was accepted"
+else
+  pass "mdm-detect: detached HEAD mode matches remediation trust"
+fi
+chmod 644 "$_mdm_detect_install/.git/HEAD"
+ln "$_mdm_detect_install/.git/HEAD" "$_mdm_detect_install/.git/HEAD.peer"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: hardlinked detached HEAD was accepted"
+else
+  pass "mdm-detect: detached HEAD requires link count one"
+fi
+rm "$_mdm_detect_install/.git/HEAD.peer"
+
+printf '%s\0' "$_mdm_detect_sha" > "$_mdm_detect_install/.git/HEAD"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: NUL-terminated detached HEAD was accepted"
+else
+  pass "mdm-detect: detached HEAD requires an exact trailing LF"
+fi
+printf '%s\n' "$_mdm_detect_sha" > "$_mdm_detect_install/.git/HEAD"
+
+if _mdm_is_darwin \
+  && chmod +a 'everyone allow write' "$_mdm_detect_persistent_marker" 2>/dev/null; then
+  if mdm_detect "$_mdm_detect_receipt" jane; then
+    fail "mdm-detect: persistent marker ACL was accepted"
+  else
+    pass "mdm-detect: persistent marker ACL is rejected"
+  fi
+  chmod -N "$_mdm_detect_persistent_marker"
+else
+  skip "mdm-detect: persistent marker ACL is rejected" \
+    "ACL fixture unavailable on this platform"
+fi
+
 _mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane '[]'
 if mdm_detect "$_mdm_detect_receipt" jane; then
   fail "mdm-detect: malformed required-components contract was accepted"
@@ -987,6 +1279,37 @@ else
   pass "mdm-detect: detector performs no Git command execution"
 fi
 
+# SemVer precedence follows the 2.0.0 identifier rules without integer
+# arithmetic, including prerelease ordering and build-metadata neutrality.
+_mdm_semver_ok=1
+for _mdm_semver_valid in 0.73.0 v1.2.3-rc.1+build.005 1.0.0-alpha; do
+  _mdm_semver_is_valid "$_mdm_semver_valid" || _mdm_semver_ok=0
+done
+for _mdm_semver_invalid in 01.2.3 1.02.3 1.2.03 1.2.3-rc..1 \
+  1.2.3-01 1.2.3+; do
+  if _mdm_semver_is_valid "$_mdm_semver_invalid"; then _mdm_semver_ok=0; fi
+done
+_mdm_semver_previous=""
+for _mdm_semver_current in 1.0.0-alpha 1.0.0-alpha.1 1.0.0-alpha.beta \
+  1.0.0-beta 1.0.0-beta.2 1.0.0-beta.11 1.0.0-rc.1 1.0.0; do
+  if [[ -n "$_mdm_semver_previous" ]] \
+    && ! _mdm_version_lt "$_mdm_semver_previous" "$_mdm_semver_current"; then
+    _mdm_semver_ok=0
+  fi
+  _mdm_semver_previous="$_mdm_semver_current"
+done
+if _mdm_version_lt 1.0.0+build.1 1.0.0+build.2 \
+  || _mdm_version_lt 1.0.0+build.2 1.0.0+build.1; then
+  _mdm_semver_ok=0
+fi
+_mdm_version_lt 99999999999999999999.0.0 \
+  100000000000000000000.0.0 || _mdm_semver_ok=0
+if [[ "$_mdm_semver_ok" -eq 1 ]]; then
+  pass "mdm-detect: SemVer prerelease/build/任意長数値を正しく比較"
+else
+  fail "mdm-detect: SemVer 2.0 precedence が不正"
+fi
+
 # Source-only main tests exercise strict argument status codes and constraints.
 export MDM_RECEIPT_DIR_OVERRIDE="$_mdm_detect_receipts"
 export MDM_EUID_OVERRIDE=0 MDM_CONSOLE_USER_OVERRIDE=jane
@@ -1003,6 +1326,7 @@ fi
 for _mdm_detect_bad_args in \
   '--min-verison 0.73.0' \
   '--min-version garbage' \
+  '--min-version 01.2.3' \
   '--expected-commit short' \
   '--user'; do
   _mdm_detect_main_rc=0
@@ -1046,6 +1370,27 @@ if [[ "$_mdm_detect_main_rc" -eq 1 ]]; then
 else
   fail "mdm-detect: minimum-version failure returned $_mdm_detect_main_rc"
 fi
+
+_mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane '["kit"]' \
+  '0.73.0-rc.1'
+_mdm_detect_main_rc=0
+mdm_detect_main --min-version 0.73.0 >/dev/null 2>&1 || _mdm_detect_main_rc=$?
+if [[ "$_mdm_detect_main_rc" -eq 1 ]]; then
+  pass "mdm-detect: prerelease は同じ core の final 要件を満たさない"
+else
+  fail "mdm-detect: prerelease を final 以上として許可 (rc=$_mdm_detect_main_rc)"
+fi
+
+_mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane '["kit"]' \
+  '0.73.0+build.7'
+_mdm_detect_main_rc=0
+mdm_detect_main --min-version 0.73.0 >/dev/null 2>&1 || _mdm_detect_main_rc=$?
+if [[ "$_mdm_detect_main_rc" -eq 0 ]]; then
+  pass "mdm-detect: build metadata は version precedence から除外"
+else
+  fail "mdm-detect: build metadata だけで minimum 判定が変化 (rc=$_mdm_detect_main_rc)"
+fi
+_mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane '["kit"]'
 
 # Executable production mode discards every source-only override.
 _mdm_detect_main_rc=0

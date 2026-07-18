@@ -35,11 +35,14 @@ _mdm_launcher_stat_mode() {
 }
 
 _mdm_launcher_acl_safe() {
-  local _path="$1" _line _perms
+  local _path="$1" _listing _first _perms
   [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]] || return 0
-  _line="$(LC_ALL=C /bin/ls -lde "$_path" 2>/dev/null || true)"
-  _perms="${_line%%[[:space:]]*}"
-  [[ -n "$_perms" && "$_perms" != *+* ]]
+  _listing="$(LC_ALL=C /bin/ls -lde "$_path" 2>/dev/null)" || return 1
+  _first="${_listing%%$'\n'*}"
+  _perms="${_first%%[[:space:]]*}"
+  [[ "$_first" == *[[:space:]]* \
+    && "$_perms" =~ ^[-bcdlps][rwxStTs-]{9}[@+]?$ ]] || return 1
+  [[ "$_perms" != *+* && "$_listing" != *$'\n'* ]]
 }
 
 _mdm_launcher_path_trusted() {
@@ -193,13 +196,18 @@ _mdm_config_path() {
 
 # root が使う一時領域を安全に選ぶ（R7-High）。TMPDIR は対象ユーザー所有を
 # 指し得て、親の所有者がエントリを rename/置換できるため、root フェーズでは
-# 無視して macOS の sticky・root 管理領域 /private/tmp を使う（/tmp は
-# /private/tmp への symlink）。非 root は従来どおり TMPDIR を尊重。
+# 無視する。macOS は sticky・root 管理領域 /private/tmp（/tmp はその
+# symlink）、非 macOS の source-only test は /tmp を使う。非 root は
+# 従来どおり TMPDIR を尊重する。
 _mdm_safe_tmpdir() {
   local _euid
   _euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
   if [[ "$_euid" -eq 0 ]]; then
-    printf '%s' "/private/tmp"
+    if _mdm_is_darwin; then
+      printf '%s' "/private/tmp"
+    else
+      printf '%s' "/tmp"
+    fi
   else
     printf '%s' "${TMPDIR:-/tmp}"
   fi
@@ -318,16 +326,12 @@ _mdm_mode_normalize() {
   printf '%s' "$_mode"
 }
 
-# macOS marks extended ACLs with '+' in the permission token emitted by ls.
-# Any ACL is rejected; POSIX owner/mode checks remain the primary Linux test
-# fallback because the production surface is macOS-only.
+# Any macOS ACL is rejected. With xattrs, ls can retain '@' in the permission
+# token and emit the ACL only on continuation lines, so the launcher helper
+# validates both the token and the complete listing.
 _mdm_has_extended_acl() {
-  local _path="$1" _line _perms
   _mdm_is_darwin || return 1
-  _line="$(LC_ALL=C /bin/ls -lde "$_path" 2>/dev/null | /usr/bin/sed -n '1p')" || return 0
-  [[ -n "$_line" ]] || return 0
-  _perms="${_line%%[[:space:]]*}"
-  [[ "$_perms" == *+* ]]
+  ! _mdm_launcher_acl_safe "$1"
 }
 
 _mdm_sha256_file() {
@@ -612,26 +616,95 @@ mdm_receipt_write() {
   return 0
 }
 
+# scutil の record は producer が成功した場合だけ採用する。parser は EOF まで
+# 読み、重複 Name や空白/制御文字を含む値を曖昧な record として拒否する。
+_mdm_read_console_user_record() {
+  printf 'show State:/Users/ConsoleUser\n' | /usr/sbin/scutil 2>/dev/null
+}
+
+_mdm_parse_console_user_record() {
+  LC_ALL=C /usr/bin/awk '
+    BEGIN { seen = 0; bad = 0 }
+
+    /^[[:space:]]*Name[[:space:]]*:/ {
+      remainder = $0
+      sub(/^[[:space:]]*Name[[:space:]]*:/, "", remainder)
+      if (seen || remainder !~ /^ [^[:space:][:cntrl:]]+$/) bad = 1
+      value = substr(remainder, 2)
+      seen = 1
+    }
+
+    END {
+      if (!bad && seen == 1) {
+        print value
+        exit 0
+      }
+      exit 1
+    }
+  '
+}
+
 # コンソールユーザーを取得（テスト時は MDM_CONSOLE_USER_OVERRIDE を優先）
 _mdm_console_user() {
   if [[ -n "${MDM_CONSOLE_USER_OVERRIDE:-}" ]]; then
     printf '%s' "$MDM_CONSOLE_USER_OVERRIDE"; return 0
   fi
-  # scutil の ConsoleUser、フォールバック stat /dev/console
-  local _u
-  _u="$(printf 'show State:/Users/ConsoleUser\n' | scutil 2>/dev/null | awk '/Name :/{print $3; exit}' || true)"
-  [[ -z "$_u" ]] && _u="$(_mdm_stat_owner /dev/console 2>/dev/null || true)"
+  # pipefail により scutil の非0終了も assignment の失敗として扱う。
+  local _u=""
+  if _u="$(_mdm_read_console_user_record | _mdm_parse_console_user_record)"; then
+    printf '%s' "$_u"
+    return 0
+  fi
+  _u="$(_mdm_stat_owner /dev/console 2>/dev/null || true)"
   printf '%s' "$_u"
 }
 
+# dscl の UniqueID record を EOF まで読み、単一の10進値だけを受理する。
+_mdm_parse_dscl_uid() {
+  LC_ALL=C /usr/bin/awk '
+    BEGIN { state = "key"; bad = 0 }
+
+    state == "key" && $0 == "UniqueID:" {
+      state = "continuation"
+      next
+    }
+
+    state == "key" && $0 ~ /^UniqueID:[ \t]/ {
+      value = substr($0, length("UniqueID:") + 2)
+      state = "done"
+      next
+    }
+
+    state == "continuation" && $0 ~ /^[ \t]/ {
+      value = substr($0, 2)
+      state = "done"
+      next
+    }
+
+    { bad = 1 }
+
+    END {
+      if (!bad && state == "done" && value ~ /^[0-9]+$/ \
+          && length(value) <= 10 \
+          && !(length(value) > 1 && substr(value, 1, 1) == "0")) {
+        print value
+        exit 0
+      }
+      exit 1
+    }
+  '
+}
+
 # 対象ユーザーの UID を dscl で取得（実在確認を兼ねる）。
-# テスト時は MDM_DSCL_UID_OVERRIDE でモック可能。解決不能なら空を返す。
+# テスト時は MDM_DSCL_UID_OVERRIDE でモック可能。解決不能なら非0を返す。
 _mdm_user_uid() {
-  local _user="$1"
+  local _user="$1" _uid
   if [[ -n "${MDM_DSCL_UID_OVERRIDE:-}" ]]; then
     printf '%s' "$MDM_DSCL_UID_OVERRIDE"; return 0
   fi
-  dscl . -read "/Users/$_user" UniqueID 2>/dev/null | awk '{print $2; exit}' || true
+  _uid="$(dscl . -read "/Users/$_user" UniqueID 2>/dev/null \
+    | _mdm_parse_dscl_uid)" || return 1
+  printf '%s' "$_uid"
 }
 
 # MDM artifact 名へ安全に埋め込める macOS short name の対応範囲。
@@ -644,8 +717,11 @@ _mdm_username_is_safe() {
 
 # 対象ユーザー契約: 予約名 denylist に加えて、username 文字種・dscl 実在確認・
 # UID >= 501（システムアカウント除外）を必須とする（最終レビュー High#8）。
-mdm_resolve_target_user() {
-  local _u="${KIT_MDM_TARGET_USER:-}"
+_mdm_resolve_target_identity() { # <user-output-var> <uid-output-var>
+  local _out_user="$1" _out_uid="$2" _u="${KIT_MDM_TARGET_USER:-}" _uid
+  [[ "$_out_user" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_out_uid" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_out_user" != "$_out_uid" ]] || return "$MDM_EXIT_USER"
   [[ -z "$_u" ]] && _u="$(_mdm_console_user)"
   case "$_u" in
     ''|root|_mbsetupuser|loginwindow|daemon|nobody)
@@ -656,8 +732,10 @@ mdm_resolve_target_user() {
     mdm_log R2 "対象ユーザー名の文字種が不正: '$_u'"
     return "$MDM_EXIT_USER"
   fi
-  local _uid
-  _uid="$(_mdm_user_uid "$_u")"
+  if ! _uid="$(_mdm_user_uid "$_u")"; then
+    mdm_log R2 "対象ユーザーが実在しない（dscl で解決不能）: '$_u'"
+    return "$MDM_EXIT_USER"
+  fi
   if ! printf '%s' "$_uid" | grep -qE '^[0-9]+$'; then
     mdm_log R2 "対象ユーザーが実在しない（dscl で解決不能）: '$_u'"
     return "$MDM_EXIT_USER"
@@ -666,28 +744,80 @@ mdm_resolve_target_user() {
     mdm_log R2 "対象ユーザーの UID がシステム領域（<501）: '$_u' (uid=$_uid)"
     return "$MDM_EXIT_USER"
   fi
-  printf '%s' "$_u"
+  printf -v "$_out_user" '%s' "$_u"
+  printf -v "$_out_uid" '%s' "$_uid"
   return 0
+}
+
+# 互換用 wrapper。production は UID も必要なので上の identity resolver を直接使う。
+mdm_resolve_target_user() {
+  local _resolved_user="" _resolved_uid=""
+  _mdm_resolve_target_identity _resolved_user _resolved_uid || return $?
+  printf '%s' "$_resolved_user"
+}
+
+_mdm_search_policy_uid() {
+  /usr/bin/id -u "$1" 2>/dev/null
+}
+
+# local domain の dscl UID と macOS search policy の UID を束縛する。
+_mdm_bind_target_uid() { # <user> <local-dscl-uid>
+  local _user="$1" _local_uid="$2" _search_uid
+  _search_uid="$(_mdm_search_policy_uid "$_user")" || return 1
+  [[ "$_local_uid" =~ ^[0-9]+$ && "$_search_uid" =~ ^[0-9]+$ ]] || return 1
+  [[ ${#_local_uid} -le 10 && ${#_search_uid} -le 10 ]] || return 1
+  [[ "$_local_uid" == "$_search_uid" && "$_search_uid" -ge 501 ]] || return 1
+  printf '%s' "$_search_uid"
 }
 
 # 対象ユーザーの canonical home を取得・検証。dscl はモック可能。
 _mdm_parse_dscl_home() {
-  awk '
-    /^NFSHomeDirectory:[[:space:]]*/ {
-      sub(/^NFSHomeDirectory:[[:space:]]*/, "")
-      print
-      exit
+  LC_ALL=C awk '
+    BEGIN { state = "key"; bad = 0 }
+
+    state == "key" && $0 == "NFSHomeDirectory:" {
+      state = "continuation"
+      next
+    }
+
+    state == "key" && $0 ~ /^NFSHomeDirectory:[ \t]/ {
+      value = substr($0, length("NFSHomeDirectory:") + 2)
+      # dscl documents whitespace-separated same-line output as multiple
+      # values. A single value containing spaces uses a continuation line.
+      if (value ~ /[[:space:]]/) bad = 1
+      state = "done"
+      next
+    }
+
+    state == "continuation" && $0 ~ /^[ \t]/ {
+      value = substr($0, 2)
+      state = "done"
+      next
+    }
+
+    { bad = 1 }
+
+    END {
+      if (!bad && state == "done" && value ~ /^\// \
+          && value !~ /[[:cntrl:]]/) {
+        print value
+        exit 0
+      }
+      exit 1
     }
   '
 }
 
 mdm_validate_user_home() {
-  local _user="$1" _home _canonical
+  local _user="$1" _expected_uid="${2:-}" _home _canonical
   if [[ -n "${MDM_DSCL_HOME_OVERRIDE:-}" ]]; then
     _home="$MDM_DSCL_HOME_OVERRIDE"
   else
-    _home="$(dscl . -read "/Users/$_user" NFSHomeDirectory 2>/dev/null \
-      | _mdm_parse_dscl_home || true)"
+    if ! _home="$(dscl . -read "/Users/$_user" NFSHomeDirectory 2>/dev/null \
+      | _mdm_parse_dscl_home)"; then
+      mdm_log R2 "home を dscl から一意に解決できない"
+      return "$MDM_EXIT_USER"
+    fi
   fi
   if [[ -z "$_home" || ! -d "$_home" ]]; then
     mdm_log R2 "home が存在しない: '$_home'"
@@ -704,10 +834,20 @@ mdm_validate_user_home() {
     return "$MDM_EXIT_USER"
   fi
   if [[ "${MDM_VALIDATE_HOME_SKIP_OWNER:-0}" != "1" ]]; then
-    local _owner; _owner="$(_mdm_stat_owner "$_home" 2>/dev/null || true)"
-    if [[ "$_owner" != "$_user" ]]; then
-      mdm_log R2 "home の所有者が対象ユーザーでない: $_owner"
-      return "$MDM_EXIT_USER"
+    if [[ -n "$_expected_uid" ]]; then
+      local _owner_uid
+      _owner_uid="$(_mdm_stat_uid "$_home" 2>/dev/null || true)"
+      if [[ ! "$_expected_uid" =~ ^[0-9]+$ || "$_owner_uid" != "$_expected_uid" ]]; then
+        mdm_log R2 "home の所有 UID が対象ユーザーと一致しない: $_owner_uid"
+        return "$MDM_EXIT_USER"
+      fi
+    else
+      local _owner
+      _owner="$(_mdm_stat_owner "$_home" 2>/dev/null || true)"
+      if [[ "$_owner" != "$_user" ]]; then
+        mdm_log R2 "home の所有者が対象ユーザーでない: $_owner"
+        return "$MDM_EXIT_USER"
+      fi
     fi
   fi
   printf '%s' "$_canonical"
@@ -1689,6 +1829,39 @@ _mdm_auth_git() {
   "${_env[@]}" /usr/bin/git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
 }
 
+# Keep exact release/prerelease tags as-is.  For commits after a tag, encode
+# git-describe's distance/hash suffix as build metadata so it does not become
+# a SemVer prerelease accidentally (v1.2.3-4-gabc -> v1.2.3+4.gabc).
+_mdm_describe_kit_version() { # <_mdm_git|_mdm_auth_git> <repo>
+  local _git_runner="$1" _repo="$2" _exact="" _described=""
+  local _base _distance _abbrev
+  case "$_git_runner" in _mdm_git|_mdm_auth_git) : ;; *) printf 'unknown'; return 0 ;; esac
+
+  _exact="$("$_git_runner" -C "$_repo" describe --tags --exact-match \
+    2>/dev/null || true)"
+  if [[ -n "$_exact" ]]; then
+    printf '%s' "$_exact"
+    return 0
+  fi
+
+  _described="$("$_git_runner" -C "$_repo" describe --tags --long --always \
+    2>/dev/null || true)"
+  if [[ "$_described" =~ ^(.+)-([0-9]+)-g([0-9a-f]+)$ ]]; then
+    _base="${BASH_REMATCH[1]}"
+    _distance="${BASH_REMATCH[2]}"
+    _abbrev="${BASH_REMATCH[3]}"
+    if [[ "$_base" == *+* ]]; then
+      printf '%s.%s.g%s' "$_base" "$_distance" "$_abbrev"
+    else
+      printf '%s+%s.g%s' "$_base" "$_distance" "$_abbrev"
+    fi
+  elif [[ -n "$_described" ]]; then
+    printf '%s' "$_described"
+  else
+    printf 'unknown'
+  fi
+}
+
 _mdm_canonical_any() {
   local _path="$1" _target _dir _base _physical _hops=0
   while [[ -L "$_path" ]]; do
@@ -2035,12 +2208,32 @@ ENABLE_CODEX_PLUGIN"
 # Detached HEAD is data, not an invitation to execute Git against a mutable
 # checkout after setup. Copy it through the bounded watchdog path so a
 # target-user race from a regular file to a FIFO cannot block root remediation.
+_mdm_managed_dir_matches_identity() { # <dir> [expected-uid] [dev:inode:type]
+  local _dir="$1" _expected_uid="${2:-}" _expected_identity="${3:-}"
+  local _identity _mode
+  [[ -d "$_dir" && ! -L "$_dir" ]] || return 1
+  [[ "$(_mdm_canonical_dir "$_dir" || true)" == "$_dir" ]] || return 1
+  [[ -z "$_expected_uid" || "$_expected_uid" =~ ^[0-9]+$ ]] || return 1
+  if [[ -n "$_expected_uid" ]]; then
+    [[ "$(_mdm_stat_uid "$_dir" || true)" == "$_expected_uid" ]] || return 1
+  fi
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir" || true)" || true)"
+  _mdm_mode_is_safe "$_mode" || return 1
+  _mdm_has_extended_acl "$_dir" && return 1
+  _identity="$(_mdm_persistent_dir_identity "$_dir" || true)"
+  case "$_identity" in *:Directory|*:directory) : ;; *) return 1 ;; esac
+  [[ -z "$_expected_identity" || "$_identity" == "$_expected_identity" ]]
+}
+
 _mdm_detached_head_matches() { # <repo> <full-sha> [expected-uid]
   local _repo="$1" _sha="$2" _expected_uid="${3:-}"
-  local _head _before _size _value _snapshot _old_umask
+  local _git_dir _git_identity _head _before _size _value _snapshot _old_umask
   [[ "$_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
-  [[ -d "$_repo/.git" && ! -L "$_repo/.git" ]] || return 1
-  _head="$_repo/.git/HEAD"
+  _git_dir="$_repo/.git"
+  _git_identity="$(_mdm_persistent_dir_identity "$_git_dir" || true)"
+  _mdm_managed_dir_matches_identity "$_git_dir" "$_expected_uid" \
+    "$_git_identity" || return 1
+  _head="$_git_dir/HEAD"
   [[ -f "$_head" && ! -L "$_head" ]] || return 1
   _before="$(_mdm_stat_identity "$_head")" || return 1
   case "$_before" in *:Regular\ File:*|*:regular\ file:*) : ;; *) return 1 ;; esac
@@ -2056,7 +2249,9 @@ _mdm_detached_head_matches() { # <repo> <full-sha> [expected-uid]
   fi
   IFS= read -r _value < "$_snapshot" || { /bin/rm -f "$_snapshot"; return 1; }
   /bin/rm -f "$_snapshot"
-  [[ "$_value" == "$_sha" ]]
+  [[ "$_value" == "$_sha" ]] || return 1
+  _mdm_managed_dir_matches_identity "$_git_dir" "$_expected_uid" \
+    "$_git_identity"
 }
 
 _MDM_AUTH_CHECKOUT=""
@@ -2339,8 +2534,9 @@ _mdm_cleanup_persistent_stage() {
   _current="$(_mdm_persistent_dir_identity "$_path" || true)"
   [[ "$_current" == "$_expected" ]] || return 1
   # The stage and its parent belong to the target user. Cleanup stays in the
-  # same dropped-privilege context and is identity-bound so a pathname swap
-  # cannot redirect recursive deletion to an unrelated directory.
+  # same dropped-privilege context; the identity check rejects stale paths,
+  # while the privilege drop keeps any remaining pathname race outside root's
+  # authority boundary.
   _mdm_run_maybe_as_user /bin/rm -rf "$_path" 2>/dev/null || return 1
   [[ ! -e "$_path" && ! -L "$_path" ]] || return 1
   _MDM_PERSISTENT_STAGE=""
@@ -2438,7 +2634,7 @@ _mdm_prepare_authoritative_checkout() { # <ref> <target-uid>
   [[ -z "$_status" ]] || return 1
 
   MDM_RCPT_RESOLVED_SHA="$_sha"
-  MDM_RCPT_KIT_VERSION="$(_mdm_auth_git -C "$_auth" describe --tags --always 2>/dev/null || echo unknown)"
+  MDM_RCPT_KIT_VERSION="$(_mdm_describe_kit_version _mdm_auth_git "$_auth")"
   _mdm_normalize_auth_tree "$_auth" || return 1
   _privacy_uid="$_target_uid"
   if [[ "${_MDM_TEST_MODE:-0}" == "1" && -n "${MDM_AUTH_PRIVACY_UID_OVERRIDE:-}" ]]; then
@@ -2471,15 +2667,20 @@ _mdm_persistent_dir_identity() {
 }
 
 _mdm_persistent_marker_trusted() { # <install-dir> <target-uid>
-  local _marker _expected_uid="$2" _copy="" _mode="" _value _extra _rc=1
+  local _marker _expected_uid="$2" _copy="" _mode="" _size=""
+  local _value _extra="" _rc=1
   [[ "$_expected_uid" =~ ^[0-9]+$ ]] || return 1
   _marker="$(_mdm_persistent_marker_path "$1")"
   _mdm_stable_managed_snapshot "$_marker" persistent-marker "$_expected_uid" \
     _copy _mode || return 1
   [[ "$_mode" == 0444 ]] || { /bin/rm -f "$_copy"; return 1; }
+  _size="$(/usr/bin/wc -c < "$_copy" | /usr/bin/tr -d '[:space:]')" \
+    || { /bin/rm -f "$_copy"; return 1; }
+  [[ "$_size" == 36 ]] || { /bin/rm -f "$_copy"; return 1; }
   exec 6<"$_copy" || { /bin/rm -f "$_copy"; return 1; }
   if IFS= read -r _value <&6 \
     && ! IFS= read -r _extra <&6 \
+    && [[ -z "$_extra" ]] \
     && [[ "$_value" == claude-code-starter-kit-mdm-user-v1 ]]; then
     _rc=0
   fi
@@ -2500,6 +2701,7 @@ _mdm_persistent_checkout_matches_identity() { # <dir> <target-uid> <dev:inode:ty
   _before="$(_mdm_persistent_dir_identity "$_dir" || true)"
   [[ "$_before" == "$_expected" ]] || return 1
   case "$_before" in *:Directory|*:directory) : ;; *) return 1 ;; esac
+  _mdm_managed_dir_matches_identity "$_dir/.git" "$_target_uid" || return 1
   _mdm_persistent_marker_trusted "$_dir" "$_target_uid" || return 1
   _after="$(_mdm_persistent_dir_identity "$_dir" || true)"
   [[ "$_after" == "$_expected" ]]
@@ -2718,11 +2920,13 @@ _mdm_rebuild_persistent_checkout() { # <install-dir> <repo-url> <full-sha> <targ
   return 0
 }
 
-_mdm_run_root_user_phase() { # <user> <home>
-  local _user="$1" _home="$2" _uid _ref _dry_run _install_dir _repo_url _cli_required
+_mdm_run_root_user_phase() { # <user> <home> <bound-target-uid>
+  local _user="$1" _home="$2" _uid="$3" _ref _dry_run _install_dir _repo_url _cli_required
+  local _persistent_identity=""
   local _setup_rc=0
-  _uid="$(/usr/bin/id -u "$_user" 2>/dev/null || true)"
-  [[ "$_uid" =~ ^[0-9]+$ ]] || { mdm_log U1b "対象ユーザー UID を解決できない"; return 1; }
+  # UID >= 501 と local/search-policy 一致は main の identity binding 済み。
+  [[ "$_uid" =~ ^[0-9]+$ ]] \
+    || { mdm_log U1b "束縛済み対象ユーザー UID が不正"; return 1; }
   _ref="${KIT_MDM_GIT_REF:-main}"
   _dry_run="$(_mdm_root_bool "${KIT_MDM_DRY_RUN:-false}" 2>/dev/null || echo false)"
   if ! _mdm_root_ref_allowed "$_ref" "$_dry_run"; then
@@ -2773,6 +2977,9 @@ _mdm_run_root_user_phase() { # <user> <home>
     mdm_log U1b "保持用 checkout を固定 SHA で再構築"
     _mdm_rebuild_persistent_checkout \
       "$_install_dir" "$_repo_url" "$MDM_RCPT_RESOLVED_SHA" "$_uid" || return 1
+    _persistent_identity="$(_mdm_persistent_dir_identity "$_install_dir" || true)"
+    _mdm_persistent_checkout_matches_identity \
+      "$_install_dir" "$_uid" "$_persistent_identity" || return 1
   fi
 
   _cli_required="true"
@@ -2803,7 +3010,13 @@ _mdm_run_root_user_phase() { # <user> <home>
   _mdm_detached_head_matches "$_MDM_AUTH_CHECKOUT" "$MDM_RCPT_RESOLVED_SHA" \
     "$(_mdm_auth_expected_uid)" || return 1
   if [[ "$_dry_run" != "true" ]]; then
-    _mdm_detached_head_matches "$_install_dir" "$MDM_RCPT_RESOLVED_SHA" "$_uid" || return 1
+    _mdm_persistent_checkout_matches_identity \
+      "$_install_dir" "$_uid" "$_persistent_identity" \
+      && _mdm_detached_head_matches \
+        "$_install_dir" "$MDM_RCPT_RESOLVED_SHA" "$_uid" \
+      && _mdm_persistent_checkout_matches_identity \
+        "$_install_dir" "$_uid" "$_persistent_identity" \
+      || return 1
   fi
   _mdm_cleanup_auth_entry_list || return 1
   _mdm_cleanup_auth_checkout || return 1
@@ -2829,7 +3042,7 @@ _mdm_run_root_user_phase() { # <user> <home>
 #         MDM_EXIT_CLI=CLIのみ欠如（部分失敗）/
 #         MDM_EXIT_CONFIG=install_dir 制約違反 / 1=それ以外の失敗
 _mdm_run_user_phase() {
-  local _euid="$1" _user="$2" _home="$3"
+  local _euid="$1" _user="$2" _home="$3" _target_uid="${4:-}"
   # MDM 管理マーカー（非 root 経路は env 継承で setup.sh へ届く。root 経路は
   # mdm_build_drop_argv が固定要素として注入する）
   export KIT_MDM_MANAGED=true
@@ -2838,7 +3051,7 @@ _mdm_run_user_phase() {
   _dry_run="$(_mdm_root_bool "${KIT_MDM_DRY_RUN:-false}" 2>/dev/null || echo false)"
 
   if [[ "$_euid" -eq 0 ]]; then
-    _mdm_run_root_user_phase "$_user" "$_home"
+    _mdm_run_root_user_phase "$_user" "$_home" "$_target_uid"
     return $?
   fi
   if [[ "$_dry_run" != "true" ]]; then
@@ -2935,7 +3148,7 @@ _mdm_run_user_phase() {
     return 1
   fi
   MDM_RCPT_RESOLVED_SHA="$_sha"
-  MDM_RCPT_KIT_VERSION="$(_mdm_git -C "$_install_dir" describe --tags --always 2>/dev/null || echo unknown)"
+  MDM_RCPT_KIT_VERSION="$(_mdm_describe_kit_version _mdm_git "$_install_dir")"
   _mdm_run_maybe_as_user /bin/chmod +x "$_install_dir/setup.sh" 2>/dev/null || true
 
   # required_components: kit は常時、claude_cli は KIT_MDM_INSTALL_CLAUDE_CLI!=false のとき（既定 true）
@@ -3578,14 +3791,14 @@ mdm_main() {
   fi
 
   # R2: ユーザー・home 解決（root の失敗時だけ system receipt を best-effort で試す）
-  local _user _home _target_uid
+  local _user="" _home _target_uid=""
   if [[ "$_euid" -eq 0 ]]; then
-    _user="$(mdm_resolve_target_user)" \
+    if ! _mdm_resolve_target_identity _user _target_uid; then
+      _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
+    fi
+    _target_uid="$(_mdm_bind_target_uid "$_user" "$_target_uid")" \
       || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
-    _home="$(mdm_validate_user_home "$_user")" \
-      || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
-    _target_uid="$(/usr/bin/id -u "$_user" 2>/dev/null || true)"
-    [[ "$_target_uid" =~ ^[0-9]+$ ]] \
+    _home="$(mdm_validate_user_home "$_user" "$_target_uid")" \
       || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
   else
     _user="$(/usr/bin/id -un)"; _home="$HOME"     # ユーザーモード
@@ -3644,7 +3857,7 @@ mdm_main() {
   # U1b..U3: キット取得(ref 固定) + setup 実行 + CLI 導入の確認。
   # root 時は git 操作・setup.sh 実行とも検証済みユーザーへ環境分離降格（Critical#2）。
   local _user_rc=0 _final_user_rc
-  _mdm_run_user_phase "$_euid" "$_user" "$_home" || _user_rc=$?
+  _mdm_run_user_phase "$_euid" "$_user" "$_home" "$_target_uid" || _user_rc=$?
   _final_user_rc="$(_mdm_user_phase_exit_code "$_user_rc" "$_dry_run")"
   if [[ "$_dry_run" == "true" ]]; then
     _mdm_cleanup_transient_checkouts
