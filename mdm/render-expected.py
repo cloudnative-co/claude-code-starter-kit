@@ -23,6 +23,16 @@ MAX_DEPTH = 64
 BEGIN_MARKER = "<!-- BEGIN STARTER-KIT-MANAGED -->"
 END_MARKER = "<!-- END STARTER-KIT-MANAGED -->"
 PROFILE_NAMES = ("minimal", "standard", "full")
+COMPONENT_NAMES = (
+    "biome",
+    "claude_cli",
+    "fonts",
+    "ghostty",
+    "kit",
+    "node_runtime",
+    "safety_net",
+    "web_content_runtime",
+)
 GENERATED_MODE = 0o600
 EXECUTABLE_MODE = 0o700
 
@@ -35,6 +45,15 @@ def fail(message):
     raise RenderError(message)
 
 
+def has_control(value):
+    return any(
+        ord(char) < 0x20
+        or 0x7F <= ord(char) <= 0x9F
+        or 0xD800 <= ord(char) <= 0xDFFF
+        for char in value
+    )
+
+
 def validate_relative(path):
     if not isinstance(path, str) or not path:
         fail("empty relative path")
@@ -43,21 +62,15 @@ def validate_relative(path):
     parts = path.split("/")
     if len(parts) > MAX_DEPTH or any(part in ("", ".", "..") for part in parts):
         fail("invalid relative path: {!r}".format(path))
+    if has_control(path):
+        fail("relative path contains a control character")
     if len(path.encode("utf-8", "strict")) > MAX_RELATIVE_BYTES:
         fail("relative path is too long: {!r}".format(path))
-    for char in path:
-        code = ord(char)
-        if code < 0x20 or code == 0x7F or 0xD800 <= code <= 0xDFFF:
-            fail("relative path contains a control character")
     return path
 
 
 def mode_is_safe(mode):
     return mode & 0o022 == 0
-
-
-def has_control(value):
-    return any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
 
 
 class Checkout:
@@ -338,6 +351,66 @@ def apply_overrides(values, allowed_keys, overrides):
     return values
 
 
+def required_components(values, claude_cli_required):
+    """Return the canonical MDM component contract for this rendered policy."""
+    required = {"kit"}
+    if claude_cli_required:
+        required.add("claude_cli")
+    conditions = (
+        ("biome", "ENABLE_BIOME_HOOKS"),
+        ("fonts", "ENABLE_FONTS_SETUP"),
+        ("ghostty", "ENABLE_GHOSTTY_SETUP"),
+        ("safety_net", "ENABLE_SAFETY_NET"),
+        ("web_content_runtime", "INSTALL_SKILLS"),
+    )
+    for component, key in conditions:
+        if values[key]:
+            required.add(component)
+    # Safety Net and the web-content-extraction runtime execute through the
+    # target user's `node`. Attesting only their package trees would let a
+    # missing, incompatible, or shadowed runtime remain compliant. Managed
+    # Biome uses a separately attested native distribution and is independent.
+    if "safety_net" in required or "web_content_runtime" in required:
+        required.add("node_runtime")
+    result = sorted(required)
+    if any(component not in COMPONENT_NAMES for component in result):
+        fail("internal unknown required component")
+    return result
+
+
+def render_policy(
+    values, profile, language, editor_choice, components
+):
+    policy_values = {
+        key: value
+        for key, value in values.items()
+        if key.startswith("ENABLE_") or key.startswith("INSTALL_")
+    }
+    if not policy_values or any(
+        not isinstance(value, bool) for value in policy_values.values()
+    ):
+        fail("internal invalid policy value")
+    policy = {
+        "schema_version": 1,
+        "profile": profile,
+        "language": language,
+        "editor_choice": editor_choice,
+        "commit_attribution": values["COMMIT_ATTRIBUTION"],
+        "values": policy_values,
+        "required_components": components,
+    }
+    try:
+        serialized = json.dumps(
+            policy,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as error:
+        fail("cannot serialize policy: {}".format(error))
+    return (serialized + "\n").encode("ascii")
+
+
 def reject_duplicate_pairs(pairs):
     result = {}
     for key, value in pairs:
@@ -606,7 +679,9 @@ def write_exclusive(path, data, mode):
         os.close(descriptor)
 
 
-def write_output(output, tree, universe, profile, language, logical_home):
+def write_output(
+    output, tree, universe, profile, language, logical_home, components, policy_data
+):
     os.mkdir(output, 0o700)
     root_info = os.lstat(output)
     identity = (root_info.st_dev, root_info.st_ino)
@@ -641,12 +716,15 @@ def write_output(output, tree, universe, profile, language, logical_home):
             )
             for entry in entries
         ).encode("utf-8")
+        policy_sha256 = hashlib.sha256(policy_data).hexdigest()
         manifest = {
             "schema_version": 1,
             "profile": profile,
             "language": language,
             "logical_home": logical_home,
             "async_hooks": False,
+            "required_components": components,
+            "policy_sha256": policy_sha256,
             "files": paths,
             "absent_files": sorted(universe.difference(paths)),
             "entries": entries,
@@ -654,6 +732,9 @@ def write_output(output, tree, universe, profile, language, logical_home):
         }
         manifest_data = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         write_exclusive(os.path.join(output, "modes.tsv"), modes, GENERATED_MODE)
+        write_exclusive(
+            os.path.join(output, "policy.json"), policy_data, GENERATED_MODE
+        )
         write_exclusive(os.path.join(output, "manifest.json"), manifest_data, GENERATED_MODE)
         os.chmod(tree_root, 0o700)
         os.chmod(output, 0o700)
@@ -671,6 +752,15 @@ def parse_arguments(argv):
     parser.add_argument("--output", required=True)
     parser.add_argument("--profile", choices=PROFILE_NAMES, required=True)
     parser.add_argument("--language", choices=("en", "ja"), required=True)
+    parser.add_argument(
+        "--editor",
+        dest="editor_choice",
+        choices=("vscode", "cursor", "zed", "neovim", "none"),
+        required=True,
+    )
+    parser.add_argument(
+        "--claude-cli-required", choices=("true", "false"), required=True
+    )
     parser.add_argument("--logical-home", required=True)
     parser.add_argument("--override", action="append", default=[])
     parser.add_argument("--prior-managed", action="append", default=[])
@@ -704,10 +794,25 @@ def main(argv=None):
         output = verify_output_parent(arguments.output)
         checkout = Checkout(arguments.checkout)
         flags, order, script_features = parse_registry(checkout)
-        values, _ = parse_profile(checkout, arguments.profile, flags.values())
-        output_affecting_overrides = set(flags.values())
-        output_affecting_overrides.update({"ENABLE_NEW_INIT", "ENABLE_CODEX_PLUGIN"})
+        values, profile_keys = parse_profile(
+            checkout, arguments.profile, flags.values()
+        )
+        # The installer accepts every declared profile flag as policy input.
+        # Derive the renderer allowlist from that same complete key set so an
+        # INSTALL_* override cannot be accepted by the wrapper but rejected by
+        # the trusted renderer.
+        output_affecting_overrides = set(profile_keys)
         values = apply_overrides(values, output_affecting_overrides, arguments.override)
+        components = required_components(
+            values, arguments.claude_cli_required == "true"
+        )
+        policy_data = render_policy(
+            values,
+            arguments.profile,
+            arguments.language,
+            arguments.editor_choice,
+            components,
+        )
         universe = build_managed_universe(checkout, order, script_features)
         universe_collisions = {
             unicodedata.normalize("NFC", relative).casefold(): relative
@@ -735,6 +840,8 @@ def main(argv=None):
             arguments.profile,
             arguments.language,
             arguments.logical_home,
+            components,
+            policy_data,
         )
     except RenderError as error:
         if output and output_identity and os.path.isdir(output) and not os.path.islink(output):

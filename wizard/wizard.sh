@@ -69,12 +69,26 @@ _CLI_OVERRIDES=()
 # Internal helpers
 # ---------------------------------------------------------------------------
 _wizard_dir() {
-  local src
+  local src link dir
   src="${BASH_SOURCE[0]}"
   while [[ -h "$src" ]]; do
-    src="$(readlink "$src")"
+    link="$(/usr/bin/readlink "$src")" || return 1
+    case "$link" in
+      /*) src="$link" ;;
+      *)
+        case "$src" in
+          */*) dir="${src%/*}"; [[ -n "$dir" ]] || dir=/ ;;
+          *) dir=. ;;
+        esac
+        src="$dir/$link"
+        ;;
+    esac
   done
-  cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd
+  case "$src" in
+    */*) dir="${src%/*}"; [[ -n "$dir" ]] || dir=/ ;;
+    *) dir=. ;;
+  esac
+  cd -P "$dir" >/dev/null 2>&1 && pwd
 }
 
 _project_dir() {
@@ -82,10 +96,8 @@ _project_dir() {
 }
 
 _bool_normalize() {
-  local val
-  val="$(printf "%s" "${1:-}" | tr '[:upper:]' '[:lower:]')"
-  case "$val" in
-    1|true|yes|y|on) printf "true" ;;
+  case "${1:-}" in
+    1|[tT][rR][uU][eE]|[yY][eE][sS]|[yY]|[oO][nN]) printf "true" ;;
     *) printf "false" ;;
   esac
 }
@@ -267,7 +279,7 @@ _PROFILE_FILL_FORMATTER_PREFER="biome"
 _load_profile_preserving_values() {
   local profile="$1"
   local _saved_pairs=()
-  local _var _val _pair _restore_key _restore_val
+  local _var _val _pair _restore_key _restore_val _rc=0
   local _legacy_formatter_state=false
   _PROFILE_FILL_FORMATTER_PREFER="biome"
   for _var in $_CONFIG_ALLOWED_KEYS; do
@@ -284,6 +296,8 @@ _load_profile_preserving_values() {
   fi
 
   load_profile_config "$profile"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
   for _pair in "${_saved_pairs[@]+"${_saved_pairs[@]}"}"; do
     _restore_key="${_pair%%=*}"
     _restore_val="${_pair#*=}"
@@ -296,12 +310,15 @@ _load_profile_preserving_values() {
 
 fill_missing_profile_defaults() {
   local profile="$1"
+  local _rc=0
   case "$profile" in
     minimal|standard|full|custom) ;;
     *) return 1 ;;
   esac
 
   _load_profile_preserving_values "$profile"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
   _normalize_formatter_hooks "$_PROFILE_FILL_FORMATTER_PREFER"
 }
 
@@ -446,10 +463,9 @@ _restore_cli_overrides() {
 }
 
 # MDM 管理モードで注入された設定値を capture する（mdm/install-mdm.sh が
-# KIT_MDM_MANAGED=true とともに検証済み値を環境変数で渡す）。
-# manifest 復元（update）や保存済み config の再読込（fresh）は既存 env 値を
-# 無条件に上書きするため、復元後に _restore_cli_overrides でこの capture を
-# 再適用し、管理端末では MDM 管理者の設定を最優先にする。
+# KIT_MDM_MANAGED=true とともに検証済み値を環境変数で渡す）。管理モードは
+# target user の manifest/config を読まず、この capture だけから profile を
+# authoritative に再構築する。通常モードの復元経路には影響させない。
 # 対象は _CONFIG_KEYS の非空 env 値のみ（KIT_MDM_MANAGED 未設定なら何もしない）。
 #
 # 結果はグローバル配列 _MDM_ENV_OVERRIDES へ直接構築する
@@ -484,7 +500,7 @@ _wizard_mdm_managed() {
 _apply_mdm_managed_profile() {
   _wizard_mdm_managed || return 0
 
-  local _pair _key _value _profile="standard" _var
+  local _pair _key _value _profile="standard" _var _rc=0
   for _pair in "$@"; do
     _key="${_pair%%=*}"
     _value="${_pair#*=}"
@@ -507,6 +523,8 @@ _apply_mdm_managed_profile() {
 
   PROFILE="$_profile"
   load_profile_config "$PROFILE"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   # GUI/font side effects are opt-in. Self-mutating updaters are always off:
   # the pinned checkout and byte-attested deployment may change only when the
@@ -517,6 +535,8 @@ _apply_mdm_managed_profile() {
   ENABLE_FONTS_SETUP="false"
 
   _restore_cli_overrides "$@"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
   # User-scope Claude plugins mutate the same settings.json that MDM attests.
   # Keep plugin installation outside this authoritative deployment until those
   # CLI-owned keys have an independently validated expected-state schema.
@@ -525,7 +545,11 @@ _apply_mdm_managed_profile() {
   ENABLE_CODEX_PLUGIN="false"
   SELECTED_PLUGINS=""
   _normalize_formatter_hooks
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
   _normalize_codex_state
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   # _restore_config_from_manifest may already have loaded the old language.
   load_strings "${LANGUAGE:-en}"
@@ -533,6 +557,7 @@ _apply_mdm_managed_profile() {
 
 _load_config_preserving_cli_overrides() {
   local file="$1"
+  local _rc=0
   local _saved_overrides=()
   local _override
   while IFS= read -r _override; do
@@ -540,7 +565,11 @@ _load_config_preserving_cli_overrides() {
   done < <(_capture_cli_overrides)
 
   load_config "$file"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
   _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 }
 
 # Clear all wizard-prompted choices so the interactive flow asks again.
@@ -586,7 +615,7 @@ load_strings() {
 # Main entry point
 # ---------------------------------------------------------------------------
 run_wizard() {
-  local dir
+  local dir _rc=0
   dir="$(_project_dir)"
 
   # Source libraries
@@ -601,39 +630,70 @@ run_wizard() {
     [[ -n "$_override" ]] && _saved_cli+=("$_override")
   done < <(_capture_cli_overrides)
 
-  # MDM 管理モード（KIT_MDM_MANAGED=true）: 復元によるクロバーの前に
-  # MDM 注入 env を capture しておき、復元後に再適用する（R2-High）。
+  # MDM 管理モード（KIT_MDM_MANAGED=true）: wrapper が注入した現在の policy
+  # input を一度だけ capture し、target-user state から分離して再構築する。
   # capture はグローバル配列 _MDM_ENV_OVERRIDES へ直接構築される（R3-M）。
   _capture_mdm_env_overrides
   local _saved_mdm=("${_MDM_ENV_OVERRIDES[@]+"${_MDM_ENV_OVERRIDES[@]}"}")
 
+  # A managed deployment is an authoritative reconciliation, not a merge of
+  # target-user state.  The manifest and saved wizard config are both writable
+  # by that user, so neither may select the update path or contribute policy.
+  # Rebuild solely from the validated values supplied by the MDM wrapper and
+  # use the fresh deployment machinery to replace the managed surface.  Root's
+  # prior-inventory handoff remains the deletion authority for retired files.
+  if _wizard_mdm_managed; then
+    UPDATE_MODE="false"
+    _apply_mdm_managed_profile "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
+    _fill_noninteractive_defaults
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
+    load_strings "$LANGUAGE"
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
+    info "Non-interactive managed mode: PROFILE=$PROFILE LANGUAGE=$LANGUAGE"
+    return 0
+  fi
+
   if [[ "$UPDATE_MODE" == "true" ]]; then
     _restore_config_from_manifest
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     _restore_cli_overrides "${_saved_cli[@]+"${_saved_cli[@]}"}"
-    if _wizard_mdm_managed; then
-      _apply_mdm_managed_profile "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
-    else
-      _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
-      _normalize_codex_state
-    fi
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
+    _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
+    _normalize_codex_state
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     WIZARD_RESULT="deploy"
-    return
+    return 0
   fi
 
   _load_config_preserving_cli_overrides "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}"
-  if _wizard_mdm_managed; then
-    _apply_mdm_managed_profile "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
-  else
-    _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
-    _normalize_codex_state
-  fi
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
+  _restore_cli_overrides "${_saved_mdm[@]+"${_saved_mdm[@]}"}"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
+  _normalize_codex_state
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   # Non-interactive mode: fill defaults and return
   if [[ "$WIZARD_NONINTERACTIVE" == "true" ]]; then
     _fill_noninteractive_defaults
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     load_strings "$LANGUAGE"
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     info "Non-interactive mode: PROFILE=$PROFILE LANGUAGE=$LANGUAGE"
-    return
+    return 0
   fi
 
   # Detect saved config and offer to reuse

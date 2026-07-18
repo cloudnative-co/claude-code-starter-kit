@@ -31,7 +31,9 @@ CI はキットリポジトリの `.github/workflows/skill-web-content-extractio
 ### 公開URLの抽出
 
 ```bash
-node ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs "https://example.com/article"
+~/.claude/skills/web-content-extraction/scripts/run-node.sh \
+  ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs \
+  "https://example.com/article"
 ```
 
 - `fetch` で取得 → 安全オプションのJSDOMでDOM化 → `defuddle/node` で本文抽出 → Markdown化
@@ -46,7 +48,8 @@ node ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs "https://e
 ### ローカルHTMLファイルの抽出（外部通信なし）
 
 ```bash
-node ~/.claude/skills/web-content-extraction/scripts/defuddle-file.mjs ./page.html
+~/.claude/skills/web-content-extraction/scripts/run-node.sh \
+  ~/.claude/skills/web-content-extraction/scripts/defuddle-file.mjs ./page.html
 ```
 
 - ネットワーク通信を一切行わない。非公開HTMLに安全。
@@ -96,7 +99,10 @@ node ~/.claude/skills/web-content-extraction/scripts/defuddle-file.mjs ./page.ht
   `package.json` / `package-lock.json` を自動ロールバック**して元の版に戻す。破壊的リリースで
   skill が壊れない。
 - **スロットル**: 起動毎の負荷を避けるため **24時間に1回**だけチェック（`logs/.last-update-check`）。
-- **多重実行防止**: ロックファイル（`logs/.update.lock`）で同時起動セッションの競合を回避。
+- **多重実行防止**: ロックファイル（`logs/.update.lock`）で、依存 updater・kit update・
+  `npm ci` の競合を回避。通常終了と HUP / INT / TERM では所有 token を照合して解除する。
+  経過時間だけで stale lock を自動奪取すると複数 reclaimer が同時に所有権を得られるため、
+  既存 lock は時刻にかかわらず fail-closed で扱う。
 - **非ブロッキング**: `async` 実行なので起動を待たせない。
 - **結果**: すべて `logs/update.log` に記録（通知はログのみ）。
 
@@ -106,6 +112,10 @@ node ~/.claude/skills/web-content-extraction/scripts/defuddle-file.mjs ./page.ht
 cd ~/.claude/skills/web-content-extraction && npm run update:deps   # = update-deps.mjs --force
 tail -f ~/.claude/skills/web-content-extraction/logs/update.log
 ```
+
+`SIGKILL`・電源断等で lock が残った場合は、依存更新・kit setup・`npm ci` のプロセスが
+動いていないことを確認してから `logs/.update.lock` を明示削除し、setup または手動更新を
+再実行する。実行中プロセスを確認せずに lock を削除してはならない。
 
 > 注: 自動更新ゲートは `npm test` に依存する。テストが実抽出（HTML/PDF）を検証しているため
 > ゲートは実効的だが、サイト固有の挙動変化までは捕捉できない。重要更新後は実URLでの確認を推奨。

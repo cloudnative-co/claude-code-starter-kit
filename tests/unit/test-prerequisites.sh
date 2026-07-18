@@ -13,6 +13,43 @@ detect_os
 # shellcheck source=lib/prerequisites.sh
 source "$PROJECT_DIR/lib/prerequisites.sh"
 
+# GNU tool detection must consume complete version output under pipefail.
+# A short-circuiting reader makes this producer exit with SIGPIPE.
+_gnu_detect_saved_path="$PATH"
+_gnu_detect_saved_sed="$_GNU_SED"
+_gnu_detect_saved_awk="$_GNU_AWK"
+_gnu_detect_tmp="$(mktemp -d)"
+cat > "$_gnu_detect_tmp/version-tool" <<'EOF'
+#!/bin/bash
+case "${0##*/}" in
+  sed) marker="GNU sed" ;;
+  awk) marker="GNU Awk" ;;
+  *) exit 1 ;;
+esac
+printf '%s\n' "$marker"
+i=0
+while [[ "$i" -lt 10000 ]]; do
+  printf 'version-output-padding-%s\n' "$i"
+  i=$((i + 1))
+done
+EOF
+chmod +x "$_gnu_detect_tmp/version-tool"
+ln -s version-tool "$_gnu_detect_tmp/sed"
+ln -s version-tool "$_gnu_detect_tmp/awk"
+export PATH="$_gnu_detect_tmp:$_gnu_detect_saved_path"
+_GNU_SED=""
+_GNU_AWK=""
+if _detect_gnu_sed && _detect_gnu_awk \
+  && [[ "$_GNU_SED" == "sed" && "$_GNU_AWK" == "awk" ]]; then
+  pass "prerequisites: GNU tool detection consumes long version output"
+else
+  fail "prerequisites: GNU tool detection failed on long version output"
+fi
+export PATH="$_gnu_detect_saved_path"
+_GNU_SED="$_gnu_detect_saved_sed"
+_GNU_AWK="$_gnu_detect_saved_awk"
+rm -rf "$_gnu_detect_tmp"
+
 # MDM setup must never fall back to independently downloaded shell installers.
 _mdm_prereq_original_brew="$(declare -f _brew_is_usable)"
 _mdm_prereq_original_curl="$(declare -f curl 2>/dev/null || true)"
@@ -58,6 +95,29 @@ if ! _pkg_install jq >/dev/null 2>&1 \
 else
   fail "prerequisites: MDM fail mode attempted a package or Node install"
 fi
+
+# A malformed managed mode is a configuration error, never an alias for auto.
+# Reject it before resolving or acquiring any runtime or touching user state.
+export KIT_MDM_PREREQ_MODE=invalid
+rm -f "$_tmp_mdm_prereq/curl-called" "$_tmp_mdm_prereq/brew-called" \
+  "$_tmp_mdm_prereq/resolver-called"
+_invalid_orig_resolver="$(declare -f _mdm_resolve_private_node_toolchain)"
+_mdm_resolve_private_node_toolchain() {
+  : > "$_tmp_mdm_prereq/resolver-called"
+  return 0
+}
+if ! check_node >/dev/null 2>&1 \
+  && ! _ensure_homebrew >/dev/null 2>&1 \
+  && ! _install_node >/dev/null 2>&1 \
+  && [[ ! -e "$_tmp_mdm_prereq/resolver-called" \
+    && ! -e "$_tmp_mdm_prereq/curl-called" \
+    && ! -e "$_tmp_mdm_prereq/brew-called" ]]; then
+  pass "prerequisites: invalid managed prerequisite mode fails before mutation or download"
+else
+  fail "prerequisites: invalid managed prerequisite mode fell through to auto behavior"
+fi
+eval "$_invalid_orig_resolver"
+export KIT_MDM_PREREQ_MODE=fail
 
 _mdm_prereq_original_pkg_install="$(declare -f _pkg_install)"
 _pkg_install() { : > "$_tmp_mdm_prereq/pkg-called"; return 0; }
@@ -503,6 +563,885 @@ DISTRO_FAMILY="$_saved_distro_family"
 export PATH="$_saved_path"
 rm -rf "$_tmpdir"
 
+# ── MDM pinned Node activation and native hook CLI artifacts ──────────────
+
+_saved_home="$HOME"
+_saved_path="$PATH"
+_saved_mdm_managed="${KIT_MDM_MANAGED:-}"
+_saved_mdm_mode="${KIT_MDM_PREREQ_MODE:-}"
+_saved_mdm_require_node="${KIT_MDM_REQUIRE_NODE_RUNTIME:-}"
+_orig_mdm_arch="$(declare -f _mdm_current_darwin_arch)"
+_orig_mdm_toolchain="$(declare -f _mdm_resolve_private_node_toolchain)"
+_orig_mdm_download="$(declare -f _mdm_download_pinned_artifact)"
+_orig_mdm_codesign="$(declare -f _mdm_prereq_codesign)"
+_saved_biome_archive_sha="$_MDM_BIOME_ARM64_ARCHIVE_SHA256"
+_saved_biome_binary_sha="$_MDM_BIOME_ARM64_BINARY_SHA256"
+_saved_biome_package_sha="$_MDM_BIOME_ARM64_PACKAGE_SHA256"
+_saved_safety_archive_sha="$_MDM_CC_SAFETY_NET_ARCHIVE_SHA256"
+_saved_safety_js_sha="$_MDM_CC_SAFETY_NET_JS_SHA256"
+_saved_safety_package_sha="$_MDM_CC_SAFETY_NET_PACKAGE_SHA256"
+_tmpdir="$(mktemp -d)"
+_tmpdir="$(cd -P "$_tmpdir" && pwd -P)"
+export HOME="$_tmpdir/home"
+export KIT_MDM_MANAGED=true KIT_MDM_PREREQ_MODE=auto
+export KIT_MDM_REQUIRE_NODE_RUNTIME=true
+mkdir -p "$HOME" "$_tmpdir/artifacts/biome/package" \
+  "$_tmpdir/artifacts/safety/package/dist/bin" "$_tmpdir/fake"
+
+_mdm_test_node="$(_prereq_canonical_file "$(command -v node)")"
+
+# The target-user resolver must reproduce the privileged installer's canonical
+# official-tree digest, not merely trust a signed node executable. Use a small
+# local inventory to lock the canonicalization properties without downloading
+# release archives during the unit suite.
+_mdm_digest_root="$_tmpdir/node-digest-root"
+mkdir -p "$_mdm_digest_root/bin"
+ln -s "$_mdm_test_node" "$_mdm_digest_root/bin/node"
+printf 'payload\n' > "$_mdm_digest_root/payload.txt"
+printf \
+  'schema=1\nversion=v24.18.0\narch=arm64\nurl=%s\nsha256=%s\n' \
+  "$_MDM_NODE_ARM64_SOURCE_URL" "$_MDM_NODE_ARM64_SOURCE_SHA256" \
+  > "$_mdm_digest_root/$_MDM_NODE_PROVENANCE_FILE"
+chmod 755 "$_mdm_digest_root" "$_mdm_digest_root/bin"
+chmod 644 "$_mdm_digest_root/payload.txt"
+chmod 444 "$_mdm_digest_root/$_MDM_NODE_PROVENANCE_FILE"
+_mdm_digest_one="$(_mdm_private_node_content_sha256 \
+  "$_mdm_digest_root" "$_mdm_digest_root/bin/node" \
+  "$(id -u)" "$(id -g)" 2>/dev/null || true)"
+chmod 644 "$_mdm_digest_root/$_MDM_NODE_PROVENANCE_FILE"
+printf 'locally-issued marker changes do not affect release content\n' \
+  > "$_mdm_digest_root/$_MDM_NODE_PROVENANCE_FILE"
+chmod 444 "$_mdm_digest_root/$_MDM_NODE_PROVENANCE_FILE"
+_mdm_digest_marker_changed="$(_mdm_private_node_content_sha256 \
+  "$_mdm_digest_root" "$_mdm_digest_root/bin/node" \
+  "$(id -u)" "$(id -g)" 2>/dev/null || true)"
+printf 'tamper\n' >> "$_mdm_digest_root/payload.txt"
+_mdm_digest_payload_changed="$(_mdm_private_node_content_sha256 \
+  "$_mdm_digest_root" "$_mdm_digest_root/bin/node" \
+  "$(id -u)" "$(id -g)" 2>/dev/null || true)"
+chmod 666 "$_mdm_digest_root/payload.txt"
+_mdm_digest_writable_rc=0
+_mdm_private_node_content_sha256 \
+  "$_mdm_digest_root" "$_mdm_digest_root/bin/node" \
+  "$(id -u)" "$(id -g)" >/dev/null 2>&1 || _mdm_digest_writable_rc=$?
+if [[ "$_mdm_digest_one" =~ ^[0-9a-f]{64}$ \
+  && "$_mdm_digest_marker_changed" == "$_mdm_digest_one" \
+  && "$_mdm_digest_payload_changed" =~ ^[0-9a-f]{64}$ \
+  && "$_mdm_digest_payload_changed" != "$_mdm_digest_one" \
+  && "$_mdm_digest_writable_rc" -ne 0 ]]; then
+  pass "prerequisites: private Node canonical digest binds the official tree"
+else
+  fail "prerequisites: private Node canonical digest contract is incomplete"
+fi
+
+# Provenance is a byte-exact root-issued record. Stub only the ownership
+# predicate so the ordinary-user fixture can exercise the production reader.
+_mdm_provenance_marker="$_mdm_digest_root/$_MDM_NODE_PROVENANCE_FILE"
+_mdm_provenance_expected="$(printf \
+  'schema=1\nversion=v%s\narch=arm64\nurl=%s\nsha256=%s' \
+  "$_MDM_NODE_VERSION" "$_MDM_NODE_ARM64_SOURCE_URL" \
+  "$_MDM_NODE_ARM64_SOURCE_SHA256")"
+/bin/chmod 644 "$_mdm_provenance_marker"
+printf '%s\n' "$_mdm_provenance_expected" > "$_mdm_provenance_marker"
+/bin/chmod 444 "$_mdm_provenance_marker"
+_orig_mdm_root_owned="$(declare -f _prereq_root_owned_not_writable)"
+_prereq_root_owned_not_writable() {
+  [[ "$1" == "$_mdm_provenance_marker" ]]
+}
+_mdm_provenance_exact_rc=0
+_mdm_private_node_provenance_valid "$_mdm_digest_root" arm64 \
+  >/dev/null 2>&1 || _mdm_provenance_exact_rc=$?
+/bin/chmod 644 "$_mdm_provenance_marker"
+printf '\000' >> "$_mdm_provenance_marker"
+/bin/chmod 444 "$_mdm_provenance_marker"
+_mdm_provenance_nul_rc=0
+_mdm_private_node_provenance_valid "$_mdm_digest_root" arm64 \
+  >/dev/null 2>&1 || _mdm_provenance_nul_rc=$?
+/bin/chmod 644 "$_mdm_provenance_marker"
+printf '%s\n' "$_mdm_provenance_expected" > "$_mdm_provenance_marker"
+/bin/chmod 444 "$_mdm_provenance_marker"
+_mdm_provenance_restored_rc=0
+_mdm_private_node_provenance_valid "$_mdm_digest_root" arm64 \
+  >/dev/null 2>&1 || _mdm_provenance_restored_rc=$?
+eval "$_orig_mdm_root_owned"
+if [[ "$_mdm_provenance_exact_rc" -eq 0 \
+  && "$_mdm_provenance_nul_rc" -ne 0 \
+  && "$_mdm_provenance_restored_rc" -eq 0 ]]; then
+  pass "prerequisites: private Node provenance requires exact canonical bytes"
+else
+  fail "prerequisites: private Node provenance accepted trailing bytes"
+fi
+
+_mdm_resolver_source="$(declare -f _mdm_resolve_private_node_toolchain)"
+if [[ "$_mdm_resolver_source" == *'_mdm_private_node_content_sha256'* \
+  && "$_mdm_resolver_source" == *'_mdm_private_node_provenance_valid'* \
+  && "$_mdm_resolver_source" == *'_MDM_NODE_NPM_VERSION'* \
+  && "$_mdm_resolver_source" == *'process.arch'* \
+  && "$_MDM_NODE_ARM64_CONTENT_SHA256" == \
+    3b87679d20e675468b9281755c823b528b6406ba7af6cc7086ef00e5c8af6533 \
+  && "$_MDM_NODE_X64_CONTENT_SHA256" == \
+    a9f69014ea08981c1b1822f565a39ae6970a319518ebf3e43d96ba9fc70aa209 ]]; then
+  pass "prerequisites: private Node resolver pins provenance, arch, npm, and tree digest"
+else
+  fail "prerequisites: private Node resolver omitted a pinned runtime binding"
+fi
+
+_mdm_resolver_gid_contract="$(
+  printf '%s\n' "$_mdm_resolver_source" | /usr/bin/awk '
+    /for dir in \/ \/Library "\/Library\/Application Support"/ {
+      block = "system"; system_seen = 1; next
+    }
+    /for dir in "\/Library\/Application Support\/ClaudeCodeStarterKit"/ {
+      block = "managed"; managed_seen = 1; next
+    }
+    block == "system" && /_prereq_stat_gid/ { system_gid = 1 }
+    block == "managed" && /_prereq_stat_gid/ && /== 0/ {
+      managed_gid_zero = 1
+    }
+    block != "" && /^[[:space:]]*done/ { block = "" }
+    END {
+      printf "%d:%d:%d:%d", system_seen + 0, system_gid + 0,
+        managed_seen + 0, managed_gid_zero + 0
+    }
+  '
+)"
+if [[ "$_mdm_resolver_gid_contract" == "1:0:1:1" ]]; then
+  pass "prerequisites: private Node resolver scopes gid 0 to managed directories"
+else
+  fail "prerequisites: private Node resolver gid trust boundary drifted"
+fi
+
+# Component publication must preserve the candidate inode for both creation
+# and replacement, then remove the old leaf without legacy backup residue.
+_mdm_test_inode() {
+  if [[ "$(/usr/bin/uname -s 2>/dev/null)" == Darwin ]]; then
+    /usr/bin/stat -f '%d:%i' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%d:%i' "$1" 2>/dev/null
+  fi
+}
+_mdm_atomic_parent="$_tmpdir/atomic-parent"
+_mdm_atomic_other_parent="$_tmpdir/atomic-other-parent"
+/bin/mkdir -p "$_mdm_atomic_parent" "$_mdm_atomic_other_parent"
+_mdm_atomic_destination="$_mdm_atomic_parent/component"
+_mdm_atomic_candidate="$_mdm_atomic_parent/.candidate-create"
+/bin/mkdir "$_mdm_atomic_candidate"
+printf 'created\n' > "$_mdm_atomic_candidate/payload"
+_mdm_atomic_create_inode="$(_mdm_test_inode "$_mdm_atomic_candidate")"
+_mdm_atomic_create_rc=0
+_mdm_atomic_replace_component_leaf \
+  "$_mdm_atomic_candidate" "$_mdm_atomic_destination" \
+  >/dev/null 2>&1 || _mdm_atomic_create_rc=$?
+_mdm_atomic_create_after="$(_mdm_test_inode \
+  "$_mdm_atomic_destination" 2>/dev/null || true)"
+if [[ "$_mdm_atomic_create_rc" -eq 0 \
+  && "$_mdm_atomic_create_after" == "$_mdm_atomic_create_inode" \
+  && "$(< "$_mdm_atomic_destination/payload")" == created \
+  && ! -e "$_mdm_atomic_candidate" && ! -L "$_mdm_atomic_candidate" \
+  && -z "$(compgen -G "$_mdm_atomic_parent/.starter-kit-old.*" || true)" ]]; then
+  pass "prerequisites: atomic component create publishes the candidate inode"
+else
+  fail "prerequisites: atomic component create changed the candidate identity"
+fi
+
+_mdm_atomic_candidate="$_mdm_atomic_parent/.candidate-swap"
+/bin/mkdir "$_mdm_atomic_candidate"
+printf 'swapped\n' > "$_mdm_atomic_candidate/payload"
+_mdm_atomic_swap_inode="$(_mdm_test_inode "$_mdm_atomic_candidate")"
+_mdm_atomic_swap_rc=0
+_mdm_atomic_replace_component_leaf \
+  "$_mdm_atomic_candidate" "$_mdm_atomic_destination" \
+  >/dev/null 2>&1 || _mdm_atomic_swap_rc=$?
+_mdm_atomic_swap_after="$(_mdm_test_inode \
+  "$_mdm_atomic_destination" 2>/dev/null || true)"
+if [[ "$_mdm_atomic_swap_rc" -eq 0 \
+  && "$_mdm_atomic_swap_after" == "$_mdm_atomic_swap_inode" \
+  && "$(< "$_mdm_atomic_destination/payload")" == swapped \
+  && ! -e "$_mdm_atomic_candidate" && ! -L "$_mdm_atomic_candidate" \
+  && -z "$(compgen -G "$_mdm_atomic_parent/.starter-kit-old.*" || true)" ]]; then
+  pass "prerequisites: atomic component swap removes the old candidate leaf"
+else
+  fail "prerequisites: atomic component swap left stale replacement state"
+fi
+
+_mdm_atomic_cross_candidate="$_mdm_atomic_other_parent/candidate"
+/bin/mkdir "$_mdm_atomic_cross_candidate"
+printf 'cross-parent\n' > "$_mdm_atomic_cross_candidate/payload"
+_mdm_atomic_cross_inode="$(_mdm_test_inode "$_mdm_atomic_cross_candidate")"
+_mdm_atomic_destination_inode="$(_mdm_test_inode "$_mdm_atomic_destination")"
+_mdm_atomic_cross_rc=0
+_mdm_atomic_replace_component_leaf \
+  "$_mdm_atomic_cross_candidate" "$_mdm_atomic_destination" \
+  >/dev/null 2>&1 || _mdm_atomic_cross_rc=$?
+if [[ "$_mdm_atomic_cross_rc" -ne 0 \
+  && "$(_mdm_test_inode "$_mdm_atomic_cross_candidate")" \
+    == "$_mdm_atomic_cross_inode" \
+  && "$(_mdm_test_inode "$_mdm_atomic_destination")" \
+    == "$_mdm_atomic_destination_inode" \
+  && "$(< "$_mdm_atomic_cross_candidate/payload")" == cross-parent \
+  && "$(< "$_mdm_atomic_destination/payload")" == swapped \
+  && -z "$(compgen -G "$_mdm_atomic_parent/.starter-kit-old.*" || true)" \
+  && -z "$(compgen -G "$_mdm_atomic_other_parent/.starter-kit-old.*" || true)" ]]; then
+  pass "prerequisites: atomic component replacement rejects cross-parent input"
+else
+  fail "prerequisites: cross-parent rejection mutated a component leaf"
+fi
+
+# Reproduce the macOS/Linux RENAME_SWAP type race deterministically by
+# injecting a directory replacement immediately after the embedded helper has
+# inspected the old link.  The exact production Python body is used; only the
+# concurrent rename is inserted.  A failed publication must reverse its one
+# swap and leave the directory inode and contents at the destination path.
+_mdm_atomic_link_parent="$_tmpdir/atomic-link-race"
+_mdm_atomic_link_destination="$_mdm_atomic_link_parent/node_modules"
+_mdm_atomic_link_candidate="$_mdm_atomic_link_parent/.link-candidate"
+_mdm_atomic_link_race_dir="$_mdm_atomic_link_parent/.race-directory"
+_mdm_atomic_link_prior="$_mdm_atomic_link_parent/.race-prior"
+_mdm_atomic_link_python="$_mdm_atomic_link_parent/race-helper.py"
+/bin/mkdir -p "$_mdm_atomic_link_race_dir"
+/bin/ln -s /tmp/original-node-modules "$_mdm_atomic_link_destination"
+/bin/ln -s /tmp/replacement-node-modules "$_mdm_atomic_link_candidate"
+printf 'preserve\n' > "$_mdm_atomic_link_race_dir/keep.txt"
+_mdm_atomic_link_race_inode="$(_mdm_test_inode "$_mdm_atomic_link_race_dir")"
+declare -f _mdm_atomic_replace_component_leaf | /usr/bin/awk '
+  /<<.*PY/ { capture = 1; next }
+  capture && /^PY$/ { capture = 0; exit }
+  capture {
+    if ($0 == "    operation = \"create\" if destination_before is None else \"swap\"") {
+      print "    if replacement_kind == \"link\":"
+      print "        rename_atomic(destination_name, \".race-prior\", \"create\")"
+      print "        rename_atomic(\".race-directory\", destination_name, \"create\")"
+      found++
+    }
+    print
+  }
+  END { if (found != 1) exit 97 }
+' > "$_mdm_atomic_link_python"
+_mdm_atomic_link_race_rc=0
+/usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+  /usr/bin/python3 -I -B "$_mdm_atomic_link_python" \
+    "$_mdm_atomic_link_candidate" "$_mdm_atomic_link_destination" link \
+    >/dev/null 2>&1 || _mdm_atomic_link_race_rc=$?
+if [[ "$_mdm_atomic_link_race_rc" -ne 0 \
+  && -d "$_mdm_atomic_link_destination" \
+  && ! -L "$_mdm_atomic_link_destination" \
+  && "$(_mdm_test_inode "$_mdm_atomic_link_destination")" \
+    == "$_mdm_atomic_link_race_inode" \
+  && "$(< "$_mdm_atomic_link_destination/keep.txt")" == preserve \
+  && ! -e "$_mdm_atomic_link_candidate" \
+  && ! -L "$_mdm_atomic_link_candidate" \
+  && -L "$_mdm_atomic_link_prior" \
+  && "$(/usr/bin/readlink "$_mdm_atomic_link_prior")" \
+    == /tmp/original-node-modules \
+  && ! -e "$_mdm_atomic_link_race_dir" \
+  && ! -L "$_mdm_atomic_link_race_dir" ]]; then
+  pass "prerequisites: link swap race restores the directory and removes only its exact candidate"
+else
+  fail "prerequisites: link swap race displaced or changed a replacement directory"
+fi
+
+# Any error after the atomic swap but before postcondition capture must reverse
+# the exact exchange. This is the WCE migration failure window where the old
+# real dependency directory must return at its original inode.
+_mdm_atomic_post_parent="$_tmpdir/atomic-post-publish"
+_mdm_atomic_post_destination="$_mdm_atomic_post_parent/node_modules"
+_mdm_atomic_post_candidate="$_mdm_atomic_post_parent/.candidate"
+_mdm_atomic_post_python="$_mdm_atomic_post_parent/post-publish-helper.py"
+/bin/mkdir -p "$_mdm_atomic_post_destination"
+printf 'original\n' > "$_mdm_atomic_post_destination/keep.txt"
+/bin/ln -s /tmp/replacement-node-modules "$_mdm_atomic_post_candidate"
+_mdm_atomic_post_inode="$(_mdm_test_inode "$_mdm_atomic_post_destination")"
+declare -f _mdm_atomic_replace_component_leaf | /usr/bin/awk '
+  /<<.*PY/ { capture = 1; next }
+  capture && /^PY$/ { capture = 0; exit }
+  capture {
+    print
+    if ($0 == "    published = True") {
+      print "    raise OSError(errno.EIO, \"injected post-publication failure\")"
+      found++
+    }
+  }
+  END { if (found != 1) exit 97 }
+' > "$_mdm_atomic_post_python"
+_mdm_atomic_post_rc=0
+/usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+  /usr/bin/python3 -I -B "$_mdm_atomic_post_python" \
+    "$_mdm_atomic_post_candidate" "$_mdm_atomic_post_destination" \
+    link-preserve-dir >/dev/null 2>&1 || _mdm_atomic_post_rc=$?
+if [[ "$_mdm_atomic_post_rc" -ne 0 \
+  && -d "$_mdm_atomic_post_destination" \
+  && ! -L "$_mdm_atomic_post_destination" \
+  && "$(_mdm_test_inode "$_mdm_atomic_post_destination")" \
+    == "$_mdm_atomic_post_inode" \
+  && "$(< "$_mdm_atomic_post_destination/keep.txt")" == original \
+  && ! -e "$_mdm_atomic_post_candidate" \
+  && ! -L "$_mdm_atomic_post_candidate" ]]; then
+  pass "prerequisites: post-publication failure restores the exact preserved directory"
+else
+  fail "prerequisites: post-publication failure left a partial activation"
+fi
+
+# Once rollback has restored the preserved directory, a later durability
+# failure must not swap the rejected activation back into the fixed leaf.
+_mdm_atomic_inverse_parent="$_tmpdir/atomic-inverse-failure"
+_mdm_atomic_inverse_destination="$_mdm_atomic_inverse_parent/node_modules"
+_mdm_atomic_inverse_candidate="$_mdm_atomic_inverse_parent/.candidate"
+_mdm_atomic_inverse_python="$_mdm_atomic_inverse_parent/inverse-helper.py"
+/bin/mkdir -p "$_mdm_atomic_inverse_destination"
+printf 'preserved\n' > "$_mdm_atomic_inverse_destination/keep.txt"
+/bin/ln -s /tmp/rejected-node-modules "$_mdm_atomic_inverse_candidate"
+_mdm_atomic_inverse_inode="$(_mdm_test_inode \
+  "$_mdm_atomic_inverse_destination")"
+_mdm_atomic_replace_component_leaf \
+  "$_mdm_atomic_inverse_candidate" "$_mdm_atomic_inverse_destination" \
+  link-preserve-dir >/dev/null 2>&1
+_mdm_atomic_inverse_token="$_MDM_COMPONENT_PRESERVE_TOKEN"
+declare -f _mdm_rollback_preserved_component_leaf | /usr/bin/awk '
+  /<<.*PY/ { capture = 1; next }
+  capture && /^PY$/ { capture = 0; exit }
+  capture {
+    print
+    if ($0 == "        rename_atomic(preserved_name, destination_name, \"swap\")") {
+      print "        raise OSError(errno.EIO, \"injected inverse durability failure\")"
+      found++
+    }
+  }
+  END { if (found != 1) exit 97 }
+' > "$_mdm_atomic_inverse_python"
+_mdm_atomic_inverse_rc=0
+/usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+  /usr/bin/python3 -I -B "$_mdm_atomic_inverse_python" \
+    "$_mdm_atomic_inverse_candidate" "$_mdm_atomic_inverse_destination" \
+    "$_mdm_atomic_inverse_token" >/dev/null 2>&1 \
+    || _mdm_atomic_inverse_rc=$?
+if [[ "$_mdm_atomic_inverse_rc" -ne 0 \
+  && -d "$_mdm_atomic_inverse_destination" \
+  && ! -L "$_mdm_atomic_inverse_destination" \
+  && "$(_mdm_test_inode "$_mdm_atomic_inverse_destination")" \
+    == "$_mdm_atomic_inverse_inode" \
+  && "$(< "$_mdm_atomic_inverse_destination/keep.txt")" == preserved \
+  && -L "$_mdm_atomic_inverse_candidate" \
+  && "$(/usr/bin/readlink "$_mdm_atomic_inverse_candidate")" \
+    == /tmp/rejected-node-modules ]]; then
+  pass "prerequisites: rollback durability failure never republishes the rejected link"
+else
+  fail "prerequisites: rollback durability failure republished the rejected link"
+fi
+
+# Finalize is allowed to remove only the token-bound old file/link. Replacing
+# that random name before finalize must fail without deleting the replacement.
+_mdm_atomic_finalize_parent="$_tmpdir/atomic-finalize-race"
+_mdm_atomic_finalize_destination="$_mdm_atomic_finalize_parent/node_modules"
+_mdm_atomic_finalize_candidate="$_mdm_atomic_finalize_parent/.candidate"
+_mdm_atomic_finalize_captured="$_mdm_atomic_finalize_parent/.captured-old"
+/bin/mkdir -p "$_mdm_atomic_finalize_parent"
+/bin/ln -s /tmp/old-node-modules "$_mdm_atomic_finalize_destination"
+/bin/ln -s /tmp/published-node-modules "$_mdm_atomic_finalize_candidate"
+_mdm_atomic_replace_component_leaf \
+  "$_mdm_atomic_finalize_candidate" "$_mdm_atomic_finalize_destination" \
+  link-preserve-dir >/dev/null 2>&1
+_mdm_atomic_finalize_token="$_MDM_COMPONENT_PRESERVE_TOKEN"
+/bin/mv "$_mdm_atomic_finalize_candidate" "$_mdm_atomic_finalize_captured"
+/bin/ln -s /tmp/foreign-finalize "$_mdm_atomic_finalize_candidate"
+_mdm_atomic_finalize_rc=0
+_mdm_finalize_preserved_component_leaf \
+  "$_mdm_atomic_finalize_candidate" "$_mdm_atomic_finalize_destination" \
+  "$_mdm_atomic_finalize_token" >/dev/null 2>&1 \
+  || _mdm_atomic_finalize_rc=$?
+if [[ "$_mdm_atomic_finalize_rc" -ne 0 \
+  && "$(/usr/bin/readlink "$_mdm_atomic_finalize_destination")" \
+    == /tmp/published-node-modules \
+  && "$(/usr/bin/readlink "$_mdm_atomic_finalize_candidate")" \
+    == /tmp/foreign-finalize \
+  && "$(/usr/bin/readlink "$_mdm_atomic_finalize_captured")" \
+    == /tmp/old-node-modules ]]; then
+  pass "prerequisites: finalize refuses a replaced backup path without deleting it"
+else
+  fail "prerequisites: finalize deleted or displaced a replaced backup path"
+fi
+
+# A malformed token or replaced published path must leave both the preserved
+# directory and every current path object untouched.
+_mdm_atomic_token_parent="$_tmpdir/atomic-token-race"
+_mdm_atomic_token_destination="$_mdm_atomic_token_parent/node_modules"
+_mdm_atomic_token_candidate="$_mdm_atomic_token_parent/.candidate"
+_mdm_atomic_token_published="$_mdm_atomic_token_parent/.captured-published"
+/bin/mkdir -p "$_mdm_atomic_token_destination"
+printf 'token-preserve\n' > "$_mdm_atomic_token_destination/keep.txt"
+/bin/ln -s /tmp/token-published "$_mdm_atomic_token_candidate"
+_mdm_atomic_token_inode="$(_mdm_test_inode "$_mdm_atomic_token_destination")"
+_mdm_atomic_replace_component_leaf \
+  "$_mdm_atomic_token_candidate" "$_mdm_atomic_token_destination" \
+  link-preserve-dir >/dev/null 2>&1
+_mdm_atomic_token_value="$_MDM_COMPONENT_PRESERVE_TOKEN"
+_mdm_atomic_token_bad="${_mdm_atomic_token_value%?}x"
+_mdm_atomic_token_rc=0
+_mdm_rollback_preserved_component_leaf \
+  "$_mdm_atomic_token_candidate" "$_mdm_atomic_token_destination" \
+  "$_mdm_atomic_token_bad" >/dev/null 2>&1 || _mdm_atomic_token_rc=$?
+_mdm_atomic_token_first_ok=false
+if [[ "$_mdm_atomic_token_rc" -ne 0 \
+  && -d "$_mdm_atomic_token_candidate" \
+  && "$(_mdm_test_inode "$_mdm_atomic_token_candidate")" \
+    == "$_mdm_atomic_token_inode" \
+  && "$(< "$_mdm_atomic_token_candidate/keep.txt")" == token-preserve \
+  && "$(/usr/bin/readlink "$_mdm_atomic_token_destination")" \
+    == /tmp/token-published ]]; then
+  _mdm_atomic_token_first_ok=true
+fi
+/bin/mv "$_mdm_atomic_token_destination" "$_mdm_atomic_token_published"
+/bin/ln -s /tmp/foreign-published "$_mdm_atomic_token_destination"
+_mdm_atomic_token_rc=0
+_mdm_rollback_preserved_component_leaf \
+  "$_mdm_atomic_token_candidate" "$_mdm_atomic_token_destination" \
+  "$_mdm_atomic_token_value" >/dev/null 2>&1 || _mdm_atomic_token_rc=$?
+if [[ "$_mdm_atomic_token_first_ok" == true \
+  && "$_mdm_atomic_token_rc" -ne 0 \
+  && -d "$_mdm_atomic_token_candidate" \
+  && "$(_mdm_test_inode "$_mdm_atomic_token_candidate")" \
+    == "$_mdm_atomic_token_inode" \
+  && "$(/usr/bin/readlink "$_mdm_atomic_token_destination")" \
+    == /tmp/foreign-published \
+  && "$(/usr/bin/readlink "$_mdm_atomic_token_published")" \
+    == /tmp/token-published ]]; then
+  pass "prerequisites: rollback token and published-path replacement are non-destructive"
+else
+  fail "prerequisites: rollback changed state after token or path replacement"
+fi
+
+# A caller must not clean a candidate pathname after the fd-bound helper
+# returns. Reproduce a replacement after the helper captured its candidate;
+# exact cleanup must leave the foreign symlink untouched.
+_mdm_atomic_foreign_parent="$_tmpdir/atomic-foreign-candidate"
+_mdm_atomic_foreign_destination="$_mdm_atomic_foreign_parent/tool"
+_mdm_atomic_foreign_candidate="$_mdm_atomic_foreign_parent/.candidate"
+_mdm_atomic_foreign_captured="$_mdm_atomic_foreign_parent/.captured-candidate"
+_mdm_atomic_foreign_python="$_mdm_atomic_foreign_parent/foreign-helper.py"
+/bin/mkdir -p "$_mdm_atomic_foreign_parent"
+/bin/ln -s /tmp/original-tool "$_mdm_atomic_foreign_destination"
+/bin/ln -s /tmp/our-candidate "$_mdm_atomic_foreign_candidate"
+declare -f _mdm_atomic_replace_component_leaf | /usr/bin/awk '
+  /<<.*PY/ { capture = 1; next }
+  capture && /^PY$/ { capture = 0; exit }
+  capture {
+    print
+    if ($0 == "    candidate_before = at(candidate_name)") {
+      print "    os.rename(candidate_name, \".captured-candidate\", src_dir_fd=parent, dst_dir_fd=parent)"
+      print "    os.symlink(\"/tmp/foreign-candidate\", candidate_name, dir_fd=parent)"
+      print "    raise ValueError(\"injected candidate replacement\")"
+      found++
+    }
+  }
+  END { if (found != 1) exit 97 }
+' > "$_mdm_atomic_foreign_python"
+_mdm_atomic_foreign_rc=0
+/usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+  /usr/bin/python3 -I -B "$_mdm_atomic_foreign_python" \
+    "$_mdm_atomic_foreign_candidate" "$_mdm_atomic_foreign_destination" link \
+    >/dev/null 2>&1 || _mdm_atomic_foreign_rc=$?
+if [[ "$_mdm_atomic_foreign_rc" -ne 0 \
+  && -L "$_mdm_atomic_foreign_destination" \
+  && "$(/usr/bin/readlink "$_mdm_atomic_foreign_destination")" \
+    == /tmp/original-tool \
+  && -L "$_mdm_atomic_foreign_candidate" \
+  && "$(/usr/bin/readlink "$_mdm_atomic_foreign_candidate")" \
+    == /tmp/foreign-candidate \
+  && -L "$_mdm_atomic_foreign_captured" \
+  && "$(/usr/bin/readlink "$_mdm_atomic_foreign_captured")" \
+    == /tmp/our-candidate ]]; then
+  pass "prerequisites: failed atomic helper does not unlink a foreign candidate replacement"
+else
+  fail "prerequisites: failed atomic helper deleted or displaced a foreign candidate replacement"
+fi
+unset -f _mdm_test_inode
+
+cat > "$_tmpdir/artifacts/biome/package/biome" <<'EOF'
+#!/bin/bash
+printf 'Version: 2.5.4\n'
+EOF
+printf '%s\n' '{"name":"@biomejs/cli-darwin-arm64","version":"2.5.4"}' \
+  > "$_tmpdir/artifacts/biome/package/package.json"
+chmod 755 "$_tmpdir/artifacts/biome/package/biome"
+( cd "$_tmpdir/artifacts/biome" && /usr/bin/tar -czf ../biome.tgz package )
+
+cat > "$_tmpdir/artifacts/safety/package/dist/bin/cc-safety-net.js" <<'EOF'
+if (process.argv.includes("--version")) process.stdout.write("1.0.6\n");
+EOF
+printf '%s\n' '{"name":"cc-safety-net","version":"1.0.6"}' \
+  > "$_tmpdir/artifacts/safety/package/package.json"
+( cd "$_tmpdir/artifacts/safety" && /usr/bin/tar -czf ../safety.tgz package )
+
+_MDM_BIOME_ARM64_ARCHIVE_SHA256="$(_prereq_sha256_file "$_tmpdir/artifacts/biome.tgz")"
+_MDM_BIOME_ARM64_BINARY_SHA256="$(_prereq_sha256_file "$_tmpdir/artifacts/biome/package/biome")"
+_MDM_BIOME_ARM64_PACKAGE_SHA256="$(_prereq_sha256_file "$_tmpdir/artifacts/biome/package/package.json")"
+_MDM_CC_SAFETY_NET_ARCHIVE_SHA256="$(_prereq_sha256_file "$_tmpdir/artifacts/safety.tgz")"
+_MDM_CC_SAFETY_NET_JS_SHA256="$(_prereq_sha256_file "$_tmpdir/artifacts/safety/package/dist/bin/cc-safety-net.js")"
+_MDM_CC_SAFETY_NET_PACKAGE_SHA256="$(_prereq_sha256_file "$_tmpdir/artifacts/safety/package/package.json")"
+
+_mdm_current_darwin_arch() { printf '%s' arm64; }
+_mdm_resolve_private_node_toolchain() {
+  _MDM_PREREQ_NODE="$_mdm_test_node"
+  _MDM_PREREQ_NPM="$_tmpdir/fake/npm"
+  KIT_MDM_NODE_RUNTIME_ROOT="$_tmpdir/private-node"
+  KIT_MDM_NODE_PATH="$_MDM_PREREQ_NODE"
+  KIT_MDM_NPM_PATH="$_MDM_PREREQ_NPM"
+  export KIT_MDM_NODE_RUNTIME_ROOT KIT_MDM_NODE_PATH KIT_MDM_NPM_PATH
+}
+_mdm_download_pinned_artifact() {
+  local url="$1" expected="$2" destination="$3" source
+  case "$url" in
+    "$_MDM_BIOME_ARM64_URL") source="$_tmpdir/artifacts/biome.tgz" ;;
+    "$_MDM_CC_SAFETY_NET_URL") source="$_tmpdir/artifacts/safety.tgz" ;;
+    *) return 90 ;;
+  esac
+  [[ "$(_prereq_sha256_file "$source")" == "$expected" ]] || return 91
+  printf '%s\n' "$url" >> "$_tmpdir/downloads.log"
+  /bin/cp "$source" "$destination"
+}
+cat > "$_tmpdir/fake/npm" <<EOF
+#!/bin/bash
+: > "$_tmpdir/npm-called"
+exit 99
+EOF
+chmod +x "$_tmpdir/fake/npm"
+export PATH="$_tmpdir/fake:/usr/bin:/bin"
+
+# The managed requirement is authoritative and strict. Profiles with no Node
+# consumer skip it; malformed values fail instead of silently selecting PATH.
+export KIT_MDM_REQUIRE_NODE_RUNTIME=false
+run_func check_node
+_node_skip_rc="$_RF_RC"
+export KIT_MDM_REQUIRE_NODE_RUNTIME=invalid
+run_func check_node
+_node_invalid_rc="$_RF_RC"
+if [[ "$_node_skip_rc" -eq 0 && "$_node_invalid_rc" -ne 0 ]]; then
+  pass "prerequisites: MDM Node requirement skips false and rejects malformed values"
+else
+  fail "prerequisites: MDM Node requirement flag was not enforced strictly"
+fi
+
+export KIT_MDM_REQUIRE_NODE_RUNTIME=true KIT_MDM_PREREQ_MODE=auto
+run_func check_node
+if assert_exit_code 0 "$_RF_RC" \
+  && [[ -L "$HOME/.local/bin/node" ]] \
+  && [[ "$(/usr/bin/readlink "$HOME/.local/bin/node")" == "$_mdm_test_node" ]]; then
+  pass "prerequisites: MDM auto activates only the exact private Node path"
+else
+  fail "prerequisites: MDM auto did not create the exact private Node activation"
+fi
+
+/bin/rm -f "$HOME/.local/bin/node"
+export KIT_MDM_PREREQ_MODE=fail
+run_func check_node
+if [[ "$_RF_RC" -eq 0 && -L "$HOME/.local/bin/node" \
+  && "$(/usr/bin/readlink "$HOME/.local/bin/node")" == "$_mdm_test_node" \
+  && ! -e "$_tmpdir/downloads.log" ]]; then
+  pass "prerequisites: MDM fail activates a preseeded private Node tree offline"
+else
+  fail "prerequisites: MDM fail did not create the missing offline activation"
+fi
+
+/bin/rm -f "$HOME/.local/bin/node"
+/bin/ln -s "$_tmpdir/fake/node" "$HOME/.local/bin/node"
+run_func check_node
+if [[ "$_RF_RC" -eq 0 \
+  && "$(/usr/bin/readlink "$HOME/.local/bin/node")" == "$_mdm_test_node" \
+  && ! -e "$_tmpdir/downloads.log" ]]; then
+  pass "prerequisites: MDM fail repairs only the user activation offline"
+else
+  fail "prerequisites: MDM fail retained an invalid Node activation"
+fi
+
+/bin/rm -f "$HOME/.local/bin/node"
+/bin/mkdir "$HOME/.local/bin/node"
+printf 'user data\n' > "$HOME/.local/bin/node/keep.txt"
+run_func check_node
+if [[ "$_RF_RC" -ne 0 && -d "$HOME/.local/bin/node" \
+  && "$(< "$HOME/.local/bin/node/keep.txt")" == 'user data' \
+  && -z "$(compgen -G "$HOME/.local/bin/.node.*" || true)" ]]; then
+  pass "prerequisites: MDM fail never replaces or deletes a Node activation directory"
+else
+  fail "prerequisites: MDM fail mutated a user-owned Node activation directory"
+fi
+/bin/rm -rf "$HOME/.local/bin/node"
+/bin/ln -s "$_mdm_test_node" "$HOME/.local/bin/node"
+
+# PATH shadows and hostile pre-created leaves are never accepted as baselines.
+cat > "$_tmpdir/fake/biome" <<'EOF'
+#!/bin/bash
+printf 'Version: 9.9.9\n'
+EOF
+cat > "$_tmpdir/fake/cc-safety-net" <<'EOF'
+#!/bin/bash
+printf '9.9.9\n'
+EOF
+chmod +x "$_tmpdir/fake/biome" "$_tmpdir/fake/cc-safety-net"
+_fake_biome_rc=0 _fake_safety_rc=0
+check_mdm_biome_baseline >/dev/null 2>&1 || _fake_biome_rc=$?
+check_mdm_cc_safety_net_baseline >/dev/null 2>&1 || _fake_safety_rc=$?
+if [[ "$_fake_biome_rc" -ne 0 && "$_fake_safety_rc" -ne 0 ]]; then
+  pass "prerequisites: MDM fail rejects arbitrary PATH hook binaries"
+else
+  fail "prerequisites: MDM fail trusted an arbitrary PATH hook binary"
+fi
+
+mkdir -p "$HOME/.local/bin/biome" "$_tmpdir/external-biome"
+printf 'preserve\n' > "$HOME/.local/bin/biome/untrusted"
+printf 'preserve\n' > "$_tmpdir/external-biome/preserve"
+mkdir -p "$HOME/.local/lib/claude-code-starter-kit/biome"
+ln -s "$_tmpdir/external-biome" \
+  "$HOME/.local/lib/claude-code-starter-kit/biome/2.5.4"
+export KIT_MDM_PREREQ_MODE=auto
+_auto_biome_dir_rc=0
+install_mdm_biome >/dev/null 2>&1 || _auto_biome_dir_rc=$?
+if [[ "$_auto_biome_dir_rc" -ne 0 \
+  && "$(< "$HOME/.local/bin/biome/untrusted")" == preserve ]]; then
+  pass "prerequisites: MDM component link never replaces a user-owned directory"
+else
+  fail "prerequisites: MDM component link mutated a user-owned directory"
+fi
+/bin/rm -rf "$HOME/.local/bin/biome"
+_auto_biome_rc=0 _auto_safety_rc=0
+install_mdm_biome >/dev/null 2>&1 || _auto_biome_rc=$?
+install_mdm_cc_safety_net >/dev/null 2>&1 || _auto_safety_rc=$?
+if [[ "$_auto_biome_rc" -eq 0 && "$_auto_safety_rc" -eq 0 \
+  && "$KIT_MDM_BIOME_COMPONENT_ROOT" == \
+    "$HOME/.local/lib/claude-code-starter-kit/biome/2.5.4" \
+  && "$KIT_MDM_BIOME_COMMAND_PATH" == \
+    "$HOME/.local/lib/claude-code-starter-kit/biome/2.5.4/biome" \
+  && "$KIT_MDM_CC_SAFETY_NET_COMPONENT_ROOT" == \
+    "$HOME/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6" \
+  && "$KIT_MDM_CC_SAFETY_NET_COMMAND_PATH" == \
+    "$HOME/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin/cc-safety-net" \
+  && -f "$_tmpdir/external-biome/preserve" \
+  && ! -e "$_tmpdir/npm-called" \
+  && "$(wc -l < "$_tmpdir/downloads.log" | /usr/bin/tr -d '[:space:]')" == 2 ]]; then
+  pass "prerequisites: MDM auto converges hook CLIs from pinned native artifacts"
+else
+  fail "prerequisites: MDM pinned hook CLI installation did not converge"
+fi
+
+_baseline_before="$(snapshot_dir_checksum "$HOME/.local/lib/claude-code-starter-kit")"
+_downloads_before="$(wc -l < "$_tmpdir/downloads.log" | /usr/bin/tr -d '[:space:]')"
+export KIT_MDM_PREREQ_MODE=fail
+if check_mdm_biome_baseline >/dev/null 2>&1 \
+  && check_mdm_cc_safety_net_baseline >/dev/null 2>&1 \
+  && [[ "$(snapshot_dir_checksum "$HOME/.local/lib/claude-code-starter-kit")" \
+      == "$_baseline_before" \
+    && "$(wc -l < "$_tmpdir/downloads.log" | /usr/bin/tr -d '[:space:]')" \
+      == "$_downloads_before" ]]; then
+  pass "prerequisites: MDM fail validates pinned hook trees offline and read-only"
+else
+  fail "prerequisites: MDM fail mutated or rejected the pinned hook baseline"
+fi
+
+# The installed wrapper is executable text, but its trust decision remains
+# byte-exact: shell-visible canonical text plus a trailing NUL is not valid.
+_safety_wrapper="$HOME/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin/cc-safety-net"
+_safety_script="$HOME/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/dist/bin/cc-safety-net.js"
+_safety_wrapper_exact_rc=0
+check_mdm_cc_safety_net_baseline \
+  >/dev/null 2>&1 || _safety_wrapper_exact_rc=$?
+printf '\000' >> "$_safety_wrapper"
+_safety_wrapper_nul_rc=0
+check_mdm_cc_safety_net_baseline \
+  >/dev/null 2>&1 || _safety_wrapper_nul_rc=$?
+_mdm_expected_safety_wrapper "$_mdm_test_node" "$_safety_script" \
+  > "$_safety_wrapper"
+/bin/chmod 755 "$_safety_wrapper"
+_safety_wrapper_restored_rc=0
+check_mdm_cc_safety_net_baseline \
+  >/dev/null 2>&1 || _safety_wrapper_restored_rc=$?
+if [[ "$_safety_wrapper_exact_rc" -eq 0 \
+  && "$_safety_wrapper_nul_rc" -ne 0 \
+  && "$_safety_wrapper_restored_rc" -eq 0 ]]; then
+  pass "prerequisites: MDM Safety wrapper requires exact canonical bytes"
+else
+  fail "prerequisites: MDM Safety wrapper accepted trailing bytes"
+fi
+
+printf 'tamper\n' >> "$HOME/.local/lib/claude-code-starter-kit/biome/2.5.4/biome"
+if ! check_mdm_biome_baseline >/dev/null 2>&1; then
+  pass "prerequisites: MDM Biome baseline rejects inner artifact tampering"
+else
+  fail "prerequisites: MDM Biome baseline accepted a tampered binary"
+fi
+
+_safety_wrapper="$HOME/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin/cc-safety-net"
+/usr/bin/sed -e "s|$_mdm_test_node|$_tmpdir/fake/node|" \
+  "$_safety_wrapper" > "$_tmpdir/wrapper-tampered"
+/bin/mv "$_tmpdir/wrapper-tampered" "$_safety_wrapper"
+/bin/chmod 755 "$_safety_wrapper"
+if ! check_mdm_cc_safety_net_baseline >/dev/null 2>&1; then
+  pass "prerequisites: MDM Safety baseline rejects a changed private Node binding"
+else
+  fail "prerequisites: MDM Safety baseline accepted a changed Node binding"
+fi
+
+mkdir -p "$_tmpdir/symlink-archive/package"
+ln -s /etc/passwd "$_tmpdir/symlink-archive/package/biome"
+( cd "$_tmpdir/symlink-archive" && /usr/bin/tar -czf ../symlink.tgz package )
+if ! _mdm_extract_pinned_regular_member "$_tmpdir/symlink.tgz" package/biome \
+    "$_tmpdir/extracted-biome" \
+  && [[ ! -e "$_tmpdir/extracted-biome" ]]; then
+  pass "prerequisites: MDM safe extraction rejects non-regular archive members"
+else
+  fail "prerequisites: MDM safe extraction accepted a symlink member"
+fi
+
+_mdm_codesign_requirement=""
+_mdm_prereq_codesign() {
+  if [[ "$1" == "--verify" ]]; then
+    _mdm_codesign_requirement="$*"
+    return 0
+  fi
+  printf '%s\n' \
+    'Identifier=node' \
+    'TeamIdentifier=HX7739G8FX' \
+    'Authority=Developer ID Application: Node.js Foundation (HX7739G8FX)' \
+    'Authority=Developer ID Certification Authority' \
+    'Authority=Apple Root CA'
+}
+if _mdm_private_node_signature_trusted "$_mdm_test_node" \
+  && [[ "$_mdm_codesign_requirement" == *'identifier "node"'* \
+    && "$_mdm_codesign_requirement" == *'1.2.840.113635.100.6.2.6'* \
+    && "$_mdm_codesign_requirement" == *'1.2.840.113635.100.6.1.13'* \
+    && "$_mdm_codesign_requirement" == *'HX7739G8FX'* ]]; then
+  pass "prerequisites: private Node requires the full Developer ID identity"
+else
+  fail "prerequisites: private Node codesign requirement is incomplete"
+fi
+_mdm_prereq_codesign() {
+  [[ "$1" == "--verify" ]] && return 0
+  printf '%s\n' 'Identifier=node' 'TeamIdentifier=HX7739G8FX'
+}
+if ! _mdm_private_node_signature_trusted "$_mdm_test_node"; then
+  pass "prerequisites: private Node rejects an incomplete certificate chain"
+else
+  fail "prerequisites: private Node accepted incomplete codesign details"
+fi
+
+if (
+  eval "$_orig_mdm_arch"
+  _mdm_prereq_sysctl() {
+    [[ "$#" -eq 2 && "$1" == -in && "$2" == hw.optional.arm64 ]] \
+      || return 9
+    printf '%s' "$_mdm_prereq_arch_sysctl_value"
+    return "$_mdm_prereq_arch_sysctl_rc"
+  }
+  _mdm_prereq_uname() {
+    case "$1" in
+      -s) printf '%s' Darwin ;;
+      -m) printf '%s' "$_mdm_prereq_arch_machine" ;;
+      *) return 9 ;;
+    esac
+  }
+  _mdm_prereq_arch_case() { # <sysctl-value> <sysctl-rc> <uname-m> <expected>
+    _mdm_prereq_arch_sysctl_value="$1"
+    _mdm_prereq_arch_sysctl_rc="$2"
+    _mdm_prereq_arch_machine="$3"
+    if _mdm_prereq_arch_actual="$(_mdm_current_darwin_arch 2>/dev/null)"; then
+      _mdm_prereq_arch_rc=0
+    else
+      _mdm_prereq_arch_rc=$?
+    fi
+    if [[ "$4" == FAIL ]]; then
+      [[ "$_mdm_prereq_arch_rc" -ne 0 && -z "$_mdm_prereq_arch_actual" ]]
+    else
+      [[ "$_mdm_prereq_arch_rc" -eq 0 \
+        && "$_mdm_prereq_arch_actual" == "$4" ]]
+    fi
+  }
+  _mdm_prereq_arch_case '' 0 x86_64 x64 \
+    && _mdm_prereq_arch_case 0 0 x86_64 x64 \
+    && _mdm_prereq_arch_case 1 0 arm64 arm64 \
+    && _mdm_prereq_arch_case 1 0 x86_64 arm64 \
+    && _mdm_prereq_arch_case invalid 0 x86_64 FAIL \
+    && _mdm_prereq_arch_case 1 0 unknown FAIL \
+    && _mdm_prereq_arch_case '' 1 x86_64 FAIL
+); then
+  pass "prerequisites: MDM architecture handles Intel, native ARM, and Rosetta"
+else
+  fail "prerequisites: MDM architecture contract is not fail-closed"
+fi
+
+eval "$_orig_mdm_arch"
+eval "$_orig_mdm_toolchain"
+eval "$_orig_mdm_download"
+eval "$_orig_mdm_codesign"
+_MDM_BIOME_ARM64_ARCHIVE_SHA256="$_saved_biome_archive_sha"
+_MDM_BIOME_ARM64_BINARY_SHA256="$_saved_biome_binary_sha"
+_MDM_BIOME_ARM64_PACKAGE_SHA256="$_saved_biome_package_sha"
+_MDM_CC_SAFETY_NET_ARCHIVE_SHA256="$_saved_safety_archive_sha"
+_MDM_CC_SAFETY_NET_JS_SHA256="$_saved_safety_js_sha"
+_MDM_CC_SAFETY_NET_PACKAGE_SHA256="$_saved_safety_package_sha"
+export HOME="$_saved_home" PATH="$_saved_path"
+if [[ -n "$_saved_mdm_managed" ]]; then export KIT_MDM_MANAGED="$_saved_mdm_managed"; else unset KIT_MDM_MANAGED; fi
+if [[ -n "$_saved_mdm_mode" ]]; then export KIT_MDM_PREREQ_MODE="$_saved_mdm_mode"; else unset KIT_MDM_PREREQ_MODE; fi
+if [[ -n "$_saved_mdm_require_node" ]]; then export KIT_MDM_REQUIRE_NODE_RUNTIME="$_saved_mdm_require_node"; else unset KIT_MDM_REQUIRE_NODE_RUNTIME; fi
+unset KIT_MDM_BIOME_COMPONENT_ROOT KIT_MDM_BIOME_COMMAND_PATH
+unset KIT_MDM_CC_SAFETY_NET_COMPONENT_ROOT KIT_MDM_CC_SAFETY_NET_COMMAND_PATH
+unset KIT_MDM_NODE_RUNTIME_ROOT KIT_MDM_NODE_PATH KIT_MDM_NPM_PATH
+unset _MDM_PREREQ_NODE _MDM_PREREQ_NPM
+unset _mdm_digest_root _mdm_digest_one _mdm_digest_marker_changed \
+  _mdm_digest_payload_changed _mdm_digest_writable_rc _mdm_resolver_source
+rm -rf "$_tmpdir"
+
+# ── PATH persistence failures propagate across multiple RC files ─────────
+
+_saved_path="$PATH"
+_tmpdir="$(mktemp -d)"
+_orig_get_shell_rc_files="$(declare -f _get_shell_rc_files)"
+_get_shell_rc_files() {
+  printf '%s\n' "$_tmpdir/missing/first.rc" "$_tmpdir/second.rc"
+}
+_path_rc=0
+_add_to_path_now_and_persist "$_tmpdir/tool/bin" test \
+  >/dev/null 2>&1 || _path_rc=$?
+if [[ "$_path_rc" -ne 0 && ! -e "$_tmpdir/second.rc" ]]; then
+  pass "prerequisites: RC persistence stops and fails on the first write error"
+else
+  fail "prerequisites: RC persistence write error was masked by a later RC file"
+fi
+export PATH="$_saved_path"
+eval "$_orig_get_shell_rc_files"
+rm -rf "$_tmpdir"
+
+# An ordinary keg-only Node must not become transiently visible when its
+# shell-RC persistence fails. check_node must surface the failure instead of
+# accepting the PATH mutation left by the failed activation attempt.
+_saved_path="$PATH"
+_saved_distro_family="${DISTRO_FAMILY:-}"
+_tmpdir="$(mktemp -d)"
+mkdir -p "$_tmpdir/prefix/bin"
+printf '#!/bin/bash\nprintf "v24.0.0\\n"\n' > "$_tmpdir/prefix/bin/node"
+chmod +x "$_tmpdir/prefix/bin/node"
+DISTRO_FAMILY=macos
+export PATH="/usr/bin:/bin"
+_orig_add_path="$(declare -f _add_to_path_now_and_persist)"
+_orig_install_node="$(declare -f _install_node)"
+brew() {
+  [[ "$1" == --prefix ]] && printf '%s\n' "$_tmpdir/prefix"
+}
+_add_to_path_now_and_persist() {
+  export PATH="$1:$PATH"
+  return 1
+}
+_install_node() { return 1; }
+_node_activation_rc=0
+check_node >/dev/null 2>&1 || _node_activation_rc=$?
+if [[ "$_node_activation_rc" -ne 0 && "$PATH" == "/usr/bin:/bin" ]]; then
+  pass "prerequisites: keg-only Node RC failure rolls back PATH and remains fatal"
+else
+  fail "prerequisites: keg-only Node RC failure was masked by transient PATH"
+fi
+unset -f brew
+eval "$_orig_add_path"
+eval "$_orig_install_node"
+DISTRO_FAMILY="$_saved_distro_family"
+export PATH="$_saved_path"
+rm -rf "$_tmpdir"
+
 # ── _install_bash4 uses package installer when needed ────────────────────
 
 _orig_pkg_install="$(declare -f _pkg_install)"
@@ -605,7 +1544,7 @@ EOF
 }
 run_func check_node
 if assert_exit_code 0 "$_RF_RC" \
-  && assert_matches "below required major 22" "$_RF_STDERR" \
+  && assert_matches "below required 22.19" "$_RF_STDERR" \
   && assert_matches "node v24.3.0 installed" "$_RF_STDOUT"; then
   pass "prerequisites: check_node upgrades Node.js below minimum major"
 else
@@ -615,10 +1554,62 @@ eval "$_orig_install_node"
 export PATH="$_saved_path"
 rm -rf "$_tmpdir"
 
+# ── macOS Node fallback checks the supported version, not command presence ─
+
+_orig_brew_is_usable="$(declare -f _brew_is_usable)"
+_orig_install_node_via_nvm="$(declare -f _install_node_via_nvm)"
+_saved_distro_family="${DISTRO_FAMILY:-}"
+_saved_mdm_managed="${KIT_MDM_MANAGED:-}"
+_saved_mdm_mode="${KIT_MDM_PREREQ_MODE:-}"
+DISTRO_FAMILY=macos
+KIT_MDM_MANAGED=false
+KIT_MDM_PREREQ_MODE=auto
+_brew_is_usable() { return 1; }
+_install_node_via_nvm() { _node_nvm_called=$((_node_nvm_called + 1)); }
+node() { printf '%s\n' v22.18.9; }
+_node_nvm_called=0
+_node_old_rc=0
+_install_node >/dev/null 2>&1 || _node_old_rc=$?
+node() { printf '%s\n' v22.19.0; }
+_node_supported_rc=0
+_install_node >/dev/null 2>&1 || _node_supported_rc=$?
+node() { printf '%s\n' v22.18.9; }
+curl() { return 0; }
+sudo() { return 0; }
+for _node_fallback_family in debian rhel; do
+  DISTRO_FAMILY="$_node_fallback_family"
+  _install_node >/dev/null 2>&1 || _node_supported_rc=$?
+done
+if [[ "$_node_old_rc" -eq 0 && "$_node_supported_rc" -eq 0 \
+  && "$_node_nvm_called" -eq 3 ]]; then
+  pass "prerequisites: Node fallback upgrades an unsupported effective PATH version"
+else
+  fail "prerequisites: package-manager success incorrectly suppresses old-Node fallback"
+fi
+unset -f node curl sudo
+eval "$_orig_brew_is_usable"
+eval "$_orig_install_node_via_nvm"
+DISTRO_FAMILY="$_saved_distro_family"
+KIT_MDM_MANAGED="$_saved_mdm_managed"
+KIT_MDM_PREREQ_MODE="$_saved_mdm_mode"
+unset _node_fallback_family
+
 {
-  test_name="prerequisites: default Node.js install major is 24 and minimum is 22"
-  if [[ "$NODE_MAJOR" == "24" && "$NODE_MIN_MAJOR" == "22" ]] \
+  test_name="prerequisites: default Node.js install major is 24 and minimum is 22.19"
+  if [[ "$NODE_MAJOR" == "24" && "$NODE_MIN_MAJOR" == "22" \
+    && "$NODE_MIN_MINOR" == "19" ]] \
     && grep -q 'nvm/v0.40.5/install.sh' "$PROJECT_DIR/lib/prerequisites.sh"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="prerequisites: Node runtime boundary rejects 22.18 and accepts 22.19"
+  if ! _prereq_node_version_is_supported v22.18.9 \
+    && _prereq_node_version_is_supported v22.19.0 \
+    && _prereq_node_version_is_supported v23.0.0; then
     pass "$test_name"
   else
     fail "$test_name"

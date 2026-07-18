@@ -77,8 +77,11 @@ _mdm_launcher_path_trusted() {
   return 0
 }
 
-_mdm_launcher_snapshot() {
-  local _source="$1" _before _opened _tmp_base _tmp _old_umask
+_mdm_launcher_snapshot() { # <source> <output-variable>
+  local _source="$1" _output="$2" _before _opened _tmp_base _old_umask
+  local _mdm_launcher_inflight=""
+  [[ "$_output" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  printf -v "$_output" '%s' ""
   if [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]]; then
     _before="$(/usr/bin/stat -f '%i:%z' "$_source" 2>/dev/null)" || return 1
   else
@@ -99,43 +102,280 @@ _mdm_launcher_snapshot() {
   fi
   [[ "$_before" == "$_opened" ]] || { exec 9<&-; return 1; }
   _old_umask="$(umask)"; umask 077
-  _tmp="$(/usr/bin/mktemp "$_tmp_base/claude-kit-mdm-launcher.XXXXXX")" \
+  _mdm_launcher_inflight="$(
+    /usr/bin/mktemp "$_tmp_base/claude-kit-mdm-launcher.XXXXXX"
+  )" \
     || { umask "$_old_umask"; exec 9<&-; return 1; }
   umask "$_old_umask"
-  /bin/cat <&9 > "$_tmp" || { exec 9<&-; /bin/rm -f "$_tmp"; return 1; }
+  # Publish the pathname to the already-trapped caller before copying bytes.
+  # Bash dynamic scope also exposes the inflight value to the cleanup helper
+  # during the few builtins between mktemp and this assignment.
+  if ! printf -v "$_output" '%s' "$_mdm_launcher_inflight"; then
+    /bin/rm -f "$_mdm_launcher_inflight"
+    _mdm_launcher_inflight=""
+    return 1
+  fi
+  if ! /bin/cat <&9 > "$_mdm_launcher_inflight"; then
+    exec 9<&-
+    /bin/rm -f "$_mdm_launcher_inflight"
+    printf -v "$_output" '%s' ""
+    _mdm_launcher_inflight=""
+    return 1
+  fi
   exec 9<&-
-  /bin/chmod 500 "$_tmp" || { /bin/rm -f "$_tmp"; return 1; }
-  printf '%s' "$_tmp"
+  if ! /bin/chmod 500 "$_mdm_launcher_inflight"; then
+    /bin/rm -f "$_mdm_launcher_inflight"
+    printf -v "$_output" '%s' ""
+    _mdm_launcher_inflight=""
+    return 1
+  fi
+  _mdm_launcher_inflight=""
+  return 0
+}
+
+_mdm_launcher_cleanup_snapshots() {
+  local _path
+  for _path in "${_mdm_launcher_inflight:-}" \
+    "${_mdm_clean_script_snapshot:-}" \
+    "${_mdm_clean_renderer_snapshot:-}"; do
+    [[ -z "$_path" ]] || /bin/rm -f "$_path"
+  done
+}
+
+_MDM_LAUNCHER_SIGNAL_WAIT_ITERATIONS=1000
+_MDM_LAUNCHER_GROUP_WAIT_ITERATIONS=100
+
+_mdm_launcher_wait_child_bounded() { # <child-pid> [iterations]
+  local _pid="$1" _attempt=0 _stat _limit
+  _limit="${2:-${_MDM_LAUNCHER_SIGNAL_WAIT_ITERATIONS:-1000}}"
+  [[ "$_limit" =~ ^[1-9][0-9]*$ && "$_limit" -le 1000 ]] || _limit=1000
+  while [[ "$_attempt" -lt "$_limit" ]]; do
+    _stat="$(LC_ALL=C /bin/ps -p "$_pid" -o stat= 2>/dev/null || true)"
+    _stat="${_stat//[[:space:]]/}"
+    case "$_stat" in
+      Z*) wait "$_pid" 2>/dev/null || true; return 0 ;;
+      "")
+        if ! /bin/kill -0 "$_pid" 2>/dev/null; then
+          wait "$_pid" 2>/dev/null || true
+          return 0
+        fi
+        ;;
+    esac
+    /bin/sleep 0.01
+    _attempt=$((_attempt + 1))
+  done
+  return 1
+}
+
+_mdm_launcher_job_running() { # <child-pid>
+  local _pid="$1" _job
+  for _job in $(jobs -r -p 2>/dev/null); do
+    [[ "$_job" != "$_pid" ]] || return 0
+  done
+  return 1
+}
+
+_mdm_launcher_job_active() { # <child-pid>; running or stopped, never completed
+  local _pid="$1" _job
+  _mdm_launcher_job_running "$_pid" && return 0
+  for _job in $(jobs -s -p 2>/dev/null); do
+    [[ "$_job" != "$_pid" ]] || return 0
+  done
+  return 1
+}
+
+_mdm_launcher_group_state() { # <process-group-id>; 0=live, 1=gone/zombie, 2=unknown
+  local _pgid="$1" _listing _platform
+  _platform="$(/usr/bin/uname -s 2>/dev/null || true)"
+  if [[ "$_platform" == Darwin ]]; then
+    if ! _listing="$(LC_ALL=C /bin/ps -o stat= -g "$_pgid" 2>/dev/null)"; then
+      /bin/kill -0 "-$_pgid" 2>/dev/null && return 2
+      return 1
+    fi
+  else
+    if ! _listing="$(
+      LC_ALL=C /bin/ps -o stat= --pgroup "$_pgid" 2>/dev/null
+    )"; then
+      /bin/kill -0 "-$_pgid" 2>/dev/null && return 2
+      return 1
+    fi
+  fi
+  if printf '%s\n' "$_listing" \
+    | /usr/bin/awk '$1 != "" && $1 !~ /^Z/ { found=1 }
+      END { exit found ? 0 : 1 }'; then
+    return 0
+  fi
+  return 1
+}
+
+_mdm_launcher_wait_group_bounded() { # <process-group-id>
+  local _pgid="$1" _attempt=0 _state _limit
+  _limit="${_MDM_LAUNCHER_GROUP_WAIT_ITERATIONS:-100}"
+  [[ "$_limit" =~ ^[1-9][0-9]*$ && "$_limit" -le 1000 ]] || _limit=100
+  while [[ "$_attempt" -lt "$_limit" ]]; do
+    _state=0
+    _mdm_launcher_group_state "$_pgid" || _state=$?
+    [[ "$_state" -ne 1 ]] || return 0
+    /bin/sleep 0.01
+    _attempt=$((_attempt + 1))
+  done
+  return 1
+}
+
+_mdm_launcher_group_quiesced() { # <process-group-id>
+  local _pgid="$1" _listing
+  _listing="$(LC_ALL=C /bin/ps -axo pgid=,stat= 2>/dev/null)" || return 2
+  printf '%s\n' "$_listing" | /usr/bin/awk -v pgid="$_pgid" '
+    $1 == pgid && $2 !~ /^[TtZ]/ { running=1 }
+    END { exit running ? 1 : 0 }
+  '
+}
+
+_mdm_launcher_stop_group() { # <process-group-id>
+  local _pgid="$1" _attempt=0 _state=0
+  [[ "$_pgid" =~ ^[1-9][0-9]*$ ]] || return 2
+  if /bin/kill -0 "-$_pgid" 2>/dev/null; then
+    /bin/kill -STOP "-$_pgid" 2>/dev/null || true
+    while ! _mdm_launcher_group_quiesced "$_pgid" \
+      && [[ "$_attempt" -lt "$_MDM_LAUNCHER_GROUP_WAIT_ITERATIONS" ]]; do
+      /bin/sleep 0.01
+      _attempt=$((_attempt + 1))
+    done
+    /bin/kill -KILL "-$_pgid" 2>/dev/null || true
+    if ! _mdm_launcher_wait_group_bounded "$_pgid"; then
+      /bin/kill -KILL "-$_pgid" 2>/dev/null || true
+      _mdm_launcher_wait_group_bounded "$_pgid" && return 0
+      _mdm_launcher_group_state "$_pgid" || _state=$?
+      [[ "$_state" -ne 1 ]] || return 0
+      [[ "$_state" -ne 2 ]] || return 2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+_mdm_launcher_exit_on_signal() {
+  trap '' HUP INT TERM
+  local _signal="$1" _rc="$2" _pid _pgid _identity _actual_ppid
+  local _actual_pgid _stop_rc=0
+  # The supervisor is exiting because of the caller's signal; suppress its
+  # own job-control notices while the child group is reaped.
+  exec 2>/dev/null
+  _pid="${_mdm_clean_child_pid:-}"
+  _pgid="${_mdm_clean_child_pgid:-}"
+  if [[ "${_mdm_clean_child_starting:-0}" == 1 ]]; then
+    if [[ ! "$_pid" =~ ^[1-9][0-9]*$ ]]; then
+      _pid="$(jobs -p 2>/dev/null)"
+      _pgid="$_pid"
+    elif [[ ! "$_pgid" =~ ^[1-9][0-9]*$ ]]; then
+      _pgid="$_pid"
+    fi
+  fi
+  if [[ "$_pid" =~ ^[1-9][0-9]*$ ]] \
+    && ! _mdm_launcher_job_active "$_pid"; then
+    _pid=""
+    _pgid=""
+  fi
+  if [[ "$_pid" =~ ^[1-9][0-9]*$ ]]; then
+    # Deliver only the caller's signal to the leader.  Sending it to a group
+    # whose leader is Bash can make Bash print a job notice before its cleanup
+    # trap runs.  The bounded wait preserves cooperative cleanup without
+    # allowing a non-cooperative child to hold the MDM launcher indefinitely.
+    _identity="$(
+      LC_ALL=C /bin/ps -p "$_pid" -o ppid= -o pgid= 2>/dev/null \
+        | /usr/bin/awk 'NF >= 2 { print $1 ":" $2; exit }'
+    )"
+    _actual_ppid="${_identity%%:*}"
+    _actual_pgid="${_identity#*:}"
+    if [[ "$_actual_ppid" == "${_mdm_clean_supervisor_pid:-}" ]]; then
+      [[ "$_actual_pgid" == "$_pgid" ]] || _pgid=""
+      builtin kill "-$_signal" "$_pid" 2>/dev/null || true
+      builtin kill -CONT "$_pid" 2>/dev/null || true
+    else
+      _pid=""
+      _pgid=""
+    fi
+    if ! _mdm_launcher_wait_child_bounded "$_pid"; then
+      if [[ "$_pgid" =~ ^[1-9][0-9]*$ && "$_pgid" == "$_pid" ]]; then
+        _mdm_launcher_stop_group "$_pgid" || _stop_rc=$?
+      else
+        /bin/kill -STOP "$_pid" 2>/dev/null || true
+        /bin/kill -KILL "$_pid" 2>/dev/null || true
+      fi
+      _mdm_launcher_wait_child_bounded \
+        "$_pid" "$_MDM_LAUNCHER_GROUP_WAIT_ITERATIONS" || true
+    fi
+    if [[ "$_pgid" =~ ^[1-9][0-9]*$ && "$_pgid" == "$_pid" ]]; then
+      # Once the leader is reaped, no Bash remains to emit a job notice.
+      # Quiesce and remove any descendant left in the dedicated group.
+      _mdm_launcher_stop_group "$_pgid" || _stop_rc=$?
+    fi
+  fi
+  if [[ "$_stop_rc" -ne 0 && "$_pgid" =~ ^[1-9][0-9]*$ \
+    && "$_pgid" == "$_pid" ]]; then
+    /bin/kill -KILL "-$_pgid" 2>/dev/null || true
+  fi
+  _mdm_launcher_cleanup_snapshots
+  exit "$_rc"
+}
+
+_mdm_launcher_arm_cleanup_traps() {
+  trap '_mdm_launcher_cleanup_snapshots' EXIT
+  trap '_mdm_launcher_exit_on_signal HUP 129' HUP
+  trap '_mdm_launcher_exit_on_signal INT 130' INT
+  trap '_mdm_launcher_exit_on_signal TERM 143' TERM
 }
 
 if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
   _mdm_clean_home="/var/root"
-  _mdm_clean_script="$0"
-  _mdm_clean_renderer=""
+  _mdm_clean_script_source="$0"
+  _mdm_clean_renderer_source=""
+  _mdm_clean_script_snapshot=""
+  _mdm_clean_renderer_snapshot=""
+  _mdm_clean_child_pid=""
+  _mdm_clean_child_pgid=""
+  _mdm_clean_child_starting=0
+  _mdm_launcher_arm_cleanup_traps
   if [[ "$(/usr/bin/id -u)" -ne 0 ]]; then
     _mdm_clean_home="${HOME:-/tmp}"
   else
-    if ! _mdm_launcher_path_trusted "$_mdm_clean_script"; then
+    if ! _mdm_launcher_path_trusted "$_mdm_clean_script_source"; then
       printf 'MDM launcher path is not trusted\n' >&2
       exit 50
     fi
-    _mdm_clean_script="$_MDM_LAUNCHER_PHYSICAL"
-    _mdm_clean_renderer="${_mdm_clean_script%/*}/render-expected.py"
-    if ! _mdm_launcher_path_trusted "$_mdm_clean_renderer"; then
+    _mdm_clean_script_source="$_MDM_LAUNCHER_PHYSICAL"
+    _mdm_clean_renderer_source="${_mdm_clean_script_source%/*}/render-expected.py"
+    if ! _mdm_launcher_path_trusted "$_mdm_clean_renderer_source"; then
       printf 'MDM expected-state renderer path is not trusted\n' >&2
       exit 50
     fi
-    _mdm_clean_renderer="$(_mdm_launcher_snapshot "$_MDM_LAUNCHER_PHYSICAL")" || {
+    _mdm_clean_renderer_source="$_MDM_LAUNCHER_PHYSICAL"
+    if ! _mdm_launcher_snapshot \
+      "$_mdm_clean_renderer_source" _mdm_clean_renderer_snapshot; then
       printf 'MDM expected-state renderer snapshot failed\n' >&2
       exit 50
-    }
+    fi
   fi
-  _mdm_clean_script="$(_mdm_launcher_snapshot "$_mdm_clean_script")" || {
-    [[ -z "$_mdm_clean_renderer" ]] || /bin/rm -f "$_mdm_clean_renderer"
+  if ! _mdm_launcher_snapshot \
+    "$_mdm_clean_script_source" _mdm_clean_script_snapshot; then
+    _mdm_launcher_cleanup_snapshots
     printf 'MDM launcher snapshot failed\n' >&2
     exit 50
-  }
-  exec /usr/bin/env -i \
+  fi
+  # Keep this trapped supervisor alive until the clean shell exits.  Monitor
+  # mode gives the asynchronous child its own process group and restores
+  # catchable INT semantics.  An outer signal is delivered exactly to the
+  # leader; after bounded cleanup grace, survivors are stopped and reaped.
+  _mdm_clean_monitor_was_on=false
+  _mdm_clean_supervisor_pid="$$"
+  case $- in *m*) _mdm_clean_monitor_was_on=true ;; esac
+  if ! set -m; then
+    _mdm_launcher_cleanup_snapshots
+    printf 'MDM launcher could not enable child process groups\n' >&2
+    exit 50
+  fi
+  _mdm_clean_child_starting=1
+  /usr/bin/env -i \
     "HOME=$_mdm_clean_home" \
     'PATH=/usr/bin:/bin:/usr/sbin:/sbin' \
     'LC_ALL=C' \
@@ -143,14 +383,74 @@ if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
       _mdm_script=$1
       _mdm_renderer=$2
       shift 2
-      trap '\''/bin/rm -f "$_mdm_script"; [[ -z "$_mdm_renderer" ]] || /bin/rm -f "$_mdm_renderer"'\'' EXIT INT TERM
+      trap '\''/bin/rm -f "$_mdm_script"; [[ -z "$_mdm_renderer" ]] || /bin/rm -f "$_mdm_renderer"'\'' EXIT
+      trap '\''/bin/rm -f "$_mdm_script"; [[ -z "$_mdm_renderer" ]] || /bin/rm -f "$_mdm_renderer"; exit 129'\'' HUP
+      trap '\''/bin/rm -f "$_mdm_script"; [[ -z "$_mdm_renderer" ]] || /bin/rm -f "$_mdm_renderer"; exit 130'\'' INT
+      trap '\''/bin/rm -f "$_mdm_script"; [[ -z "$_mdm_renderer" ]] || /bin/rm -f "$_mdm_renderer"; exit 143'\'' TERM
       . "$_mdm_script"
       /bin/rm -f "$_mdm_script"
       _MDM_EXPECTED_RENDERER="$_mdm_renderer"
       [[ -z "$_mdm_renderer" ]] || _MDM_EXPECTED_RENDERER_SNAPSHOT=1
-      trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"'\'' EXIT INT TERM
+      trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"'\'' EXIT
+      trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"; exit 129'\'' HUP
+      trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"; exit 130'\'' INT
+      trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"; exit 143'\'' TERM
       mdm_main "$@"
-    ' mdm-install-clean "$_mdm_clean_script" "$_mdm_clean_renderer" "$@"
+    ' mdm-install-clean "$_mdm_clean_script_snapshot" \
+      "$_mdm_clean_renderer_snapshot" "$@" &
+  _mdm_clean_child_pid=$! \
+    _mdm_clean_child_pgid=$! \
+    _mdm_clean_child_starting=1
+  [[ "$_mdm_clean_monitor_was_on" == true ]] || set +m
+  _mdm_clean_child_identity="$(
+    LC_ALL=C /bin/ps -p "$_mdm_clean_child_pid" -o ppid= -o pgid= \
+      2>/dev/null \
+      | /usr/bin/awk 'NF >= 2 { print $1 ":" $2; exit }'
+  )"
+  _mdm_clean_actual_ppid="${_mdm_clean_child_identity%%:*}"
+  _mdm_clean_actual_pgid="${_mdm_clean_child_identity#*:}"
+  if ! _mdm_launcher_job_active "$_mdm_clean_child_pid"; then
+    _mdm_clean_completed_pid="$_mdm_clean_child_pid"
+    _mdm_clean_child_pid="" \
+      _mdm_clean_child_pgid="" \
+      _mdm_clean_child_starting=0
+    _mdm_clean_rc=0
+    wait "$_mdm_clean_completed_pid" || _mdm_clean_rc=$?
+    _mdm_launcher_cleanup_snapshots
+    trap - EXIT HUP INT TERM
+    exit "$_mdm_clean_rc"
+  fi
+  if [[ "$_mdm_clean_actual_ppid" != "$_mdm_clean_supervisor_pid" ]]; then
+    _mdm_clean_child_pid="" \
+      _mdm_clean_child_pgid="" \
+      _mdm_clean_child_starting=0
+    _mdm_launcher_cleanup_snapshots
+    printf 'MDM launcher child parent verification failed\n' >&2
+    exit 50
+  fi
+  if [[ "$_mdm_clean_actual_pgid" != "$_mdm_clean_child_pid" ]]; then
+    /bin/kill -TERM "$_mdm_clean_child_pid" 2>/dev/null || true
+    if ! _mdm_launcher_wait_child_bounded \
+      "$_mdm_clean_child_pid" "$_MDM_LAUNCHER_GROUP_WAIT_ITERATIONS"; then
+      /bin/kill -STOP "$_mdm_clean_child_pid" 2>/dev/null || true
+      /bin/kill -KILL "$_mdm_clean_child_pid" 2>/dev/null || true
+      _mdm_launcher_wait_child_bounded \
+        "$_mdm_clean_child_pid" "$_MDM_LAUNCHER_GROUP_WAIT_ITERATIONS" \
+        || true
+    fi
+    _mdm_launcher_cleanup_snapshots
+    printf 'MDM launcher child process group verification failed\n' >&2
+    exit 50
+  fi
+  _mdm_clean_child_starting=0
+  _mdm_clean_rc=0
+  wait "$_mdm_clean_child_pid" || _mdm_clean_rc=$?
+  _mdm_clean_child_pid="" \
+    _mdm_clean_child_pgid="" \
+    _mdm_clean_child_starting=0
+  _mdm_launcher_cleanup_snapshots
+  trap - EXIT HUP INT TERM
+  exit "$_mdm_clean_rc"
 fi
 set -euo pipefail
 _MDM_TEST_MODE="${MDM_SOURCE_ONLY:-0}"
@@ -183,6 +483,19 @@ MDM_EXIT_CONFIG=50
 # shellcheck disable=SC2034
 MDM_EXIT_OS=60
 
+# Root-side external operations use fixed production deadlines.  An
+# untrusted MDM environment cannot lengthen or disable these values.  A
+# source-only test may set MDM_TIMEOUT_OVERRIDE_SECONDS to a smaller positive
+# value so process-group and rollback behavior can be exercised quickly.
+_MDM_TIMEOUT_QUERY_SECONDS=120
+_MDM_TIMEOUT_GIT_SECONDS=300
+_MDM_TIMEOUT_PACKAGE_SECONDS=600
+_MDM_TIMEOUT_PKGUTIL_SECONDS=60
+_MDM_TIMEOUT_WCE_NPM_SECONDS=900
+_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS=120
+_MDM_TIMEOUT_SETUP_SECONDS=1200
+_MDM_TIMEOUT_CLT_INSTALL_SECONDS=1200
+
 # 配布元リポジトリ（install.sh と同一 URL。KIT_MDM_GIT_REF で SHA を固定する
 # ため URL 自体は固定でよい）。
 # テスト時は MDM_KIT_REPO_URL_OVERRIDE でローカル fixture repo に差し替え可能
@@ -213,12 +526,272 @@ _mdm_safe_tmpdir() {
   fi
 }
 
+_mdm_timeout_seconds() { # <fixed-seconds>
+  local _fixed="$1" _override="${MDM_TIMEOUT_OVERRIDE_SECONDS:-}"
+  [[ "$_fixed" =~ ^[1-9][0-9]*$ && "$_fixed" -le 86400 ]] || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && "$_override" =~ ^[1-9][0-9]*$ \
+    && "$_override" -le "$_fixed" ]]; then
+    printf '%s' "$_override"
+  else
+    printf '%s' "$_fixed"
+  fi
+}
+
+_mdm_timeout_group_live() { # <process-group-id>; zombies do not execute work
+  local _pgid="$1" _listing="" _platform
+  [[ "$_pgid" =~ ^[1-9][0-9]*$ ]] || return 2
+  _platform="$(/usr/bin/uname -s 2>/dev/null || true)"
+  if [[ "$_platform" == Darwin ]]; then
+    _listing="$(/bin/ps -o stat= -g "$_pgid" 2>/dev/null)" || _listing=""
+  else
+    _listing="$(/bin/ps -o stat= --pgroup "$_pgid" 2>/dev/null)" || _listing=""
+  fi
+  if [[ -n "$_listing" ]]; then
+    ! printf '%s\n' "$_listing" | /usr/bin/awk '$1 !~ /^Z/ { exit 1 }'
+    return
+  fi
+  # Compatibility fallback for a ps implementation without direct PG lookup.
+  _listing="$(/bin/ps -axo pgid=,stat= 2>/dev/null)" || return 2
+  printf '%s\n' "$_listing" | /usr/bin/awk -v pgid="$_pgid" '
+    $1 == pgid && $2 !~ /^Z/ { live=1 }
+    END { exit(live ? 0 : 1) }
+  '
+}
+
+_mdm_timeout_group_quiesced() { # <process-group-id>; every live member stopped
+  local _pgid="$1" _listing=""
+  [[ "$_pgid" =~ ^[1-9][0-9]*$ ]] || return 2
+  _listing="$(/bin/ps -axo pgid=,stat= 2>/dev/null)" || return 2
+  printf '%s\n' "$_listing" | /usr/bin/awk -v pgid="$_pgid" '
+    $1 == pgid && $2 !~ /^[TtZ]/ { running=1 }
+    END { exit(running ? 1 : 0) }
+  '
+}
+
+_mdm_timeout_stop_group() { # <process-group-id>
+  local _pgid="$1" _ticks=0 _state=0
+  [[ "$_pgid" =~ ^[1-9][0-9]*$ ]] || return 1
+  _mdm_timeout_group_live "$_pgid" || { _state=$?; [[ "$_state" -eq 1 ]]; return; }
+  # Give the group leader the graceful TERM window first.  Broadcasting TERM
+  # to every member lets a TERM-ignoring shell survive a killed child long
+  # enough to emit asynchronous "Killed: 9" diagnostics on the caller's
+  # stderr.  The bounded KILL below still reaps the complete process group.
+  /bin/kill -TERM "$_pgid" 2>/dev/null || true
+  while /bin/kill -0 "-$_pgid" 2>/dev/null \
+    && [[ "$_ticks" -lt 25 ]]; do
+    /bin/sleep 0.01
+    _ticks=$((_ticks + 1))
+  done
+  # Freeze survivors before SIGKILL.  Otherwise a TERM-ignoring shell can run
+  # after one of its children dies and leak a job-control diagnostic to the
+  # caller.  STOP follows the graceful TERM window, so cooperative leaders
+  # still receive their normal shutdown opportunity.
+  /bin/kill -STOP "-$_pgid" 2>/dev/null || true
+  _ticks=0
+  while ! _mdm_timeout_group_quiesced "$_pgid" \
+    && [[ "$_ticks" -lt 25 ]]; do
+    /bin/sleep 0.01
+    _ticks=$((_ticks + 1))
+  done
+  /bin/kill -KILL "-$_pgid" 2>/dev/null || true
+  _ticks=0
+  while /bin/kill -0 "-$_pgid" 2>/dev/null \
+    && [[ "$_ticks" -lt 10 ]]; do
+    /bin/sleep 0.01
+    _ticks=$((_ticks + 1))
+  done
+  _mdm_timeout_group_live "$_pgid" || _state=$?
+  [[ "$_state" -eq 1 ]]
+}
+
+_mdm_timeout_cleanup_control() { # <control-dir> <marker> <wake-fifo>
+  local _control="$1" _marker="$2" _wake="$3" _base
+  _base="$(_mdm_safe_tmpdir)" || return 1
+  case "$_control" in "$_base"/claude-kit-mdm-timeout.*) : ;; *) return 1 ;; esac
+  [[ "$_marker" == "$_control/timed-out" \
+    && "$_wake" == "$_control/wake" \
+    && -d "$_control" && ! -L "$_control" ]] || return 1
+  if [[ -e "$_marker" || -L "$_marker" ]]; then
+    [[ -f "$_marker" && ! -L "$_marker" ]] || return 1
+    /bin/rm -f "$_marker" || return 1
+  fi
+  if [[ -e "$_wake" || -L "$_wake" ]]; then
+    [[ -p "$_wake" && ! -L "$_wake" ]] || return 1
+    /bin/rm -f "$_wake" || return 1
+  fi
+  /bin/rmdir "$_control"
+}
+
+# Run an external command or shell function in its own process group.  The
+# wrapper is transparent for stdin/stdout/stderr and ordinary status.  At the
+# deadline it returns 124 only after TERM, bounded KILL, and group/control
+# cleanup have completed.  Clearing inherited traps in the child prevents a
+# helper subprocess from running the coordinator's EXIT cleanup.
+_MDM_ACTIVE_TIMEOUT_SUPERVISOR_PID=""
+_MDM_TIMEOUT_SUPERVISOR_STARTING=0
+_MDM_TIMEOUT_SUPERVISOR_PREVIOUS_BG=""
+
+_mdm_timeout_coordinator() { # <seconds> <command-or-function> [args...]
+  local _seconds="$1"; shift
+  local _base="" _control="" _marker="" _wake="" _old_umask
+  local _child="" _watchdog="" _rc=0 _signal_child="" _signal_watchdog=""
+  local _child_starting=false _watchdog_starting=false _last_bg=""
+  local _monitor_was_on=false _timed_out=false _cleanup_rc=0 _watchdog_rc=0
+  _mdm_timeout_capture_last_bg() { # <output-variable>
+    local _output="$1" _value="" _nounset_was_on=false
+    case $- in *u*) _nounset_was_on=true ;; esac
+    set +u
+    _value="$!"
+    [[ "$_nounset_was_on" == true ]] && set -u
+    printf -v "$_output" '%s' "$_value"
+  }
+  _mdm_timeout_capture_last_bg _last_bg
+  _mdm_timeout_abort() {
+    local _signal_rc="$1"
+    trap - HUP INT TERM
+    # Job-control diagnostics are coordinator noise, not command stderr.
+    # Ordinary command stderr has already streamed directly before this point.
+    exec 2>/dev/null
+    _signal_watchdog="$_watchdog"
+    if [[ ! "$_signal_watchdog" =~ ^[1-9][0-9]*$ \
+      && "$_watchdog_starting" == true ]]; then
+      _mdm_timeout_capture_last_bg _signal_watchdog
+      [[ "$_signal_watchdog" != "$_last_bg" ]] || _signal_watchdog=""
+    fi
+    _signal_child="$_child"
+    if [[ ! "$_signal_child" =~ ^[1-9][0-9]*$ \
+      && "$_child_starting" == true ]]; then
+      _mdm_timeout_capture_last_bg _signal_child
+      [[ "$_signal_child" != "$_last_bg" ]] || _signal_child=""
+    fi
+    # Wake the watchdog first, but stop the command group before waiting for
+    # it.  Bash 3.2 may keep read -t blocked briefly after TERM.
+    if [[ "$_signal_watchdog" =~ ^[1-9][0-9]*$ ]]; then
+      /bin/kill -TERM "$_signal_watchdog" 2>/dev/null || true
+    fi
+    if [[ "$_signal_child" =~ ^[1-9][0-9]*$ ]]; then
+      # Freeze the complete group while its leader is still present.  If TERM
+      # removes the leader first, a signal-ignoring command-substitution child
+      # can keep running during Bash 3.2's deferred wait handling.
+      /bin/kill -STOP "-$_signal_child" 2>/dev/null || true
+      _mdm_timeout_stop_group "$_signal_child" || true
+      wait "$_signal_child" 2>/dev/null || true
+    fi
+    if [[ "$_signal_watchdog" =~ ^[1-9][0-9]*$ ]]; then
+      wait "$_signal_watchdog" 2>/dev/null || true
+    fi
+    if [[ -n "$_control" ]]; then
+      [[ -n "$_marker" ]] || _marker="$_control/timed-out"
+      [[ -n "$_wake" ]] || _wake="$_control/wake"
+      _mdm_timeout_cleanup_control "$_control" "$_marker" "$_wake" || true
+    fi
+    exit "$_signal_rc"
+  }
+  trap '_mdm_timeout_abort 129' HUP
+  trap '_mdm_timeout_abort 130' INT
+  trap '_mdm_timeout_abort 143' TERM
+  [[ "$_seconds" =~ ^[1-9][0-9]*$ && "$_seconds" -le 86400 \
+    && "$#" -gt 0 ]] || return 1
+  _base="$(_mdm_safe_tmpdir)" || return 1
+  _old_umask="$(umask)"; umask 077
+  _control="$(/usr/bin/mktemp -d \
+    "$_base/claude-kit-mdm-timeout.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  _marker="$_control/timed-out"
+  _wake="$_control/wake"
+  [[ -d "$_control" && ! -L "$_control" ]] \
+    || { _mdm_timeout_cleanup_control "$_control" "$_marker" "$_wake" || true; return 1; }
+  /bin/chmod 700 "$_control" \
+    || { _mdm_timeout_cleanup_control "$_control" "$_marker" "$_wake" || true; return 1; }
+  /usr/bin/mkfifo -m 600 "$_wake" \
+    || { _mdm_timeout_cleanup_control "$_control" "$_marker" "$_wake" || true; return 1; }
+
+  case $- in *m*) _monitor_was_on=true ;; esac
+  set -m \
+    || { _mdm_timeout_cleanup_control "$_control" "$_marker" "$_wake" || true; return 1; }
+  _child_starting=true
+  ( trap - EXIT HUP INT TERM; "$@" ) <&0 &
+  _child=$!
+  _child_starting=false
+  [[ "$_monitor_was_on" == true ]] || set +m || true
+  _last_bg="$_child"
+  _watchdog_starting=true
+  (
+    trap - EXIT HUP INT TERM
+    # Bash read(1) supplies the clock without an external sleep descendant.
+    # Opening the private FIFO read/write keeps it from returning EOF early.
+    IFS= read -r -t "$_seconds" <> "$_wake" && exit 0
+    [[ -d "$_control" && ! -L "$_control" \
+      && ! -e "$_marker" && ! -L "$_marker" ]] || exit 1
+    ( set -C; umask 077; : > "$_marker" ) 2>/dev/null || true
+    _mdm_timeout_stop_group "$_child" || exit 1
+    exit 124
+  ) &
+  _watchdog=$!
+  _watchdog_starting=false
+
+  wait "$_child" 2>/dev/null || _rc=$?
+  if [[ ! -e "$_marker" ]]; then
+    /bin/kill -TERM "$_watchdog" 2>/dev/null || true
+  fi
+  wait "$_watchdog" 2>/dev/null || _watchdog_rc=$?
+  # The private marker is published before the watchdog starts termination.
+  # A shell may report the killed leader before the watchdog's final `exit
+  # 124` is observed, so the inode is the authoritative deadline event.
+  if [[ -f "$_marker" && ! -L "$_marker" ]]; then
+    _timed_out=true
+  elif [[ "$_watchdog_rc" -eq 124 ]]; then
+    _timed_out=true
+  fi
+  # A leader may exit after spawning a background descendant.  Preserve the
+  # leader status, but never allow that process group to escape the wrapper.
+  _mdm_timeout_stop_group "$_child" || _cleanup_rc=$?
+  _mdm_timeout_cleanup_control "$_control" "$_marker" "$_wake" || _cleanup_rc=$?
+  [[ "$_cleanup_rc" -eq 0 ]] || return 1
+  [[ "$_timed_out" == true ]] && return 124
+  return "$_rc"
+}
+
+_mdm_run_with_timeout() { # <seconds> <command-or-function> [args...]
+  local _supervisor="" _rc=0 _previous=""
+  _mdm_timeout_capture_parent_bg() {
+    local _nounset_was_on=false
+    case $- in *u*) _nounset_was_on=true ;; esac
+    set +u
+    _previous="$!"
+    [[ "$_nounset_was_on" == true ]] && set -u
+  }
+  _mdm_timeout_capture_parent_bg
+  _MDM_TIMEOUT_SUPERVISOR_PREVIOUS_BG="$_previous"
+  _MDM_TIMEOUT_SUPERVISOR_STARTING=1
+  # An explicit self-dup keeps a here-doc/pipe stdin attached; Bash otherwise
+  # redirects stdin of an asynchronous command from /dev/null with job control
+  # disabled.
+  _mdm_timeout_coordinator "$@" <&0 &
+  _supervisor=$!
+  _MDM_ACTIVE_TIMEOUT_SUPERVISOR_PID="$_supervisor"
+  _MDM_TIMEOUT_SUPERVISOR_STARTING=0
+  wait "$_supervisor" 2>/dev/null || _rc=$?
+  if [[ "$_MDM_ACTIVE_TIMEOUT_SUPERVISOR_PID" == "$_supervisor" ]]; then
+    _MDM_ACTIVE_TIMEOUT_SUPERVISOR_PID=""
+  fi
+  return "$_rc"
+}
+
 # ── レシート用グローバル（各フェーズが埋める）──────────────
 MDM_RCPT_KIT_VERSION=""; MDM_RCPT_GIT_REF=""; MDM_RCPT_RESOLVED_SHA=""
 MDM_RCPT_INSTALL_DIR=""; MDM_RCPT_REQUIRED_COMPONENTS='["kit"]'; MDM_RCPT_PROFILE=""
 MDM_RCPT_LANGUAGE=""; MDM_RCPT_MANIFEST_PATH=""; MDM_RCPT_MANIFEST_SHA256=""
 MDM_RCPT_DEPLOYMENT_SHA256=""
+MDM_RCPT_POLICY_SHA256=""; MDM_RCPT_COMPONENT_MANIFEST_PATH=""
+MDM_RCPT_COMPONENT_MANIFEST_SHA256=""
+MDM_RCPT_TARGET_UID=0; MDM_RCPT_TARGET_GENERATED_UID=""
 MDM_RCPT_TARGET_USER=""; MDM_RCPT_PARTIAL='[]'; MDM_RCPT_TIMESTAMP=""; MDM_RCPT_LOG_PATH=""
+_MDM_TARGET_GENERATED_UID=""
+_MDM_TARGET_SHELL="/bin/bash"
+KIT_MDM_POLICY_SHA256=""
 
 MDM_LOG_FILE="${MDM_LOG_FILE:-}"
 # ログは検証済みの保持 fd（fd 7）へ書く（R4-High）。ファイルを一度だけ排他
@@ -256,6 +829,23 @@ _mdm_is_darwin() {
   [[ "$(/usr/bin/uname -s 2>/dev/null || true)" == "Darwin" ]]
 }
 
+_mdm_macos_version_supported() { # <product-version>
+  local _version="$1" _major _minor
+  [[ "$_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$ ]] \
+    || return 1
+  _major="${BASH_REMATCH[1]}"
+  _minor="${BASH_REMATCH[2]}"
+  [[ "${#_major}" -le 3 && "${#_minor}" -le 3 ]] || return 1
+  (( _major > 13 || (_major == 13 && _minor >= 5) ))
+}
+
+_mdm_supported_macos_host() {
+  local _version
+  _mdm_is_darwin || return 1
+  _version="$(/usr/bin/sw_vers -productVersion 2>/dev/null)" || return 1
+  _mdm_macos_version_supported "$_version"
+}
+
 _mdm_stat_mode() {
   if _mdm_is_darwin; then
     /usr/bin/stat -f '%Lp' "$1" 2>/dev/null
@@ -277,6 +867,14 @@ _mdm_stat_uid() {
     /usr/bin/stat -f '%u' "$1" 2>/dev/null
   else
     /usr/bin/stat -c '%u' "$1" 2>/dev/null
+  fi
+}
+
+_mdm_stat_gid() {
+  if _mdm_is_darwin; then
+    /usr/bin/stat -f '%g' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%g' "$1" 2>/dev/null
   fi
 }
 
@@ -308,6 +906,25 @@ _mdm_stat_fd_inode() {
   fi
 }
 
+# Command substitution removes every trailing newline, so assigning plain
+# `readlink` output can make two different link targets compare equal.  Suppress
+# readlink's delimiter with `-n`, keep a non-newline sentinel through command
+# substitution, remove only that sentinel, then reject every control character
+# in the actual target.
+_mdm_readlink_exact() { # <path> <output-var>
+  local _path="$1" _out_var="$2" _raw _rc=0
+  [[ "$_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _raw="$(
+    /usr/bin/readlink -n "$_path" 2>/dev/null || _rc=$?
+    printf '\036'
+    exit "$_rc"
+  )" || return 1
+  [[ "$_raw" == *$'\036' ]] || return 1
+  _raw="${_raw%$'\036'}"
+  [[ -n "$_raw" && ! "$_raw" =~ [[:cntrl:]] ]] || return 1
+  printf -v "$_out_var" '%s' "$_raw"
+}
+
 _mdm_mode_is_safe() {
   local _mode="$1"
   [[ "$_mode" =~ ^[0-7]+$ ]] || return 1
@@ -324,6 +941,12 @@ _mdm_mode_normalize() {
   [[ "$_mode" =~ ^[0-7]{1,4}$ ]] || return 1
   while [[ ${#_mode} -lt 4 ]]; do _mode="0$_mode"; done
   printf '%s' "$_mode"
+}
+
+_mdm_mode_owner_executable() {
+  local _mode
+  _mode="$(_mdm_mode_normalize "$1")" || return 1
+  case "${_mode:1:1}" in 1|3|5|7) return 0 ;; *) return 1 ;; esac
 }
 
 # Any macOS ACL is rejected. With xattrs, ls can retain '@' in the permission
@@ -343,6 +966,931 @@ _mdm_sha256_file() {
   else
     return 1
   fi
+}
+
+# Canonical artifact digest shared with the detector contract. Trees are
+# walked through bound descriptors without following symlinks. Entry type,
+# path, complete metadata, ACL absence, xattrs, link target, and file bytes are
+# covered. Unsafe ownership, writable entries, hard links, and escaping or
+# dangling links fail closed. Two complete captures must agree.
+_mdm_artifact_digest() { # <file|tree> <absolute-path> [owner-uid-csv] [group-gid-csv]
+  local _kind="$1" _path="$2" _owner_csv="${3:-}" _group_csv="${4:-}"
+  local _python _canonical
+  case "$_kind" in file|tree) : ;; *) return 1 ;; esac
+  [[ "$_path" == /* && ! "$_path" =~ [[:cntrl:]] ]] || return 1
+  [[ -z "$_owner_csv" || "$_owner_csv" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+  [[ -z "$_group_csv" || "$_group_csv" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+  [[ ! -L "$_path" ]] || return 1
+  _canonical="$(_mdm_canonical_any "$_path")" || return 1
+  [[ "$_canonical" == /* && ! "$_canonical" =~ [[:cntrl:]] ]] || return 1
+  _path="$_canonical"
+  _python="$(_mdm_system_python)" || return 1
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
+    /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_kind" "$_path" "$_owner_csv" "$_group_csv" <<'PY'
+import base64
+import collections
+import ctypes
+import errno
+import hashlib
+import json
+import os
+import stat
+import sys
+
+kind, root, owner_csv, group_csv = sys.argv[1:]
+allowed_owners = ({int(value) for value in owner_csv.split(",")}
+                  if owner_csv else None)
+allowed_groups = ({int(value) for value in group_csv.split(",")}
+                  if group_csv else None)
+MAX_ENTRIES = 100000
+MAX_DEPTH = 256
+MAX_FILE = 512 * 1024 * 1024
+MAX_TOTAL = 2 * 1024 * 1024 * 1024
+MAX_PATH_TOTAL = 64 * 1024 * 1024
+MAX_SYMLINK_TARGET = 64 * 1024
+MAX_SYMLINKS = 40
+MAX_SYMLINK_COMPONENTS = 4096
+MAX_XATTRS = 262144
+MAX_XATTRS_PER_ENTRY = 256
+MAX_XATTR_LIST = 64 * 1024
+MAX_XATTR_VALUE = 16 * 1024 * 1024
+MAX_XATTR_TOTAL = 64 * 1024 * 1024
+
+ACL_TYPE_EXTENDED = 0x00000100
+O_SYMLINK = 0x00200000
+XATTR_SHOWCOMPRESSION = 0x0020
+DARWIN = sys.platform == "darwin"
+
+if kind not in ("file", "tree"):
+    raise SystemExit(1)
+
+if DARWIN:
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    libc.acl_get_fd_np.restype = ctypes.c_void_p
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    libc.acl_free.restype = ctypes.c_int
+    libc.flistxattr.argtypes = [
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int
+    ]
+    libc.flistxattr.restype = ctypes.c_ssize_t
+    libc.fgetxattr.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p,
+        ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int,
+    ]
+    libc.fgetxattr.restype = ctypes.c_ssize_t
+    libc.freadlink.argtypes = [
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t
+    ]
+    libc.freadlink.restype = ctypes.c_ssize_t
+else:
+    libc = None
+
+DIR_FLAGS = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+FILE_FLAGS = (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+              | getattr(os, "O_CLOEXEC", 0))
+# Darwin O_SYMLINK opens the link object. Linux O_PATH|O_NOFOLLOW provides the
+# same fstat binding for the portable MDM test contract.
+LINK_FLAGS = ((os.O_RDONLY | os.O_NONBLOCK | O_SYMLINK
+               | getattr(os, "O_CLOEXEC", 0)) if DARWIN else
+              (getattr(os, "O_PATH", os.O_RDONLY) | os.O_NOFOLLOW
+               | getattr(os, "O_CLOEXEC", 0)))
+
+
+def weak_identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode,
+            value.st_uid, value.st_gid, getattr(value, "st_flags", 0),
+            getattr(value, "st_gen", 0))
+
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+            value.st_gid, value.st_nlink, value.st_size,
+            getattr(value, "st_flags", 0), getattr(value, "st_gen", 0),
+            value.st_mtime_ns, value.st_ctime_ns)
+
+
+def assert_bound(parent, name, descriptor, before, strong=True):
+    opened = os.fstat(descriptor)
+    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    compare = identity if strong else weak_identity
+    if compare(opened) != compare(before) or compare(current) != compare(before):
+        raise ValueError("artifact path changed")
+    return opened
+
+
+def open_entry(parent, name, before):
+    if stat.S_ISDIR(before.st_mode):
+        flags = DIR_FLAGS
+    elif stat.S_ISREG(before.st_mode):
+        flags = FILE_FLAGS
+    elif stat.S_ISLNK(before.st_mode):
+        flags = LINK_FLAGS
+    else:
+        raise ValueError("unsupported artifact entry")
+    descriptor = os.open(name, flags, dir_fd=parent)
+    try:
+        opened = assert_bound(parent, name, descriptor, before)
+        if stat.S_IFMT(opened.st_mode) != stat.S_IFMT(before.st_mode):
+            raise ValueError("artifact type changed")
+        if not stat.S_ISDIR(opened.st_mode) and opened.st_nlink != 1:
+            raise ValueError("hard-linked artifact entry")
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def no_extended_acl(descriptor):
+    if not DARWIN:
+        names = os.listxattr(descriptor)
+        if "system.posix_acl_access" in names or "system.posix_acl_default" in names:
+            raise ValueError("extended ACL is not allowed")
+        return
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED)
+    if not acl:
+        error = ctypes.get_errno()
+        if error == errno.ENOENT:
+            return
+        raise OSError(error or errno.EIO, "acl_get_fd_np")
+    ctypes.set_errno(0)
+    result = libc.acl_free(acl)
+    error = ctypes.get_errno()
+    if result != 0:
+        raise OSError(error or errno.EIO, "acl_free")
+    raise ValueError("extended ACL is not allowed")
+
+
+def list_xattr_names(descriptor, is_link=False):
+    if not DARWIN:
+        if is_link:
+            return []
+        names = [os.fsencode(value) for value in os.listxattr(descriptor)]
+        if len(names) > MAX_XATTRS_PER_ENTRY or len(set(names)) != len(names):
+            raise ValueError("too many or duplicate xattrs")
+        if sum(len(value) + 1 for value in names) > MAX_XATTR_LIST:
+            raise ValueError("xattr name list too large")
+        return sorted(names)
+    ctypes.set_errno(0)
+    needed = libc.flistxattr(descriptor, None, 0, XATTR_SHOWCOMPRESSION)
+    if needed < 0:
+        error = ctypes.get_errno()
+        raise OSError(error or errno.EIO, "flistxattr")
+    if needed > MAX_XATTR_LIST:
+        raise ValueError("xattr name list too large")
+    if needed == 0:
+        return []
+    buffer = ctypes.create_string_buffer(needed)
+    ctypes.set_errno(0)
+    actual = libc.flistxattr(descriptor, ctypes.cast(buffer, ctypes.c_void_p),
+                            needed, XATTR_SHOWCOMPRESSION)
+    if actual != needed:
+        if actual < 0:
+            error = ctypes.get_errno()
+            raise OSError(error or errno.EIO, "flistxattr")
+        raise ValueError("xattr name list changed")
+    raw = bytes(buffer[:actual])
+    if not raw.endswith(b"\0"):
+        raise ValueError("invalid xattr name list")
+    names = raw[:-1].split(b"\0")
+    if any(not name or b"\0" in name or len(name) > 127 for name in names):
+        raise ValueError("invalid xattr name")
+    if len(names) > MAX_XATTRS_PER_ENTRY or len(set(names)) != len(names):
+        raise ValueError("too many or duplicate xattrs")
+    return sorted(names)
+
+
+def read_xattr(descriptor, name):
+    def read_once():
+        if not DARWIN:
+            value = os.getxattr(descriptor, os.fsdecode(name))
+            if len(value) > MAX_XATTR_VALUE:
+                raise ValueError("xattr value too large")
+            return value
+        ctypes.set_errno(0)
+        needed = libc.fgetxattr(descriptor, name, None, 0, 0,
+                                XATTR_SHOWCOMPRESSION)
+        if needed < 0:
+            error = ctypes.get_errno()
+            raise OSError(error or errno.EIO, "fgetxattr")
+        if needed > MAX_XATTR_VALUE:
+            raise ValueError("xattr value too large")
+        buffer = ctypes.create_string_buffer(max(needed, 1))
+        ctypes.set_errno(0)
+        actual = libc.fgetxattr(descriptor, name,
+                                ctypes.cast(buffer, ctypes.c_void_p),
+                                needed, 0, XATTR_SHOWCOMPRESSION)
+        if actual != needed:
+            if actual < 0:
+                error = ctypes.get_errno()
+                raise OSError(error or errno.EIO, "fgetxattr")
+            raise ValueError("xattr value changed")
+        return bytes(buffer[:actual])
+    first = read_once()
+    second = read_once()
+    if first != second:
+        raise ValueError("xattr value changed")
+    return first
+
+
+def fd_readlink(descriptor):
+    before = os.fstat(descriptor)
+    if (not stat.S_ISLNK(before.st_mode) or before.st_nlink != 1
+            or before.st_size <= 0 or before.st_size > MAX_SYMLINK_TARGET):
+        raise ValueError("unsafe artifact symlink")
+
+    def read_once():
+        if not DARWIN:
+            value = os.readlink(b"", dir_fd=descriptor)
+            return value if isinstance(value, bytes) else os.fsencode(value)
+        buffer = ctypes.create_string_buffer(before.st_size + 1)
+        ctypes.set_errno(0)
+        actual = libc.freadlink(descriptor,
+                                ctypes.cast(buffer, ctypes.c_void_p),
+                                before.st_size + 1)
+        if actual < 0:
+            error = ctypes.get_errno()
+            raise OSError(error or errno.EIO, "freadlink")
+        return bytes(buffer[:actual])
+
+    first = read_once()
+    second = read_once()
+    after = os.fstat(descriptor)
+    if (not first or first != second or len(first) != before.st_size
+            or identity(after) != identity(before)):
+        raise ValueError("artifact symlink changed")
+    return first
+
+
+def capture():
+    records = []
+    total = 0
+    path_total = 0
+    xattr_count = 0
+    xattr_total = 0
+    root_bytes = os.fsencode(root)
+    if not root_bytes.startswith(b"/"):
+        raise ValueError("artifact path is not absolute")
+    parts = root_bytes.split(b"/")[1:]
+    if not parts or any(part in (b"", b".", b"..") for part in parts):
+        raise ValueError("artifact path is not canonical")
+    slash = os.open(b"/", DIR_FLAGS)
+    held = [slash]
+    bindings = []
+    try:
+        current = slash
+        for index, part in enumerate(parts):
+            before = os.stat(part, dir_fd=current, follow_symlinks=False)
+            final = index == len(parts) - 1
+            if not final:
+                if not stat.S_ISDIR(before.st_mode):
+                    raise ValueError("non-directory artifact parent")
+                flags = DIR_FLAGS
+            elif kind == "tree" and stat.S_ISDIR(before.st_mode):
+                flags = DIR_FLAGS
+            elif kind == "file" and stat.S_ISREG(before.st_mode):
+                flags = FILE_FLAGS
+            else:
+                raise ValueError("artifact root type mismatch")
+            child = os.open(part, flags, dir_fd=current)
+            try:
+                opened = assert_bound(current, part, child, before, final)
+                if final and not stat.S_ISDIR(opened.st_mode) and opened.st_nlink != 1:
+                    raise ValueError("hard-linked artifact root")
+            except Exception:
+                os.close(child)
+                raise
+            bindings.append((current, part, child, before, final))
+            held.append(child)
+            current = child
+        root_fd = current
+        root_dev = os.fstat(root_fd).st_dev
+
+        def metadata(descriptor, before):
+            nonlocal xattr_count, xattr_total
+            is_link = stat.S_ISLNK(before.st_mode)
+            if not (is_link and not DARWIN):
+                no_extended_acl(descriptor)
+            names = list_xattr_names(descriptor, is_link)
+            values = []
+            for name in names:
+                value = read_xattr(descriptor, name)
+                xattr_count += 1
+                xattr_total += len(name) + len(value)
+                if xattr_count > MAX_XATTRS or xattr_total > MAX_XATTR_TOTAL:
+                    raise ValueError("artifact xattrs too large")
+                values.append({"name": base64.b64encode(name).decode("ascii"),
+                               "value": base64.b64encode(value).decode("ascii")})
+            if list_xattr_names(descriptor, is_link) != names:
+                raise ValueError("xattr names changed")
+            if identity(os.fstat(descriptor)) != identity(before):
+                raise ValueError("artifact metadata changed")
+            return values
+
+        def validate_symlink(parent_parts, target):
+            if target.startswith(b"/") or len(target) > MAX_SYMLINK_TARGET:
+                raise ValueError("invalid artifact symlink")
+            pending = collections.deque(list(parent_parts) + target.split(b"/"))
+            descriptors = [os.dup(root_fd)]
+            target_bindings = []
+            symlinks = 0
+            processed = 0
+            try:
+                while pending:
+                    component = pending.popleft()
+                    processed += 1
+                    if processed > MAX_SYMLINK_COMPONENTS:
+                        raise ValueError("symlink target too complex")
+                    if component in (b"", b"."):
+                        continue
+                    if component == b"..":
+                        if len(descriptors) == 1:
+                            raise ValueError("artifact symlink escapes root")
+                        parent, name, descriptor, before = target_bindings.pop()
+                        assert_bound(parent, name, descriptor, before, False)
+                        os.close(descriptors.pop())
+                        continue
+                    current_fd = descriptors[-1]
+                    before = os.stat(component, dir_fd=current_fd,
+                                     follow_symlinks=False)
+                    if before.st_dev != root_dev:
+                        raise ValueError("artifact symlink crosses filesystem")
+                    if stat.S_ISLNK(before.st_mode):
+                        if before.st_nlink != 1:
+                            raise ValueError("hard-linked artifact symlink")
+                        link_fd = os.open(component, LINK_FLAGS, dir_fd=current_fd)
+                        try:
+                            assert_bound(current_fd, component, link_fd, before)
+                            nested = fd_readlink(link_fd)
+                            assert_bound(current_fd, component, link_fd, before)
+                        finally:
+                            os.close(link_fd)
+                        if nested.startswith(b"/") or len(nested) > MAX_SYMLINK_TARGET:
+                            raise ValueError("invalid nested artifact symlink")
+                        symlinks += 1
+                        if symlinks > MAX_SYMLINKS:
+                            raise ValueError("too many symlink hops")
+                        pending.extendleft(reversed(nested.split(b"/")))
+                        continue
+                    if pending:
+                        if not stat.S_ISDIR(before.st_mode):
+                            raise ValueError("dangling artifact symlink")
+                        child = os.open(component, DIR_FLAGS, dir_fd=current_fd)
+                        try:
+                            assert_bound(current_fd, component, child, before, False)
+                        except Exception:
+                            os.close(child)
+                            raise
+                        target_bindings.append((current_fd, component, child, before))
+                        descriptors.append(child)
+                        continue
+                    if stat.S_ISDIR(before.st_mode):
+                        flags = DIR_FLAGS
+                    elif stat.S_ISREG(before.st_mode):
+                        if before.st_nlink != 1:
+                            raise ValueError("hard-linked symlink target")
+                        flags = FILE_FLAGS
+                    else:
+                        raise ValueError("unsupported symlink target")
+                    terminal = os.open(component, flags, dir_fd=current_fd)
+                    try:
+                        assert_bound(current_fd, component, terminal, before, False)
+                    finally:
+                        os.close(terminal)
+                for parent, name, descriptor, before in reversed(target_bindings):
+                    assert_bound(parent, name, descriptor, before, False)
+            finally:
+                for descriptor in reversed(descriptors):
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+        def visit(descriptor, parent, name, before, relative_parts, depth):
+            nonlocal total, path_total
+            if depth > MAX_DEPTH or len(records) >= MAX_ENTRIES:
+                raise ValueError("artifact tree too large")
+            if before.st_dev != root_dev:
+                raise ValueError("artifact crosses filesystem")
+            if allowed_owners is not None and before.st_uid not in allowed_owners:
+                raise ValueError("unexpected artifact owner")
+            if allowed_groups is not None and before.st_gid not in allowed_groups:
+                raise ValueError("unexpected artifact group")
+            if not stat.S_ISLNK(before.st_mode) and stat.S_IMODE(before.st_mode) & 0o022:
+                raise ValueError("writable artifact entry")
+            relative_bytes = b"/".join(relative_parts)
+            path_total += len(relative_bytes)
+            if path_total > MAX_PATH_TOTAL:
+                raise ValueError("artifact paths too large")
+            base = {"path": os.fsdecode(relative_bytes),
+                    "mode": format(stat.S_IMODE(before.st_mode), "04o"),
+                    "uid": before.st_uid, "gid": before.st_gid,
+                    "nlink": before.st_nlink,
+                    "size": before.st_size,
+                    "flags": getattr(before, "st_flags", 0),
+                    "xattrs": metadata(descriptor, before)}
+            if stat.S_ISDIR(before.st_mode):
+                records.append(dict(base, kind="dir"))
+                names = sorted(os.listdir(descriptor), key=os.fsencode)
+                for child_name in names:
+                    child_bytes = os.fsencode(child_name)
+                    if child_bytes in (b"", b".", b"..") or b"/" in child_bytes:
+                        raise ValueError("invalid artifact entry")
+                    child_before = os.stat(child_bytes, dir_fd=descriptor,
+                                           follow_symlinks=False)
+                    child = open_entry(descriptor, child_bytes, child_before)
+                    try:
+                        visit(child, descriptor, child_bytes, child_before,
+                              relative_parts + [child_bytes], depth + 1)
+                        assert_bound(descriptor, child_bytes, child, child_before)
+                    finally:
+                        os.close(child)
+                names_after = sorted(os.listdir(descriptor), key=os.fsencode)
+                if names_after != names:
+                    raise ValueError("directory entries changed")
+            elif stat.S_ISREG(before.st_mode):
+                if before.st_nlink != 1 or before.st_size > MAX_FILE:
+                    raise ValueError("unsafe artifact file")
+                digest = hashlib.sha256()
+                size = 0
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                while True:
+                    block = os.read(descriptor, 1024 * 1024)
+                    if not block:
+                        break
+                    size += len(block)
+                    if size > MAX_FILE:
+                        raise ValueError("artifact file grew")
+                    digest.update(block)
+                if size != before.st_size:
+                    raise ValueError("artifact file size changed")
+                total += size
+                if total > MAX_TOTAL:
+                    raise ValueError("artifact aggregate too large")
+                records.append(dict(base, kind="file", size=size,
+                                    sha256=digest.hexdigest()))
+            elif stat.S_ISLNK(before.st_mode):
+                if before.st_nlink != 1:
+                    raise ValueError("hard-linked artifact symlink")
+                target = fd_readlink(descriptor)
+                validate_symlink(relative_parts[:-1], target)
+                records.append(dict(base, kind="symlink",
+                                    target=base64.b64encode(target).decode("ascii")))
+            else:
+                raise ValueError("unsupported artifact entry")
+            if identity(os.fstat(descriptor)) != identity(before):
+                raise ValueError("artifact changed")
+            if parent is not None:
+                assert_bound(parent, name, descriptor, before)
+
+        root_before = os.fstat(root_fd)
+        visit(root_fd, None, None, root_before, [], 0)
+        for parent, name, descriptor, before, strong in reversed(bindings):
+            assert_bound(parent, name, descriptor, before, strong)
+        return (json.dumps(records, ensure_ascii=True, sort_keys=True,
+                           separators=(",", ":")) + "\n").encode("ascii")
+    finally:
+        for descriptor in reversed(held):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+try:
+    first = capture()
+    second = capture()
+    if first != second:
+        raise ValueError("artifact changed during capture")
+    print(hashlib.sha256(first).hexdigest())
+except (OSError, UnicodeError, ValueError, MemoryError, OverflowError,
+        RuntimeError, ctypes.ArgumentError):
+    sys.exit(1)
+PY
+}
+
+# Hash only Git worktree semantics so root-owned authoritative content can be
+# compared with the target-user-owned retained checkout.  The same fd-bound
+# walker is used for both sides; uid/gid/timestamps and clone-specific .git
+# bytes are deliberately excluded.  The retained marker is the only additional
+# exclusion and is validated independently by _mdm_persistent_marker_trusted.
+_mdm_worktree_content_digest() { # <absolute-tree> <authority|retained>
+  local _path="$1" _role="$2" _python _canonical
+  case "$_role" in authority|retained) : ;; *) return 1 ;; esac
+  [[ "$_path" == /* && ! "$_path" =~ [[:cntrl:]] && ! -L "$_path" ]] \
+    || return 1
+  _canonical="$(_mdm_canonical_dir "$_path")" || return 1
+  [[ "$_canonical" == "$_path" ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
+    /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_path" "$_role" <<'PY'
+import base64
+import collections
+import ctypes
+import errno
+import hashlib
+import json
+import os
+import stat
+import sys
+
+root, role = sys.argv[1:]
+if role not in ("authority", "retained"):
+    raise SystemExit(1)
+
+MAX_ENTRIES = 100000
+MAX_DEPTH = 256
+MAX_FILE = 512 * 1024 * 1024
+MAX_TOTAL = 2 * 1024 * 1024 * 1024
+MAX_PATH_TOTAL = 64 * 1024 * 1024
+MAX_SYMLINK_TARGET = 64 * 1024
+MAX_SYMLINKS = 40
+MAX_SYMLINK_COMPONENTS = 4096
+DARWIN = sys.platform == "darwin"
+O_SYMLINK = 0x00200000
+MARKER = b".claude-starter-kit-mdm-managed"
+
+if DARWIN:
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.freadlink.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t]
+    libc.freadlink.restype = ctypes.c_ssize_t
+    libc.flistxattr.argtypes = [ctypes.c_int, ctypes.c_void_p,
+                               ctypes.c_size_t, ctypes.c_int]
+    libc.flistxattr.restype = ctypes.c_ssize_t
+    libc.fgetxattr.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p,
+                               ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    libc.fgetxattr.restype = ctypes.c_ssize_t
+else:
+    libc = None
+
+DIR_FLAGS = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+FILE_FLAGS = (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+              | getattr(os, "O_CLOEXEC", 0))
+LINK_FLAGS = ((os.O_RDONLY | os.O_NONBLOCK | O_SYMLINK
+               | getattr(os, "O_CLOEXEC", 0)) if DARWIN else
+              (getattr(os, "O_PATH", os.O_RDONLY) | os.O_NOFOLLOW
+               | getattr(os, "O_CLOEXEC", 0)))
+
+
+def weak_identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode,
+            value.st_uid, value.st_gid, getattr(value, "st_flags", 0),
+            getattr(value, "st_gen", 0))
+
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+            value.st_gid, value.st_nlink, value.st_size,
+            getattr(value, "st_flags", 0), getattr(value, "st_gen", 0),
+            value.st_mtime_ns, value.st_ctime_ns)
+
+
+def assert_bound(parent, name, descriptor, before, strong=True):
+    opened = os.fstat(descriptor)
+    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    compare = identity if strong else weak_identity
+    if compare(opened) != compare(before) or compare(current) != compare(before):
+        raise ValueError("worktree path changed")
+    return opened
+
+
+def open_entry(parent, name, before):
+    if stat.S_ISDIR(before.st_mode):
+        flags = DIR_FLAGS
+    elif stat.S_ISREG(before.st_mode):
+        flags = FILE_FLAGS
+    elif stat.S_ISLNK(before.st_mode):
+        flags = LINK_FLAGS
+    else:
+        raise ValueError("unsupported worktree entry")
+    descriptor = os.open(name, flags, dir_fd=parent)
+    try:
+        opened = assert_bound(parent, name, descriptor, before)
+        if stat.S_IFMT(opened.st_mode) != stat.S_IFMT(before.st_mode):
+            raise ValueError("worktree type changed")
+        if not stat.S_ISDIR(opened.st_mode) and opened.st_nlink != 1:
+            raise ValueError("hard-linked worktree entry")
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def fd_readlink(descriptor):
+    before = os.fstat(descriptor)
+    if (not stat.S_ISLNK(before.st_mode) or before.st_nlink != 1
+            or before.st_size <= 0 or before.st_size > MAX_SYMLINK_TARGET):
+        raise ValueError("unsafe worktree symlink")
+
+    def read_once():
+        if not DARWIN:
+            value = os.readlink(b"", dir_fd=descriptor)
+            return value if isinstance(value, bytes) else os.fsencode(value)
+        buffer = ctypes.create_string_buffer(before.st_size + 1)
+        ctypes.set_errno(0)
+        actual = libc.freadlink(descriptor,
+                                ctypes.cast(buffer, ctypes.c_void_p),
+                                before.st_size + 1)
+        if actual < 0:
+            error = ctypes.get_errno()
+            raise OSError(error or errno.EIO, "freadlink")
+        return bytes(buffer[:actual])
+
+    first = read_once()
+    second = read_once()
+    if (not first or first != second or len(first) != before.st_size
+            or identity(os.fstat(descriptor)) != identity(before)):
+        raise ValueError("worktree symlink changed")
+    return first
+
+
+def capture_xattrs(descriptor, value):
+    if getattr(value, "st_flags", 0) != 0:
+        raise ValueError("worktree flags are not allowed")
+    if DARWIN:
+        ctypes.set_errno(0)
+        needed = libc.flistxattr(descriptor, None, 0, 0x0020)
+        if needed < 0:
+            error = ctypes.get_errno()
+            raise OSError(error or errno.EIO, "flistxattr")
+        if needed > 64 * 1024:
+            raise ValueError("worktree xattrs too large")
+        if needed == 0:
+            names = []
+        else:
+            buffer = ctypes.create_string_buffer(needed)
+            actual = libc.flistxattr(descriptor,
+                                     ctypes.cast(buffer, ctypes.c_void_p),
+                                     needed, 0x0020)
+            if actual != needed or not bytes(buffer[:actual]).endswith(b"\0"):
+                raise ValueError("worktree xattr names changed")
+            names = bytes(buffer[:actual - 1]).split(b"\0")
+    elif stat.S_ISLNK(value.st_mode):
+        names = []
+    else:
+        names = [os.fsencode(name) for name in os.listxattr(descriptor)]
+    if len(names) > 256 or len(set(names)) != len(names):
+        raise ValueError("invalid worktree xattr names")
+    records = []
+    for name in sorted(names):
+        if not name or len(name) > 127:
+            raise ValueError("invalid worktree xattr name")
+        if DARWIN:
+            ctypes.set_errno(0)
+            needed = libc.fgetxattr(descriptor, name, None, 0, 0, 0x0020)
+            if needed < 0:
+                error = ctypes.get_errno()
+                raise OSError(error or errno.EIO, "fgetxattr")
+            if needed > 16 * 1024 * 1024:
+                raise ValueError("worktree xattr value too large")
+            buffer = ctypes.create_string_buffer(max(needed, 1))
+            actual = libc.fgetxattr(descriptor, name,
+                                    ctypes.cast(buffer, ctypes.c_void_p),
+                                    needed, 0, 0x0020)
+            if actual != needed:
+                raise ValueError("worktree xattr value changed")
+            data = bytes(buffer[:actual])
+        else:
+            data = os.getxattr(descriptor, os.fsdecode(name))
+            if len(data) > 16 * 1024 * 1024:
+                raise ValueError("worktree xattr value too large")
+        records.append({"name": base64.b64encode(name).decode("ascii"),
+                        "value": base64.b64encode(data).decode("ascii")})
+    return records
+
+
+def require_checkout_mode(value):
+    mode = stat.S_IMODE(value.st_mode)
+    if stat.S_ISDIR(value.st_mode):
+        allowed = (0o755,) if role == "retained" else (0o555, 0o755)
+    elif stat.S_ISREG(value.st_mode):
+        executable = bool(mode & 0o111)
+        if role == "retained":
+            allowed = (0o755,) if executable else (0o644,)
+        else:
+            allowed = (0o555, 0o755) if executable else (0o444, 0o644)
+    else:
+        return
+    if mode not in allowed:
+        raise ValueError("non-canonical worktree mode")
+
+
+def capture():
+    records = []
+    total = 0
+    path_total = 0
+    root_bytes = os.fsencode(root)
+    if not root_bytes.startswith(b"/"):
+        raise ValueError("worktree path is not absolute")
+    parts = root_bytes.split(b"/")[1:]
+    if not parts or any(part in (b"", b".", b"..") for part in parts):
+        raise ValueError("worktree path is not canonical")
+
+    slash = os.open(b"/", DIR_FLAGS)
+    held = [slash]
+    bindings = []
+    try:
+        current = slash
+        for index, part in enumerate(parts):
+            before = os.stat(part, dir_fd=current, follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode):
+                raise ValueError("non-directory worktree component")
+            child = os.open(part, DIR_FLAGS, dir_fd=current)
+            final = index == len(parts) - 1
+            try:
+                assert_bound(current, part, child, before, final)
+            except Exception:
+                os.close(child)
+                raise
+            bindings.append((current, part, child, before, final))
+            held.append(child)
+            current = child
+        root_fd = current
+        root_dev = os.fstat(root_fd).st_dev
+
+        def validate_symlink(parent_parts, target):
+            if target.startswith(b"/") or len(target) > MAX_SYMLINK_TARGET:
+                raise ValueError("invalid worktree symlink")
+            pending = collections.deque(list(parent_parts) + target.split(b"/"))
+            descriptors = [os.dup(root_fd)]
+            target_bindings = []
+            logical = []
+            hops = 0
+            processed = 0
+            try:
+                while pending:
+                    component = pending.popleft()
+                    processed += 1
+                    if processed > MAX_SYMLINK_COMPONENTS:
+                        raise ValueError("worktree symlink too complex")
+                    if component in (b"", b"."):
+                        continue
+                    if component == b"..":
+                        if not logical:
+                            raise ValueError("worktree symlink escapes root")
+                        logical.pop()
+                        parent, name, descriptor, before = target_bindings.pop()
+                        assert_bound(parent, name, descriptor, before)
+                        os.close(descriptors.pop())
+                        continue
+                    if not logical and (component == b".git"
+                                        or (role == "retained" and component == MARKER)):
+                        raise ValueError("worktree symlink enters excluded state")
+                    current_fd = descriptors[-1]
+                    before = os.stat(component, dir_fd=current_fd,
+                                     follow_symlinks=False)
+                    if before.st_dev != root_dev:
+                        raise ValueError("worktree symlink crosses filesystem")
+                    if stat.S_ISLNK(before.st_mode):
+                        link_fd = open_entry(current_fd, component, before)
+                        try:
+                            nested = fd_readlink(link_fd)
+                            assert_bound(current_fd, component, link_fd, before)
+                        finally:
+                            os.close(link_fd)
+                        if nested.startswith(b"/"):
+                            raise ValueError("absolute nested worktree symlink")
+                        hops += 1
+                        if hops > MAX_SYMLINKS:
+                            raise ValueError("too many worktree symlinks")
+                        pending.extendleft(reversed(nested.split(b"/")))
+                        continue
+                    logical.append(component)
+                    if pending:
+                        if not stat.S_ISDIR(before.st_mode):
+                            raise ValueError("dangling worktree symlink")
+                        child = os.open(component, DIR_FLAGS, dir_fd=current_fd)
+                        try:
+                            assert_bound(current_fd, component, child, before)
+                        except Exception:
+                            os.close(child)
+                            raise
+                        target_bindings.append((current_fd, component, child, before))
+                        descriptors.append(child)
+                    else:
+                        if stat.S_ISDIR(before.st_mode):
+                            flags = DIR_FLAGS
+                        elif stat.S_ISREG(before.st_mode):
+                            flags = FILE_FLAGS
+                        else:
+                            raise ValueError("unsupported worktree symlink target")
+                        terminal = os.open(component, flags, dir_fd=current_fd)
+                        try:
+                            assert_bound(current_fd, component, terminal, before)
+                        finally:
+                            os.close(terminal)
+                for parent, name, descriptor, before in reversed(target_bindings):
+                    assert_bound(parent, name, descriptor, before)
+            finally:
+                for descriptor in reversed(descriptors):
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+        def visit(descriptor, parent, name, before, relative, depth):
+            nonlocal total, path_total
+            if depth > MAX_DEPTH or len(records) >= MAX_ENTRIES:
+                raise ValueError("worktree too large")
+            if before.st_dev != root_dev:
+                raise ValueError("worktree crosses filesystem")
+            xattrs = capture_xattrs(descriptor, before)
+            require_checkout_mode(before)
+            relative_bytes = b"/".join(relative)
+            path_total += len(relative_bytes)
+            if path_total > MAX_PATH_TOTAL:
+                raise ValueError("worktree paths too large")
+            path = base64.b64encode(relative_bytes).decode("ascii")
+            if stat.S_ISDIR(before.st_mode):
+                records.append({"kind": "dir", "mode": "040000", "path": path,
+                                "xattrs": xattrs})
+                names = sorted((os.fsencode(item) for item in os.listdir(descriptor)))
+                for child_name in names:
+                    if child_name in (b"", b".", b"..") or b"/" in child_name:
+                        raise ValueError("invalid worktree entry")
+                    if depth == 0 and (child_name == b".git"
+                                       or (role == "retained" and child_name == MARKER)):
+                        continue
+                    child_before = os.stat(child_name, dir_fd=descriptor,
+                                           follow_symlinks=False)
+                    child = open_entry(descriptor, child_name, child_before)
+                    try:
+                        visit(child, descriptor, child_name, child_before,
+                              relative + [child_name], depth + 1)
+                        assert_bound(descriptor, child_name, child, child_before)
+                    finally:
+                        os.close(child)
+                after_names = sorted((os.fsencode(item)
+                                      for item in os.listdir(descriptor)))
+                if after_names != names:
+                    raise ValueError("worktree directory changed")
+            elif stat.S_ISREG(before.st_mode):
+                if before.st_nlink != 1 or before.st_size > MAX_FILE:
+                    raise ValueError("unsafe worktree file")
+                digest = hashlib.sha256()
+                size = 0
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                while True:
+                    block = os.read(descriptor, 1024 * 1024)
+                    if not block:
+                        break
+                    size += len(block)
+                    if size > MAX_FILE:
+                        raise ValueError("worktree file grew")
+                    digest.update(block)
+                if size != before.st_size:
+                    raise ValueError("worktree file size changed")
+                total += size
+                if total > MAX_TOTAL:
+                    raise ValueError("worktree aggregate too large")
+                mode = "100755" if stat.S_IMODE(before.st_mode) & 0o111 else "100644"
+                records.append({"kind": "file", "mode": mode, "path": path,
+                                "sha256": digest.hexdigest(), "size": size,
+                                "xattrs": xattrs})
+            elif stat.S_ISLNK(before.st_mode):
+                target = fd_readlink(descriptor)
+                validate_symlink(relative[:-1], target)
+                records.append({"kind": "symlink", "mode": "120000", "path": path,
+                                "target": base64.b64encode(target).decode("ascii"),
+                                "xattrs": xattrs})
+            else:
+                raise ValueError("unsupported worktree entry")
+            if identity(os.fstat(descriptor)) != identity(before):
+                raise ValueError("worktree changed")
+            if parent is not None:
+                assert_bound(parent, name, descriptor, before)
+
+        root_before = os.fstat(root_fd)
+        visit(root_fd, None, None, root_before, [], 0)
+        for parent, name, descriptor, before, strong in reversed(bindings):
+            assert_bound(parent, name, descriptor, before, strong)
+        return (json.dumps(records, ensure_ascii=True, sort_keys=True,
+                           separators=(",", ":")) + "\n").encode("ascii")
+    finally:
+        for descriptor in reversed(held):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+try:
+    first = capture()
+    second = capture()
+    if first != second:
+        raise ValueError("worktree changed during capture")
+    print(hashlib.sha256(first).hexdigest())
+except (OSError, UnicodeError, ValueError, MemoryError, OverflowError,
+        RuntimeError, ctypes.ArgumentError):
+    raise SystemExit(1)
+PY
 }
 
 _mdm_stat_identity() {
@@ -367,11 +1915,112 @@ _mdm_stat_fd_identity() {
 # at most limit+1 bytes, and the copied size plus source metadata must remain
 # identical to the pre-open snapshot.
 _MDM_BOUND_SNAPSHOT_MODE=""
+
+_mdm_snapshot_copy_bound() {
+  # <source> <snapshot> <label> <before-id> <size> <metadata> <uid> <mode> <limit>
+  local _source="$1" _snapshot="$2" _label="$3" _before="$4" _size="$5"
+  local _meta="$6" _uid="$7" _mode="$8" _copy_limit="$9"
+  local _opened="" _copied="" _copied_size="" _after="" _meta_after=""
+  local _after_uid="" _after_rest="" _after_links="" _after_mode=""
+  exec 9<"$_source" || return 1
+  _opened="$(_mdm_stat_fd_identity 9)" || { exec 9<&-; return 1; }
+  [[ "$_opened" == "$_before" ]] || { exec 9<&-; return 1; }
+  /usr/bin/head -c "$_copy_limit" <&9 > "$_snapshot" \
+    || { exec 9<&-; return 1; }
+  exec 9<&- 2>/dev/null || true
+  _copied="$(_mdm_stat_identity "$_snapshot")" || return 1
+  case "$_copied" in
+    *:Regular\ File:*|*:regular\ file:*) : ;;
+    *) return 1 ;;
+  esac
+  _copied_size="${_copied##*:}"
+  [[ "$_copied_size" == "$_size" ]] || return 1
+  _after="$(_mdm_stat_identity "$_source")" || return 1
+  _meta_after="$(_mdm_stat_managed_metadata "$_source")" || return 1
+  if [[ "$_label" == history ]]; then
+    # Link-count changes are not content/identity changes.  A valid root-owned
+    # history may be hardlinked by a local root recovery workflow.
+    [[ "$_meta_after" =~ ^[0-9]+:[0-9]+:[0-7]+$ ]] || return 1
+    _after_uid="${_meta_after%%:*}"
+    _after_rest="${_meta_after#*:}"
+    _after_links="${_after_rest%%:*}"
+    _after_mode="$(_mdm_mode_normalize "${_after_rest#*:}" || true)"
+    [[ "$_after_links" =~ ^[1-9][0-9]*$ \
+      && "$_after_uid" == "$_uid" && "$_after_mode" == "$_mode" ]] \
+      || return 1
+  else
+    [[ "$_meta_after" == "$_meta" ]] || return 1
+  fi
+  [[ "$_after" == "$_before" ]] || return 1
+  ! _mdm_has_extended_acl "$_source" || return 1
+  /bin/chmod 600 "$_snapshot"
+}
+
+_MDM_ACTIVE_BOUND_SNAPSHOT_SUPERVISOR_PID=""
+_MDM_BOUND_SNAPSHOT_SUPERVISOR_STARTING=0
+_MDM_BOUND_SNAPSHOT_SUPERVISOR_PREVIOUS_BG=""
+_MDM_ACTIVE_BOUND_SNAPSHOT_PATH=""
+
+_mdm_run_bound_snapshot_with_timeout() { # <seconds> <snapshot> <function> [args...]
+  local _seconds="$1" _snapshot="$2" _supervisor="" _rc=0 _previous=""
+  local _monitor_was_on=false _pending_signal=""
+  shift 2
+  _mdm_bound_snapshot_capture_parent_bg() {
+    local _nounset_was_on=false
+    case $- in *u*) _nounset_was_on=true ;; esac
+    set +u
+    _previous="$!"
+    [[ "$_nounset_was_on" == true ]] && set -u
+  }
+  _mdm_bound_snapshot_capture_parent_bg
+  # Defer a signal until cleanup ownership is fully registered.  Ignoring it
+  # here would discard it instead of making it pending.
+  trap '_pending_signal=HUP' HUP
+  trap '_pending_signal=INT' INT
+  trap '_pending_signal=TERM' TERM
+  _MDM_BOUND_SNAPSHOT_SUPERVISOR_PREVIOUS_BG="$_previous"
+  _MDM_BOUND_SNAPSHOT_SUPERVISOR_STARTING=1
+  _MDM_ACTIVE_BOUND_SNAPSHOT_PATH="$_snapshot"
+  # Arm cleanup as soon as registration is complete.  Before spawn, the $!
+  # fallback rejects the saved previous PID; during handoff it recovers the
+  # new supervisor PID.
+  _mdm_arm_transient_signal_cleanup
+  case "$_pending_signal" in
+    HUP) _mdm_cleanup_transient_checkouts HUP; exit 129 ;;
+    INT) _mdm_cleanup_transient_checkouts INT; exit 130 ;;
+    TERM) _mdm_cleanup_transient_checkouts TERM; exit 143 ;;
+  esac
+  case $- in *m*) _monitor_was_on=true ;; esac
+  set -m || {
+    _MDM_BOUND_SNAPSHOT_SUPERVISOR_STARTING=0
+    _MDM_ACTIVE_BOUND_SNAPSHOT_PATH=""
+    return 1
+  }
+  # The parent needs monitor mode only for assigning this supervisor its own
+  # process group.  Disable it inside that already-separated supervisor so
+  # its normally-terminated watchdog cannot emit job-control diagnostics.
+  ( set +m; _mdm_timeout_coordinator "$_seconds" "$@" ) <&0 &
+  _supervisor=$!
+  _MDM_ACTIVE_BOUND_SNAPSHOT_SUPERVISOR_PID="$_supervisor"
+  _MDM_BOUND_SNAPSHOT_SUPERVISOR_STARTING=0
+  [[ "$_monitor_was_on" == true ]] || set +m || true
+  # Do not install an EXIT trap here: snapshot helpers are also consumed via
+  # command substitution, where a newly-installed EXIT trap would roll back
+  # the caller's live transaction when the substitution exits normally.
+  wait "$_supervisor" 2>/dev/null || _rc=$?
+  if [[ "$_MDM_ACTIVE_BOUND_SNAPSHOT_SUPERVISOR_PID" == "$_supervisor" ]]; then
+    _MDM_ACTIVE_BOUND_SNAPSHOT_SUPERVISOR_PID=""
+  fi
+  if [[ "$_MDM_ACTIVE_BOUND_SNAPSHOT_PATH" == "$_snapshot" ]]; then
+    _MDM_ACTIVE_BOUND_SNAPSHOT_PATH=""
+  fi
+  return "$_rc"
+}
+
 _mdm_snapshot_bound_to() { # <source> <snapshot> <label> [target-uid]
   local _source="$1" _snapshot="$2" _label="$3" _expected_uid="${4:-}"
-  local _before _opened _after _meta _meta_after _uid _rest _links _mode_raw _mode
-  local _size _limit _copy_limit _copied _copied_size _done _child _watchdog _rc
-  local _copy_rc _timer _watch_seconds=5
+  local _before _meta _uid _rest _links _mode_raw _mode
+  local _size _limit _copy_limit _watch_seconds=5
   _MDM_BOUND_SNAPSHOT_MODE=""
   [[ -f "$_source" && ! -L "$_source" ]] || return 1
   [[ -f "$_snapshot" && ! -L "$_snapshot" ]] || return 1
@@ -384,14 +2033,18 @@ _mdm_snapshot_bound_to() { # <source> <snapshot> <label> [target-uid]
   _links="${_rest%%:*}"; _mode_raw="${_rest#*:}"
   _mode="$(_mdm_mode_normalize "$_mode_raw")" || return 1
   _mdm_mode_is_safe "$_mode" || return 1
-  [[ "$_links" == 1 ]] || return 1
+  if [[ "$_label" == history ]]; then
+    [[ "$_links" =~ ^[1-9][0-9]*$ ]] || return 1
+  else
+    [[ "$_links" == 1 ]] || return 1
+  fi
   _mdm_has_extended_acl "$_source" && return 1
   if [[ "$_label" == managed || "$_label" == cli ]] \
     || [[ "$_label" == head && -n "$_expected_uid" ]]; then
     [[ "$_expected_uid" =~ ^[0-9]+$ && "$_uid" == "$_expected_uid" ]] || return 1
   fi
   case "$_label" in
-    manifest|receipt) _limit=4194304 ;;
+    manifest|receipt|history) _limit=4194304 ;;
     managed) _limit=67108864 ;;
     cli) _limit=536870912 ;;
     head) _limit=41 ;;
@@ -399,64 +2052,14 @@ _mdm_snapshot_bound_to() { # <source> <snapshot> <label> [target-uid]
   esac
   [[ "$_size" =~ ^[0-9]+$ && "$_size" -le "$_limit" ]] || return 1
   _copy_limit=$((_limit + 1))
-  _done="$_snapshot.done"
-  [[ ! -e "$_done" && ! -L "$_done" ]] || return 1
-  ( umask 077; set -C; printf 'pending\n' > "$_done" ) 2>/dev/null || return 1
-  /bin/chmod 600 "$_done" || { /bin/rm -f "$_done"; return 1; }
   if [[ "${_MDM_TEST_MODE:-0}" == "1" \
     && "${MDM_SNAPSHOT_WATCHDOG_SECONDS_OVERRIDE:-}" =~ ^[1-5]$ ]]; then
     _watch_seconds="$MDM_SNAPSHOT_WATCHDOG_SECONDS_OVERRIDE"
   fi
-
-  (
-    _copy_rc=0
-    exec 9<"$_source" || _copy_rc=1
-    if [[ "$_copy_rc" -eq 0 ]]; then
-      _opened="$(_mdm_stat_fd_identity 9)" || _copy_rc=1
-    fi
-    [[ "$_copy_rc" -ne 0 || "$_opened" == "$_before" ]] || _copy_rc=1
-    if [[ "$_copy_rc" -eq 0 ]] \
-      && ! /usr/bin/head -c "$_copy_limit" <&9 > "$_snapshot"; then
-      _copy_rc=1
-    fi
-    exec 9<&- 2>/dev/null || true
-    if [[ "$_copy_rc" -eq 0 ]]; then
-      _copied="$(_mdm_stat_identity "$_snapshot")" || _copy_rc=1
-    fi
-    if [[ "$_copy_rc" -eq 0 ]]; then
-      case "$_copied" in *:Regular\ File:*|*:regular\ file:*) : ;; *) _copy_rc=1 ;; esac
-      _copied_size="${_copied##*:}"
-      [[ "$_copied_size" == "$_size" ]] || _copy_rc=1
-    fi
-    if [[ "$_copy_rc" -eq 0 ]]; then
-      _after="$(_mdm_stat_identity "$_source")" || _copy_rc=1
-      _meta_after="$(_mdm_stat_managed_metadata "$_source")" || _copy_rc=1
-      [[ "$_after" == "$_before" && "$_meta_after" == "$_meta" ]] || _copy_rc=1
-      ! _mdm_has_extended_acl "$_source" || _copy_rc=1
-    fi
-    [[ "$_copy_rc" -ne 0 ]] || /bin/chmod 600 "$_snapshot" || _copy_rc=1
-    printf '%s\n' "$_copy_rc" > "$_done"
-    exit "$_copy_rc"
-  ) &
-  _child=$!
-  (
-    _timer=""
-    trap '[[ -z "${_timer:-}" ]] || kill "$_timer" 2>/dev/null || true; exit 0' TERM INT
-    /bin/sleep "$_watch_seconds" >/dev/null 2>&1 & _timer=$!
-    wait "$_timer" 2>/dev/null || true
-    if ! /usr/bin/grep -Eq '^[01]$' "$_done" 2>/dev/null; then
-      kill -TERM "$_child" 2>/dev/null || true
-      /bin/sleep 1 >/dev/null 2>&1 & _timer=$!
-      wait "$_timer" 2>/dev/null || true
-      /usr/bin/grep -Eq '^[01]$' "$_done" 2>/dev/null || kill -KILL "$_child" 2>/dev/null || true
-    fi
-  ) &
-  _watchdog=$!
-  if wait "$_child" 2>/dev/null; then _rc=0; else _rc=$?; fi
-  kill "$_watchdog" 2>/dev/null || true
-  wait "$_watchdog" 2>/dev/null || true
-  /bin/rm -f "$_done"
-  if [[ "$_rc" -ne 0 || ! -f "$_snapshot" || -L "$_snapshot" ]]; then
+  if ! _mdm_run_bound_snapshot_with_timeout "$_watch_seconds" "$_snapshot" \
+      _mdm_snapshot_copy_bound "$_source" "$_snapshot" "$_label" \
+      "$_before" "$_size" "$_meta" "$_uid" "$_mode" "$_copy_limit" \
+    || [[ ! -f "$_snapshot" || -L "$_snapshot" ]]; then
     /bin/rm -f "$_snapshot"
     return 1
   fi
@@ -549,10 +2152,302 @@ _mdm_verify_dir_chain() {
 #   - dir 権限を umask に依存させない（信頼チェーン成立で 755 を要求・chmod は不要）
 #   - 既存パスの symlink は辿らず除去（root の書込を別ファイルへ誘導させない）
 #   - 同一 dir の一時ファイルへ書いてから mv -f（atomic rename・部分書込を晒さない）
-mdm_receipt_write() {
+_MDM_RECEIPT_PUBLISHED=0
+_MDM_RECEIPT_PREPARED_TMP=""
+_MDM_RECEIPT_PREPARED_PATH=""
+
+_mdm_generated_receipt_is_exact() { # <temp> <destination> <result> <exit>
+  local _file="$1" _destination="$2" _result="$3" _exit="$4" _python
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_file" "$_destination" "$_result" "$_exit" \
+      "$MDM_RCPT_KIT_VERSION" "$MDM_RCPT_GIT_REF" \
+      "$MDM_RCPT_RESOLVED_SHA" "$MDM_RCPT_INSTALL_DIR" \
+      "$MDM_RCPT_REQUIRED_COMPONENTS" "$MDM_RCPT_PROFILE" \
+      "$MDM_RCPT_LANGUAGE" "$MDM_RCPT_MANIFEST_PATH" \
+      "$MDM_RCPT_MANIFEST_SHA256" "$MDM_RCPT_DEPLOYMENT_SHA256" \
+      "$MDM_RCPT_POLICY_SHA256" "$MDM_RCPT_COMPONENT_MANIFEST_PATH" \
+      "$MDM_RCPT_COMPONENT_MANIFEST_SHA256" "$MDM_RCPT_TARGET_USER" \
+      "$MDM_RCPT_TARGET_UID" "$MDM_RCPT_TARGET_GENERATED_UID" \
+      "$MDM_RCPT_PARTIAL" "$MDM_RCPT_TIMESTAMP" "$MDM_RCPT_LOG_PATH" \
+      >/dev/null 2>&1 <<'PY'
+import json
+import os
+import re
+import stat
+import sys
+
+(path, destination, result, exit_raw, kit_version, git_ref, resolved_sha,
+ install_dir, required_raw, profile, language, manifest_path, manifest_sha,
+ deployment_sha, policy_sha, component_path, component_sha, target_user,
+ target_uid_raw, target_guid, partial_raw, timestamp, log_path) = sys.argv[1:]
+
+order = (
+    "schema_version", "kit_version", "git_ref", "resolved_sha",
+    "install_dir", "required_components", "profile", "language",
+    "manifest_path", "manifest_sha256", "deployment_sha256",
+    "policy_sha256", "component_manifest_path",
+    "component_manifest_sha256", "target_user", "target_uid",
+    "target_generated_uid", "result", "exit_code", "partial",
+    "timestamp", "log_path",
+)
+allowed_components = {
+    "biome", "claude_cli", "fonts", "ghostty", "kit", "node_runtime",
+    "safety_net", "web_content_runtime",
+}
+hash_pattern = re.compile(r"[0-9a-f]{64}")
+commit_pattern = re.compile(r"[0-9a-f]{40}")
+guid_pattern = re.compile(
+    r"[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}")
+
+
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON key")
+        value[key] = item
+    return value
+
+
+def reject_constant(_value):
+    raise ValueError("non-finite JSON number")
+
+
+def control_free(value):
+    if isinstance(value, str):
+        return not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                       or 0xD800 <= ord(char) <= 0xDFFF for char in value)
+    if isinstance(value, list):
+        return all(control_free(item) for item in value)
+    if isinstance(value, dict):
+        return all(control_free(key) and control_free(item)
+                   for key, item in value.items())
+    return True
+
+
+def decimal(value):
+    if (not value.isascii() or not value.isdigit()
+            or (len(value) > 1 and value.startswith("0"))):
+        raise ValueError("non-canonical integer")
+    return int(value)
+
+
+def canonical_array(raw):
+    value = json.loads(raw, object_pairs_hook=unique_object,
+                       parse_constant=reject_constant)
+    if type(value) is not list or not control_free(value):
+        raise ValueError("invalid receipt array")
+    rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"),
+                          allow_nan=False)
+    if rendered != raw:
+        raise ValueError("non-canonical receipt array")
+    return value
+
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+            value.st_uid, value.st_gid, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns, getattr(value, "st_flags", 0),
+            getattr(value, "st_gen", 0))
+
+
+try:
+    exit_code = decimal(exit_raw)
+    target_uid = decimal(target_uid_raw)
+    required = canonical_array(required_raw)
+    partial = canonical_array(partial_raw)
+    if (not 1 <= len(required) <= 8
+            or any(type(item) is not str or item not in allowed_components
+                   for item in required)
+            or required != sorted(set(required)) or "kit" not in required):
+        raise ValueError("invalid required components")
+    needs_node = ("safety_net" in required
+                  or "web_content_runtime" in required)
+    if ("node_runtime" in required) != needs_node:
+        raise ValueError("invalid node component dependency")
+    if profile not in {"minimal", "standard", "full"}:
+        raise ValueError("invalid profile")
+    if language not in {"en", "ja"}:
+        raise ValueError("invalid language")
+
+    if result == "success":
+        suffix = "/.claude-starter-kit"
+        home = install_dir[:-len(suffix)] if install_dir.endswith(suffix) else ""
+        receipt_dir = os.path.dirname(destination)
+        if (exit_code != 0 or partial != [] or target_uid < 501
+                or not target_user or not guid_pattern.fullmatch(target_guid)
+                or not commit_pattern.fullmatch(git_ref)
+                or resolved_sha != git_ref
+                or not install_dir.startswith("/") or not home
+                or install_dir != home + "/.claude-starter-kit"
+                or manifest_path
+                    != home + "/.claude/.starter-kit-manifest.json"
+                or component_path
+                    != receipt_dir + "/components-" + target_guid + ".json"
+                or destination
+                    != receipt_dir + "/receipt-" + target_user + ".json"
+                or any(not hash_pattern.fullmatch(value) for value in (
+                    manifest_sha, deployment_sha, policy_sha, component_sha))):
+            raise ValueError("invalid success receipt claim")
+    elif result == "failure":
+        if exit_code not in {10, 11, 20, 21, 30, 40, 50, 60}:
+            raise ValueError("invalid failure exit code")
+        if tuple(partial) not in {
+                (), ("claude_cli",), ("receipt",), ("rollback",),
+                ("claude_cli", "rollback"), ("receipt", "rollback")}:
+            raise ValueError("invalid partial failure claim")
+        if target_user:
+            if target_uid < 501 or not guid_pattern.fullmatch(target_guid):
+                raise ValueError("invalid resolved target tuple")
+        elif target_uid != 0 or target_guid:
+            raise ValueError("invalid unresolved target tuple")
+        if git_ref and not commit_pattern.fullmatch(git_ref):
+            raise ValueError("invalid failure git ref")
+        if resolved_sha and (not commit_pattern.fullmatch(resolved_sha)
+                             or resolved_sha != git_ref):
+            raise ValueError("invalid failure resolved SHA")
+        if install_dir and (not install_dir.startswith("/")
+                            or not install_dir.endswith("/.claude-starter-kit")):
+            raise ValueError("invalid failure install path")
+        if manifest_path and not manifest_path.startswith("/"):
+            raise ValueError("invalid failure manifest path")
+        if component_path and not component_path.startswith("/"):
+            raise ValueError("invalid failure component path")
+        for value in (manifest_sha, deployment_sha, policy_sha, component_sha):
+            if value and not hash_pattern.fullmatch(value):
+                raise ValueError("invalid failure hash")
+    else:
+        raise ValueError("invalid receipt result")
+
+    expected = {
+        "schema_version": 3,
+        "kit_version": kit_version,
+        "git_ref": git_ref,
+        "resolved_sha": resolved_sha,
+        "install_dir": install_dir,
+        "required_components": required,
+        "profile": profile,
+        "language": language,
+        "manifest_path": manifest_path,
+        "manifest_sha256": manifest_sha,
+        "deployment_sha256": deployment_sha,
+        "policy_sha256": policy_sha,
+        "component_manifest_path": component_path,
+        "component_manifest_sha256": component_sha,
+        "target_user": target_user,
+        "target_uid": target_uid,
+        "target_generated_uid": target_guid,
+        "result": result,
+        "exit_code": exit_code,
+        "partial": partial,
+        "timestamp": timestamp,
+        "log_path": log_path,
+    }
+    if not control_free(expected):
+        raise ValueError("receipt contains a control character")
+    lines = ["{"]
+    for index, key in enumerate(order):
+        rendered = json.dumps(expected[key], ensure_ascii=False,
+                              separators=(",", ":"), allow_nan=False)
+        comma = "," if index + 1 < len(order) else ""
+        lines.append(f'  {json.dumps(key)}: {rendered}{comma}')
+    canonical = ("\n".join(lines) + "\n}\n").encode("utf-8")
+
+    before = os.lstat(path)
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+            or before.st_size < 3 or before.st_size > 64 * 1024):
+        raise ValueError("unsafe receipt temp")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
+                         | getattr(os, "O_CLOEXEC", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if identity(opened) != identity(before):
+            raise ValueError("receipt identity changed")
+        actual = b""
+        while len(actual) < opened.st_size:
+            chunk = os.read(descriptor, opened.st_size - len(actual))
+            if not chunk:
+                raise ValueError("short receipt read")
+            actual += chunk
+        if os.read(descriptor, 1):
+            raise ValueError("receipt grew during read")
+    finally:
+        os.close(descriptor)
+    if identity(os.lstat(path)) != identity(before) or actual != canonical:
+        raise ValueError("receipt is not writer-canonical")
+    decoded = json.loads(actual.decode("utf-8", "strict"),
+                         object_pairs_hook=unique_object,
+                         parse_constant=reject_constant)
+    if decoded != expected or tuple(decoded) != order:
+        raise ValueError("receipt schema mismatch")
+except (IndexError, OSError, TypeError, UnicodeError, ValueError,
+        json.JSONDecodeError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_receipt_discard_prepared() {
+  local _tmp="${_MDM_RECEIPT_PREPARED_TMP:-}"
+  local _path="${_MDM_RECEIPT_PREPARED_PATH:-}" _dir
+  [[ -n "$_tmp" ]] || return 0
+  [[ -n "$_path" ]] || _path="${_MDM_RECEIPT_PREPARED_DESTINATION:-}"
+  _dir="${_path%/*}"
+  case "$_tmp" in "$_dir"/.receipt-tmp.*) : ;; *) return 1 ;; esac
+  if [[ -e "$_tmp" || -L "$_tmp" ]]; then
+    [[ -f "$_tmp" && ! -L "$_tmp" ]] || return 1
+    /bin/rm -f "$_tmp" || return 1
+  fi
+  _MDM_RECEIPT_PREPARED_TMP=""
+  _MDM_RECEIPT_PREPARED_PATH=""
+  _MDM_RECEIPT_PREPARED_DESTINATION=""
+}
+
+_mdm_receipt_prepared_ready() {
+  local _tmp="${_MDM_RECEIPT_PREPARED_TMP:-}"
+  local _path="${_MDM_RECEIPT_PREPARED_PATH:-}"
+  [[ -n "$_tmp" && -n "$_path" && -f "$_tmp" && ! -L "$_tmp" \
+    && "${_MDM_RECEIPT_PREPARED_DESTINATION:-}" == "$_path" ]]
+}
+
+_mdm_receipt_publish_prepared() {
+  local _tmp="${_MDM_RECEIPT_PREPARED_TMP:-}"
+  local _path="${_MDM_RECEIPT_PREPARED_PATH:-}"
+  [[ -n "$_tmp" && -n "$_path" ]] || return 1
+  /bin/mv -f "$_tmp" "$_path" 2>/dev/null || return 1
+  _MDM_RECEIPT_PREPARED_TMP=""
+  _MDM_RECEIPT_PREPARED_PATH=""
+  _MDM_RECEIPT_PREPARED_DESTINATION=""
+  _MDM_RECEIPT_PUBLISHED=1
+}
+
+mdm_receipt_prepare() {
   local _path="$1" _result="$2" _exit="$3"
+  local _manifest_home=""
+  _MDM_RECEIPT_PUBLISHED=0
+  [[ -z "${_MDM_RECEIPT_PREPARED_TMP:-}" ]] || return 1
+  _MDM_RECEIPT_PREPARED_DESTINATION="$_path"
   local _dir; _dir="$(dirname "$_path")"
   local _euid; _euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
+  if [[ "$_result" == success && "$_exit" -eq 0 ]]; then
+    [[ "$MDM_RCPT_GIT_REF" =~ ^[0-9a-f]{40}$ \
+      && "$MDM_RCPT_RESOLVED_SHA" =~ ^[0-9a-f]{40}$ \
+      && "$MDM_RCPT_GIT_REF" == "$MDM_RCPT_RESOLVED_SHA" ]] || return 1
+    [[ "$MDM_RCPT_TARGET_UID" =~ ^[0-9]+$ && "$MDM_RCPT_TARGET_UID" -ge 501 ]] || return 1
+    _mdm_normalize_generated_uid "$MDM_RCPT_TARGET_GENERATED_UID" >/dev/null || return 1
+    case "$MDM_RCPT_INSTALL_DIR" in
+      /*/.claude-starter-kit)
+        _manifest_home="${MDM_RCPT_INSTALL_DIR%/.claude-starter-kit}" ;;
+      *) return 1 ;;
+    esac
+    [[ -n "$_manifest_home" \
+      && "$MDM_RCPT_MANIFEST_PATH" == "$_manifest_home/.claude/.starter-kit-manifest.json" \
+      && "$MDM_RCPT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ \
+      && "$MDM_RCPT_DEPLOYMENT_SHA256" =~ ^[0-9a-f]{64}$ \
+      && "$MDM_RCPT_POLICY_SHA256" =~ ^[0-9a-f]{64}$ \
+      && "$MDM_RCPT_COMPONENT_MANIFEST_PATH" == /* \
+      && "$MDM_RCPT_COMPONENT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  fi
   # root 書込（mkdir 含む）の前に既存コンポーネントを検証する。
   # 中間/最終が攻撃者所有 or symlink なら、mkdir がリンク先へ作成する前に
   # fail-closed する。成立すれば以降の mktemp/chmod/mv は攻撃者が介入できない。
@@ -575,6 +2470,13 @@ mdm_receipt_write() {
       return 1
     fi
   fi
+  # `mv source existing-directory` succeeds by placing source *inside* the
+  # directory.  Treat every pre-existing non-regular destination as a hard
+  # failure (a symlink is handled separately below and replaced in-place).
+  if [[ -e "$_path" && ! -f "$_path" && ! -L "$_path" ]]; then
+    mdm_log R4 "レシートパスの実体が regular file でない: $_path"
+    return 1
+  fi
   if [[ -L "$_path" ]]; then
     rm -f "$_path" 2>/dev/null || true
     if [[ -L "$_path" || -e "$_path" ]]; then
@@ -583,10 +2485,16 @@ mdm_receipt_write() {
     fi
   fi
   local _tmp
-  _tmp="$(mktemp "$_dir/.receipt-tmp.XXXXXX" 2>/dev/null)" || return 1
+  _tmp="$(mktemp "$_dir/.receipt-tmp.XXXXXX" 2>/dev/null)" || {
+    _MDM_RECEIPT_PREPARED_DESTINATION=""
+    return 1
+  }
+  _MDM_RECEIPT_PREPARED_TMP="$_tmp"
+  _MDM_RECEIPT_PREPARED_PATH="$_path"
+  _mdm_arm_transient_cleanup
   {
     printf '{\n'
-    printf '  "schema_version": 2,\n'
+    printf '  "schema_version": 3,\n'
     printf '  "kit_version": "%s",\n'  "$(mdm_json_escape "$MDM_RCPT_KIT_VERSION")"
     printf '  "git_ref": "%s",\n'      "$(mdm_json_escape "$MDM_RCPT_GIT_REF")"
     printf '  "resolved_sha": "%s",\n' "$(mdm_json_escape "$MDM_RCPT_RESOLVED_SHA")"
@@ -597,23 +2505,57 @@ mdm_receipt_write() {
     printf '  "manifest_path": "%s",\n' "$(mdm_json_escape "$MDM_RCPT_MANIFEST_PATH")"
     printf '  "manifest_sha256": "%s",\n' "$(mdm_json_escape "$MDM_RCPT_MANIFEST_SHA256")"
     printf '  "deployment_sha256": "%s",\n' "$(mdm_json_escape "$MDM_RCPT_DEPLOYMENT_SHA256")"
+    printf '  "policy_sha256": "%s",\n' "$(mdm_json_escape "$MDM_RCPT_POLICY_SHA256")"
+    printf '  "component_manifest_path": "%s",\n' "$(mdm_json_escape "$MDM_RCPT_COMPONENT_MANIFEST_PATH")"
+    printf '  "component_manifest_sha256": "%s",\n' "$(mdm_json_escape "$MDM_RCPT_COMPONENT_MANIFEST_SHA256")"
     printf '  "target_user": "%s",\n'  "$(mdm_json_escape "$MDM_RCPT_TARGET_USER")"
+    printf '  "target_uid": %s,\n' "$MDM_RCPT_TARGET_UID"
+    printf '  "target_generated_uid": "%s",\n' \
+      "$(mdm_json_escape "$MDM_RCPT_TARGET_GENERATED_UID")"
     printf '  "result": "%s",\n'       "$(mdm_json_escape "$_result")"
     printf '  "exit_code": %s,\n'      "$_exit"
     printf '  "partial": %s,\n'        "$MDM_RCPT_PARTIAL"
     printf '  "timestamp": "%s",\n'    "$(mdm_json_escape "$MDM_RCPT_TIMESTAMP")"
     printf '  "log_path": "%s"\n'      "$(mdm_json_escape "$MDM_RCPT_LOG_PATH")"
     printf '}\n'
-  } > "$_tmp" || { rm -f "$_tmp" 2>/dev/null || true; return 1; }
+  } > "$_tmp" || { _mdm_receipt_discard_prepared || true; return 1; }
   # 信頼チェーン成立 dir 内の一時ファイルなので chmod のパス指定は安全
   # （攻撃者が dir 内エントリを差し替えられない）。失敗は fail-closed（R5-High）。
-  if ! chmod 644 "$_tmp" 2>/dev/null; then
-    rm -f "$_tmp" 2>/dev/null || true
+  if ! chmod 600 "$_tmp" 2>/dev/null; then
+    _mdm_receipt_discard_prepared || true
     mdm_log R4 "レシートの権限設定に失敗（fail-closed）: $_tmp"
     return 1
   fi
-  mv -f "$_tmp" "$_path" 2>/dev/null || { rm -f "$_tmp" 2>/dev/null || true; return 1; }
-  return 0
+  local _meta _rest _links _mode
+  [[ -f "$_tmp" && ! -L "$_tmp" ]] \
+    || { _mdm_receipt_discard_prepared || true; return 1; }
+  if [[ "$_euid" -eq 0 ]]; then
+    _mdm_component_trusted "$_tmp" \
+      || { _mdm_receipt_discard_prepared || true; return 1; }
+  fi
+  _meta="$(_mdm_stat_managed_metadata "$_tmp")" \
+    || { _mdm_receipt_discard_prepared || true; return 1; }
+  [[ "$_meta" =~ ^[0-9]+:[0-9]+:[0-7]+$ ]] \
+    || { _mdm_receipt_discard_prepared || true; return 1; }
+  _rest="${_meta#*:}"; _links="${_rest%%:*}"
+  _mode="$(_mdm_mode_normalize "${_rest#*:}")" \
+    || { _mdm_receipt_discard_prepared || true; return 1; }
+  if _mdm_has_extended_acl "$_tmp" \
+    || [[ "$_links" != 1 || "$_mode" != 0600 ]]; then
+    _mdm_receipt_discard_prepared || true
+    return 1
+  fi
+  _mdm_json_valid "$_tmp" \
+    && _mdm_generated_receipt_is_exact "$_tmp" "$_path" "$_result" "$_exit" \
+    || { _mdm_receipt_discard_prepared || true; return 1; }
+  _mdm_receipt_prepared_ready
+}
+
+mdm_receipt_write() {
+  mdm_receipt_prepare "$@" \
+    && _mdm_receipt_prepared_ready \
+    && _mdm_receipt_publish_prepared \
+    || { _mdm_receipt_discard_prepared || true; return 1; }
 }
 
 # scutil の record は producer が成功した場合だけ採用する。parser は EOF まで
@@ -715,23 +2657,35 @@ _mdm_username_is_safe() {
   [[ "$_user" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*([.@][A-Za-z0-9_-]+)*$ ]]
 }
 
-# 対象ユーザー契約: 予約名 denylist に加えて、username 文字種・dscl 実在確認・
-# UID >= 501（システムアカウント除外）を必須とする（最終レビュー High#8）。
+# Resolve only the short name here.  Production identity is subsequently read
+# as one UniqueID+GeneratedUID record from each dscl domain; doing a separate
+# UID lookup here would mix account generations across multiple reads.
+_mdm_resolve_target_username() { # <user-output-var>
+  local _target_out_var="$1" _candidate="${KIT_MDM_TARGET_USER:-}" _lower
+  [[ "$_target_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return "$MDM_EXIT_USER"
+  [[ -z "$_candidate" ]] && _candidate="$(_mdm_console_user)"
+  _lower="$(printf '%s' "$_candidate" | /usr/bin/tr '[:upper:]' '[:lower:]')" || return "$MDM_EXIT_USER"
+  case "$_lower" in
+    ''|root|_mbsetupuser|_unresolved|loginwindow|daemon|nobody)
+      mdm_log R2 "対象ユーザーを解決できない（'$_candidate' は無効）"
+      return "$MDM_EXIT_USER" ;;
+  esac
+  if ! _mdm_username_is_safe "$_candidate"; then
+    mdm_log R2 "対象ユーザー名の文字種が不正: '$_candidate'"
+    return "$MDM_EXIT_USER"
+  fi
+  printf -v "$_target_out_var" '%s' "$_candidate"
+  return 0
+}
+
+# Compatibility helper retained for direct callers/tests.  The main root flow
+# uses _mdm_resolve_target_username + _mdm_bind_target_identity_tuple instead.
 _mdm_resolve_target_identity() { # <user-output-var> <uid-output-var>
-  local _out_user="$1" _out_uid="$2" _u="${KIT_MDM_TARGET_USER:-}" _uid
+  local _out_user="$1" _out_uid="$2" _u="" _uid
   [[ "$_out_user" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
     && "$_out_uid" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
     && "$_out_user" != "$_out_uid" ]] || return "$MDM_EXIT_USER"
-  [[ -z "$_u" ]] && _u="$(_mdm_console_user)"
-  case "$_u" in
-    ''|root|_mbsetupuser|loginwindow|daemon|nobody)
-      mdm_log R2 "対象ユーザーを解決できない（'$_u' は無効）"
-      return "$MDM_EXIT_USER" ;;
-  esac
-  if ! _mdm_username_is_safe "$_u"; then
-    mdm_log R2 "対象ユーザー名の文字種が不正: '$_u'"
-    return "$MDM_EXIT_USER"
-  fi
+  _mdm_resolve_target_username _u || return $?
   if ! _uid="$(_mdm_user_uid "$_u")"; then
     mdm_log R2 "対象ユーザーが実在しない（dscl で解決不能）: '$_u'"
     return "$MDM_EXIT_USER"
@@ -772,7 +2726,7 @@ _mdm_bind_target_uid() { # <user> <local-dscl-uid>
 
 # 対象ユーザーの canonical home を取得・検証。dscl はモック可能。
 _mdm_parse_dscl_home() {
-  LC_ALL=C awk '
+  LC_ALL=C /usr/bin/awk '
     BEGIN { state = "key"; bad = 0 }
 
     state == "key" && $0 == "NFSHomeDirectory:" {
@@ -808,8 +2762,232 @@ _mdm_parse_dscl_home() {
   '
 }
 
+_mdm_parse_dscl_generated_uid() {
+  LC_ALL=C /usr/bin/awk '
+    BEGIN { state = "key"; bad = 0 }
+    state == "key" && $0 == "GeneratedUID:" { state = "continuation"; next }
+    state == "key" && $0 ~ /^GeneratedUID:[ \t]/ {
+      value = substr($0, length("GeneratedUID:") + 2); state = "done"; next
+    }
+    state == "continuation" && $0 ~ /^[ \t]/ {
+      value = substr($0, 2); state = "done"; next
+    }
+    { bad = 1 }
+    END {
+      if (!bad && state == "done" && value ~ /^[0-9A-Fa-f-]+$/) {
+        print value; exit 0
+      }
+      exit 1
+    }
+  '
+}
+
+_mdm_normalize_generated_uid() {
+  local _value
+  _value="$(printf '%s' "$1" | /usr/bin/tr '[:lower:]' '[:upper:]')" || return 1
+  [[ "$_value" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]] \
+    || return 1
+  [[ "$_value" != 00000000-0000-0000-0000-000000000000 ]] || return 1
+  printf '%s' "$_value"
+}
+
+_mdm_local_generated_uid() {
+  local _user="$1" _value
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 && -n "${MDM_DSCL_GENERATED_UID_OVERRIDE:-}" ]]; then
+    _mdm_normalize_generated_uid "$MDM_DSCL_GENERATED_UID_OVERRIDE"
+    return
+  fi
+  _value="$(/usr/bin/dscl . -read "/Users/$_user" GeneratedUID 2>/dev/null \
+    | _mdm_parse_dscl_generated_uid)" || return 1
+  _mdm_normalize_generated_uid "$_value"
+}
+
+_mdm_search_generated_uid() {
+  local _user="$1" _value
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 ]]; then
+    if [[ -n "${MDM_SEARCH_GENERATED_UID_OVERRIDE:-}" ]]; then
+      _mdm_normalize_generated_uid "$MDM_SEARCH_GENERATED_UID_OVERRIDE"
+      return
+    fi
+    if [[ -n "${MDM_DSCL_GENERATED_UID_OVERRIDE:-}" ]]; then
+      _mdm_normalize_generated_uid "$MDM_DSCL_GENERATED_UID_OVERRIDE"
+      return
+    fi
+  fi
+  _value="$(/usr/bin/dscl /Search -read "/Users/$_user" GeneratedUID 2>/dev/null \
+    | _mdm_parse_dscl_generated_uid)" || return 1
+  _mdm_normalize_generated_uid "$_value"
+}
+
+_mdm_bind_target_generated_uid() {
+  local _user="$1" _local _search
+  _local="$(_mdm_local_generated_uid "$_user")" || return 1
+  _search="$(_mdm_search_generated_uid "$_user")" || return 1
+  [[ "$_local" == "$_search" ]] || return 1
+  printf '%s' "$_local"
+}
+
+# Parse one dscl record containing both account-generation attributes.  The
+# local and search-policy domains are each read once so UID/GeneratedUID cannot
+# be mixed across separate record generations.
+_mdm_parse_dscl_identity_record() {
+  LC_ALL=C /usr/bin/awk '
+    BEGIN { pending = ""; uid_seen = 0; guid_seen = 0; bad = 0 }
+    function guid_is_canonical(value, compact) {
+      if (length(value) != 36 \
+          || substr(value, 9, 1) != "-" \
+          || substr(value, 14, 1) != "-" \
+          || substr(value, 19, 1) != "-" \
+          || substr(value, 24, 1) != "-") return 0
+      compact = value
+      gsub(/-/, "", compact)
+      return length(compact) == 32 && compact ~ /^[0-9A-Fa-f]+$/
+    }
+    $0 == "UniqueID:" || $0 == "GeneratedUID:" {
+      if (pending != "") bad = 1
+      pending = substr($0, 1, length($0) - 1)
+      next
+    }
+    $0 ~ /^(UniqueID|GeneratedUID):[ \t]/ {
+      key = $0; sub(/:.*/, "", key)
+      # key excludes the colon: skip both ":" and exactly one delimiter.
+      # Any additional whitespace remains in value and fails validation.
+      value = substr($0, length(key) + 3)
+      if (pending != "") bad = 1
+      if (key == "UniqueID") {
+        if (uid_seen) bad = 1; uid = value; uid_seen = 1
+      } else {
+        if (guid_seen) bad = 1; guid = value; guid_seen = 1
+      }
+      next
+    }
+    $0 ~ /^[ \t]/ {
+      value = substr($0, 2)
+      if (pending == "UniqueID") {
+        if (uid_seen) bad = 1; uid = value; uid_seen = 1
+      } else if (pending == "GeneratedUID") {
+        if (guid_seen) bad = 1; guid = value; guid_seen = 1
+      } else bad = 1
+      pending = ""
+      next
+    }
+    { bad = 1 }
+    END {
+      if (!bad && pending == "" && uid_seen == 1 && guid_seen == 1 \
+          && uid ~ /^[0-9]+$/ && length(uid) <= 10 \
+          && !(length(uid) > 1 && substr(uid, 1, 1) == "0") \
+          && guid_is_canonical(guid)) {
+        print uid "\t" guid; exit 0
+      }
+      exit 1
+    }
+  '
+}
+
+_mdm_read_local_identity_record() {
+  /usr/bin/dscl . -read "/Users/$1" UniqueID GeneratedUID 2>/dev/null
+}
+
+_mdm_read_search_identity_record() {
+  /usr/bin/dscl /Search -read "/Users/$1" UniqueID GeneratedUID 2>/dev/null
+}
+
+_mdm_bind_target_identity_tuple() { # <user> [expected-uid]
+  local _user="$1" _expected_uid="${2:-}" _local _search
+  local _local_uid _search_uid _local_guid _search_guid
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_DSCL_UID_OVERRIDE:-}" \
+    && -n "${MDM_DSCL_GENERATED_UID_OVERRIDE:-}" ]]; then
+    _local_uid="$MDM_DSCL_UID_OVERRIDE"
+    _search_uid="${MDM_SEARCH_UID_OVERRIDE:-$MDM_DSCL_UID_OVERRIDE}"
+    _local_guid="$MDM_DSCL_GENERATED_UID_OVERRIDE"
+    _search_guid="${MDM_SEARCH_GENERATED_UID_OVERRIDE:-$MDM_DSCL_GENERATED_UID_OVERRIDE}"
+  else
+    _local="$(_mdm_read_local_identity_record "$_user" \
+      | _mdm_parse_dscl_identity_record)" || return 1
+    _search="$(_mdm_read_search_identity_record "$_user" \
+      | _mdm_parse_dscl_identity_record)" || return 1
+    _local_uid="${_local%%$'\t'*}"; _local_guid="${_local#*$'\t'}"
+    _search_uid="${_search%%$'\t'*}"; _search_guid="${_search#*$'\t'}"
+  fi
+  [[ "$_local_uid" =~ ^[0-9]+$ && "$_search_uid" =~ ^[0-9]+$ \
+    && "$_local_uid" == "$_search_uid" \
+    && ( -z "$_expected_uid" || "$_local_uid" == "$_expected_uid" ) \
+    && "$_local_uid" -ge 501 && ${#_local_uid} -le 10 ]] || return 1
+  _local_guid="$(_mdm_normalize_generated_uid "$_local_guid")" || return 1
+  _search_guid="$(_mdm_normalize_generated_uid "$_search_guid")" || return 1
+  [[ "$_local_guid" == "$_search_guid" ]] || return 1
+  printf '%s\t%s' "$_local_uid" "$_local_guid"
+}
+
+_mdm_parse_dscl_shell() {
+  LC_ALL=C /usr/bin/awk '
+    BEGIN { state = "key"; bad = 0 }
+    state == "key" && $0 == "UserShell:" { state = "continuation"; next }
+    state == "key" && $0 ~ /^UserShell:[ \t]/ {
+      value = substr($0, length("UserShell:") + 2); state = "done"; next
+    }
+    state == "continuation" && $0 ~ /^[ \t]/ {
+      value = substr($0, 2); state = "done"; next
+    }
+    { bad = 1 }
+    END {
+      if (!bad && state == "done" && value ~ /^\/[A-Za-z0-9._+\/-]+$/) {
+        print value; exit 0
+      }
+      exit 1
+    }
+  '
+}
+
+_mdm_resolve_user_shell_path() { # <absolute-shell-path>
+  local _shell="$1" _canonical
+  [[ "$_shell" == /* && ! "$_shell" =~ [[:cntrl:][:space:]] ]] || return 1
+  _canonical="$(_mdm_canonical_any "$_shell")" || return 1
+  [[ "$_canonical" == /* && ! "$_canonical" =~ [[:cntrl:][:space:]] \
+    && -f "$_canonical" && ! -L "$_canonical" && -x "$_canonical" ]] || return 1
+  printf '%s' "$_canonical"
+}
+
+_mdm_user_shell() {
+  local _user="$1" _shell
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 && -n "${MDM_USER_SHELL_OVERRIDE:-}" ]]; then
+    _shell="$MDM_USER_SHELL_OVERRIDE"
+  else
+    _shell="$(/usr/bin/dscl . -read "/Users/$_user" UserShell 2>/dev/null \
+      | _mdm_parse_dscl_shell)" || return 1
+  fi
+  [[ "$_shell" == /* && ! "$_shell" =~ [[:cntrl:][:space:]] ]] || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" != 1 ]]; then
+    _shell="$(_mdm_resolve_user_shell_path "$_shell")" || return 1
+  fi
+  printf '%s' "$_shell"
+}
+
+_mdm_user_dir_acl_safe() { # <user-owned-directory>
+  local _dir="$1" _listing _first _permissions _rest
+  _mdm_is_darwin || return 0
+  _listing="$(LC_ALL=C /bin/ls -lde "$_dir" 2>/dev/null)" || return 1
+  _first="${_listing%%$'\n'*}"
+  _permissions="${_first%%[[:space:]]*}"
+  [[ "$_first" == *[[:space:]]* \
+    && "$_permissions" =~ ^d[rwxStTs-]{9}[@+]?$ ]] || return 1
+  if [[ "$_listing" != *$'\n'* ]]; then
+    [[ "$_permissions" != *+* ]]
+    return
+  fi
+  [[ "$_permissions" == *@ || "$_permissions" == *+ ]] || return 1
+  _rest="${_listing#*$'\n'}"
+  [[ "$_rest" != *$'\n'* \
+    && "$_rest" =~ ^[[:space:]]*0:[[:space:]]+group:everyone[[:space:]]+deny[[:space:]]+delete$ ]]
+}
+
+_mdm_user_home_acl_safe() { # <home>
+  _mdm_user_dir_acl_safe "$1"
+}
+
 mdm_validate_user_home() {
-  local _user="$1" _expected_uid="${2:-}" _home _canonical
+  local _user="$1" _expected_uid="${2:-}" _home _canonical _mode
   if [[ -n "${MDM_DSCL_HOME_OVERRIDE:-}" ]]; then
     _home="$MDM_DSCL_HOME_OVERRIDE"
   else
@@ -831,6 +3009,14 @@ mdm_validate_user_home() {
     || return "$MDM_EXIT_USER"
   if [[ "$_canonical" != "$_home" ]]; then
     mdm_log R2 "home が canonical path でない: $_home"
+    return "$MDM_EXIT_USER"
+  fi
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_home")")" \
+    || return "$MDM_EXIT_USER"
+  if ! _mdm_mode_is_safe "$_mode" \
+    || ! _mdm_mode_owner_executable "$_mode" \
+    || ! _mdm_user_home_acl_safe "$_home"; then
+    mdm_log R2 "home の mode/ACL が管理境界として不正: $_home"
     return "$MDM_EXIT_USER"
   fi
   if [[ "${MDM_VALIDATE_HOME_SKIP_OWNER:-0}" != "1" ]]; then
@@ -871,14 +3057,14 @@ mdm_resolve_ref_sha() {
   # --verify は失敗時に stdout を空にする。
   # git は _mdm_git 経由（root 時は検証済みユーザーへ降格。Critical#2）
   if [[ -n "$_remote_url" ]]; then
-    _mdm_git -C "$_repo" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+    _mdm_git_network -C "$_repo" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
       fetch --quiet "$_remote_url" "$_ref" 2>/dev/null || return "$MDM_EXIT_SETUP"
     _sha="$(_mdm_git -C "$_repo" rev-parse --verify "FETCH_HEAD^{commit}" 2>/dev/null || true)"
   elif printf '%s' "$_ref" | grep -qE '^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$'; then
     _sha="$(_mdm_git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
   else
     # 明示 fetch → FETCH_HEAD の commit を真実とする（ローカル ref を更新しないことがあるため）
-    if ! _mdm_git -C "$_repo" fetch --quiet origin "$_ref" 2>/dev/null; then
+    if ! _mdm_git_network -C "$_repo" fetch --quiet origin "$_ref" 2>/dev/null; then
       # origin が無い（初回 clone 前のローカルテスト）場合はローカル ref 解決にフォールバック
       _sha="$(_mdm_git -C "$_repo" rev-parse --verify "${_ref}^{commit}" 2>/dev/null || true)"
     else
@@ -929,10 +3115,12 @@ mdm_prereq_plan() {
 # 降格実行時に対象ユーザーへ引き継ぐ環境変数の許可リスト（env -i で root 環境を
 # 継承しないため、渡すものだけを明示列挙する。
 _MDM_PASSTHROUGH_KEYS="PROFILE LANGUAGE EDITOR_CHOICE COMMIT_ATTRIBUTION \
-ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_STATUSLINE ENABLE_SAFETY_NET \
-ENABLE_AUTO_UPDATE ENABLE_DOC_SIZE_GUARD ENABLE_FEATURE_RECOMMENDATION \
-ENABLE_PRE_COMPACT_COMMIT ENABLE_WEB_CONTENT_UPDATE ENABLE_NO_FLICKER ENABLE_NEW_INIT \
-ENABLE_CODEX_PLUGIN \
+ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS \
+ENABLE_CODEX_PLUGIN ENABLE_TMUX_HOOKS ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS \
+ENABLE_BIOME_HOOKS ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT \
+ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_WEB_CONTENT_UPDATE ENABLE_STATUSLINE \
+ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_NO_FLICKER \
+ENABLE_FEATURE_RECOMMENDATION ENABLE_AGENT_TEAMS \
 KIT_MDM_GIT_REF KIT_MDM_INSTALL_DIR KIT_MDM_INSTALL_CLAUDE_CLI KIT_MDM_DRY_RUN \
 KIT_MDM_PREREQ_MODE \
 HTTP_PROXY HTTPS_PROXY NO_PROXY"
@@ -956,28 +3144,94 @@ _mdm_lang_to_locale() {
 # 引数 $4 以降は実行するコマンド argv（インタプリタ込みで呼び出し側が絶対パス指定）。
 MDM_DROP_ARGV=()
 _MDM_GIT_SAFE_DIRECTORY=""
+_MDM_WCE_VERIFIED_BUNDLE=""
+_MDM_WCE_CARRIER_ACTIVE=false
+_MDM_OUTER_TRANSACTION_ACTIVE=false
+_MDM_OUTER_TRANSACTION_BACKUP=""
 mdm_build_drop_argv() {
   local _uid="$1" _user="$2" _home="$3"; shift 3
-  local _brewbin=""
+  local _nodebin="" _brewbin="" _tool_bins="" _shell="${_MDM_TARGET_SHELL:-/bin/bash}"
+  [[ "$_shell" == /* && ! "$_shell" =~ [[:cntrl:][:space:]] ]] || return 1
+  case "${KIT_MDM_REQUIRE_NODE_RUNTIME:-false}" in
+    true)
+      _nodebin="$(_mdm_node_runtime_bin)" || return 1
+      [[ -d "$_nodebin" && ! -L "$_nodebin" ]] || return 1
+      _nodebin="${_nodebin}:" ;;
+    false) : ;;
+    *) return 1 ;;
+  esac
   [[ -x /opt/homebrew/bin/brew ]] && _brewbin="/opt/homebrew/bin:"
   [[ -x /usr/local/bin/brew ]] && _brewbin="${_brewbin}/usr/local/bin:"
+  local _candidate
+  for _candidate in \
+    /opt/homebrew/opt/node@24/bin /usr/local/opt/node@24/bin \
+    /opt/homebrew/opt/gnu-sed/libexec/gnubin /usr/local/opt/gnu-sed/libexec/gnubin \
+    /opt/homebrew/opt/gawk/libexec/gnubin /usr/local/opt/gawk/libexec/gnubin; do
+    [[ -d "$_candidate" && ! -L "$_candidate" ]] || continue
+    _tool_bins="${_tool_bins}${_candidate}:"
+  done
   MDM_DROP_ARGV=(
     /usr/bin/env -i
     "HOME=$_home"
     "USER=$_user"
     "LOGNAME=$_user"
-    "PATH=${_brewbin}/usr/bin:/bin:/usr/sbin:/sbin"
+    "SHELL=$_shell"
+    "PATH=${_nodebin}${_brewbin}${_tool_bins}/usr/bin:/bin:/usr/sbin:/sbin"
     "GIT_CONFIG_NOSYSTEM=1"
     "GIT_CONFIG_GLOBAL=/dev/null"
     "GIT_TERMINAL_PROMPT=0"
     "GIT_NO_REPLACE_OBJECTS=1"
+    "GIT_OPTIONAL_LOCKS=0"
     # MDM 管理マーカー: setup.sh（wizard）が update/fresh の設定復元後に
     # MDM 注入 env を再適用するためのフラグ（固定値・R2-High）
     "KIT_MDM_MANAGED=true"
     # MDMの独立期待値レンダラーとsetupのhook schemaを固定する内部値。
     # 公開設定にはせず、互換性を優先してlegacy schemaへ収束させる。
     "KIT_MDM_ASYNC_HOOKS=false"
+    "KIT_MDM_REQUIRE_NODE_RUNTIME=${KIT_MDM_REQUIRE_NODE_RUNTIME:-false}"
   )
+  case "${_MDM_OUTER_TRANSACTION_ACTIVE:-false}" in
+    true)
+      # Internal carrier: only the root-owned outer installer may suppress the
+      # setup layer backup. It is deliberately absent from every config and
+      # passthrough allowlist.
+      MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="KIT_MDM_OUTER_TRANSACTION=true"
+      if [[ -n "${_MDM_OUTER_TRANSACTION_BACKUP:-}" ]]; then
+        [[ "$_MDM_OUTER_TRANSACTION_BACKUP" == "$_home"/.claude.mdm-backup.* \
+          && -d "$_MDM_OUTER_TRANSACTION_BACKUP" \
+          && ! -L "$_MDM_OUTER_TRANSACTION_BACKUP" ]] \
+          || { MDM_DROP_ARGV=(); return 1; }
+        MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="KIT_MDM_OUTER_TRANSACTION_BACKUP=$_MDM_OUTER_TRANSACTION_BACKUP"
+      fi ;;
+    false) : ;;
+    *) MDM_DROP_ARGV=(); return 1 ;;
+  esac
+  if [[ "$(_mdm_root_bool "${KIT_MDM_INSTALL_CLAUDE_CLI:-true}" 2>/dev/null || echo true)" == true ]]; then
+    MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="KIT_MDM_REQUIRE_NATIVE_CLAUDE_CLI=true"
+  fi
+  if [[ -n "${KIT_MDM_POLICY_SHA256:-}" ]]; then
+    [[ "$KIT_MDM_POLICY_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="KIT_MDM_POLICY_SHA256=$KIT_MDM_POLICY_SHA256"
+  fi
+  case "${_MDM_WCE_CARRIER_ACTIVE:-false}" in
+    true)
+      local _wce_expected
+      _wce_expected="$(_mdm_wce_runtime_path)" \
+        || { MDM_DROP_ARGV=(); return 1; }
+      [[ -n "${_MDM_WCE_VERIFIED_BUNDLE:-}" \
+        && "$_MDM_WCE_VERIFIED_BUNDLE" == "$_wce_expected" \
+        && "${_MDM_EXPECTED_WCE_COMPONENT_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+        || { MDM_DROP_ARGV=(); return 1; }
+      _MDM_WCE_RUNTIME_DIGEST=""
+      _mdm_wce_runtime_trusted "$_MDM_WCE_VERIFIED_BUNDLE" \
+        || { MDM_DROP_ARGV=(); return 1; }
+      [[ "$_MDM_WCE_RUNTIME_DIGEST" \
+        == "$_MDM_EXPECTED_WCE_COMPONENT_SHA256" ]] \
+        || { MDM_DROP_ARGV=(); return 1; }
+      MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="KIT_MDM_WCE_RUNTIME_BUNDLE=$_MDM_WCE_VERIFIED_BUNDLE" ;;
+    false) : ;;
+    *) MDM_DROP_ARGV=(); return 1 ;;
+  esac
   if [[ -n "${_MDM_GIT_SAFE_DIRECTORY:-}" ]]; then
     if [[ "$_MDM_GIT_SAFE_DIRECTORY" != /* ]] \
       || [[ "$_MDM_GIT_SAFE_DIRECTORY" =~ [[:cntrl:]] ]]; then
@@ -1024,18 +3278,13 @@ mdm_build_drop_argv() {
   return 0
 }
 
-# setup.sh へ渡す引数をグローバル配列 MDM_SETUP_ARGV へ直接構築する
-# （KIT_MDM_DRY_RUN=true のとき --dry-run を追加）。
-# $1（任意）= 対象ユーザーの canonical home。既存インストール
-# （manifest 存在）を検出した場合は --update を付与し本体の update パス
-# を通す。
+# setup.sh へ渡す引数をグローバル配列 MDM_SETUP_ARGV へ直接構築する。
+# 対象ユーザーの既存 manifest に依存せず、authoritative checkout を fresh
+# reconciliation として適用する。KIT_MDM_DRY_RUN=true のときだけ --dry-run
+# を追加する。
 MDM_SETUP_ARGV=()
 mdm_build_setup_argv() {
-  local _home="${1:-}"
   MDM_SETUP_ARGV=(--non-interactive)
-  if [[ -n "$_home" && -f "$_home/.claude/.starter-kit-manifest.json" ]]; then
-    MDM_SETUP_ARGV[${#MDM_SETUP_ARGV[@]}]='--update'
-  fi
   if [[ "$(_mdm_root_bool "${KIT_MDM_DRY_RUN:-false}" 2>/dev/null || echo false)" == "true" ]]; then
     MDM_SETUP_ARGV[${#MDM_SETUP_ARGV[@]}]='--dry-run'
   fi
@@ -1061,8 +3310,7 @@ _mdm_boot_mode_is_safe() {
 # 親ディレクトリの検証を含む — 書込可能な親では他者が差し替えを植えられる。
 _mdm_boot_config_file_is_secure() {
   local _f="$1"
-  [[ -e "$_f" ]] || return 1
-  [[ -L "$_f" ]] && return 1
+  [[ -f "$_f" && ! -L "$_f" ]] || return 1
   local _mode _dir _dmode
   _mode="$(_mdm_stat_mode "$_f" || true)"
   _mdm_boot_mode_is_safe "$_mode" || return 1
@@ -1093,13 +3341,16 @@ _mdm_boot_config_file_is_secure() {
 # discarded inherited environment, so only the root-owned config file and
 # MDM-supplied KEY=VALUE argv are inputs.
 _MDM_ROOT_ALLOWED_KEYS="PROFILE LANGUAGE EDITOR_CHOICE COMMIT_ATTRIBUTION \
-ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_STATUSLINE ENABLE_SAFETY_NET \
-ENABLE_AUTO_UPDATE ENABLE_DOC_SIZE_GUARD ENABLE_FEATURE_RECOMMENDATION \
-ENABLE_PRE_COMPACT_COMMIT ENABLE_WEB_CONTENT_UPDATE ENABLE_NO_FLICKER ENABLE_NEW_INIT \
-ENABLE_CODEX_PLUGIN \
+ENABLE_NEW_INIT INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS \
+ENABLE_CODEX_PLUGIN ENABLE_TMUX_HOOKS ENABLE_DOC_BLOCKER ENABLE_PRETTIER_HOOKS \
+ENABLE_BIOME_HOOKS ENABLE_PR_CREATION_LOG ENABLE_PRE_COMPACT_COMMIT \
+ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_WEB_CONTENT_UPDATE ENABLE_STATUSLINE \
+ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD ENABLE_NO_FLICKER \
+ENABLE_FEATURE_RECOMMENDATION ENABLE_AGENT_TEAMS \
 KIT_MDM_TARGET_USER KIT_MDM_INSTALL_HOMEBREW KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE \
 KIT_MDM_PREREQ_MODE KIT_MDM_WINDOWS_MODE KIT_MDM_INSTALL_CLAUDE_CLI \
 KIT_MDM_GIT_REF KIT_MDM_INSTALL_DIR KIT_MDM_LOG_DIR KIT_MDM_DRY_RUN \
+KIT_MDM_EXPECTED_POLICY_SHA256 \
 HTTP_PROXY HTTPS_PROXY NO_PROXY"
 
 _mdm_root_key_allowed() {
@@ -1162,12 +3413,15 @@ _mdm_root_value() {
       _value="$(_mdm_root_bool "$_value")" || return 1
       [[ "$_value" == false ]] || return 1
       printf '%s' "$_value" ;;
-    ENABLE_*|COMMIT_ATTRIBUTION|KIT_MDM_INSTALL_HOMEBREW|KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE|KIT_MDM_INSTALL_CLAUDE_CLI|KIT_MDM_DRY_RUN)
+    ENABLE_*|INSTALL_*|COMMIT_ATTRIBUTION|KIT_MDM_INSTALL_HOMEBREW|KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE|KIT_MDM_INSTALL_CLAUDE_CLI|KIT_MDM_DRY_RUN)
       _mdm_root_bool "$_value" ;;
     KIT_MDM_TARGET_USER)
       _mdm_username_is_safe "$_value" || return 1
       printf '%s' "$_value" ;;
     KIT_MDM_GIT_REF) _mdm_root_gitref_syntax "$_value" ;;
+    KIT_MDM_EXPECTED_POLICY_SHA256)
+      [[ "$_value" =~ ^[0-9a-f]{64}$ ]] || return 1
+      printf '%s' "$_value" ;;
     KIT_MDM_INSTALL_DIR|KIT_MDM_LOG_DIR)
       [[ "$_value" == /* && "$_value" != *..* ]] || return 1
       printf '%s' "$_value" ;;
@@ -1190,7 +3444,7 @@ _mdm_root_config_apply() {
     unset "_MDM_ROOT_STAGE_${_key}" "_MDM_ROOT_SET_${_key}"
   done
 
-  if [[ -f "$_file" ]]; then
+  if [[ -e "$_file" || -L "$_file" ]]; then
     local _pre_inode _fd_inode
     _pre_inode="$(_mdm_stat_inode "$_file" || echo pre-fail)"
     _mdm_boot_config_file_is_secure "$_file" || return "$MDM_EXIT_CONFIG"
@@ -1225,7 +3479,12 @@ _mdm_root_config_apply() {
         mdm_log R1 "管理設定値の quote が不正: $_key"
         return "$MDM_EXIT_CONFIG"
       fi
-      printf -v "_MDM_ROOT_STAGE_${_key}" '%s' "$_value"
+      _normalized="$(_mdm_root_value "$_key" "$_value")" || {
+        exec 8<&-
+        mdm_log R1 "管理設定値が不正: $_key"
+        return "$MDM_EXIT_CONFIG"
+      }
+      printf -v "_MDM_ROOT_STAGE_${_key}" '%s' "$_normalized"
       printf -v "$_set_var" '%s' 1
     done <&8
     exec 8<&-
@@ -1236,7 +3495,11 @@ _mdm_root_config_apply() {
     case "$_arg" in *=*) : ;; *) mdm_log R1 "不明な CLI 引数: $_arg"; return "$MDM_EXIT_CONFIG" ;; esac
     _key="${_arg%%=*}"; _value="${_arg#*=}"
     _mdm_root_key_allowed "$_key" || { mdm_log R1 "不明な CLI キー: $_key"; return "$MDM_EXIT_CONFIG"; }
-    printf -v "_MDM_ROOT_STAGE_${_key}" '%s' "$_value"
+    _normalized="$(_mdm_root_value "$_key" "$_value")" || {
+      mdm_log R1 "CLI 設定値が不正: $_key"
+      return "$MDM_EXIT_CONFIG"
+    }
+    printf -v "_MDM_ROOT_STAGE_${_key}" '%s' "$_normalized"
     printf -v "_MDM_ROOT_SET_${_key}" '%s' 1
   done
 
@@ -1269,29 +3532,54 @@ _mdm_receipt_dir_for() {
 # フォールバックし、それも書けなければログ+終了コードのみを唯一のシグナルとする。
 _mdm_finish() {
   local _user="$1" _home="$2" _result="$3" _code="$4"
+  local _success_failure_reason=""
   MDM_RCPT_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
   MDM_RCPT_LOG_PATH="$MDM_LOG_FILE"
   : "${MDM_RCPT_PROFILE:=${PROFILE:-standard}}"
   : "${MDM_RCPT_LANGUAGE:=${LANGUAGE:-en}}"
   local _rcpt_dir; _rcpt_dir="$(_mdm_receipt_dir_for "$_home")"
   if [[ "$_result" == "success" && "$_code" -eq 0 ]]; then
-    if ! mdm_receipt_write "$_rcpt_dir/receipt-$_user.json" "$_result" "$_code"; then
-      # A successful remediation without its trusted receipt would leave MDM
-      # reporting success while detection stays non-compliant.  Receipt write
-      # is therefore part of the success postcondition.
+    # Preparation and strict semantic validation remain signal-interruptible.
+    # Only the final same-directory rename and builtin commit-state transition
+    # form the masked publication critical section.
+    if ! mdm_receipt_prepare \
+        "$_rcpt_dir/receipt-$_user.json" "$_result" "$_code"; then
+      _success_failure_reason=receipt
+    elif ! _mdm_receipt_prepared_ready \
+      || ! _mdm_transaction_ready_to_commit; then
+      _mdm_receipt_discard_prepared || true
+      _success_failure_reason=transaction
+    else
+      trap '' HUP INT TERM
+      if _mdm_receipt_publish_prepared \
+        && [[ "${_MDM_RECEIPT_PUBLISHED:-0}" == 1 ]]; then
+        _mdm_transaction_commit || true
+      else
+        _mdm_receipt_discard_prepared || true
+        _success_failure_reason=receipt
+        _mdm_arm_transient_cleanup
+      fi
+    fi
+    if [[ -n "$_success_failure_reason" ]]; then
       _result="failure"
       _code="$MDM_EXIT_SETUP"
-      MDM_RCPT_PARTIAL='["receipt"]'
-      mdm_receipt_write \
-        "$_rcpt_dir/receipt-_unresolved.json" \
-        "$_result" "$_code" 2>/dev/null || true
+      if [[ "$_success_failure_reason" == receipt ]]; then
+        MDM_RCPT_REQUIRED_COMPONENTS='["kit"]'
+        MDM_RCPT_PARTIAL='["receipt"]'
+      fi
+      _mdm_transaction_abort || _mdm_transaction_mark_partial
+      mdm_receipt_write "$_rcpt_dir/receipt-$_user.json" \
+        "$_result" "$_code" 2>/dev/null \
+        || mdm_receipt_write "$_rcpt_dir/receipt-_unresolved.json" \
+          "$_result" "$_code" 2>/dev/null || true
     fi
   else
+    _mdm_transaction_abort || _mdm_transaction_mark_partial
     mdm_receipt_write "$_rcpt_dir/receipt-$_user.json" "$_result" "$_code" || \
       mdm_receipt_write "$_rcpt_dir/receipt-_unresolved.json" \
         "$_result" "$_code" 2>/dev/null || true
   fi
-  mdm_log R4 "完了: result=$_result exit=$_code"
+  mdm_log R4 "完了: result=$_result exit=$_code" || true
   exit "$_code"
 }
 
@@ -1324,20 +3612,286 @@ _mdm_fail_or_exit_unresolved() { # <exit-code> <dry-run>
 
 # MDM_DROP_ARGV（mdm_build_drop_argv が直接構築）を環境分離降格で実行する
 # 共通ヘルパー。launchctl/sudo/env は絶対パス固定。
-#   /bin/launchctl asuser <uid> /usr/bin/sudo -u <user> -H /usr/bin/env -i ... <cmd...>
+#   (cd <home> && /bin/launchctl asuser <uid> /usr/bin/sudo -u '#<uid>'
+#     -H /usr/bin/env -i ... <cmd...>)
 # MDM_EXEC_AS_USER_DRYRUN=1 のとき実行せず argv を1行1要素で表示のみ
 # （テスト用。表示は再パースされない）。
 _mdm_exec_as_user() {
   local _uid="$1" _user="$2" _home="$3"; shift 3
+  local _launchctl=/bin/launchctl _sudo=/usr/bin/sudo _supervisor="" _rc=0
+  local _control="" _dir_identity="" _record_state=0 _wait_count=0 _previous=""
+  local _nounset_was_on=false
+  local _deadline="${_MDM_EXEC_AS_USER_DEADLINE_SECONDS:-0}"
+  [[ "$_uid" =~ ^[0-9]+$ && "$_uid" -ge 501 ]] || return 1
+  [[ "$_home" == /* && ! "$_home" =~ [[:cntrl:]] ]] || return 1
+  [[ "$_deadline" =~ ^[0-9]+$ && "$_deadline" -le 86400 ]] || return 1
+  if [[ "${MDM_EXEC_AS_USER_DRYRUN:-0}" != "1" ]]; then
+    [[ -d "$_home" && ! -L "$_home" ]] || return 1
+  fi
   mdm_build_drop_argv "$_uid" "$_user" "$_home" "$@" || return 1
   if [[ "${MDM_EXEC_AS_USER_DRYRUN:-0}" == "1" ]]; then
-    printf '%s\n' /bin/launchctl asuser "$_uid" /usr/bin/sudo -u "$_user" -H "${MDM_DROP_ARGV[@]}"
+    printf '%s\n' /bin/launchctl asuser "$_uid" /usr/bin/sudo -u "#$_uid" -H "${MDM_DROP_ARGV[@]}"
     return 0
   fi
-  # The remediation lock belongs to the root coordinator.  Do not let a
-  # target-user process (or one of its background descendants) inherit FD 19
-  # and extend the lock lifetime after the coordinator exits.
-  /bin/launchctl asuser "$_uid" /usr/bin/sudo -u "$_user" -H "${MDM_DROP_ARGV[@]}" 19>&-
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 ]]; then
+    [[ -z "${MDM_LAUNCHCTL_OVERRIDE:-}" ]] || _launchctl="$MDM_LAUNCHCTL_OVERRIDE"
+    [[ -z "${MDM_SUDO_OVERRIDE:-}" ]] || _sudo="$MDM_SUDO_OVERRIDE"
+  fi
+  [[ "$_launchctl" == /* && -x "$_launchctl" && ! -L "$_launchctl" \
+    && "$_sudo" == /* && -x "$_sudo" && ! -L "$_sudo" ]] || return 1
+  if [[ "${_MDM_RUN_LOCK_MODE:-}" == mkdir ]]; then
+    _control="${_MDM_RUN_LOCK_CONTROL_DIR:-}"
+    _dir_identity="${_MDM_RUN_LOCK_DIR_IDENTITY:-}"
+    [[ -n "$_control" && -n "$_dir_identity" ]] || return 1
+  fi
+
+  # Keep a root supervisor alive around launchctl/sudo.  sudo closes fd>=3,
+  # but this shell retains fd18/19 while waiting, so a killed coordinator does
+  # not release the host lock until the active user command has actually
+  # stopped.  mkdir fallback additionally publishes PID+start identity.
+  case $- in *u*) _nounset_was_on=true ;; esac
+  set +u
+  _previous="$!"
+  [[ "$_nounset_was_on" == true ]] && set -u
+  _MDM_DROP_SUPERVISOR_PREVIOUS_BG="$_previous"
+  _MDM_DROP_SUPERVISOR_STARTING=1
+  /bin/sh -c '
+    _home=$1; _control=$2; _dir_identity=$3; _deadline=$4; shift 4
+    _worker=""; _tmp=""; _child=""; _pgid=""; _rc=0; _pending=0
+    _deadline_watchdog=""
+    _dir_id() {
+      if [ "$(/usr/bin/uname -s 2>/dev/null)" = Darwin ]; then
+        /usr/bin/stat -f "%d:%i:%HT" "$1" 2>/dev/null
+      else
+        /usr/bin/stat -c "%d:%i:%F" "$1" 2>/dev/null
+      fi
+    }
+    _group_live() {
+      _group_listing=""
+      if [ "$(/usr/bin/uname -s 2>/dev/null)" = Darwin ]; then
+        _group_listing=$(/bin/ps -o stat= -g "$1" 2>/dev/null) || _group_listing=""
+      else
+        _group_listing=$(/bin/ps -o stat= --pgroup "$1" 2>/dev/null) \
+          || _group_listing=""
+      fi
+      if [ -n "$_group_listing" ]; then
+        ! printf "%s\n" "$_group_listing" \
+          | /usr/bin/awk '\''$1 !~ /^Z/ { exit 1 }'\''
+        return
+      fi
+      _group_listing=$(/bin/ps -axo pgid=,stat= 2>/dev/null) || return 0
+      printf "%s\n" "$_group_listing" | /usr/bin/awk -v pgid="$1" \
+        '\''$1 == pgid && $2 !~ /^Z/ { live=1 }
+             END { exit(live ? 0 : 1) }'\''
+    }
+    _group_quiesced() {
+      _group_listing=$(/bin/ps -axo pgid=,stat= 2>/dev/null) || return 1
+      printf "%s\n" "$_group_listing" | /usr/bin/awk -v pgid="$1" \
+        '\''$1 == pgid && $2 !~ /^[TtZ]/ { running=1 }
+             END { exit(running ? 1 : 0) }'\''
+    }
+    _cleanup_record() {
+      [ -n "$_worker" ] || return 0
+      [ "$(_dir_id "$_control")" = "$_dir_identity" ] || return 0
+      if [ -n "$_tmp" ] && [ "$_tmp" = "$_control/.worker.$$" ] \
+        && [ -f "$_tmp" ] && [ ! -L "$_tmp" ]; then
+        /bin/rm -f "$_tmp"
+      fi
+      if [ -f "$_worker" ] && [ ! -L "$_worker" ]; then
+        IFS="$(printf "\t")" read -r _pid _start _record_dir < "$_worker" || return 0
+        [ "$_pid" = "$$" ] && [ "$_record_dir" = "$_dir_identity" ] \
+          && /bin/rm -f "$_worker"
+      fi
+    }
+    _stop_deadline_watchdog() {
+      [ -n "$_deadline_watchdog" ] || return 0
+      _watchdog_pgid=$_deadline_watchdog
+      /bin/kill -TERM "$_watchdog_pgid" 2>/dev/null || :
+      _watchdog_stop_count=0
+      while /bin/kill -0 "-$_watchdog_pgid" 2>/dev/null \
+        && [ "$_watchdog_stop_count" -lt 25 ]; do
+        /bin/sleep 0.01
+        _watchdog_stop_count=$((_watchdog_stop_count + 1))
+      done
+      /bin/kill -STOP "-$_watchdog_pgid" 2>/dev/null || :
+      _watchdog_stop_count=0
+      while ! _group_quiesced "$_watchdog_pgid" \
+        && [ "$_watchdog_stop_count" -lt 25 ]; do
+        /bin/sleep 0.01
+        _watchdog_stop_count=$((_watchdog_stop_count + 1))
+      done
+      /bin/kill -KILL "-$_watchdog_pgid" 2>/dev/null || :
+      _watchdog_stop_count=0
+      while /bin/kill -0 "-$_watchdog_pgid" 2>/dev/null \
+        && [ "$_watchdog_stop_count" -lt 10 ]; do
+        /bin/sleep 0.01
+        _watchdog_stop_count=$((_watchdog_stop_count + 1))
+      done
+      wait "$_deadline_watchdog" 2>/dev/null || :
+      _deadline_watchdog=""
+      ! _group_live "$_watchdog_pgid"
+    }
+    _terminate() {
+      _requested_rc=$1
+      _cleanup_failed=0
+      trap - HUP INT TERM USR1
+      # The command keeps its original stderr until cancellation begins.  From
+      # here on, suppress only the supervisor asynchronous job-control
+      # diagnostic (for example, "Killed: 9") while it reaps the process group.
+      exec 2>/dev/null
+      _stop_deadline_watchdog || _cleanup_failed=1
+      if [ -n "$_child" ]; then
+        if [ -n "$_pgid" ]; then
+          /bin/kill -TERM "$_child" 2>/dev/null || :
+        else
+          /bin/kill -TERM "$_child" 2>/dev/null || :
+        fi
+        _stop_count=0
+        while /bin/kill -0 "-$_pgid" 2>/dev/null \
+          && [ "$_stop_count" -lt 100 ]; do
+          /bin/sleep 0.01
+          _stop_count=$((_stop_count + 1))
+        done
+        if [ -n "$_pgid" ]; then
+          /bin/kill -STOP "-$_pgid" 2>/dev/null || :
+          _stop_count=0
+          while ! _group_quiesced "$_pgid" \
+            && [ "$_stop_count" -lt 25 ]; do
+            /bin/sleep 0.01
+            _stop_count=$((_stop_count + 1))
+          done
+        fi
+        if [ -n "$_pgid" ]; then
+          /bin/kill -KILL "-$_pgid" 2>/dev/null || :
+        else
+          /bin/kill -KILL "$_child" 2>/dev/null || :
+        fi
+        _stop_count=0
+        while /bin/kill -0 "-$_pgid" 2>/dev/null \
+          && [ "$_stop_count" -lt 20 ]; do
+          /bin/sleep 0.01
+          _stop_count=$((_stop_count + 1))
+        done
+        _group_live "$_pgid" && _cleanup_failed=1
+        wait "$_child" 2>/dev/null || :
+      fi
+      _cleanup_record
+      [ "$_cleanup_failed" -eq 0 ] || exit 1
+      exit "$_requested_rc"
+    }
+    trap "_pending=129" HUP
+    trap "_pending=130" INT
+    trap "_pending=143" TERM
+    trap "_pending=124" USR1
+    trap "_cleanup_record" EXIT
+    case "$_deadline" in ""|*[!0-9]*) exit 1 ;; esac
+    [ "$_deadline" = 0 ] || case "$_deadline" in 0*) exit 1 ;; esac
+    [ "$_deadline" -le 86400 ] || exit 1
+    cd -P -- "$_home" || exit 1
+    if [ -n "$_control" ]; then
+      [ "$(_dir_id "$_control")" = "$_dir_identity" ] || exit 1
+      [ ! -e "$_control/.reap" ] && [ ! -L "$_control/.reap" ] || exit 1
+      _worker="$_control/worker"
+      _tmp="$_control/.worker.$$"
+      _start=$(TZ=UTC0 LC_ALL=C /bin/ps -p "$$" -o lstart= 2>/dev/null \
+        | /usr/bin/awk "{\$1=\$1; print}") || exit 1
+      [ -n "$_start" ] && [ ! -e "$_worker" ] && [ ! -L "$_worker" ] || exit 1
+      umask 077
+      (set -C; printf "%s\t%s\t%s\n" "$$" "$_start" "$_dir_identity" > "$_tmp") \
+        2>/dev/null || exit 1
+      /bin/chmod 600 "$_tmp" || exit 1
+      [ "$(_dir_id "$_control")" = "$_dir_identity" ] || exit 1
+      [ ! -e "$_control/.reap" ] && [ ! -L "$_control/.reap" ] || exit 1
+      /bin/mv "$_tmp" "$_worker" || exit 1
+      [ "$(_dir_id "$_control")" = "$_dir_identity" ] || exit 1
+      [ ! -e "$_control/.reap" ] && [ ! -L "$_control/.reap" ] || exit 1
+      IFS="$(printf "\t")" read -r _pid _record_start _record_dir _extra \
+        < "$_worker" || exit 1
+      [ "$_pid" = "$$" ] && [ "$_record_start" = "$_start" ] \
+        && [ "$_record_dir" = "$_dir_identity" ] && [ -z "$_extra" ] || exit 1
+      [ "$(_dir_id "$_control")" = "$_dir_identity" ] || exit 1
+      [ ! -e "$_control/.reap" ] && [ ! -L "$_control/.reap" ] || exit 1
+    fi
+    # A dedicated process group lets cancellation stop setup descendants too;
+    # killing only launchctl/sudo can orphan a grandchild and release the lock
+    # while it is still mutating shared state.
+    [ "$_pending" -eq 0 ] || _terminate "$_pending"
+    set -m || exit 1
+    "$@" &
+    _child=$!
+    _pgid="$_child"
+    set +m || :
+    [ "$_pending" -eq 0 ] || _terminate "$_pending"
+    if [ "$_deadline" -gt 0 ]; then
+      set -m || _terminate 1
+      ( /bin/sleep "$_deadline"; /bin/kill -USR1 "$$" 2>/dev/null || : ) &
+      _deadline_watchdog=$!
+      set +m || :
+    fi
+    wait "$_child" 2>/dev/null || _rc=$?
+    _stop_deadline_watchdog || _terminate 1
+    [ "$_pending" -eq 0 ] || _terminate "$_pending"
+    _child=""
+    if _group_live "$_pgid"; then
+      /bin/kill -TERM "$_pgid" 2>/dev/null || :
+      _stop_count=0
+      while /bin/kill -0 "-$_pgid" 2>/dev/null \
+        && [ "$_stop_count" -lt 100 ]; do
+        /bin/sleep 0.01
+        _stop_count=$((_stop_count + 1))
+      done
+      /bin/kill -STOP "-$_pgid" 2>/dev/null || :
+      _stop_count=0
+      while ! _group_quiesced "$_pgid" \
+        && [ "$_stop_count" -lt 25 ]; do
+        /bin/sleep 0.01
+        _stop_count=$((_stop_count + 1))
+      done
+      /bin/kill -KILL "-$_pgid" 2>/dev/null || :
+      _stop_count=0
+      while /bin/kill -0 "-$_pgid" 2>/dev/null \
+        && [ "$_stop_count" -lt 20 ]; do
+        /bin/sleep 0.01
+        _stop_count=$((_stop_count + 1))
+      done
+      _group_live "$_pgid" && exit 1
+    fi
+    _cleanup_record
+    exit "$_rc"
+  ' mdm-drop-supervisor "$_home" "$_control" "$_dir_identity" "$_deadline" \
+    "$_launchctl" asuser "$_uid" "$_sudo" -u "#$_uid" -H "${MDM_DROP_ARGV[@]}" &
+  _supervisor=$!
+  _MDM_ACTIVE_DROP_SUPERVISOR_PID="$_supervisor"
+  _MDM_DROP_SUPERVISOR_STARTING=0
+  if [[ -n "$_control" ]]; then
+    while [[ "$_wait_count" -lt 500 ]]; do
+      if _mdm_lock_record_state "$_control/worker" "$_dir_identity"; then
+        _record_state=0; break
+      else
+        _record_state=$?
+      fi
+      [[ "$_record_state" -eq 3 ]] || break
+      /bin/kill -0 "$_supervisor" 2>/dev/null || break
+      /bin/sleep 0.01
+      _wait_count=$((_wait_count + 1))
+    done
+    if [[ "$_record_state" -ne 0 || "$_MDM_LOCK_RECORD_PID" != "$_supervisor" ]]; then
+      /bin/kill -TERM "$_supervisor" 2>/dev/null || true
+      _mdm_wait_lock_holder "$_supervisor" || true
+      _MDM_ACTIVE_DROP_SUPERVISOR_PID=""
+      return 1
+    fi
+  fi
+  wait "$_supervisor" || _rc=$?
+  _MDM_ACTIVE_DROP_SUPERVISOR_PID=""
+  return "$_rc"
+}
+
+_mdm_exec_setup_as_user() {
+  local _MDM_EXEC_AS_USER_DEADLINE_SECONDS
+  _MDM_EXEC_AS_USER_DEADLINE_SECONDS="$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_SETUP_SECONDS")" || return 1
+  _mdm_exec_as_user "$@"
 }
 
 # ── git 実行ディスパッチャ ──────────────────────────────────────
@@ -1354,6 +3908,23 @@ _mdm_git() {
     _mdm_exec_as_user "$_MDM_GIT_DROP_UID" "$_MDM_GIT_DROP_USER" "$_MDM_GIT_DROP_HOME" /usr/bin/git "$@"
   else
     git "$@"
+  fi
+}
+
+# Only network-bearing Git operations use this runner.  A wall-clock deadline
+# covers stalls that low-speed detection cannot observe, while the low-speed
+# floor rejects a peer that keeps a connection alive without useful progress.
+_mdm_git_network() {
+  local _deadline _MDM_EXEC_AS_USER_DEADLINE_SECONDS
+  _deadline="$(_mdm_timeout_seconds "$_MDM_TIMEOUT_GIT_SECONDS")" || return 1
+  if [[ -n "$_MDM_GIT_DROP_UID" ]]; then
+    # _mdm_git creates a nested launchctl/sudo process group in this mode, so
+    # its own supervisor must own the deadline and descendant cleanup.
+    _MDM_EXEC_AS_USER_DEADLINE_SECONDS="$_deadline"
+    _mdm_git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 "$@"
+  else
+    _mdm_run_with_timeout "$_deadline" _mdm_git \
+      -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 "$@"
   fi
 }
 
@@ -1460,17 +4031,35 @@ _mdm_check_dryrun_prerequisites() {
 # softwareupdate -l の旧形式（"* Command Line Tools ..."）と現行形式
 #（"* Label: Command Line Tools ..."）を同じ install label に正規化する。
 _mdm_select_clt_label() {
-  local _label _version
-  sed -nE '/\*.*Command Line Tools/ {
-    s/^[^*]*\*[[:space:]]*//
-    s/^Label:[[:space:]]*//
-    p
-  }' | while IFS= read -r _label; do
-    _version="${_label##*Xcode}"
-    _version="${_version# }"
-    _version="${_version#-}"
-    printf '%s\t%s\n' "$_version" "$_label"
-  done | sort -V | tail -n1 | cut -f2-
+  LC_ALL=C /usr/bin/awk '
+    function newer(left, right, lparts, rparts, nl, nr, count, i, lv, rv) {
+      nl = split(left, lparts, /[^0-9]+/)
+      nr = split(right, rparts, /[^0-9]+/)
+      count = nl > nr ? nl : nr
+      for (i = 1; i <= count; i++) {
+        lv = i <= nl ? lparts[i] + 0 : 0
+        rv = i <= nr ? rparts[i] + 0 : 0
+        if (lv != rv) return lv > rv
+      }
+      return left > right
+    }
+
+    /\*.*Command Line Tools/ {
+      label = $0
+      sub(/^[^*]*\*[[:space:]]*/, "", label)
+      sub(/^Label:[[:space:]]*/, "", label)
+      version = label
+      sub(/^.*Xcode[[:space:]-]*/, "", version)
+      if (version !~ /^[0-9]+([.-][0-9]+)*$/) next
+      if (!seen || newer(version, best_version)) {
+        seen = 1
+        best_version = version
+        best_label = label
+      }
+    }
+
+    END { if (seen) print best_label }
+  '
 }
 
 # Xcode Command Line Tools の導入確認。root 実行前提。
@@ -1494,9 +4083,13 @@ _mdm_ensure_clt() {
     return 1
   fi
   local _label
-  _label="$(softwareupdate -l 2>/dev/null | _mdm_select_clt_label || true)"
+  _label="$(_mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_QUERY_SECONDS")" softwareupdate -l 2>/dev/null \
+    | _mdm_select_clt_label || true)"
   if [[ -n "$_label" ]]; then
-    softwareupdate -i "$_label" --verbose >/dev/null 2>&1 || true
+    _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+      "$_MDM_TIMEOUT_CLT_INSTALL_SECONDS")" \
+      softwareupdate -i "$_label" --verbose >/dev/null 2>&1 || true
   else
     mdm_log R3 "softwareupdate に CLT の候補が見つからない"
   fi
@@ -1520,7 +4113,10 @@ _mdm_resolve_brew_pkg_url() {
   if [[ -n "${MDM_BREW_RELEASES_JSON_OVERRIDE:-}" ]]; then
     _json="$(cat "$MDM_BREW_RELEASES_JSON_OVERRIDE" 2>/dev/null || true)"
   else
-    _json="$(curl -fsSL "https://api.github.com/repos/Homebrew/brew/releases/latest" 2>/dev/null || true)"
+    _json="$(_mdm_run_with_timeout "$(_mdm_timeout_seconds \
+      "$_MDM_TIMEOUT_QUERY_SECONDS")" curl -fsSL \
+      "https://api.github.com/repos/Homebrew/brew/releases/latest" \
+      2>/dev/null || true)"
   fi
   [[ -z "$_json" ]] && return 1
   local _url
@@ -1645,7 +4241,9 @@ _mdm_bootstrap_homebrew() {
   _mdm_arm_transient_cleanup
 
   mdm_log R3 "Homebrew pkg をダウンロード中: $_pkg_url"
-  if ! curl -fsSL -o "$_pkg" "$_pkg_url" 2>/dev/null; then
+  if ! _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_PACKAGE_SECONDS")" \
+    curl -fsSL -o "$_pkg" "$_pkg_url" 2>/dev/null; then
     mdm_log R3 "Homebrew pkg のダウンロードに失敗: $_pkg_url"
     _mdm_cleanup_prereq_artifacts
     return 1
@@ -1654,7 +4252,9 @@ _mdm_bootstrap_homebrew() {
   # 署名検証: exit code + 証明書チェーンの Developer ID Installer を Homebrew の
   # Team ID (927JGANW46) に pin して確認してから installer にかける（High#7）。
   local _sig_out _sig_rc=0
-  _sig_out="$(pkgutil --check-signature "$_pkg" 2>&1)" || _sig_rc=$?
+  _sig_out="$(_mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_PKGUTIL_SECONDS")" \
+    pkgutil --check-signature "$_pkg" 2>&1)" || _sig_rc=$?
   if [[ $_sig_rc -ne 0 ]] || ! _mdm_check_brew_signature_output "$_sig_out"; then
     mdm_log R3 "Homebrew pkg の署名検証に失敗（Team ID ${_MDM_BREW_TEAM_ID} の Developer ID Installer 署名を確認できない）"
     _mdm_cleanup_prereq_artifacts
@@ -1673,7 +4273,9 @@ _mdm_bootstrap_homebrew() {
 
   mdm_log R3 "Homebrew pkg を導入中 (HOMEBREW_PKG_USER=$_user)"
   local _rc=0
-  installer -pkg "$_pkg" -target / >/dev/null 2>&1 || _rc=$?
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_PACKAGE_SECONDS")" \
+    installer -pkg "$_pkg" -target / >/dev/null 2>&1 || _rc=$?
   _mdm_cleanup_prereq_artifacts
   if [[ $_rc -ne 0 ]]; then
     mdm_log R3 "Homebrew pkg の導入に失敗 (exit=$_rc)"
@@ -1732,17 +4334,19 @@ _mdm_cli_present_for_home() {
   local _home="$1" _link
   _link="$_home/.local/bin/claude"
   local _versions="$_home/.local/share/claude/versions" _target _canonical
-  local _target_uid _snapshot _old_umask _rc=1
+  local _target_uid _snapshot _old_umask _rc=1 _mode
   if [[ "${_MDM_TEST_MODE:-0}" == "1" && -n "${MDM_CLAUDE_CLI_TRUST_OVERRIDE:-}" ]]; then
     [[ "$MDM_CLAUDE_CLI_TRUST_OVERRIDE" == "1" ]]
     return
   fi
   [[ -L "$_link" ]] || return 1
-  _target="$(/usr/bin/readlink "$_link" 2>/dev/null)" || return 1
+  _mdm_readlink_exact "$_link" _target || return 1
   case "$_target" in "$_versions"/*) : ;; *) return 1 ;; esac
   [[ "${_target#"$_versions"/}" =~ ^[0-9A-Za-z._+-]+$ ]] || return 1
   _canonical="$(_mdm_canonical_file "$_target")" || return 1
   [[ "$_canonical" == "$_target" && -x "$_target" ]] || return 1
+  _mode="$(_mdm_stat_mode "$_target")" || return 1
+  _mdm_mode_owner_executable "$_mode" || return 1
   _target_uid="$(_mdm_stat_uid "$_home")" || return 1
   [[ "$_target_uid" =~ ^[0-9]+$ ]] || return 1
   _old_umask="$(umask)"; umask 077
@@ -1750,6 +4354,10 @@ _mdm_cli_present_for_home() {
     || { umask "$_old_umask"; return 1; }
   umask "$_old_umask"
   if ! _mdm_snapshot_bound_to "$_target" "$_snapshot" cli "$_target_uid"; then
+    /bin/rm -f "$_snapshot"
+    return 1
+  fi
+  if ! _mdm_mode_owner_executable "$_MDM_BOUND_SNAPSHOT_MODE"; then
     /bin/rm -f "$_snapshot"
     return 1
   fi
@@ -1829,6 +4437,13 @@ _mdm_auth_git() {
   "${_env[@]}" /usr/bin/git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
 }
 
+_mdm_auth_git_network() {
+  local _deadline
+  _deadline="$(_mdm_timeout_seconds "$_MDM_TIMEOUT_GIT_SECONDS")" || return 1
+  _mdm_run_with_timeout "$_deadline" _mdm_auth_git \
+    -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=60 "$@"
+}
+
 # Keep exact release/prerelease tags as-is.  For commits after a tag, encode
 # git-describe's distance/hash suffix as build metadata so it does not become
 # a SemVer prerelease accidentally (v1.2.3-4-gabc -> v1.2.3+4.gabc).
@@ -1866,7 +4481,7 @@ _mdm_canonical_any() {
   local _path="$1" _target _dir _base _physical _hops=0
   while [[ -L "$_path" ]]; do
     _hops=$((_hops + 1)); [[ "$_hops" -le 40 ]] || return 1
-    _target="$(/usr/bin/readlink "$_path" 2>/dev/null)" || return 1
+    _mdm_readlink_exact "$_path" _target || return 1
     [[ "$_target" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
     if [[ "$_target" == /* ]]; then
       _path="$_target"
@@ -1907,7 +4522,7 @@ _mdm_auth_entry_list() { # <tree> <output-var>
 }
 
 _mdm_normalize_auth_tree() {
-  local _tree="$1" _entry _mode_dir=755 _list=""
+  local _tree="$1" _entry _entry_mode _mode_dir=755 _list=""
   local _mode_exec=755 _mode_file=644
   if [[ "${_MDM_TEST_MODE:-0}" == "1" && "${MDM_AUTH_READONLY_OWNER_TEST:-0}" == "1" ]]; then
     _mode_dir=555; _mode_exec=555; _mode_file=444
@@ -1922,7 +4537,9 @@ _mdm_normalize_auth_tree() {
     elif [[ -d "$_entry" ]]; then
       /bin/chmod "$_mode_dir" "$_entry" || { /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""; return 1; }
     elif [[ -f "$_entry" ]]; then
-      if [[ -x "$_entry" ]]; then
+      _entry_mode="$(_mdm_stat_mode "$_entry")" \
+        || { /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""; return 1; }
+      if _mdm_mode_owner_executable "$_entry_mode"; then
         /bin/chmod "$_mode_exec" "$_entry" || { /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""; return 1; }
       else
         /bin/chmod "$_mode_file" "$_entry" || { /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""; return 1; }
@@ -1958,7 +4575,8 @@ _mdm_auth_tree_trusted() {
     fi
   done < "$_list"
   /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""
-  [[ "$_rc" -eq 0 && -f "$_tree/setup.sh" && ! -L "$_tree/setup.sh" && -x "$_tree/setup.sh" ]]
+  [[ "$_rc" -eq 0 && -f "$_tree/setup.sh" && ! -L "$_tree/setup.sh" ]] \
+    && _mdm_mode_owner_executable "$(_mdm_stat_mode "$_tree/setup.sh")"
 }
 
 _mdm_auth_tree_private_for_uid() { # <tree> <target-uid>
@@ -2024,7 +4642,145 @@ _mdm_expected_tree_trusted() { # <rendered-output>
   /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""
   [[ "$_count" -gt 3 && -d "$_root/tree" && ! -L "$_root/tree" \
     && -f "$_root/modes.tsv" && ! -L "$_root/modes.tsv" \
+    && -f "$_root/policy.json" && ! -L "$_root/policy.json" \
     && -f "$_root/manifest.json" && ! -L "$_root/manifest.json" ]]
+}
+
+_mdm_expected_json_contract_valid() { # <rendered> <profile> <language> <home>
+  local _root="$1" _profile="$2" _language="$3" _home="$4" _python
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_root/manifest.json" "$_root/policy.json" \
+    "$_profile" "$_language" "$_home" <<'PY'
+import hashlib
+import json
+import re
+import sys
+
+manifest_path, policy_path, profile, language, home = sys.argv[1:]
+manifest_keys = [
+    "schema_version", "profile", "language", "logical_home", "async_hooks",
+    "required_components", "policy_sha256", "files", "absent_files",
+    "entries", "total_bytes",
+]
+entry_keys = [
+    "path", "live_mode", "snapshot_mode", "comparison", "size", "sha256",
+]
+policy_keys = {
+    "commit_attribution", "editor_choice", "language", "profile",
+    "required_components", "schema_version", "values",
+}
+components = {
+    "biome", "claude_cli", "fonts", "ghostty", "kit", "node_runtime",
+    "safety_net", "web_content_runtime",
+}
+
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def reject_constant(_value):
+    raise ValueError("non-finite JSON number")
+
+
+def relative(value):
+    if (type(value) is not str or not value or value.startswith("/")
+            or "\\" in value or len(value.encode("utf-8")) > 1024):
+        return False
+    parts = value.split("/")
+    return (len(parts) <= 64 and all(part not in ("", ".", "..") for part in parts)
+            and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                        or 0xD800 <= ord(char) <= 0xDFFF for char in value))
+
+
+def load(path, limit):
+    with open(path, "rb") as handle:
+        raw = handle.read(limit + 1)
+    if len(raw) > limit or not raw.endswith(b"\n"):
+        raise ValueError("invalid generated JSON size/terminator")
+    value = json.loads(raw.decode("utf-8", "strict"),
+                       object_pairs_hook=unique_object,
+                       parse_constant=reject_constant)
+    return raw, value
+
+
+try:
+    manifest_raw, manifest = load(manifest_path, 64 * 1024 * 1024)
+    policy_raw, policy = load(policy_path, 4 * 1024 * 1024)
+    if type(manifest) is not dict or list(manifest) != manifest_keys:
+        raise ValueError("invalid generated manifest keys/order")
+    canonical_manifest = (json.dumps(
+        manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    if manifest_raw != canonical_manifest:
+        raise ValueError("generated manifest is not writer-canonical")
+    required = manifest["required_components"]
+    files = manifest["files"]
+    absent = manifest["absent_files"]
+    entries = manifest["entries"]
+    if (type(manifest["schema_version"]) is not int
+            or manifest["schema_version"] != 1
+            or manifest["profile"] != profile
+            or manifest["language"] != language
+            or manifest["logical_home"] != home
+            or manifest["async_hooks"] is not False
+            or type(required) is not list or required != sorted(set(required))
+            or not required or not set(required).issubset(components)
+            or type(files) is not list or files != sorted(set(files))
+            or not files or len(files) > 1000
+            or type(absent) is not list or absent != sorted(set(absent))
+            or len(absent) > 2000 or set(files) & set(absent)
+            or type(entries) is not list or len(entries) != len(files)
+            or type(manifest["total_bytes"]) is not int
+            or manifest["total_bytes"] < 0
+            or not re.fullmatch(r"[0-9a-f]{64}", manifest["policy_sha256"])
+            or any(not relative(item) for item in files + absent)):
+        raise ValueError("invalid generated manifest identity")
+    total = 0
+    for index, entry in enumerate(entries):
+        if (type(entry) is not dict or list(entry) != entry_keys
+                or entry["path"] != files[index]
+                or entry["live_mode"] not in {"0600", "0700"}
+                or entry["snapshot_mode"] not in {"0600", "0700"}
+                or entry["comparison"] not in {"exact", "managed-section"}
+                or type(entry["size"]) is not int or entry["size"] < 0
+                or entry["size"] > 64 * 1024 * 1024
+                or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
+                or not relative(entry["path"])):
+            raise ValueError("invalid generated manifest entry")
+        total += entry["size"]
+    if total != manifest["total_bytes"] or total > 128 * 1024 * 1024:
+        raise ValueError("invalid generated manifest total")
+    if type(policy) is not dict or set(policy) != policy_keys:
+        raise ValueError("invalid generated policy keys")
+    canonical_policy = (json.dumps(
+        policy, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        + "\n").encode("ascii")
+    if policy_raw != canonical_policy:
+        raise ValueError("generated policy is not writer-canonical")
+    values = policy["values"]
+    if (type(policy["schema_version"]) is not int
+            or policy["schema_version"] != 1
+            or policy["profile"] != profile or policy["language"] != language
+            or policy["editor_choice"] not in {
+                "none", "vscode", "cursor", "zed", "neovim"}
+            or type(policy["commit_attribution"]) is not bool
+            or policy["required_components"] != required
+            or type(values) is not dict or not values
+            or any(type(flag) is not str
+                   or not (flag.startswith("ENABLE_") or flag.startswith("INSTALL_"))
+                   or type(enabled) is not bool for flag, enabled in values.items())
+            or hashlib.sha256(policy_raw).hexdigest()
+                != manifest["policy_sha256"]):
+        raise ValueError("invalid generated policy identity")
+except (OSError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+PY
 }
 
 _mdm_prior_relative_is_safe() {
@@ -2039,33 +4795,46 @@ _mdm_prior_relative_is_safe() {
 # receipt.  Only paths that passed a prior root postcondition as actually
 # deployed are persisted here; profile-disabled/absent candidates must never
 # become deletion authority merely because a remediation was attempted.
-_mdm_capture_prior_inventory() { # <user> <home> <target-uid>
-  local _user="$1" _home="$2" _target_uid="$3"
+_mdm_capture_prior_inventory() { # <user> <home> <target-uid> <generated-uid>
+  local _user="$1" _home="$2" _target_uid="$3" _generated_uid="${4:-}"
   local _history_dir _history _history_copy="" _count _index _relative
-  local _raw="" _inventory="" _old_umask _unique_count
-  : "$_target_uid"
+  local _raw="" _inventory="" _old_umask _unique_count _mode _identity_tuple
   _MDM_PRIOR_INVENTORY=""
+  [[ "$_target_uid" =~ ^[0-9]+$ && "$_target_uid" -ge 501 ]] || return 1
+  if [[ -z "$_generated_uid" ]]; then
+    _generated_uid="$(_mdm_bind_target_generated_uid "$_user")" || return 1
+  fi
+  _generated_uid="$(_mdm_normalize_generated_uid "$_generated_uid")" || return 1
+  _identity_tuple="$(_mdm_bind_target_identity_tuple "$_user" "$_target_uid")" || return 1
+  [[ "${_identity_tuple%%$'\t'*}" == "$_target_uid" \
+    && "${_identity_tuple#*$'\t'}" == "$_generated_uid" ]] || return 1
   _history_dir="$(_mdm_receipt_dir_for "$_home")"
-  _history="$_history_dir/managed-history-$_user.json"
+  _history="$_history_dir/managed-history-$_generated_uid.json"
   [[ -e "$_history" || -L "$_history" ]] || return 0
   if [[ "${_MDM_TEST_MODE:-0}" == 1 && -n "${MDM_SYSTEM_RCPT_DIR_OVERRIDE:-}" ]]; then
-    _mdm_component_trusted "$_history_dir" && _mdm_component_trusted "$_history" \
-      || return 1
+    _mdm_component_trusted "$_history_dir" || return 1
   else
-    _mdm_verify_dir_chain "$_history_dir" "/Library/Application Support" \
-      && _mdm_component_trusted "$_history" || return 1
+    _mdm_verify_dir_chain "$_history_dir" "/Library/Application Support" || return 1
   fi
-  _history_copy="$(_mdm_stable_file_snapshot "$_history" receipt)" || return 1
+  # An invalid child cannot safely grant deletion authority, but it must not
+  # permanently deny remediation either.  Ignore it and replace it with a
+  # fresh root-owned schema after a successful postcondition.
+  [[ -f "$_history" && ! -L "$_history" ]] || return 0
+  _mdm_component_trusted "$_history" || return 0
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_history" 2>/dev/null || true)" 2>/dev/null || true)"
+  [[ "$_mode" == 0600 ]] || return 0
+  _history_copy="$(_mdm_stable_file_snapshot "$_history" history)" || return 0
   if ! _mdm_json_valid "$_history_copy" \
-    || [[ "$(_mdm_json_get "$_history_copy" schema_version)" != 1 ]] \
-    || [[ "$(_mdm_json_get "$_history_copy" target_user)" != "$_user" ]] \
+    || [[ "$(_mdm_json_get "$_history_copy" schema_version)" != 2 ]] \
+    || [[ "$(_mdm_json_get "$_history_copy" target_uid)" != "$_target_uid" ]] \
+    || [[ "$(_mdm_json_get "$_history_copy" target_generated_uid)" != "$_generated_uid" ]] \
     || [[ "$(_mdm_json_get "$_history_copy" home)" != "$_home" ]]; then
     /bin/rm -f "$_history_copy"
-    return 1
+    return 0
   fi
   _count="$(_mdm_json_array_count "$_history_copy" managed_inventory)"
   [[ "$_count" =~ ^[0-9]+$ && "$_count" -gt 0 && "$_count" -le 2000 ]] \
-    || { /bin/rm -f "$_history_copy"; return 1; }
+    || { /bin/rm -f "$_history_copy"; return 0; }
   _old_umask="$(umask)"; umask 077
   _raw="$(/usr/bin/mktemp "$(_mdm_safe_tmpdir)/claude-kit-mdm-prior-raw.XXXXXX")" \
     || { umask "$_old_umask"; /bin/rm -f "$_history_copy"; return 1; }
@@ -2091,12 +4860,22 @@ _mdm_capture_prior_inventory() { # <user> <home> <target-uid>
   _mdm_arm_transient_cleanup
 }
 
-_mdm_persist_managed_history() { # <user> <home>
-  local _user="$1" _home="$2" _manifest="${_MDM_EXPECTED_OUTPUT:-}/manifest.json"
+_mdm_persist_managed_history() { # <user> <home> <target-uid> <generated-uid>
+  local _user="$1" _home="$2" _target_uid="${3:-}" _generated_uid="${4:-}"
+  local _manifest="${_MDM_EXPECTED_OUTPUT:-}/manifest.json"
   local _dir _path _tmp _raw _count _index _relative _total=0 _old_umask _sep=""
+  local _identity_tuple
   [[ -f "$_manifest" && ! -L "$_manifest" ]] || return 1
+  [[ "$_target_uid" =~ ^[0-9]+$ && "$_target_uid" -ge 501 ]] || return 1
+  if [[ -z "$_generated_uid" ]]; then
+    _generated_uid="$(_mdm_bind_target_generated_uid "$_user")" || return 1
+  fi
+  _generated_uid="$(_mdm_normalize_generated_uid "$_generated_uid")" || return 1
+  _identity_tuple="$(_mdm_bind_target_identity_tuple "$_user" "$_target_uid")" || return 1
+  [[ "${_identity_tuple%%$'\t'*}" == "$_target_uid" \
+    && "${_identity_tuple#*$'\t'}" == "$_generated_uid" ]] || return 1
   _dir="$(_mdm_receipt_dir_for "$_home")"
-  _path="$_dir/managed-history-$_user.json"
+  _path="$_dir/managed-history-$_generated_uid.json"
   if [[ "${_MDM_TEST_MODE:-0}" == 1 && -n "${MDM_SYSTEM_RCPT_DIR_OVERRIDE:-}" ]]; then
     [[ -d "$_dir" ]] || /bin/mkdir -p "$_dir" || return 1
     _mdm_component_trusted "$_dir" || return 1
@@ -2131,8 +4910,10 @@ _mdm_persist_managed_history() { # <user> <home>
   [[ "$_total" =~ ^[0-9]+$ && "$_total" -gt 0 && "$_total" -le 2000 ]] \
     || { /bin/rm -f "$_raw" "$_tmp"; return 1; }
   {
-    printf '{\n  "schema_version": 1,\n'
+    printf '{\n  "schema_version": 2,\n'
     printf '  "target_user": "%s",\n' "$(mdm_json_escape "$_user")"
+    printf '  "target_uid": %s,\n' "$_target_uid"
+    printf '  "target_generated_uid": "%s",\n' "$_generated_uid"
     printf '  "home": "%s",\n' "$(mdm_json_escape "$_home")"
     printf '  "managed_inventory": ['
     _sep=""
@@ -2142,16 +4923,19 @@ _mdm_persist_managed_history() { # <user> <home>
     done < "$_raw"
     printf ']\n}\n'
   } > "$_tmp" || { /bin/rm -f "$_raw" "$_tmp"; return 1; }
-  /bin/chmod 644 "$_tmp" \
+  /bin/chmod 600 "$_tmp" \
     && /bin/mv -f "$_tmp" "$_path" \
+    && [[ -f "$_path" && ! -L "$_path" ]] \
     && _mdm_component_trusted "$_path" \
+    && [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_path")")" == 0600 ]] \
+    && [[ "$(_mdm_stat_managed_metadata "$_path")" =~ ^[0-9]+:1:[0-7]+$ ]] \
     || { /bin/rm -f "$_raw" "$_tmp"; return 1; }
   /bin/rm -f "$_raw"
 }
 
 _mdm_prepare_expected_state() { # <logical-home>
   local _home="$1" _base _workspace _output _renderer _python _old_umask
-  local _key _value _normalized
+  local _key _value _normalized _cli_required _policy _policy_hash _declared_policy
   local _args=() _override_keys
   _renderer="${_MDM_EXPECTED_RENDERER:-}"
   [[ -n "$_renderer" && -f "$_renderer" && ! -L "$_renderer" ]] || {
@@ -2178,12 +4962,18 @@ _mdm_prepare_expected_state() { # <logical-home>
     --output "$_output"
     --profile "${PROFILE:-standard}"
     --language "${LANGUAGE:-en}"
+    --editor "${EDITOR_CHOICE:-none}"
     --logical-home "$_home"
   )
-  _override_keys="COMMIT_ATTRIBUTION ENABLE_STATUSLINE ENABLE_SAFETY_NET \
-ENABLE_AUTO_UPDATE ENABLE_DOC_SIZE_GUARD ENABLE_FEATURE_RECOMMENDATION \
-ENABLE_PRE_COMPACT_COMMIT ENABLE_WEB_CONTENT_UPDATE ENABLE_NO_FLICKER ENABLE_NEW_INIT \
-ENABLE_CODEX_PLUGIN"
+  _cli_required="$(_mdm_root_bool "${KIT_MDM_INSTALL_CLAUDE_CLI:-true}" 2>/dev/null || echo true)"
+  _args[${#_args[@]}]=--claude-cli-required
+  _args[${#_args[@]}]="$_cli_required"
+  _override_keys=""
+  for _key in $_MDM_ROOT_ALLOWED_KEYS; do
+    case "$_key" in ENABLE_*|INSTALL_*|COMMIT_ATTRIBUTION)
+      _override_keys="${_override_keys}${_override_keys:+ }$_key" ;;
+    esac
+  done
   for _key in $_override_keys; do
     _value="${!_key:-}"
     [[ -n "$_value" ]] || continue
@@ -2200,9 +4990,73 @@ ENABLE_CODEX_PLUGIN"
     done < "$_MDM_PRIOR_INVENTORY"
   fi
   mdm_log U1b "信頼済みrendererで期待状態を生成"
-  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B "$_renderer" "${_args[@]}" >/dev/null 2>&1 || return 1
-  _mdm_expected_tree_trusted "$_output" || return 1
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
+    /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+      "$_python" -I -B "$_renderer" "${_args[@]}" >/dev/null 2>&1 || return 1
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
+    _mdm_expected_tree_trusted "$_output" || return 1
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
+    _mdm_expected_json_contract_valid \
+      "$_output" "${PROFILE:-standard}" "${LANGUAGE:-en}" "$_home" || return 1
+  _policy="$_output/policy.json"
+  _policy_hash="$(_mdm_sha256_file "$_policy")" || return 1
+  _declared_policy="$(_mdm_json_get "$_output/manifest.json" policy_sha256)" || return 1
+  [[ "$_policy_hash" =~ ^[0-9a-f]{64}$ && "$_declared_policy" == "$_policy_hash" ]] \
+    || return 1
+  if [[ -n "${KIT_MDM_EXPECTED_POLICY_SHA256:-}" \
+    && "$KIT_MDM_EXPECTED_POLICY_SHA256" != "$_policy_hash" ]]; then
+    mdm_log U1b "expected policy SHA-256 と算出値が不一致"
+    return "$MDM_EXIT_CONFIG"
+  fi
+  KIT_MDM_POLICY_SHA256="$_policy_hash"
+  MDM_RCPT_POLICY_SHA256="$_policy_hash"
+  export KIT_MDM_POLICY_SHA256
+  mdm_log U1b "policy_sha256=$_policy_hash"
+}
+
+MDM_REQUIRED_COMPONENTS=()
+_mdm_load_expected_required_components() {
+  local _manifest="${_MDM_EXPECTED_OUTPUT:-}/manifest.json" _count _index=0
+  local _value _previous="" _sep="" _json="[" _has_kit=0 _has_cli=0 _cli_required
+  local _has_node=0 _needs_node=0
+  [[ -f "$_manifest" && ! -L "$_manifest" ]] || return 1
+  _count="$(_mdm_json_array_count "$_manifest" required_components)" || return 1
+  [[ "$_count" =~ ^[0-9]+$ && "$_count" -ge 1 && "$_count" -le 8 ]] || return 1
+  MDM_REQUIRED_COMPONENTS=()
+  while (( _index < _count )); do
+    _value="$(_mdm_json_array_get "$_manifest" required_components "$_index")" || return 1
+    case "$_value" in
+      biome|claude_cli|fonts|ghostty|kit|node_runtime|safety_net|web_content_runtime) : ;;
+      *) return 1 ;;
+    esac
+    [[ -z "$_previous" || "$_value" > "$_previous" ]] || return 1
+    MDM_REQUIRED_COMPONENTS[${#MDM_REQUIRED_COMPONENTS[@]}]="$_value"
+    _json="${_json}${_sep}\"$_value\""; _sep=,
+    [[ "$_value" == kit ]] && _has_kit=1
+    [[ "$_value" == claude_cli ]] && _has_cli=1
+    [[ "$_value" == node_runtime ]] && _has_node=1
+    case "$_value" in safety_net|web_content_runtime) _needs_node=1 ;; esac
+    _previous="$_value"; _index=$((_index + 1))
+  done
+  _json="$_json]"
+  _cli_required="$(_mdm_root_bool "${KIT_MDM_INSTALL_CLAUDE_CLI:-true}" 2>/dev/null || echo true)"
+  [[ "$_has_kit" -eq 1 ]] || return 1
+  if [[ "$_cli_required" == true ]]; then
+    [[ "$_has_cli" -eq 1 ]] || return 1
+  else
+    [[ "$_has_cli" -eq 0 ]] || return 1
+  fi
+  [[ "$_has_node" -eq "$_needs_node" ]] || return 1
+  if [[ "$_has_node" -eq 1 ]]; then
+    KIT_MDM_REQUIRE_NODE_RUNTIME=true
+  else
+    KIT_MDM_REQUIRE_NODE_RUNTIME=false
+  fi
+  export KIT_MDM_REQUIRE_NODE_RUNTIME
+  MDM_RCPT_REQUIRED_COMPONENTS="$_json"
 }
 
 # Detached HEAD is data, not an invitation to execute Git against a mutable
@@ -2225,12 +5079,24 @@ _mdm_managed_dir_matches_identity() { # <dir> [expected-uid] [dev:inode:type]
   [[ -z "$_expected_identity" || "$_identity" == "$_expected_identity" ]]
 }
 
+# The retained checkout is not an execution authority, but its worktree must
+# still be an exact clean representation of the pinned commit.  Include ignored
+# paths explicitly: otherwise a concurrently injected ignore-matching file can
+# be accepted into the first full-tree attestation baseline.
+_mdm_persistent_worktree_clean() { # <repo>
+  local _status
+  _status="$(_mdm_git -C "$1" status --porcelain --untracked-files=all \
+    --ignored=matching -- . \
+    ':(exclude).claude-starter-kit-mdm-managed' 2>/dev/null)" || return 1
+  [[ -z "$_status" ]]
+}
+
 _mdm_detached_head_matches() { # <repo> <full-sha> [expected-uid]
   local _repo="$1" _sha="$2" _expected_uid="${3:-}"
   local _git_dir _git_identity _head _before _size _value _snapshot _old_umask
   [[ "$_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
   _git_dir="$_repo/.git"
-  _git_identity="$(_mdm_persistent_dir_identity "$_git_dir" || true)"
+  _git_identity="$(_mdm_persistent_dir_identity "$_git_dir")" || return 1
   _mdm_managed_dir_matches_identity "$_git_dir" "$_expected_uid" \
     "$_git_identity" || return 1
   _head="$_git_dir/HEAD"
@@ -2258,20 +5124,360 @@ _MDM_AUTH_CHECKOUT=""
 _MDM_DRYRUN_CHECKOUT=""
 _MDM_PERSISTENT_STAGE=""
 _MDM_PERSISTENT_STAGE_IDENTITY=""
+_MDM_PERSISTENT_TRANSACTION_STATE="idle"
+_MDM_PERSISTENT_INSTALL_DIR=""
+_MDM_PERSISTENT_TARGET_UID=""
+_MDM_PERSISTENT_PARENT_IDENTITY=""
+_MDM_PERSISTENT_CANDIDATE_IDENTITY=""
+_MDM_PERSISTENT_CANDIDATE_DIGEST=""
+_MDM_PERSISTENT_PREVIOUS_IDENTITY=""
+_MDM_PERSISTENT_PREVIOUS_DIGEST=""
+_MDM_CLAUDE_TRANSACTION_STATE="idle"
+_MDM_CLAUDE_LIVE=""
+_MDM_CLAUDE_BACKUP=""
+_MDM_CLAUDE_FAILED=""
+_MDM_CLAUDE_TARGET_UID=""
+_MDM_CLAUDE_PARENT_IDENTITY=""
+_MDM_CLAUDE_CANDIDATE_IDENTITY=""
+_MDM_CLAUDE_PREVIOUS_IDENTITY=""
+_MDM_CLAUDE_PREVIOUS_DIGEST=""
+_MDM_CLAUDE_MARKER_VALUE=""
+_MDM_TRANSACTION_STATE="idle"
+_MDM_TRANSACTION_USER=""
+_MDM_TRANSACTION_HOME=""
+_MDM_TRANSACTION_UID=""
+_MDM_TRANSACTION_GENERATED_UID=""
+_MDM_TRANSACTION_HISTORY_PATH=""
+_MDM_TRANSACTION_HISTORY_STATE="untouched"
+_MDM_TRANSACTION_HISTORY_SNAPSHOT=""
+_MDM_TRANSACTION_COMPONENT_PATH=""
+_MDM_TRANSACTION_COMPONENT_STATE="untouched"
+_MDM_TRANSACTION_COMPONENT_SNAPSHOT=""
 _MDM_EXPECTED_DIR=""
 _MDM_EXPECTED_OUTPUT=""
 _MDM_PRIOR_INVENTORY=""
+_MDM_EXPECTED_KIT_COMPONENT_SHA256=""
 _MDM_RUN_LOCK_FILE=""
 _MDM_RUN_LOCK_BASE=""
 _MDM_RUN_LOCK_MODE=""
 _MDM_RUN_LOCK_HOLDER_PID=""
 _MDM_RUN_LOCK_WORKER_PID=""
 _MDM_RUN_LOCK_CONTROL_DIR=""
+_MDM_RUN_LOCK_LIFETIME_FIFO=""
+_MDM_RUN_LOCK_DIR_IDENTITY=""
+_MDM_RUN_LOCK_ERROR=""
+_MDM_ACTIVE_DROP_SUPERVISOR_PID=""
+_MDM_DROP_SUPERVISOR_STARTING=0
+_MDM_DROP_SUPERVISOR_PREVIOUS_BG=""
 
 _mdm_process_parent_pid() { # <pid>
   local _pid="$1"
   [[ "$_pid" =~ ^[0-9]+$ ]] || return 1
   /bin/ps -p "$_pid" -o ppid= 2>/dev/null | /usr/bin/tr -d '[:space:]'
+}
+
+_mdm_process_start_identity() { # <pid>
+  local _pid="$1" _value
+  [[ "$_pid" =~ ^[0-9]+$ ]] || return 1
+  _value="$(TZ=UTC0 LC_ALL=C /bin/ps -p "$_pid" -o lstart= 2>/dev/null \
+    | /usr/bin/awk '{$1=$1; print}')" || return 1
+  [[ -n "$_value" && ! "$_value" =~ [[:cntrl:]] ]] || return 1
+  printf '%s' "$_value"
+}
+
+_MDM_LOCK_RECORD_PID=""
+_MDM_LOCK_RECORD_START=""
+_MDM_LOCK_RECORD_DIR=""
+_mdm_lock_record_state() { # <record-path> <expected-dir-identity>
+  local _path="$1" _expected_dir="$2" _before _opened _after _meta _rest _mode
+  local _line="" _extra="" _pid _start _dir _tail _current_start
+  _MDM_LOCK_RECORD_PID=""; _MDM_LOCK_RECORD_START=""; _MDM_LOCK_RECORD_DIR=""
+  [[ -e "$_path" || -L "$_path" ]] || return 3
+  [[ -f "$_path" && ! -L "$_path" ]] || return 2
+  _before="$(_mdm_stat_identity "$_path")" || return 2
+  exec 15<"$_path" || return 2
+  _opened="$(_mdm_stat_fd_identity 15)" || { exec 15<&-; return 2; }
+  [[ "$_before" == "$_opened" ]] || { exec 15<&-; return 2; }
+  IFS= read -r _line <&15 || { exec 15<&-; return 2; }
+  if IFS= read -r _extra <&15; then exec 15<&-; return 2; fi
+  exec 15<&-
+  _after="$(_mdm_stat_identity "$_path")" || return 2
+  [[ "$_after" == "$_before" ]] || return 2
+  _meta="$(_mdm_stat_managed_metadata "$_path")" || return 2
+  [[ "$_meta" =~ ^[0-9]+:1:[0-7]+$ ]] || return 2
+  _rest="${_meta#*:}"; _rest="${_rest#*:}"
+  _mode="$(_mdm_mode_normalize "$_rest")" || return 2
+  [[ "$(_mdm_stat_uid "$_path" || true)" == "$(_mdm_auth_expected_uid)" \
+    && "$_mode" == 0600 ]] || return 2
+  _mdm_has_extended_acl "$_path" && return 2
+  _pid="${_line%%$'\t'*}"; _tail="${_line#*$'\t'}"
+  [[ "$_tail" != "$_line" ]] || return 2
+  _start="${_tail%%$'\t'*}"; _dir="${_tail#*$'\t'}"
+  [[ "$_dir" != "$_tail" && "$_pid" =~ ^[0-9]+$ \
+    && -n "$_start" && ! "$_start" =~ [[:cntrl:]] \
+    && "$_dir" == "$_expected_dir" ]] || return 2
+  _MDM_LOCK_RECORD_PID="$_pid"
+  _MDM_LOCK_RECORD_START="$_start"
+  _MDM_LOCK_RECORD_DIR="$_dir"
+  /bin/kill -0 "$_pid" 2>/dev/null || return 1
+  _current_start="$(_mdm_process_start_identity "$_pid" || true)"
+  [[ -n "$_current_start" && "$_current_start" == "$_start" ]] || return 1
+  return 0
+}
+
+_MDM_REAP_RECORD_PID=""
+_MDM_REAP_RECORD_START=""
+_MDM_REAP_RECORD_CONTROL=""
+_MDM_REAP_RECORD_DIR=""
+_mdm_reap_record_state() { # <record> <control-identity> <reap-identity>
+  local _path="$1" _expected_control="$2" _expected_reap="$3"
+  local _before _opened _after _meta _rest _mode _line="" _extra=""
+  local _pid _start _control _reap _tail _current_start
+  _MDM_REAP_RECORD_PID=""; _MDM_REAP_RECORD_START=""
+  _MDM_REAP_RECORD_CONTROL=""; _MDM_REAP_RECORD_DIR=""
+  [[ -e "$_path" || -L "$_path" ]] || return 3
+  [[ -f "$_path" && ! -L "$_path" ]] || return 2
+  _before="$(_mdm_stat_identity "$_path")" || return 2
+  exec 15<"$_path" || return 2
+  _opened="$(_mdm_stat_fd_identity 15)" || { exec 15<&-; return 2; }
+  [[ "$_opened" == "$_before" ]] || { exec 15<&-; return 2; }
+  IFS= read -r _line <&15 || { exec 15<&-; return 2; }
+  if IFS= read -r _extra <&15; then exec 15<&-; return 2; fi
+  exec 15<&-
+  _after="$(_mdm_stat_identity "$_path")" || return 2
+  [[ "$_after" == "$_before" ]] || return 2
+  _meta="$(_mdm_stat_managed_metadata "$_path")" || return 2
+  [[ "$_meta" =~ ^[0-9]+:1:[0-7]+$ ]] || return 2
+  _rest="${_meta#*:}"; _rest="${_rest#*:}"
+  _mode="$(_mdm_mode_normalize "$_rest")" || return 2
+  [[ "$(_mdm_stat_uid "$_path" || true)" == "$(_mdm_auth_expected_uid)" \
+    && "$_mode" == 0600 ]] || return 2
+  _mdm_has_extended_acl "$_path" && return 2
+  _pid="${_line%%$'\t'*}"; _tail="${_line#*$'\t'}"
+  [[ "$_tail" != "$_line" ]] || return 2
+  _start="${_tail%%$'\t'*}"; _tail="${_tail#*$'\t'}"
+  _control="${_tail%%$'\t'*}"; _reap="${_tail#*$'\t'}"
+  [[ "$_reap" != "$_tail" && "$_pid" =~ ^[0-9]+$ \
+    && -n "$_start" && ! "$_start" =~ [[:cntrl:]] \
+    && "$_control" == "$_expected_control" \
+    && "$_reap" == "$_expected_reap" ]] || return 2
+  _MDM_REAP_RECORD_PID="$_pid"
+  _MDM_REAP_RECORD_START="$_start"
+  _MDM_REAP_RECORD_CONTROL="$_control"
+  _MDM_REAP_RECORD_DIR="$_reap"
+  /bin/kill -0 "$_pid" 2>/dev/null || return 1
+  _current_start="$(_mdm_process_start_identity "$_pid" || true)"
+  [[ -n "$_current_start" && "$_current_start" == "$_start" ]] || return 1
+  return 0
+}
+
+_MDM_REAP_CLAIM_IDENTITY=""
+_mdm_mkdir_reap_claim_create() { # <control> <control-identity>
+  local _control="$1" _expected="$2" _reap _owner _identity _start
+  local _owner_tmp _old_umask _state=0
+  _MDM_REAP_CLAIM_IDENTITY=""
+  _reap="$_control/.reap"; _owner="$_reap/owner"
+  /bin/mkdir "$_reap" 2>/dev/null || return 1
+  /bin/chmod 700 "$_reap" || return 1
+  _mdm_component_trusted "$_reap" || return 1
+  [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_reap")")" == 0700 ]] \
+    || return 1
+  _mdm_has_extended_acl "$_reap" && return 1
+  [[ "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" ]] \
+    || return 1
+  _identity="$(_mdm_persistent_dir_identity "$_reap" || true)"
+  [[ -n "$_identity" ]] || return 1
+  _start="$(_mdm_process_start_identity "$$" || true)"
+  [[ -n "$_start" ]] || return 1
+  _owner_tmp="$_reap/.owner.init.$$"
+  _old_umask="$(umask)"; umask 077
+  (set -o noclobber
+   printf '%s\t%s\t%s\t%s\n' "$$" "$_start" "$_expected" "$_identity" \
+     > "$_owner_tmp") 2>/dev/null
+  _state=$?
+  umask "$_old_umask"
+  [[ "$_state" -eq 0 ]] || return 1
+  /bin/chmod 600 "$_owner_tmp" || return 1
+  [[ "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" \
+    && "$(_mdm_persistent_dir_identity "$_reap" || true)" == "$_identity" ]] \
+    || return 1
+  /bin/mv "$_owner_tmp" "$_owner" || return 1
+  if _mdm_reap_record_state "$_owner" "$_expected" "$_identity"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  [[ "$_state" -eq 0 && "$_MDM_REAP_RECORD_PID" == "$$" \
+    && "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" \
+    && "$(_mdm_persistent_dir_identity "$_reap" || true)" == "$_identity" ]] \
+    || return 1
+  _MDM_REAP_CLAIM_IDENTITY="$_identity"
+}
+
+_mdm_mkdir_reap_claim_release() { # <control> <control-id> <reap-id>
+  local _control="$1" _expected="$2" _identity="$3" _reap _owner _state
+  local _entry _count=0
+  _reap="$_control/.reap"; _owner="$_reap/owner"
+  [[ "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" \
+    && "$(_mdm_persistent_dir_identity "$_reap" || true)" == "$_identity" ]] \
+    || return 1
+  if _mdm_reap_record_state "$_owner" "$_expected" "$_identity"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  [[ "$_state" -eq 0 && "$_MDM_REAP_RECORD_PID" == "$$" ]] || return 1
+  while IFS= read -r _entry; do
+    [[ "$_entry" == "$_owner" ]] || return 1
+    _count=$((_count + 1))
+  done < <(/usr/bin/find "$_reap" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+  [[ "$_count" -eq 1 ]] || return 1
+  /bin/rm -f "$_owner" || return 1
+  /bin/rmdir "$_reap" || return 1
+  [[ "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" ]]
+}
+
+_mdm_mkdir_reap_remove_worker_temps() { # <control> <control-id> <reap-id>
+  local _control="$1" _expected="$2" _reap_identity="$3"
+  local _entry _name _meta _rest _mode _before _after
+  if ! _mdm_reap_record_state \
+      "$_control/.reap/owner" "$_expected" "$_reap_identity" \
+    || [[ "$_MDM_REAP_RECORD_PID" != "$$" ]]; then
+    return 1
+  fi
+  while IFS= read -r _entry; do
+    [[ -n "$_entry" && ! "$_entry" =~ [[:cntrl:]] ]] || return 1
+    _name="${_entry##*/}"
+    [[ ( "$_name" =~ ^\.worker\.[0-9]+$ \
+        || "$_name" =~ ^\.owner\.init\.[0-9]+$ ) \
+      && -f "$_entry" && ! -L "$_entry" ]] || return 1
+    _meta="$(_mdm_stat_managed_metadata "$_entry")" || return 1
+    [[ "$_meta" =~ ^[0-9]+:1:[0-7]+$ ]] || return 1
+    _rest="${_meta#*:}"; _rest="${_rest#*:}"
+    _mode="$(_mdm_mode_normalize "$_rest")" || return 1
+    [[ "$(_mdm_stat_uid "$_entry" || true)" == "$(_mdm_auth_expected_uid)" \
+      && "$_mode" == 0600 ]] || return 1
+    _mdm_has_extended_acl "$_entry" && return 1
+    _before="$(_mdm_stat_identity "$_entry")" || return 1
+    /bin/rm -f "$_entry" || return 1
+    _after="$(_mdm_persistent_dir_identity "$_control" || true)"
+    [[ "$_after" == "$_expected" && ! -e "$_entry" && ! -L "$_entry" \
+      && -n "$_before" ]] || return 1
+  done < <(/usr/bin/find "$_control" -mindepth 1 -maxdepth 1 \
+    \( -name '.worker.*' -o -name '.owner.init.*' \) -print 2>/dev/null)
+  [[ "$(_mdm_persistent_dir_identity "$_control/.reap" || true)" \
+    == "$_reap_identity" ]]
+}
+
+# Return 0 after recovering a stale/incomplete claim, 2 while a live reaper
+# owns it, and 1 for malformed metadata. Every removal is generation-bound.
+_mdm_mkdir_reap_recover() { # <control> <control-identity>
+  local _control="$1" _expected="$2" _reap _owner _identity _state=3
+  local _count=0 _entry _entries=0 _name _meta _rest _mode _init=""
+  _reap="$_control/.reap"; _owner="$_reap/owner"
+  [[ -d "$_reap" && ! -L "$_reap" ]] || return 1
+  _mdm_component_trusted "$_reap" || return 1
+  [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_reap")")" == 0700 ]] \
+    || return 1
+  _identity="$(_mdm_persistent_dir_identity "$_reap" || true)"
+  [[ -n "$_identity" \
+    && "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" ]] \
+    || return 1
+  while [[ "$_count" -lt 50 && ! -e "$_owner" && ! -L "$_owner" ]]; do
+    /bin/sleep 0.01
+    [[ "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" \
+      && "$(_mdm_persistent_dir_identity "$_reap" || true)" == "$_identity" ]] \
+      || return 1
+    _count=$((_count + 1))
+  done
+  if _mdm_reap_record_state "$_owner" "$_expected" "$_identity"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  [[ "$_state" -ne 0 ]] || return 2
+  [[ "$_state" -eq 1 || "$_state" -eq 3 ]] || return 1
+  while IFS= read -r _entry; do
+    _entries=$((_entries + 1))
+    if [[ "$_state" -eq 1 ]]; then
+      [[ "$_entry" == "$_owner" ]] || return 1
+    else
+      _name="${_entry##*/}"
+      [[ -z "$_init" && "$_name" =~ ^\.owner\.init\.[0-9]+$ \
+        && -f "$_entry" && ! -L "$_entry" ]] || return 1
+      _meta="$(_mdm_stat_managed_metadata "$_entry")" || return 1
+      [[ "$_meta" =~ ^[0-9]+:1:[0-7]+$ ]] || return 1
+      _rest="${_meta#*:}"; _rest="${_rest#*:}"
+      _mode="$(_mdm_mode_normalize "$_rest")" || return 1
+      [[ "$(_mdm_stat_uid "$_entry" || true)" == "$(_mdm_auth_expected_uid)" \
+        && "$_mode" == 0600 ]] || return 1
+      _mdm_has_extended_acl "$_entry" && return 1
+      _init="$_entry"
+    fi
+  done < <(/usr/bin/find "$_reap" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+  if [[ "$_state" -eq 1 ]]; then
+    [[ "$_entries" -eq 1 ]] || return 1
+  else
+    [[ "$_entries" -le 1 ]] || return 1
+  fi
+  [[ "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" \
+    && "$(_mdm_persistent_dir_identity "$_reap" || true)" == "$_identity" ]] \
+    || return 1
+  [[ "$_state" -ne 1 ]] || /bin/rm -f "$_owner" || return 1
+  [[ -z "$_init" ]] || /bin/rm -f "$_init" || return 1
+  /bin/rmdir "$_reap" || return 1
+  [[ "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" ]]
+}
+
+# Return 0 when this live claim may remove the generation, 2 when a live owner
+# or worker still protects it, and 1 for malformed/missing authority.
+_mdm_mkdir_reap_removal_state() { # <control> <control-id> <reap-id>
+  local _control="$1" _expected="$2" _reap_identity="$3"
+  local _state _owner="$_control/owner" _worker="$_control/worker"
+  if _mdm_reap_record_state \
+      "$_control/.reap/owner" "$_expected" "$_reap_identity"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  [[ "$_state" -eq 0 && "$_MDM_REAP_RECORD_PID" == "$$" \
+    && "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" \
+    && "$(_mdm_persistent_dir_identity "$_control/.reap" || true)" \
+      == "$_reap_identity" ]] || return 1
+
+  if _mdm_lock_record_state "$_owner" "$_expected"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  case "$_state" in
+    0) [[ "$_MDM_LOCK_RECORD_PID" == "$$" ]] || return 2 ;;
+    1|3) : ;;
+    2) return 1 ;;
+    *) return 1 ;;
+  esac
+  if _mdm_lock_record_state "$_worker" "$_expected"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  case "$_state" in
+    0) return 2 ;;
+    1|3) : ;;
+    2) return 1 ;;
+    *) return 1 ;;
+  esac
+
+  if _mdm_reap_record_state \
+      "$_control/.reap/owner" "$_expected" "$_reap_identity"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  [[ "$_state" -eq 0 && "$_MDM_REAP_RECORD_PID" == "$$" \
+    && "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_expected" \
+    && "$(_mdm_persistent_dir_identity "$_control/.reap" || true)" \
+      == "$_reap_identity" ]]
 }
 
 _mdm_lock_control_cleanup() { # <base> <control-dir>
@@ -2286,7 +5492,10 @@ _mdm_lock_control_cleanup() { # <base> <control-dir>
     [[ ! -L "$_control/$_entry" ]] || return 1
     [[ ! -e "$_control/$_entry" || -f "$_control/$_entry" ]] || return 1
   done
-  /bin/rm -f "$_control/owner" "$_control/ready" "$_control/release" || return 1
+  [[ ! -L "$_control/lifetime" ]] || return 1
+  [[ ! -e "$_control/lifetime" || -p "$_control/lifetime" ]] || return 1
+  /bin/rm -f "$_control/owner" "$_control/ready" "$_control/release" \
+    "$_control/lifetime" || return 1
   /bin/rmdir "$_control" 2>/dev/null || [[ ! -e "$_control" ]]
 }
 
@@ -2313,6 +5522,7 @@ _mdm_wait_lock_holder() { # <holder-pid>
 
 _mdm_abort_legacy_lock_holder() { # <base> <control-dir> <holder-pid> <worker-pid>
   local _base="$1" _control="$2" _holder="$3" _worker="$4"
+  { exec 18>&-; } 2>/dev/null || true
   if [[ "$_worker" =~ ^[0-9]+$ ]]; then
     /bin/kill -TERM "$_worker" 2>/dev/null || true
   fi
@@ -2323,11 +5533,284 @@ _mdm_abort_legacy_lock_holder() { # <base> <control-dir> <holder-pid> <worker-pi
   _mdm_lock_control_cleanup "$_base" "$_control" || true
 }
 
+_mdm_mkdir_lock_cleanup() { # <base> <control-dir> <expected-dir-identity>
+  local _base="$1" _control="$2" _expected="$3" _reap _reap_identity
+  local _quarantine="" _moved _entry _name _current _state=0 _count=0
+  [[ "$_control" == "$_base/remediation-global.mkdir-lock" \
+    && -n "$_expected" ]] || return 1
+  [[ -d "$_control" && ! -L "$_control" ]] || return 1
+  _current="$(_mdm_persistent_dir_identity "$_control" || true)"
+  [[ "$_current" == "$_expected" ]] || return 1
+  _mdm_component_trusted "$_control" || return 1
+
+  # Unknown content is an integrity failure. Check it before creating the
+  # reap claim or renaming anything so a rejected generation stays at the
+  # fixed path for diagnosis and cannot be confused with its successor.
+  while IFS= read -r _entry; do
+    [[ -n "$_entry" && ! "$_entry" =~ [[:cntrl:]] ]] || return 1
+    _name="${_entry##*/}"
+    case "$_name" in
+      owner|worker) [[ -f "$_entry" && ! -L "$_entry" ]] || return 1 ;;
+      .worker.*) [[ "$_name" =~ ^\.worker\.[0-9]+$ \
+        && -f "$_entry" && ! -L "$_entry" ]] || return 1 ;;
+      .owner.init.*) [[ "$_name" =~ ^\.owner\.init\.[0-9]+$ \
+        && -f "$_entry" && ! -L "$_entry" ]] || return 1 ;;
+      *) return 1 ;;
+    esac
+  done < <(/usr/bin/find "$_control" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+
+  # Claim this exact generation with a live process/start/identity record.
+  # A successor can recover a crashed reaper without treating a bare marker
+  # as permanent contention.
+  _mdm_mkdir_reap_claim_create "$_control" "$_expected" || return 1
+  _reap="$_control/.reap"
+  _reap_identity="$_MDM_REAP_CLAIM_IDENTITY"
+  _mdm_mkdir_reap_remove_worker_temps \
+    "$_control" "$_expected" "$_reap_identity" || {
+      _mdm_mkdir_reap_claim_release \
+        "$_control" "$_expected" "$_reap_identity" || true
+      return 1
+    }
+  if _mdm_mkdir_reap_removal_state \
+      "$_control" "$_expected" "$_reap_identity"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  if [[ "$_state" -ne 0 ]]; then
+    _mdm_mkdir_reap_claim_release \
+      "$_control" "$_expected" "$_reap_identity" || return 1
+    [[ "$_state" -eq 2 ]] && return 2
+    return 1
+  fi
+  _quarantine="$(/usr/bin/mktemp -d "$_base/.remediation-reap.XXXXXX" 2>/dev/null)" \
+    || { _mdm_mkdir_reap_claim_release \
+      "$_control" "$_expected" "$_reap_identity" || true; return 1; }
+  if ! /bin/chmod 700 "$_quarantine" \
+    || ! _mdm_component_trusted "$_quarantine"; then
+    /bin/rmdir "$_quarantine" 2>/dev/null || true
+    _mdm_mkdir_reap_claim_release \
+      "$_control" "$_expected" "$_reap_identity" || true
+    return 1
+  fi
+
+  # The supervisor publishes `worker` before starting the dropped child and
+  # checks for this claim both before and after publication. Re-read it here:
+  # claim-first makes publication abort; worker-first makes this removal abort.
+  _mdm_mkdir_reap_remove_worker_temps \
+    "$_control" "$_expected" "$_reap_identity" || {
+      /bin/rmdir "$_quarantine" 2>/dev/null || true
+      _mdm_mkdir_reap_claim_release \
+        "$_control" "$_expected" "$_reap_identity" || true
+      return 1
+    }
+  if _mdm_mkdir_reap_removal_state \
+      "$_control" "$_expected" "$_reap_identity"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  if [[ "$_state" -eq 0 ]]; then
+    while IFS= read -r _entry; do
+      [[ -n "$_entry" && ! "$_entry" =~ [[:cntrl:]] ]] \
+        || { _state=1; break; }
+      _name="${_entry##*/}"
+      case "$_name" in
+        owner|worker) [[ -f "$_entry" && ! -L "$_entry" ]] \
+          || { _state=1; break; } ;;
+        .reap) [[ -d "$_entry" && ! -L "$_entry" ]] \
+          || { _state=1; break; } ;;
+        *) _state=1; break ;;
+      esac
+    done < <(/usr/bin/find "$_control" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+  fi
+  if [[ "$_state" -ne 0 ]]; then
+    /bin/rmdir "$_quarantine" 2>/dev/null || true
+    _mdm_mkdir_reap_claim_release \
+      "$_control" "$_expected" "$_reap_identity" || return 1
+    [[ "$_state" -eq 2 ]] && return 2
+    return 1
+  fi
+  _moved="$_quarantine/lock"
+  if ! /bin/mv "$_control" "$_moved"; then
+    /bin/rmdir "$_quarantine" 2>/dev/null || true
+    _mdm_mkdir_reap_claim_release \
+      "$_control" "$_expected" "$_reap_identity" || true
+    return 1
+  fi
+  [[ "$(_mdm_persistent_dir_identity "$_moved" || true)" == "$_expected" ]] \
+    || return 1
+
+  # From this point onward touch only the generation-specific quarantine.
+  # A new fixed-name lock may already exist and must never be removed (ABA).
+  while IFS= read -r _entry; do
+    [[ -n "$_entry" && ! "$_entry" =~ [[:cntrl:]] ]] || return 1
+    _name="${_entry##*/}"
+    case "$_name" in
+      owner|worker) [[ -f "$_entry" && ! -L "$_entry" ]] || return 1 ;;
+      .reap) [[ -d "$_entry" && ! -L "$_entry" ]] || return 1 ;;
+      *) return 1 ;;
+    esac
+  done < <(/usr/bin/find "$_moved" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+  [[ "$(_mdm_persistent_dir_identity "$_moved/.reap" || true)" \
+    == "$_reap_identity" ]] || return 1
+  if _mdm_reap_record_state \
+      "$_moved/.reap/owner" "$_expected" "$_reap_identity"; then
+    _state=0
+  else
+    _state=$?
+  fi
+  [[ "$_state" -eq 0 && "$_MDM_REAP_RECORD_PID" == "$$" ]] || return 1
+  while IFS= read -r _entry; do
+    [[ "$_entry" == "$_moved/.reap/owner" ]] || return 1
+    _count=$((_count + 1))
+  done < <(/usr/bin/find "$_moved/.reap" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+  [[ "$_count" -eq 1 ]] || return 1
+  /bin/rm -f "$_moved/owner" "$_moved/worker" || return 1
+  /bin/rm -f "$_moved/.reap/owner" || return 1
+  /bin/rmdir "$_moved/.reap" "$_moved" "$_quarantine" || return 1
+}
+
+_mdm_mkdir_lock_wait_initialization() { # <control> <dir-identity>
+  local _control="$1" _identity="$2" _count=0
+  while [[ "$_count" -lt 50 ]]; do
+    [[ "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_identity" ]] \
+      || return 1
+    [[ -e "$_control/owner" || -L "$_control/owner" \
+      || -e "$_control/worker" || -L "$_control/worker" ]] && return 0
+    /bin/sleep 0.01
+    _count=$((_count + 1))
+  done
+  return 0
+}
+
+_mdm_acquire_mkdir_lock() { # <base>
+  local _base="$1" _control _owner_file _worker_file
+  local _old_umask _attempt=0 _dir_identity="" _start="" _state=0
+  _control="$_base/remediation-global.mkdir-lock"
+  _owner_file="$_control/owner"
+  _worker_file="$_control/worker"
+  while [[ "$_attempt" -lt 3 ]]; do
+    _old_umask="$(umask)"; umask 077
+    if /bin/mkdir "$_control" 2>/dev/null; then
+      umask "$_old_umask"
+      /bin/chmod 700 "$_control" \
+        || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+      _mdm_component_trusted "$_control" \
+        || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+      _dir_identity="$(_mdm_persistent_dir_identity "$_control" || true)"
+      [[ -n "$_dir_identity" ]] || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+      _start="$(_mdm_process_start_identity "$$" || true)"
+      [[ -n "$_start" ]] || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+      _old_umask="$(umask)"; umask 077
+      # Bind initialization to the directory inode via cwd. If a recovery
+      # renames this incomplete generation, a delayed initializer can only
+      # write into that old inode and never into a successor at the fixed path.
+      (
+        builtin cd -P "$_control" || exit 1
+        [[ "$(_mdm_persistent_dir_identity . || true)" == "$_dir_identity" ]] \
+          || exit 1
+        set -o noclobber
+        _owner_tmp=".owner.init.$$"
+        printf '%s\t%s\t%s\n' "$$" "$_start" "$_dir_identity" \
+          > "./$_owner_tmp" \
+          || exit 1
+        /bin/chmod 600 "./$_owner_tmp" || exit 1
+        [[ "$(_mdm_persistent_dir_identity . || true)" == "$_dir_identity" ]] \
+          || exit 1
+        /bin/mv "./$_owner_tmp" ./owner
+      ) 2>/dev/null
+      _state=$?
+      umask "$_old_umask"
+      [[ "$_state" -eq 0 \
+        && "$(_mdm_persistent_dir_identity "$_control" || true)" == "$_dir_identity" ]] \
+        || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+      _mdm_lock_record_state "$_owner_file" "$_dir_identity" \
+        || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+      _MDM_RUN_LOCK_MODE="mkdir"
+      _MDM_RUN_LOCK_FILE="$_control"
+      _MDM_RUN_LOCK_BASE="$_base"
+      _MDM_RUN_LOCK_CONTROL_DIR="$_control"
+      _MDM_RUN_LOCK_DIR_IDENTITY="$_dir_identity"
+      _MDM_RUN_LOCK_ERROR=""
+      return 0
+    fi
+    umask "$_old_umask"
+    [[ -d "$_control" && ! -L "$_control" ]] \
+      || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+    _mdm_component_trusted "$_control" \
+      || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+    _dir_identity="$(_mdm_persistent_dir_identity "$_control" || true)"
+    [[ -n "$_dir_identity" ]] || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+    if [[ -e "$_control/.reap" || -L "$_control/.reap" ]]; then
+      if _mdm_mkdir_reap_recover "$_control" "$_dir_identity"; then
+        _attempt=$((_attempt + 1))
+        continue
+      else
+        _state=$?
+      fi
+      if [[ "$_state" -eq 2 ]]; then
+        _MDM_RUN_LOCK_ERROR=contention
+      else
+        _MDM_RUN_LOCK_ERROR=backend
+      fi
+      return 1
+    fi
+
+    if _mdm_lock_record_state "$_owner_file" "$_dir_identity"; then
+      _state=0
+    else
+      _state=$?
+    fi
+    case "$_state" in
+      0) _MDM_RUN_LOCK_ERROR=contention; return 1 ;;
+      2) _MDM_RUN_LOCK_ERROR=backend; return 1 ;;
+      3)
+        _mdm_mkdir_lock_wait_initialization "$_control" "$_dir_identity" \
+          || { _MDM_RUN_LOCK_ERROR=backend; return 1; }
+        if _mdm_lock_record_state "$_owner_file" "$_dir_identity"; then
+          _state=0
+        else
+          _state=$?
+        fi
+        case "$_state" in
+          0) _MDM_RUN_LOCK_ERROR=contention; return 1 ;;
+          2) _MDM_RUN_LOCK_ERROR=backend; return 1 ;;
+          3) : ;;
+        esac ;;
+    esac
+    if _mdm_lock_record_state "$_worker_file" "$_dir_identity"; then
+      _state=0
+    else
+      _state=$?
+    fi
+    case "$_state" in
+      0) _MDM_RUN_LOCK_ERROR=contention; return 1 ;;
+      2) _MDM_RUN_LOCK_ERROR=backend; return 1 ;;
+    esac
+    if _mdm_mkdir_lock_cleanup "$_base" "$_control" "$_dir_identity"; then
+      _state=0
+    else
+      _state=$?
+    fi
+    if [[ "$_state" -ne 0 ]]; then
+      [[ "$_state" -eq 2 ]] \
+        && _MDM_RUN_LOCK_ERROR=contention \
+        || _MDM_RUN_LOCK_ERROR=backend
+      return 1
+    fi
+    _attempt=$((_attempt + 1))
+  done
+  _MDM_RUN_LOCK_ERROR=backend
+  return 1
+}
+
 _mdm_acquire_run_lock() { # <user> <home>
   local _user="$1" _home="$2" _base _lock _lockf=/usr/bin/lockf
   local _old_umask _path_identity _fd_identity _lock_rc=0
-  local _control="" _owner_file _ready _release _holder="" _worker="" _reported_holder
+  local _control="" _owner_file _ready _release _lifetime _holder="" _worker="" _reported_holder
   local _owner_pid _ready_line _wait_count=0
+  _MDM_RUN_LOCK_ERROR=backend
   _base="$(_mdm_receipt_dir_for "$_home")"
   if [[ "${_MDM_TEST_MODE:-0}" == 1 && -n "${MDM_SYSTEM_RCPT_DIR_OVERRIDE:-}" ]]; then
     [[ -d "$_base" ]] || /bin/mkdir -p "$_base" || return 1
@@ -2340,8 +5823,19 @@ _mdm_acquire_run_lock() { # <user> <home>
   if [[ "${_MDM_TEST_MODE:-0}" == 1 && -n "${MDM_LOCKF_OVERRIDE:-}" ]]; then
     _lockf="$MDM_LOCKF_OVERRIDE"
   fi
-  [[ "$_lockf" == /* && -x "$_lockf" && ! -L "$_lockf" ]] || return 1
-  _lock="$_base/remediation-$_user.lock"
+  [[ "$_lockf" == /* ]] || return 1
+  if [[ ! -e "$_lockf" && ! -L "$_lockf" ]]; then
+    if _mdm_acquire_mkdir_lock "$_base"; then
+      _mdm_arm_transient_cleanup
+      return 0
+    fi
+    return 1
+  fi
+  [[ -f "$_lockf" && -x "$_lockf" && ! -L "$_lockf" ]] || return 1
+  : "$_user"
+  # CLT, Homebrew and compliance artifacts include host-global resources, so
+  # different target users must be serialized through the same lock as well.
+  _lock="$_base/remediation-global.lock"
   [[ ! -e "$_lock" || ( -f "$_lock" && ! -L "$_lock" ) ]] || return 1
   _old_umask="$(umask)"; umask 077
   if [[ ! -e "$_lock" ]]; then
@@ -2374,6 +5868,22 @@ _mdm_acquire_run_lock() { # <user> <home>
     _owner_file="$_control/owner"
     _ready="$_control/ready"
     _release="$_control/release"
+    _lifetime="$_control/lifetime"
+    /usr/bin/mkfifo "$_lifetime" || {
+      _mdm_lock_control_cleanup "$_base" "$_control" || true
+      return 1
+    }
+    /bin/chmod 600 "$_lifetime" || {
+      _mdm_lock_control_cleanup "$_base" "$_control" || true
+      return 1
+    }
+    # Open the lifetime channel before the lockf holder starts.  The wrapper
+    # closes its inherited writer before exec so the holder's reader observes
+    # EOF exactly when the coordinator/drop-supervisor writers are gone.
+    exec 18<>"$_lifetime" || {
+      _mdm_lock_control_cleanup "$_base" "$_control" || true
+      return 1
+    }
     _old_umask="$(umask)"; umask 077
     /bin/sh -c 'printf "%s\n" "$PPID"' > "$_owner_file"
     _lock_rc=$?
@@ -2388,27 +5898,24 @@ _mdm_acquire_run_lock() { # <user> <home>
     [[ "$_owner_pid" =~ ^[0-9]+$ ]] \
       || { _mdm_lock_control_cleanup "$_base" "$_control" || true; return 1; }
 
+    /bin/sh -c 'exec 18>&-; exec "$@"' mdm-lockf-wrapper \
     "$_lockf" -k -n -s -t 0 "$_lock" /bin/sh -c '
       _owner_pid=$1
       _control=$2
       _ready=$3
-      _release=$4
+      _lifetime=$4
       _lockf_pid=$PPID
       _cleanup() {
-        /bin/rm -f "$_control/owner" "$_ready" "$_release"
+        /bin/rm -f "$_control/owner" "$_ready" "$_control/release" "$_lifetime"
         /bin/rmdir "$_control" 2>/dev/null || :
       }
       trap _cleanup EXIT
       trap "exit 0" INT TERM
       umask 077
+      exec 17<"$_lifetime" || exit 1
       printf "%s:%s\n" "$$" "$_lockf_pid" > "$_ready" || exit 1
-      while [ ! -e "$_release" ]; do
-        _parent="$(/bin/ps -p "$_lockf_pid" -o ppid= 2>/dev/null \
-          | /usr/bin/tr -d "[:space:]")"
-        [ "$_parent" = "$_owner_pid" ] || break
-        /bin/sleep 0.1
-      done
-    ' mdm-lock-holder "$_owner_pid" "$_control" "$_ready" "$_release" &
+      /bin/cat <&17 >/dev/null
+    ' mdm-lock-holder "$_owner_pid" "$_control" "$_ready" "$_lifetime" &
     _holder=$!
 
     while [[ ! -e "$_ready" && "$_wait_count" -lt 500 ]]; do
@@ -2418,7 +5925,18 @@ _mdm_acquire_run_lock() { # <user> <home>
     done
     if [[ ! -f "$_ready" || -L "$_ready" ]] \
       || ! _mdm_component_trusted "$_ready"; then
-      _mdm_abort_legacy_lock_holder "$_base" "$_control" "$_holder" "$_worker"
+      # `kill -0` also succeeds for an unreaped zombie. Close the lifetime
+      # writer and capture the holder status through bounded wait directly;
+      # EX_TEMPFAIL is lock contention, every other failure is backend damage.
+      { exec 18>&-; } 2>/dev/null || true
+      _lock_rc=0
+      _mdm_wait_lock_holder "$_holder" || _lock_rc=$?
+      _mdm_lock_control_cleanup "$_base" "$_control" || true
+      if [[ "$_lock_rc" -eq 75 ]]; then
+        _MDM_RUN_LOCK_ERROR=contention
+      else
+        _MDM_RUN_LOCK_ERROR=backend
+      fi
       return 1
     fi
     _ready_line="$(/bin/cat "$_ready" 2>/dev/null || true)"
@@ -2438,41 +5956,56 @@ _mdm_acquire_run_lock() { # <user> <home>
     _MDM_RUN_LOCK_HOLDER_PID="$_holder"
     _MDM_RUN_LOCK_WORKER_PID="$_worker"
     _MDM_RUN_LOCK_CONTROL_DIR="$_control"
+    _MDM_RUN_LOCK_LIFETIME_FIFO="$_lifetime"
   else
     exec 19>&-
+    if [[ "$_lock_rc" -eq 75 ]]; then
+      _MDM_RUN_LOCK_ERROR=contention
+    else
+      _MDM_RUN_LOCK_ERROR=backend
+    fi
     return 1
   fi
   _MDM_RUN_LOCK_FILE="$_lock"
   _MDM_RUN_LOCK_BASE="$_base"
+  _MDM_RUN_LOCK_ERROR=""
   _mdm_arm_transient_cleanup
+  return 0
 }
 
 _mdm_release_run_lock() {
   local _lock="${_MDM_RUN_LOCK_FILE:-}" _base="${_MDM_RUN_LOCK_BASE:-}"
   local _mode="${_MDM_RUN_LOCK_MODE:-}" _control="${_MDM_RUN_LOCK_CONTROL_DIR:-}"
   local _holder="${_MDM_RUN_LOCK_HOLDER_PID:-}" _worker="${_MDM_RUN_LOCK_WORKER_PID:-}"
-  local _release _old_umask _wait_rc=0
+  local _lifetime="${_MDM_RUN_LOCK_LIFETIME_FIFO:-}" _wait_rc=0
+  local _dir_identity="${_MDM_RUN_LOCK_DIR_IDENTITY:-}"
   [[ -n "$_lock" ]] || return 0
-  [[ -n "$_base" && "$_lock" == "$_base"/remediation-*.lock \
-    && -f "$_lock" && ! -L "$_lock" ]] || return 1
+  [[ -n "$_base" ]] || return 1
+  case "$_lock" in
+    "$_base"/remediation-*.lock|"$_base"/remediation-global.mkdir-lock) : ;;
+    *) return 1 ;;
+  esac
   case "$_mode" in
     fd)
+      [[ -f "$_lock" && ! -L "$_lock" ]] || return 1
       exec 19>&- || return 1 ;;
     legacy)
+      [[ -f "$_lock" && ! -L "$_lock" ]] || return 1
       [[ "$_holder" =~ ^[0-9]+$ && "$_worker" =~ ^[0-9]+$ ]] || return 1
       [[ -n "$_control" ]] || return 1
       case "$_control" in "$_base"/.remediation-lock.*) : ;; *) return 1 ;; esac
       [[ -d "$_control" && ! -L "$_control" ]] || return 1
       _mdm_component_trusted "$_control" || return 1
-      _release="$_control/release"
-      [[ ! -e "$_release" && ! -L "$_release" ]] || return 1
-      _old_umask="$(umask)"; umask 077
-      (set -o noclobber; : > "$_release") 2>/dev/null \
-        || { umask "$_old_umask"; return 1; }
-      umask "$_old_umask"
+      [[ "$_lifetime" == "$_control/lifetime" && -p "$_lifetime" && ! -L "$_lifetime" ]] \
+        || return 1
+      exec 18>&- || return 1
       _mdm_wait_lock_holder "$_holder" || _wait_rc=$?
       _mdm_lock_control_cleanup "$_base" "$_control" || return 1
       [[ "$_wait_rc" -eq 0 ]] || return 1 ;;
+    mkdir)
+      [[ "$_lock" == "$_base/remediation-global.mkdir-lock" \
+        && "$_control" == "$_lock" && -n "$_dir_identity" ]] || return 1
+      _mdm_mkdir_lock_cleanup "$_base" "$_control" "$_dir_identity" || return 1 ;;
     *) return 1 ;;
   esac
   _MDM_RUN_LOCK_FILE=""
@@ -2481,6 +6014,9 @@ _mdm_release_run_lock() {
   _MDM_RUN_LOCK_HOLDER_PID=""
   _MDM_RUN_LOCK_WORKER_PID=""
   _MDM_RUN_LOCK_CONTROL_DIR=""
+  _MDM_RUN_LOCK_LIFETIME_FIFO=""
+  _MDM_RUN_LOCK_DIR_IDENTITY=""
+  _MDM_RUN_LOCK_ERROR=""
 }
 _mdm_cleanup_auth_entry_list() {
   local _path="${_MDM_AUTH_ENTRY_LIST:-}" _base _uid
@@ -2522,12 +6058,17 @@ _mdm_cleanup_persistent_stage() {
   local _path="${_MDM_PERSISTENT_STAGE:-}" _expected _name _current
   [[ -n "$_path" ]] || return 0
   _expected="${_MDM_PERSISTENT_STAGE_IDENTITY:-}"
-  [[ -n "$_expected" ]] || return 1
   _name="${_path##*/}"
   case "$_name" in .claude-starter-kit.mdm-stage.*) : ;; *) return 1 ;; esac
   if [[ ! -e "$_path" && ! -L "$_path" ]]; then
     _MDM_PERSISTENT_STAGE=""
     _MDM_PERSISTENT_STAGE_IDENTITY=""
+    return 0
+  fi
+  if [[ -z "$_expected" ]]; then
+    [[ -d "$_path" && ! -L "$_path" ]] || return 1
+    _mdm_run_maybe_as_user /bin/rmdir "$_path" 2>/dev/null || return 1
+    _MDM_PERSISTENT_STAGE=""
     return 0
   fi
   [[ -d "$_path" && ! -L "$_path" ]] || return 1
@@ -2586,12 +6127,110 @@ _mdm_cleanup_renderer_snapshot() {
   _MDM_EXPECTED_RENDERER_SNAPSHOT=0
 }
 
+_mdm_stop_active_drop_supervisor() { # [HUP|INT|TERM]
+  local _signal="${1:-TERM}" _pid="${_MDM_ACTIVE_DROP_SUPERVISOR_PID:-}"
+  local _candidate="" _nounset_was_on=false
+  case "$_signal" in HUP|INT|TERM) : ;; *) return 1 ;; esac
+  if [[ ! "$_pid" =~ ^[1-9][0-9]*$ \
+    && "${_MDM_DROP_SUPERVISOR_STARTING:-0}" == 1 ]]; then
+    case $- in *u*) _nounset_was_on=true ;; esac
+    set +u
+    _candidate="$!"
+    [[ "$_nounset_was_on" == true ]] && set -u
+    if [[ "$_candidate" =~ ^[1-9][0-9]*$ \
+      && "$_candidate" != "${_MDM_DROP_SUPERVISOR_PREVIOUS_BG:-}" ]]; then
+      _pid="$_candidate"
+    fi
+  fi
+  [[ "$_pid" =~ ^[1-9][0-9]*$ ]] || {
+    _MDM_DROP_SUPERVISOR_STARTING=0
+    return 0
+  }
+  /bin/kill "-$_signal" "$_pid" 2>/dev/null || true
+  # The supervisor itself bounds TERM->KILL for its user child to three
+  # seconds, shorter than this five-second watchdog.
+  _mdm_wait_lock_holder "$_pid" >/dev/null 2>&1 || true
+  _MDM_ACTIVE_DROP_SUPERVISOR_PID=""
+  _MDM_DROP_SUPERVISOR_STARTING=0
+  return 0
+}
+
+_mdm_stop_active_timeout_supervisor() { # [HUP|INT|TERM]
+  local _signal="${1:-TERM}" _pid="${_MDM_ACTIVE_TIMEOUT_SUPERVISOR_PID:-}"
+  local _candidate="" _nounset_was_on=false
+  case "$_signal" in HUP|INT|TERM) : ;; *) return 1 ;; esac
+  if [[ ! "$_pid" =~ ^[1-9][0-9]*$ \
+    && "${_MDM_TIMEOUT_SUPERVISOR_STARTING:-0}" == 1 ]]; then
+    case $- in *u*) _nounset_was_on=true ;; esac
+    set +u
+    _candidate="$!"
+    [[ "$_nounset_was_on" == true ]] && set -u
+    if [[ "$_candidate" =~ ^[1-9][0-9]*$ \
+      && "$_candidate" != "${_MDM_TIMEOUT_SUPERVISOR_PREVIOUS_BG:-}" ]]; then
+      _pid="$_candidate"
+    fi
+  fi
+  [[ "$_pid" =~ ^[1-9][0-9]*$ ]] || return 0
+  /bin/kill "-$_signal" "$_pid" 2>/dev/null || true
+  wait "$_pid" 2>/dev/null || true
+  _MDM_ACTIVE_TIMEOUT_SUPERVISOR_PID=""
+  _MDM_TIMEOUT_SUPERVISOR_STARTING=0
+}
+
+_mdm_stop_active_bound_snapshot() { # [HUP|INT|TERM]
+  local _signal="${1:-TERM}"
+  local _pid="${_MDM_ACTIVE_BOUND_SNAPSHOT_SUPERVISOR_PID:-}"
+  local _path="${_MDM_ACTIVE_BOUND_SNAPSHOT_PATH:-}" _candidate="" _base
+  local _nounset_was_on=false
+  case "$_signal" in HUP|INT|TERM) : ;; *) return 1 ;; esac
+  if [[ ! "$_pid" =~ ^[1-9][0-9]*$ \
+    && "${_MDM_BOUND_SNAPSHOT_SUPERVISOR_STARTING:-0}" == 1 ]]; then
+    case $- in *u*) _nounset_was_on=true ;; esac
+    set +u
+    _candidate="$!"
+    [[ "$_nounset_was_on" == true ]] && set -u
+    if [[ "$_candidate" =~ ^[1-9][0-9]*$ \
+      && "$_candidate" \
+        != "${_MDM_BOUND_SNAPSHOT_SUPERVISOR_PREVIOUS_BG:-}" ]]; then
+      _pid="$_candidate"
+    fi
+  fi
+  if [[ "$_pid" =~ ^[1-9][0-9]*$ ]]; then
+    /bin/kill "-$_signal" "$_pid" 2>/dev/null || true
+    _mdm_wait_lock_holder "$_pid" >/dev/null 2>&1 || true
+  fi
+  _MDM_ACTIVE_BOUND_SNAPSHOT_SUPERVISOR_PID=""
+  _MDM_BOUND_SNAPSHOT_SUPERVISOR_STARTING=0
+  if [[ -n "$_path" ]]; then
+    _base="$(_mdm_safe_tmpdir)" || return 1
+    case "$_path" in "$_base"/claude-kit-mdm-*) : ;; *) return 1 ;; esac
+    if [[ -e "$_path" || -L "$_path" ]]; then
+      [[ -f "$_path" && ! -L "$_path" ]] || return 1
+      /bin/rm -f "$_path" || return 1
+    fi
+  fi
+  _MDM_ACTIVE_BOUND_SNAPSHOT_PATH=""
+}
+
 _mdm_cleanup_transient_checkouts() {
-  trap - EXIT INT TERM
+  local _timeout_signal="${1:-TERM}"
+  # Cleanup is a single critical section.  Disarm EXIT and ignore every
+  # catchable signal used by the launcher before the first cleanup action, so
+  # a second signal cannot interrupt later stage/lock release.  The original
+  # INT/TERM handler retains responsibility for the final 130/143 exit.
+  trap - EXIT
+  trap '' HUP INT TERM
+  _mdm_stop_active_timeout_supervisor "$_timeout_signal" || true
+  _mdm_stop_active_drop_supervisor "$_timeout_signal" || true
+  _mdm_stop_active_bound_snapshot "$_timeout_signal" || true
+  _mdm_receipt_discard_prepared || true
+  _mdm_transaction_abort || true
   _mdm_cleanup_prereq_artifacts || true
   _mdm_cleanup_auth_entry_list || true
   _mdm_cleanup_dryrun_checkout || true
-  _mdm_cleanup_persistent_stage || true
+  if [[ "${_MDM_TRANSACTION_STATE:-idle}" != partial ]]; then
+    _mdm_cleanup_persistent_stage || true
+  fi
   _mdm_cleanup_auth_checkout || true
   _mdm_cleanup_expected_dir || true
   _mdm_cleanup_prior_inventory || true
@@ -2599,10 +6238,15 @@ _mdm_cleanup_transient_checkouts() {
   _mdm_release_run_lock || true
 }
 
+_mdm_arm_transient_signal_cleanup() {
+  trap '_mdm_cleanup_transient_checkouts HUP; exit 129' HUP
+  trap '_mdm_cleanup_transient_checkouts INT; exit 130' INT
+  trap '_mdm_cleanup_transient_checkouts TERM; exit 143' TERM
+}
+
 _mdm_arm_transient_cleanup() {
   trap '_mdm_cleanup_transient_checkouts' EXIT
-  trap '_mdm_cleanup_transient_checkouts; exit 130' INT
-  trap '_mdm_cleanup_transient_checkouts; exit 143' TERM
+  _mdm_arm_transient_signal_cleanup
 }
 
 _mdm_prepare_authoritative_checkout() { # <ref> <target-uid>
@@ -2623,14 +6267,17 @@ _mdm_prepare_authoritative_checkout() { # <ref> <target-uid>
 
   _repo_url="$(_mdm_repo_url)"
   mdm_log U1b "root authoritative checkout を作成"
-  _mdm_auth_git clone --quiet --no-checkout --no-local "$_repo_url" "$_auth" 2>/dev/null || return 1
-  _mdm_auth_git -C "$_auth" fetch --quiet "$_repo_url" "$_ref" 2>/dev/null || return 1
+  _mdm_auth_git_network clone --quiet --no-checkout --no-local \
+    "$_repo_url" "$_auth" 2>/dev/null || return 1
+  _mdm_auth_git_network -C "$_auth" fetch --quiet \
+    "$_repo_url" "$_ref" 2>/dev/null || return 1
   _sha="$(_mdm_auth_git -C "$_auth" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
   [[ "$_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
   _mdm_auth_git -C "$_auth" checkout --quiet --force --detach "$_sha" 2>/dev/null || return 1
   _head="$(_mdm_auth_git -C "$_auth" rev-parse --verify HEAD 2>/dev/null || true)"
   [[ "$_head" == "$_sha" ]] || return 1
-  _status="$(_mdm_auth_git -C "$_auth" status --porcelain --untracked-files=all 2>/dev/null || true)"
+  _status="$(_mdm_auth_git -C "$_auth" status --porcelain --untracked-files=all 2>/dev/null)" \
+    || return 1
   [[ -z "$_status" ]] || return 1
 
   MDM_RCPT_RESOLVED_SHA="$_sha"
@@ -2649,8 +6296,31 @@ _mdm_prepare_authoritative_checkout() { # <ref> <target-uid>
 _mdm_root_ref_allowed() { # <ref> <dry-run>
   local _ref="$1" _dry_run="$2"
   _mdm_boot_validate_gitref "$_ref" >/dev/null 2>&1 || return 1
-  if [[ "${_MDM_TEST_MODE:-0}" != "1" && "$_dry_run" != "true" ]]; then
+  case "$_dry_run" in true|false) : ;; *) return 1 ;; esac
+  if [[ "${_MDM_TEST_MODE:-0}" != "1" ]]; then
     [[ "$_ref" =~ ^[0-9a-f]{40}$ ]]
+  fi
+}
+
+# Validate every production-only semantic before lock/log/prerequisite paths
+# can mutate host state.  The target home/UID are already bound by R2, so the
+# dedicated checkout constraint and existing marker can be checked here.
+_mdm_validate_semantic_config() { # <euid> <home> <target-uid> <dry-run>
+  local _euid="$1" _home="$2" _target_uid="$3" _dry_run="$4"
+  local _ref="${KIT_MDM_GIT_REF:-main}" _install_dir="$_home/.claude-starter-kit"
+  _mdm_root_ref_allowed "$_ref" "$_dry_run" || return "$MDM_EXIT_CONFIG"
+  _mdm_log_dir_for "$_euid" "$_home" >/dev/null || return "$MDM_EXIT_CONFIG"
+  [[ "$_dry_run" == true ]] && return 0
+  if [[ -n "${KIT_MDM_INSTALL_DIR:-}" && "$KIT_MDM_INSTALL_DIR" != "$_install_dir" ]]; then
+    return "$MDM_EXIT_CONFIG"
+  fi
+  if [[ -L "$_install_dir" || ( -e "$_install_dir" && ! -d "$_install_dir" ) ]]; then
+    return "$MDM_EXIT_CONFIG"
+  fi
+  if [[ -d "$_install_dir" ]]; then
+    [[ "$(_mdm_canonical_dir "$_install_dir")" == "$_install_dir" ]] || return "$MDM_EXIT_CONFIG"
+    _mdm_persistent_marker_trusted "$_install_dir" "$_target_uid" \
+      || return "$MDM_EXIT_CONFIG"
   fi
 }
 
@@ -2726,42 +6396,193 @@ _mdm_create_persistent_marker() { # <install-dir> <target-uid>
   _mdm_persistent_marker_trusted "$1" "$_target_uid"
 }
 
-_mdm_promote_persistent_stage() { # <stage> <install-dir> <create|swap>
-  local _stage="$1" _install_dir="$2" _operation="$3" _python
-  case "$_operation" in create|swap) : ;; *) return 1 ;; esac
+_mdm_atomic_user_dir_operation() {
+  # <parent> <source-name> <destination-name> <create|swap> <uid>
+  # <parent-identity> <source-identity> <destination-identity|absent>
+  local _parent="$1" _source="$2" _destination="$3" _operation="$4"
+  local _target_uid="$5" _parent_identity="$6" _source_identity="$7"
+  local _destination_identity="$8" _python _outcome
+  [[ "$_parent" == /* && ! "$_parent" =~ [[:cntrl:]] \
+    && "$_source" != */* && "$_destination" != */* \
+    && -n "$_source" && -n "$_destination" \
+    && "$_source" != . && "$_source" != .. \
+    && "$_destination" != . && "$_destination" != .. \
+    && "$_source" != "$_destination" \
+    && "$_target_uid" =~ ^[0-9]+$ ]] || return 1
+  case "$_operation" in
+    create) [[ "$_destination_identity" == absent ]] || return 1 ;;
+    swap) [[ "$_destination_identity" != absent ]] || return 1 ;;
+    *) return 1 ;;
+  esac
   _python="$(_mdm_system_python)" || return 1
-  # Both paths share one target-user-owned parent.  RENAME_EXCL/NOREPLACE makes
-  # the first install fail if a destination appears concurrently; RENAME_SWAP/
-  # EXCHANGE replaces an existing managed checkout without an absent window.
-  _mdm_run_maybe_as_user "$_python" -I -B -c '
+  # The user-owned parent is opened once with O_NOFOLLOW.  Both preflight and
+  # postcondition use fstatat-style dir_fd lookups around a single atomic
+  # rename operation, so a pathname replacement cannot inherit stale delete
+  # authority from an earlier shell check.
+  if _mdm_run_maybe_as_user "$_python" -I -B -c '
 import ctypes
 import os
+import stat
 import sys
 
-source, destination, operation = sys.argv[1:]
-libc = ctypes.CDLL(None, use_errno=True)
-source_b = os.fsencode(source)
-destination_b = os.fsencode(destination)
+(parent, source, destination, operation, uid_raw, parent_expected,
+ source_expected, destination_expected) = sys.argv[1:]
+uid = int(uid_raw)
+for name in (source, destination):
+    if not name or name in (".", "..") or "/" in name or "\x00" in name:
+        raise SystemExit(1)
 
-if sys.platform == "darwin":
-    rename = libc.renamex_np
-    rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-    rename.restype = ctypes.c_int
-    flags = 4 if operation == "create" else 2  # RENAME_EXCL / RENAME_SWAP
-    result = rename(source_b, destination_b, flags)
-elif sys.platform.startswith("linux"):
-    rename = libc.renameat2
-    rename.argtypes = [ctypes.c_int, ctypes.c_char_p,
-                       ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    rename.restype = ctypes.c_int
-    flags = 1 if operation == "create" else 2  # NOREPLACE / EXCHANGE
-    result = rename(-100, source_b, -100, destination_b, flags)  # AT_FDCWD
-else:
-    raise SystemExit(2)
+flags = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+         | getattr(os, "O_CLOEXEC", 0))
+parent_fd = os.open(parent, flags)
 
-if result != 0:
-    raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
-' "$_stage" "$_install_dir" "$_operation" >/dev/null 2>&1
+def expected_tuple(value):
+    pieces = value.split(":", 2)
+    if len(pieces) != 3:
+        raise ValueError("invalid identity")
+    return int(pieces[0]), int(pieces[1])
+
+def checked(name, expected):
+    value = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if (not stat.S_ISDIR(value.st_mode) or value.st_uid != uid
+            or (value.st_dev, value.st_ino) != expected_tuple(expected)):
+        raise ValueError("directory identity changed")
+    return value
+
+def missing(name):
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    return False
+
+try:
+    parent_value = os.fstat(parent_fd)
+    if (not stat.S_ISDIR(parent_value.st_mode) or parent_value.st_uid != uid
+            or (parent_value.st_dev, parent_value.st_ino)
+                != expected_tuple(parent_expected)):
+        raise ValueError("parent identity changed")
+    checked(source, source_expected)
+    if operation == "create":
+        if not missing(destination):
+            raise ValueError("destination appeared")
+    else:
+        checked(destination, destination_expected)
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_b = os.fsencode(source)
+    destination_b = os.fsencode(destination)
+    if sys.platform == "darwin":
+        rename = libc.renameatx_np
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                           ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        rename_flags = 4 if operation == "create" else 2
+    elif sys.platform.startswith("linux"):
+        rename = libc.renameat2
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                           ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        rename_flags = 1 if operation == "create" else 2
+    else:
+        raise ValueError("unsupported platform")
+    if rename(parent_fd, source_b, parent_fd, destination_b,
+              rename_flags) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+    if operation == "create":
+        if not missing(source):
+            raise ValueError("source still present")
+        checked(destination, source_expected)
+    else:
+        checked(source, destination_expected)
+        checked(destination, source_expected)
+    after = os.fstat(parent_fd)
+    if ((after.st_dev, after.st_ino)
+            != (parent_value.st_dev, parent_value.st_ino)):
+        raise ValueError("parent changed")
+    os.fsync(parent_fd)
+finally:
+    os.close(parent_fd)
+' "$_parent" "$_source" "$_destination" "$_operation" "$_target_uid" \
+    "$_parent_identity" "$_source_identity" "$_destination_identity" \
+    >/dev/null 2>&1; then
+    return 0
+  fi
+  # renameatx_np/renameat2 may have completed the exchange before a later
+  # postcondition or directory fsync failed.  Never assume that a non-zero
+  # helper status means the namespace is unchanged: classify the two recorded
+  # inode layouts and accept only the proven published layout.
+  _outcome="$(_mdm_user_dir_operation_outcome \
+    "$_parent" "$_source" "$_destination" "$_operation" "$_target_uid" \
+    "$_parent_identity" "$_source_identity" "$_destination_identity" \
+    2>/dev/null || true)"
+  [[ "$_outcome" == published ]]
+}
+
+_mdm_user_dir_operation_outcome() {
+  # <parent> <source-name> <destination-name> <create|swap> <uid>
+  # <parent-id> <source-id> <destination-id|absent>
+  local _parent="$1" _source="$2" _destination="$3" _operation="$4"
+  local _uid="$5" _parent_identity="$6" _source_identity="$7"
+  local _destination_identity="$8" _source_path _destination_path
+  local _source_current=absent _destination_current=absent
+  [[ "$(_mdm_persistent_dir_identity "$_parent" 2>/dev/null || true)" \
+      == "$_parent_identity" \
+    && "$(_mdm_stat_uid "$_parent" 2>/dev/null || true)" == "$_uid" ]] \
+    || { printf '%s' unknown; return 1; }
+  _source_path="$_parent/$_source"; _destination_path="$_parent/$_destination"
+  if [[ -d "$_source_path" && ! -L "$_source_path" ]]; then
+    _source_current="$(_mdm_persistent_dir_identity "$_source_path")" \
+      || { printf '%s' unknown; return 1; }
+  elif [[ -e "$_source_path" || -L "$_source_path" ]]; then
+    printf '%s' unknown; return 1
+  fi
+  if [[ -d "$_destination_path" && ! -L "$_destination_path" ]]; then
+    _destination_current="$(_mdm_persistent_dir_identity \
+      "$_destination_path")" || { printf '%s' unknown; return 1; }
+  elif [[ -e "$_destination_path" || -L "$_destination_path" ]]; then
+    printf '%s' unknown; return 1
+  fi
+  case "$_operation:$_source_current:$_destination_current" in
+    "create:$_source_identity:absent"|\
+    "swap:$_source_identity:$_destination_identity")
+      printf '%s' unchanged ;;
+    "create:absent:$_source_identity"|\
+    "swap:$_destination_identity:$_source_identity")
+      printf '%s' published ;;
+    *) printf '%s' unknown; return 1 ;;
+  esac
+}
+
+_mdm_promote_persistent_stage() {
+  # <stage> <install-dir> <create|swap> [source-id] [destination-id|absent]
+  # [target-uid] [parent-id]
+  local _stage="$1" _install_dir="$2" _operation="$3"
+  local _source_identity="${4:-}" _destination_identity="${5:-}"
+  local _target_uid="${6:-}" _parent_identity="${7:-}"
+  local _parent _source_name _destination_name
+  _parent="${_stage%/*}"
+  [[ "$_parent" == "${_install_dir%/*}" ]] || return 1
+  _source_name="${_stage##*/}"; _destination_name="${_install_dir##*/}"
+  [[ -n "$_source_identity" ]] \
+    || _source_identity="$(_mdm_persistent_dir_identity "$_stage")" || return 1
+  if [[ -z "$_destination_identity" ]]; then
+    if [[ "$_operation" == create ]]; then
+      _destination_identity=absent
+    else
+      _destination_identity="$(_mdm_persistent_dir_identity "$_install_dir")" \
+        || return 1
+    fi
+  fi
+  [[ -n "$_target_uid" ]] \
+    || _target_uid="$(_mdm_stat_uid "$_stage")" || return 1
+  [[ -n "$_parent_identity" ]] \
+    || _parent_identity="$(_mdm_persistent_dir_identity "$_parent")" || return 1
+  _mdm_atomic_user_dir_operation "$_parent" "$_source_name" \
+    "$_destination_name" "$_operation" "$_target_uid" \
+    "$_parent_identity" "$_source_identity" "$_destination_identity"
 }
 
 _mdm_restore_previous_persistent_checkout() { # <stage> <install> <uid> <candidate-id> <previous-id>
@@ -2813,32 +6634,801 @@ _mdm_retract_initial_persistent_checkout() { # <stage-path> <install-dir> <candi
   _mdm_cleanup_persistent_stage
 }
 
+_mdm_claude_transaction_marker_path() {
+  printf '%s/.claude-starter-kit-mdm-transaction' "$1"
+}
+
+_mdm_claude_transaction_marker_trusted() { # <claude-dir> <uid> <value>
+  local _dir="$1" _uid="$2" _expected="$3" _copy="" _mode=""
+  local _size _value="" _extra="" _rc=1
+  [[ "$_uid" =~ ^[0-9]+$ && -n "$_expected" \
+    && ! "$_expected" =~ [[:cntrl:]] ]] || return 1
+  _mdm_stable_managed_snapshot \
+    "$(_mdm_claude_transaction_marker_path "$_dir")" \
+    claude-transaction-marker "$_uid" _copy _mode || return 1
+  _size="$(/usr/bin/wc -c < "$_copy" | /usr/bin/tr -d '[:space:]')" \
+    || { /bin/rm -f "$_copy"; return 1; }
+  if [[ "$_mode" == 0444 && "$_size" -eq $((${#_expected} + 1)) ]]; then
+    exec 6<"$_copy" || { /bin/rm -f "$_copy"; return 1; }
+    if IFS= read -r _value <&6 \
+      && ! IFS= read -r _extra <&6 \
+      && [[ -z "$_extra" && "$_value" == "$_expected" ]]; then
+      _rc=0
+    fi
+    exec 6<&-
+  fi
+  /bin/rm -f "$_copy"
+  return "$_rc"
+}
+
+_mdm_claude_backup_marker_trusted() { # <claude-dir> <uid> <backup-path>
+  local _dir="$1" _uid="$2" _expected="$3" _copy="" _mode=""
+  local _size _value="" _extra="" _rc=1
+  [[ "$_uid" =~ ^[0-9]+$ && "$_expected" == /* \
+    && ! "$_expected" =~ [[:cntrl:]] ]] || return 1
+  _mdm_stable_managed_snapshot "$_dir/.starter-kit-last-backup" \
+    claude-backup-marker "$_uid" _copy _mode || return 1
+  _size="$(/usr/bin/wc -c < "$_copy" | /usr/bin/tr -d '[:space:]')" \
+    || { /bin/rm -f "$_copy"; return 1; }
+  if _mdm_mode_is_safe "$_mode" \
+    && [[ "$_size" -eq $((${#_expected} + 1)) ]]; then
+    exec 6<"$_copy" || { /bin/rm -f "$_copy"; return 1; }
+    if IFS= read -r _value <&6 \
+      && ! IFS= read -r _extra <&6 \
+      && [[ -z "$_extra" && "$_value" == "$_expected" ]]; then
+      _rc=0
+    fi
+    exec 6<&-
+  fi
+  /bin/rm -f "$_copy"
+  return "$_rc"
+}
+
+_mdm_create_claude_transaction_marker() { # <claude-dir> <uid> <value>
+  local _dir="$1" _uid="$2" _value="$3" _marker
+  [[ "$_uid" =~ ^[0-9]+$ && -n "$_value" \
+    && ! "$_value" =~ [[:cntrl:]] ]] || return 1
+  _marker="$(_mdm_claude_transaction_marker_path "$_dir")"
+  # The candidate is target-user-owned. Remove only its copied transaction
+  # marker, then create the current marker under the same dropped authority.
+  _mdm_run_maybe_as_user /bin/rm -f "$_marker" 2>/dev/null || return 1
+  _mdm_run_maybe_as_user /bin/sh -c '
+    set -eu
+    umask 022
+    set -C
+    printf "%s\n" "$2" > "$1"
+    /bin/chmod 444 "$1"
+  ' mdm-claude-transaction-marker "$_marker" "$_value" \
+    2>/dev/null || return 1
+  _mdm_claude_transaction_marker_trusted "$_dir" "$_uid" "$_value"
+}
+
+_mdm_transaction_failed_path() { # <source-path> <stage-token> <failed-token>
+  local _source="$1" _stage_token="$2" _failed_token="$3"
+  local _name="${_source##*/}" _parent="${_source%/*}"
+  case "$_name" in
+    *"$_stage_token"*)
+      printf '%s/%s%s%s' "$_parent" "${_name%%"$_stage_token"*}" \
+        "$_failed_token" "${_name#*"$_stage_token"}" ;;
+    *) return 1 ;;
+  esac
+}
+
+_mdm_transaction_preserve_failed_dir() {
+  # <source> <failed-base> <uid> <parent-id> <source-id> <output-var>
+  local _source="$1" _base="$2" _uid="$3" _parent_identity="$4"
+  local _source_identity="$5" _out_var="$6" _parent _candidate _current
+  local _collision=0
+  [[ "$_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _parent="${_source%/*}"
+  [[ "$_parent" == "${_base%/*}" ]] || return 1
+  _candidate="$_base"
+  while [[ "$_collision" -le 100 ]]; do
+    if [[ -e "$_candidate" || -L "$_candidate" ]]; then
+      _collision=$((_collision + 1))
+      _candidate="$_base.$_collision"
+      continue
+    fi
+    if _mdm_atomic_user_dir_operation "$_parent" "${_source##*/}" \
+        "${_candidate##*/}" create "$_uid" "$_parent_identity" \
+        "$_source_identity" absent; then
+      printf -v "$_out_var" '%s' "$_candidate"
+      return 0
+    fi
+    _current="$(_mdm_persistent_dir_identity "$_source" 2>/dev/null || true)"
+    [[ "$_current" == "$_source_identity" ]] || return 1
+    _collision=$((_collision + 1))
+    _candidate="$_base.$_collision"
+  done
+  return 1
+}
+
+_mdm_transaction_allocate_claude_candidate() { # <home> <uid>
+  local _home="$1" _uid="$2" _timestamp _candidate
+  [[ "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _timestamp="$(LC_ALL=C date +%Y%m%d%H%M%S 2>/dev/null)" || return 1
+  [[ "$_timestamp" =~ ^[0-9]{14}$ ]] || return 1
+  _candidate="$(_mdm_run_maybe_as_user /bin/sh -c '
+    set -eu
+    umask 077
+    base="$1/.claude.mdm-backup.$2"
+    candidate="$base"
+    collision=0
+    while [ "$collision" -le 100 ]; do
+      if /bin/mkdir -m 700 "$candidate" 2>/dev/null; then
+        printf "%s\n" "$candidate"
+        exit 0
+      fi
+      [ -e "$candidate" ] || [ -L "$candidate" ] || exit 1
+      collision=$((collision + 1))
+      candidate="$base.$collision"
+    done
+    exit 1
+  ' mdm-claude-candidate "$_home" "$_timestamp" 2>/dev/null)" || return 1
+  case "$_candidate" in
+    "$_home"/.claude.mdm-backup."$_timestamp"|\
+    "$_home"/.claude.mdm-backup."$_timestamp".[0-9]*) : ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$_candidate"
+}
+
+_mdm_transaction_rotate_claude_backups() { # <home> <current-backup>
+  local _home="$1" _current="$2"
+  [[ "$_current" == "$_home"/.claude.mdm-backup.* \
+    && -d "$_current" && ! -L "$_current" ]] || return 1
+  _mdm_run_maybe_as_user /bin/sh -c '
+    set -eu
+    home="$1"
+    current="$2"
+    for candidate in "$home"/.claude.mdm-backup.*; do
+      [ -e "$candidate" ] || [ -L "$candidate" ] || continue
+      [ "$candidate" = "$current" ] && continue
+      suffix=${candidate#"$home"/.claude.mdm-backup.}
+      printf "%s\n" "$suffix" \
+        | /usr/bin/grep -Eq "^[0-9]{14}(\.[0-9]+)?$" || continue
+      /bin/rm -rf "$candidate" || exit 1
+    done
+  ' mdm-rotate-claude-backups "$_home" "$_current"
+}
+
+_mdm_transaction_snapshot_root_file() {
+  # <path> <history|manifest> <state-var> <snapshot-var>
+  local _path="$1" _label="$2" _state_var="$3" _snapshot_var="$4"
+  local _snapshot="" _mode="" _old_umask
+  if [[ ! -e "$_path" && ! -L "$_path" ]]; then
+    printf -v "$_state_var" '%s' absent
+    printf -v "$_snapshot_var" '%s' ''
+    return 0
+  fi
+  [[ -f "$_path" && ! -L "$_path" ]] || return 1
+  _mdm_component_trusted "$_path" || return 1
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_path")")" || return 1
+  [[ "$_mode" == 0600 ]] || return 1
+  # Publish cleanup ownership in the same signal-masked allocation section.
+  # The potentially longer bounded copy runs with the normal signal handler;
+  # `capturing` means the live root file is still untouched and only the temp
+  # snapshot may be discarded by abort.
+  trap '' HUP INT TERM
+  _old_umask="$(umask)"; umask 077
+  _snapshot="$(/usr/bin/mktemp \
+    "$(_mdm_safe_tmpdir)/claude-kit-mdm-${_label}.XXXXXX")" || {
+    umask "$_old_umask"
+    _mdm_arm_transient_cleanup
+    return 1
+  }
+  umask "$_old_umask"
+  printf -v "$_state_var" '%s' capturing
+  printf -v "$_snapshot_var" '%s' "$_snapshot"
+  _mdm_arm_transient_cleanup
+  if ! _mdm_snapshot_bound_to "$_path" "$_snapshot" "$_label"; then
+    /bin/rm -f "$_snapshot"
+    printf -v "$_state_var" '%s' untouched
+    printf -v "$_snapshot_var" '%s' ''
+    return 1
+  fi
+  printf -v "$_state_var" '%s' present
+}
+
+_mdm_transaction_restore_root_file() {
+  # <path> <present|absent> <snapshot>
+  local _path="$1" _state="$2" _snapshot="$3" _dir _tmp="" _mode
+  _dir="${_path%/*}"
+  _mdm_component_receipt_dir_is_trusted "$_dir" || return 1
+  case "$_state" in
+    untouched|capturing) : ;;
+    present)
+      [[ -f "$_snapshot" && ! -L "$_snapshot" ]] || return 1
+      if [[ -f "$_path" && ! -L "$_path" ]] \
+        && _mdm_component_trusted "$_path" \
+        && [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_path")")" \
+          == 0600 ]] \
+        && /usr/bin/cmp -s "$_snapshot" "$_path"; then
+        return 0
+      fi
+      _tmp="$(/usr/bin/mktemp "$_dir/.transaction-restore.XXXXXX")" \
+        || return 1
+      /bin/cp -p "$_snapshot" "$_tmp" \
+        && /bin/chmod 600 "$_tmp" \
+        || { /bin/rm -f "$_tmp"; return 1; }
+      [[ -f "$_tmp" && ! -L "$_tmp" ]] \
+        || { /bin/rm -f "$_tmp"; return 1; }
+      _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_tmp")")" || {
+        /bin/rm -f "$_tmp"; return 1;
+      }
+      [[ "$_mode" == 0600 ]] \
+        && ! _mdm_has_extended_acl "$_tmp" \
+        && /bin/mv -f "$_tmp" "$_path" \
+        || { /bin/rm -f "$_tmp"; return 1; } ;;
+    absent)
+      if [[ -e "$_path" || -L "$_path" ]]; then
+        [[ -f "$_path" && ! -L "$_path" ]] || return 1
+        _mdm_component_trusted "$_path" || return 1
+        _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_path")")" \
+          || return 1
+        [[ "$_mode" == 0600 ]] || return 1
+        /bin/rm -f "$_path" || return 1
+      fi ;;
+    *) return 1 ;;
+  esac
+  _mdm_component_receipt_dir_is_trusted "$_dir" || return 1
+  [[ "$_state" == untouched || "$_state" == capturing ]] && return 0
+  if [[ "$_state" == present ]]; then
+    [[ -f "$_path" && ! -L "$_path" ]] \
+      && _mdm_component_trusted "$_path" \
+      && [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_path")")" == 0600 ]]
+  else
+    [[ ! -e "$_path" && ! -L "$_path" ]]
+  fi
+}
+
+_mdm_transaction_cleanup_root_snapshots() {
+  local _snapshot
+  for _snapshot in "${_MDM_TRANSACTION_HISTORY_SNAPSHOT:-}" \
+    "${_MDM_TRANSACTION_COMPONENT_SNAPSHOT:-}"; do
+    [[ -n "$_snapshot" ]] || continue
+    case "$_snapshot" in
+      /private/tmp/claude-kit-mdm-history.*|/tmp/claude-kit-mdm-history.*|\
+      /private/tmp/claude-kit-mdm-manifest.*|/tmp/claude-kit-mdm-manifest.*)
+        if [[ -e "$_snapshot" || -L "$_snapshot" ]]; then
+          [[ -f "$_snapshot" && ! -L "$_snapshot" ]] \
+            && /bin/rm -f "$_snapshot" || return 1
+        fi ;;
+      *) return 1 ;;
+    esac
+  done
+  _MDM_TRANSACTION_HISTORY_SNAPSHOT=""
+  _MDM_TRANSACTION_COMPONENT_SNAPSHOT=""
+}
+
+_mdm_transaction_begin() { # <user> <home> <uid> <generated-uid>
+  local _user="$1" _home="$2" _uid="$3" _generated="$4" _dir _old_umask
+  [[ "${_MDM_TRANSACTION_STATE:-idle}" == idle \
+    && "$_uid" =~ ^[0-9]+$ && "$_uid" -ge 501 ]] || return 1
+  _generated="$(_mdm_normalize_generated_uid "$_generated")" || return 1
+  _dir="$(_mdm_receipt_dir_for "$_home")"
+  if [[ "${_MDM_TEST_MODE:-0}" != 1 \
+    || -z "${MDM_SYSTEM_RCPT_DIR_OVERRIDE:-}" ]]; then
+    _mdm_verify_dir_chain "$_dir" "/Library/Application Support" || return 1
+  fi
+  if [[ ! -d "$_dir" ]]; then
+    [[ ! -e "$_dir" && ! -L "$_dir" ]] || return 1
+    _old_umask="$(umask)"; umask 022
+    /bin/mkdir -p "$_dir" || { umask "$_old_umask"; return 1; }
+    umask "$_old_umask"
+  fi
+  /bin/chmod 755 "$_dir" || return 1
+  _mdm_component_receipt_dir_is_trusted "$_dir" || return 1
+  _MDM_TRANSACTION_HISTORY_PATH="$_dir/managed-history-$_generated.json"
+  _MDM_TRANSACTION_COMPONENT_PATH="$_dir/components-$_generated.json"
+  _MDM_TRANSACTION_HISTORY_STATE="untouched"
+  _MDM_TRANSACTION_HISTORY_SNAPSHOT=""
+  _MDM_TRANSACTION_COMPONENT_STATE="untouched"
+  _MDM_TRANSACTION_COMPONENT_SNAPSHOT=""
+  _MDM_TRANSACTION_USER="$_user"
+  _MDM_TRANSACTION_HOME="$_home"
+  _MDM_TRANSACTION_UID="$_uid"
+  _MDM_TRANSACTION_GENERATED_UID="$_generated"
+  _MDM_TRANSACTION_STATE="active"
+  _mdm_arm_transient_cleanup
+  _mdm_transaction_snapshot_root_file "$_MDM_TRANSACTION_HISTORY_PATH" \
+    history _MDM_TRANSACTION_HISTORY_STATE \
+    _MDM_TRANSACTION_HISTORY_SNAPSHOT \
+    || { _mdm_transaction_abort || true; return 1; }
+  if ! _mdm_transaction_snapshot_root_file \
+    "$_MDM_TRANSACTION_COMPONENT_PATH" manifest \
+    _MDM_TRANSACTION_COMPONENT_STATE _MDM_TRANSACTION_COMPONENT_SNAPSHOT; then
+    _mdm_transaction_abort || true
+    return 1
+  fi
+}
+
+_mdm_transaction_prepare_claude() { # <home> <uid>
+  local _home="$1" _uid="$2" _live _backup _parent_identity
+  local _candidate_identity _previous_identity="" _previous_digest="" _mode
+  local _marker _live_digest _MDM_EXEC_AS_USER_DEADLINE_SECONDS
+  _live="$_home/.claude"
+  [[ "${_MDM_TRANSACTION_STATE:-idle}" == active \
+    && "${_MDM_CLAUDE_TRANSACTION_STATE:-idle}" == idle \
+    && "$_home" == "$_MDM_TRANSACTION_HOME" \
+    && "$_uid" == "$_MDM_TRANSACTION_UID" ]] || return 1
+  _MDM_EXEC_AS_USER_DEADLINE_SECONDS="$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_SETUP_SECONDS")" || return 1
+  [[ -d "$_home" && ! -L "$_home" \
+    && "$(_mdm_canonical_dir "$_home")" == "$_home" \
+    && "$(_mdm_stat_uid "$_home")" == "$_uid" ]] || return 1
+  _parent_identity="$(_mdm_persistent_dir_identity "$_home")" || return 1
+  trap '' HUP INT TERM
+  if ! _backup="$(_mdm_transaction_allocate_claude_candidate \
+      "$_home" "$_uid")"; then
+    _mdm_arm_transient_cleanup
+    return 1
+  fi
+  _MDM_CLAUDE_LIVE="$_live"
+  _MDM_CLAUDE_BACKUP="$_backup"
+  _MDM_CLAUDE_TARGET_UID="$_uid"
+  _MDM_CLAUDE_PARENT_IDENTITY="$_parent_identity"
+  _MDM_CLAUDE_CANDIDATE_IDENTITY=""
+  _MDM_CLAUDE_TRANSACTION_STATE="allocated"
+  _mdm_arm_transient_cleanup
+  _candidate_identity="$(_mdm_persistent_dir_identity "$_backup")" \
+    || { _mdm_transaction_abort_claude || true; return 1; }
+  [[ "$(_mdm_stat_uid "$_backup")" == "$_uid" ]] \
+    || { _mdm_transaction_abort_claude || true; return 1; }
+  _MDM_CLAUDE_CANDIDATE_IDENTITY="$_candidate_identity"
+  _marker="claude-code-starter-kit-mdm-transaction-v1:${_backup##*/}"
+  _MDM_CLAUDE_MARKER_VALUE="$_marker"
+  _MDM_CLAUDE_TRANSACTION_STATE="prepared"
+  _mdm_arm_transient_cleanup
+
+  if [[ -e "$_live" || -L "$_live" ]]; then
+    [[ -d "$_live" && ! -L "$_live" \
+      && "$(_mdm_canonical_dir "$_live")" == "$_live" \
+      && "$(_mdm_stat_uid "$_live")" == "$_uid" ]] || return 1
+    _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_live")")" || return 1
+    _mdm_mode_is_safe "$_mode" || return 1
+    _mdm_has_extended_acl "$_live" && return 1
+    _previous_identity="$(_mdm_persistent_dir_identity "$_live")" || return 1
+    _previous_digest="$(_mdm_artifact_digest tree "$_live")" || return 1
+    _mdm_run_maybe_as_user /bin/cp -a "$_live/." "$_backup/" \
+      || return 1
+    _mdm_run_maybe_as_user /bin/chmod "$_mode" "$_backup" || return 1
+    [[ "$(_mdm_persistent_dir_identity "$_backup")" == "$_candidate_identity" ]] \
+      || return 1
+    _mdm_create_claude_transaction_marker "$_backup" "$_uid" "$_marker" \
+      || return 1
+    _live_digest="$(_mdm_artifact_digest tree "$_live")" || return 1
+    [[ "$_live_digest" == "$_previous_digest" \
+      && "$(_mdm_persistent_dir_identity "$_live")" == "$_previous_identity" ]] \
+      || return 1
+    _MDM_CLAUDE_PREVIOUS_IDENTITY="$_previous_identity"
+    _MDM_CLAUDE_PREVIOUS_DIGEST="$_previous_digest"
+    trap '' HUP INT TERM
+    if ! _mdm_atomic_user_dir_operation "$_home" "${_backup##*/}" .claude \
+      swap "$_uid" "$_parent_identity" "$_candidate_identity" \
+      "$_previous_identity"; then
+      _mdm_arm_transient_cleanup
+      return 1
+    fi
+    _MDM_CLAUDE_TRANSACTION_STATE="swapped"
+    _mdm_arm_transient_cleanup
+    [[ "$(_mdm_persistent_dir_identity "$_live")" == "$_candidate_identity" \
+      && "$(_mdm_persistent_dir_identity "$_backup")" == "$_previous_identity" \
+      && "$(_mdm_artifact_digest tree "$_backup")" == "$_previous_digest" ]] \
+      && _mdm_claude_transaction_marker_trusted \
+        "$_live" "$_uid" "$_marker" \
+      || { _mdm_transaction_abort_claude || true; return 1; }
+  else
+    _mdm_create_claude_transaction_marker "$_backup" "$_uid" "$_marker" \
+      || return 1
+    trap '' HUP INT TERM
+    if ! _mdm_atomic_user_dir_operation "$_home" "${_backup##*/}" .claude \
+      create "$_uid" "$_parent_identity" "$_candidate_identity" absent; then
+      _mdm_arm_transient_cleanup
+      return 1
+    fi
+    _MDM_CLAUDE_TRANSACTION_STATE="created"
+    _mdm_arm_transient_cleanup
+    [[ "$(_mdm_persistent_dir_identity "$_live")" == "$_candidate_identity" ]] \
+      && _mdm_claude_transaction_marker_trusted \
+        "$_live" "$_uid" "$_marker" \
+      || { _mdm_transaction_abort_claude || true; return 1; }
+  fi
+}
+
+_mdm_transaction_abort_claude() {
+  local _state="${_MDM_CLAUDE_TRANSACTION_STATE:-idle}"
+  local _live="${_MDM_CLAUDE_LIVE:-}" _backup="${_MDM_CLAUDE_BACKUP:-}"
+  local _uid="${_MDM_CLAUDE_TARGET_UID:-}" _parent_identity
+  local _candidate_identity _previous_identity _previous_digest _failed
+  case "$_state" in idle|aborted|committed) return 0 ;; esac
+  _parent_identity="$_MDM_CLAUDE_PARENT_IDENTITY"
+  _candidate_identity="$_MDM_CLAUDE_CANDIDATE_IDENTITY"
+  _previous_identity="$_MDM_CLAUDE_PREVIOUS_IDENTITY"
+  _previous_digest="$_MDM_CLAUDE_PREVIOUS_DIGEST"
+  _failed="$(_mdm_transaction_failed_path "$_backup" \
+    .mdm-backup. .mdm-failed.)" || return 1
+  case "$_state" in
+    allocated)
+      case "$_backup" in
+        "${_MDM_TRANSACTION_HOME:-}"/.claude.mdm-backup.*) : ;;
+        *) return 1 ;;
+      esac
+      _mdm_run_maybe_as_user /bin/rmdir "$_backup" 2>/dev/null || return 1
+      [[ ! -e "$_backup" && ! -L "$_backup" ]] || return 1
+      _failed="" ;;
+    prepared)
+      [[ "$(_mdm_persistent_dir_identity "$_backup" 2>/dev/null || true)" \
+        == "$_candidate_identity" ]] || return 1
+      _mdm_transaction_preserve_failed_dir "$_backup" "$_failed" "$_uid" \
+        "$_parent_identity" "$_candidate_identity" _failed || return 1 ;;
+    swapped)
+      [[ "$(_mdm_persistent_dir_identity "$_live" 2>/dev/null || true)" \
+          == "$_candidate_identity" \
+        && "$(_mdm_persistent_dir_identity "$_backup" 2>/dev/null || true)" \
+          == "$_previous_identity" \
+        && "$(_mdm_artifact_digest tree "$_backup" 2>/dev/null || true)" \
+          == "$_previous_digest" ]] || return 1
+      _mdm_atomic_user_dir_operation "${_live%/*}" "${_backup##*/}" \
+        "${_live##*/}" swap "$_uid" "$_parent_identity" \
+        "$_previous_identity" "$_candidate_identity" || return 1
+      [[ "$(_mdm_persistent_dir_identity "$_live" 2>/dev/null || true)" \
+        == "$_previous_identity" ]] || return 1
+      _mdm_transaction_preserve_failed_dir "$_backup" "$_failed" "$_uid" \
+        "$_parent_identity" "$_candidate_identity" _failed || return 1 ;;
+    created)
+      [[ "$(_mdm_persistent_dir_identity "$_live" 2>/dev/null || true)" \
+        == "$_candidate_identity" ]] || return 1
+      _mdm_transaction_preserve_failed_dir "$_live" "$_failed" "$_uid" \
+        "$_parent_identity" "$_candidate_identity" _failed || return 1
+      [[ ! -e "$_live" && ! -L "$_live" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  _MDM_CLAUDE_FAILED="$_failed"
+  _MDM_CLAUDE_TRANSACTION_STATE="aborted"
+}
+
+_mdm_transaction_abort_persistent() {
+  local _state="${_MDM_PERSISTENT_TRANSACTION_STATE:-idle}"
+  local _install="${_MDM_PERSISTENT_INSTALL_DIR:-}"
+  local _stage="${_MDM_PERSISTENT_STAGE:-}" _failed _uid _parent_identity
+  local _candidate_identity _candidate_digest _previous_identity _previous_digest
+  case "$_state" in idle|aborted|committed) return 0 ;; esac
+  _uid="$_MDM_PERSISTENT_TARGET_UID"
+  _parent_identity="$_MDM_PERSISTENT_PARENT_IDENTITY"
+  _candidate_identity="$_MDM_PERSISTENT_CANDIDATE_IDENTITY"
+  _candidate_digest="$_MDM_PERSISTENT_CANDIDATE_DIGEST"
+  _previous_identity="$_MDM_PERSISTENT_PREVIOUS_IDENTITY"
+  _previous_digest="$_MDM_PERSISTENT_PREVIOUS_DIGEST"
+  _failed="$(_mdm_transaction_failed_path "$_stage" \
+    .mdm-stage. .mdm-failed.)" || return 1
+  case "$_state" in
+    allocated)
+      _mdm_cleanup_persistent_stage || return 1
+      _failed="" ;;
+    prepared)
+      [[ "$(_mdm_persistent_dir_identity "$_stage" 2>/dev/null || true)" \
+        == "$_candidate_identity" ]] || return 1
+      _mdm_transaction_preserve_failed_dir "$_stage" "$_failed" "$_uid" \
+        "$_parent_identity" "$_candidate_identity" _failed || return 1 ;;
+    swapped)
+      [[ "$(_mdm_persistent_dir_identity "$_install" 2>/dev/null || true)" \
+          == "$_candidate_identity" \
+        && "$(_mdm_persistent_dir_identity "$_stage" 2>/dev/null || true)" \
+          == "$_previous_identity" \
+        && "$(_mdm_artifact_digest tree "$_install" "$_uid" \
+          2>/dev/null || true)" == "$_candidate_digest" \
+        && "$(_mdm_artifact_digest tree "$_stage" "$_uid" \
+          2>/dev/null || true)" == "$_previous_digest" ]] || return 1
+      _mdm_atomic_user_dir_operation "${_install%/*}" "${_stage##*/}" \
+        "${_install##*/}" swap "$_uid" "$_parent_identity" \
+        "$_previous_identity" "$_candidate_identity" || return 1
+      _mdm_transaction_preserve_failed_dir "$_stage" "$_failed" "$_uid" \
+        "$_parent_identity" "$_candidate_identity" _failed || return 1 ;;
+    created)
+      [[ "$(_mdm_persistent_dir_identity "$_install" 2>/dev/null || true)" \
+          == "$_candidate_identity" \
+        && "$(_mdm_artifact_digest tree "$_install" "$_uid" \
+          2>/dev/null || true)" == "$_candidate_digest" ]] || return 1
+      _mdm_transaction_preserve_failed_dir "$_install" "$_failed" "$_uid" \
+        "$_parent_identity" "$_candidate_identity" _failed || return 1 ;;
+    *) return 1 ;;
+  esac
+  _MDM_PERSISTENT_STAGE=""
+  _MDM_PERSISTENT_STAGE_IDENTITY=""
+  _MDM_PERSISTENT_TRANSACTION_STATE="aborted"
+}
+
+_mdm_transaction_mark_partial() {
+  case "${MDM_RCPT_PARTIAL:-[]}" in
+    *'"rollback"'*) : ;;
+    '[]') MDM_RCPT_PARTIAL='["rollback"]' ;;
+    *']') MDM_RCPT_PARTIAL="${MDM_RCPT_PARTIAL%]},\"rollback\"]" ;;
+    *) MDM_RCPT_PARTIAL='["rollback"]' ;;
+  esac
+}
+
+_mdm_transaction_abort() {
+  local _rc=0
+  case "${_MDM_TRANSACTION_STATE:-idle}" in
+    idle|aborted|committed) return 0 ;;
+  esac
+  trap '' HUP INT TERM
+  _mdm_transaction_abort_claude || _rc=1
+  _mdm_transaction_abort_persistent || _rc=1
+  _mdm_transaction_restore_root_file "$_MDM_TRANSACTION_COMPONENT_PATH" \
+    "$_MDM_TRANSACTION_COMPONENT_STATE" \
+    "$_MDM_TRANSACTION_COMPONENT_SNAPSHOT" || _rc=1
+  _mdm_transaction_restore_root_file "$_MDM_TRANSACTION_HISTORY_PATH" \
+    "$_MDM_TRANSACTION_HISTORY_STATE" \
+    "$_MDM_TRANSACTION_HISTORY_SNAPSHOT" || _rc=1
+  if [[ "$_rc" -eq 0 ]]; then
+    _mdm_transaction_cleanup_root_snapshots || _rc=1
+  fi
+  if [[ "$_rc" -eq 0 ]]; then
+    _MDM_TRANSACTION_STATE="aborted"
+    return 0
+  fi
+  _MDM_TRANSACTION_STATE="partial"
+  _mdm_transaction_mark_partial
+  mdm_log R4 "transaction rollback が不完全。回復用pathを保持"
+  return 1
+}
+
+_mdm_transaction_ready_to_commit() {
+  local _home="${_MDM_TRANSACTION_HOME:-}" _uid="${_MDM_TRANSACTION_UID:-}"
+  local _live="${_MDM_CLAUDE_LIVE:-}" _backup="${_MDM_CLAUDE_BACKUP:-}"
+  local _install="${_MDM_PERSISTENT_INSTALL_DIR:-}"
+  local _stage="${_MDM_PERSISTENT_STAGE:-}" _state
+  [[ "${_MDM_TRANSACTION_STATE:-idle}" == active \
+    && "$_home" == /* && "$_uid" =~ ^[0-9]+$ \
+    && "$(_mdm_persistent_dir_identity "$_home" 2>/dev/null || true)" \
+      == "${_MDM_CLAUDE_PARENT_IDENTITY:-}" \
+    && "$(_mdm_stat_uid "$_home" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+
+  _state="${_MDM_CLAUDE_TRANSACTION_STATE:-idle}"
+  [[ "$(_mdm_persistent_dir_identity "$_live" 2>/dev/null || true)" \
+      == "${_MDM_CLAUDE_CANDIDATE_IDENTITY:-}" \
+    && "$(_mdm_stat_uid "$_live" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+  _mdm_claude_transaction_marker_trusted "$_live" "$_uid" \
+    "${_MDM_CLAUDE_MARKER_VALUE:-}" || return 1
+  case "$_state" in
+    swapped)
+      [[ "$(_mdm_persistent_dir_identity "$_backup" 2>/dev/null || true)" \
+          == "${_MDM_CLAUDE_PREVIOUS_IDENTITY:-}" \
+        && "$(_mdm_artifact_digest tree "$_backup" 2>/dev/null || true)" \
+          == "${_MDM_CLAUDE_PREVIOUS_DIGEST:-}" ]] || return 1
+      _mdm_claude_backup_marker_trusted "$_live" "$_uid" "$_backup" \
+        || return 1 ;;
+    created)
+      [[ ! -e "$_backup" && ! -L "$_backup" \
+        && ! -e "$_live/.starter-kit-last-backup" \
+        && ! -L "$_live/.starter-kit-last-backup" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+
+  [[ "$(_mdm_persistent_dir_identity "${_install%/*}" \
+      2>/dev/null || true)" == "${_MDM_PERSISTENT_PARENT_IDENTITY:-}" ]] \
+    || return 1
+  case "${_MDM_PERSISTENT_TRANSACTION_STATE:-idle}" in
+    swapped)
+      [[ "$(_mdm_persistent_dir_identity "$_install" 2>/dev/null || true)" \
+          == "${_MDM_PERSISTENT_CANDIDATE_IDENTITY:-}" \
+        && "$(_mdm_artifact_digest tree "$_install" "$_uid" \
+          2>/dev/null || true)" == "${_MDM_PERSISTENT_CANDIDATE_DIGEST:-}" \
+        && "$(_mdm_persistent_dir_identity "$_stage" 2>/dev/null || true)" \
+          == "${_MDM_PERSISTENT_PREVIOUS_IDENTITY:-}" \
+        && "$(_mdm_artifact_digest tree "$_stage" "$_uid" \
+          2>/dev/null || true)" == "${_MDM_PERSISTENT_PREVIOUS_DIGEST:-}" ]] \
+        || return 1 ;;
+    created)
+      [[ "$(_mdm_persistent_dir_identity "$_install" 2>/dev/null || true)" \
+          == "${_MDM_PERSISTENT_CANDIDATE_IDENTITY:-}" \
+        && "$(_mdm_artifact_digest tree "$_install" "$_uid" \
+          2>/dev/null || true)" == "${_MDM_PERSISTENT_CANDIDATE_DIGEST:-}" \
+        && ! -e "$_stage" && ! -L "$_stage" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  case "${_MDM_TRANSACTION_HISTORY_STATE:-untouched}" in
+    absent) : ;;
+    present) [[ -f "${_MDM_TRANSACTION_HISTORY_SNAPSHOT:-}" \
+      && ! -L "${_MDM_TRANSACTION_HISTORY_SNAPSHOT:-}" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  case "${_MDM_TRANSACTION_COMPONENT_STATE:-untouched}" in
+    absent) : ;;
+    present) [[ -f "${_MDM_TRANSACTION_COMPONENT_SNAPSHOT:-}" \
+      && ! -L "${_MDM_TRANSACTION_COMPONENT_SNAPSHOT:-}" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+_mdm_transaction_commit() {
+  local _rc=0 _marker _claude_state
+  [[ "${_MDM_TRANSACTION_STATE:-idle}" == active ]] || return 1
+  _claude_state="${_MDM_CLAUDE_TRANSACTION_STATE:-idle}"
+  _MDM_TRANSACTION_STATE="committed"
+  _MDM_CLAUDE_TRANSACTION_STATE="committed"
+  if [[ "${_MDM_PERSISTENT_TRANSACTION_STATE:-idle}" == swapped ]]; then
+    _mdm_cleanup_persistent_stage || _rc=1
+  else
+    _MDM_PERSISTENT_STAGE=""
+    _MDM_PERSISTENT_STAGE_IDENTITY=""
+  fi
+  _MDM_PERSISTENT_TRANSACTION_STATE="committed"
+  _marker="$(_mdm_claude_transaction_marker_path \
+    "${_MDM_CLAUDE_LIVE:-/nonexistent}")"
+  if [[ -n "${_MDM_CLAUDE_LIVE:-}" ]]; then
+    _mdm_run_maybe_as_user /bin/rm -f "$_marker" 2>/dev/null || _rc=1
+  fi
+  if [[ "$_claude_state" == swapped ]]; then
+    _mdm_transaction_rotate_claude_backups \
+      "$_MDM_TRANSACTION_HOME" "$_MDM_CLAUDE_BACKUP" || _rc=1
+  fi
+  _mdm_transaction_cleanup_root_snapshots || _rc=1
+  [[ "$_rc" -eq 0 ]] || mdm_log R4 "commit後 cleanup を完了できず回復用pathを保持"
+  return 0
+}
+
+_mdm_normalize_persistent_worktree() { # <stage> <target-uid>
+  local _stage="$1" _target_uid="$2" _python
+  [[ "$_stage" == /* && ! "$_stage" =~ [[:cntrl:]] \
+    && "$_target_uid" =~ ^[0-9]+$ ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  # mktemp and Git inherit the wrapper's umask 077.  Preserve Git's executable
+  # class while making the retained worktree canonical (directories 0755,
+  # regular files 0644/0755).  Run the fd-bound walk as the target user: the
+  # user-owned parent is never traversed with root write authority.
+  _mdm_run_maybe_as_user "$_python" -I -B -c '
+import os
+import stat
+import sys
+
+root = os.fsencode(sys.argv[1])
+expected_uid = int(sys.argv[2])
+marker = b".claude-starter-kit-mdm-managed"
+dir_flags = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+file_flags = (os.O_RDONLY | os.O_NOFOLLOW
+              | getattr(os, "O_CLOEXEC", 0))
+entries = 0
+
+def stable(value):
+    return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode),
+            value.st_uid, value.st_gid, value.st_nlink, value.st_size)
+
+def visit(descriptor, root_dev, depth):
+    global entries
+    if depth > 256:
+        raise ValueError("retained worktree is too deep")
+    before = os.fstat(descriptor)
+    if (not stat.S_ISDIR(before.st_mode) or before.st_dev != root_dev
+            or before.st_uid != expected_uid):
+        raise ValueError("unsafe retained directory")
+    os.fchmod(descriptor, 0o755)
+    names = sorted(os.fsencode(name) for name in os.listdir(descriptor))
+    for name in names:
+        if name in (b"", b".", b"..") or b"/" in name:
+            raise ValueError("invalid retained worktree name")
+        if depth == 0 and name in (b".git", marker):
+            continue
+        entries += 1
+        if entries > 100000:
+            raise ValueError("retained worktree is too large")
+        value = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        if value.st_dev != root_dev or value.st_uid != expected_uid:
+            raise ValueError("unsafe retained worktree entry")
+        if stat.S_ISDIR(value.st_mode):
+            child = os.open(name, dir_flags, dir_fd=descriptor)
+            try:
+                if stable(os.fstat(child)) != stable(value):
+                    raise ValueError("retained directory changed")
+                visit(child, root_dev, depth + 1)
+                after = os.fstat(child)
+                if stable(after) != stable(value):
+                    raise ValueError("retained directory changed")
+            finally:
+                os.close(child)
+        elif stat.S_ISREG(value.st_mode):
+            if value.st_nlink != 1:
+                raise ValueError("hard-linked retained file")
+            child = os.open(name, file_flags, dir_fd=descriptor)
+            try:
+                if stable(os.fstat(child)) != stable(value):
+                    raise ValueError("retained file changed")
+                mode = 0o755 if stat.S_IMODE(value.st_mode) & 0o111 else 0o644
+                os.fchmod(child, mode)
+                after = os.fstat(child)
+                if stable(after) != stable(value):
+                    raise ValueError("retained file changed")
+            finally:
+                os.close(child)
+        elif stat.S_ISLNK(value.st_mode):
+            if value.st_nlink != 1:
+                raise ValueError("hard-linked retained symlink")
+        else:
+            raise ValueError("special retained worktree entry")
+    if sorted(os.fsencode(name) for name in os.listdir(descriptor)) != names:
+        raise ValueError("retained directory entries changed")
+
+descriptor = os.open(root, dir_flags)
+try:
+    root_before = os.fstat(descriptor)
+    if root_before.st_uid != expected_uid:
+        raise ValueError("retained root owner mismatch")
+    visit(descriptor, root_before.st_dev, 0)
+    root_after = os.fstat(descriptor)
+    if stable(root_after) != stable(root_before):
+        raise ValueError("retained root changed")
+finally:
+    os.close(descriptor)
+' "$_stage" "$_target_uid"
+}
+
 _mdm_rebuild_persistent_checkout() { # <install-dir> <repo-url> <full-sha> <target-uid>
   local _install_dir="$1" _repo_url="$2" _sha="$3" _target_uid="$4"
   local _parent _stage _stage_name _fetched _head _status _mode _existing=false
   local _install_identity="" _stage_identity _current_install _current_stage
+  local _parent_identity _candidate_digest="" _previous_digest=""
+  local _transactional=false
   [[ "$_sha" =~ ^[0-9a-f]{40}$ && "$_target_uid" =~ ^[0-9]+$ ]] || return 1
   _parent="$(/usr/bin/dirname "$_install_dir")"
   _mdm_run_maybe_as_user /bin/mkdir -p "$_parent" 2>/dev/null || return 1
+  _parent_identity="$(_mdm_persistent_dir_identity "$_parent")" || return 1
+  [[ "${_MDM_TRANSACTION_STATE:-idle}" == active ]] && _transactional=true
 
   if [[ -e "$_install_dir" || -L "$_install_dir" ]]; then
     [[ -d "$_install_dir" && ! -L "$_install_dir" ]] || return 1
     _install_identity="$(_mdm_persistent_dir_identity "$_install_dir" || true)"
     _mdm_persistent_checkout_matches_identity \
       "$_install_dir" "$_target_uid" "$_install_identity" || return 1
+    if [[ "$_transactional" == true ]]; then
+      _previous_digest="$(_mdm_artifact_digest tree \
+        "$_install_dir" "$_target_uid")" || return 1
+    fi
     _existing=true
   fi
 
-  _stage="$(_mdm_run_maybe_as_user /usr/bin/mktemp -d \
-    "$_parent/.claude-starter-kit.mdm-stage.XXXXXX" 2>/dev/null)" || return 1
+  trap '' HUP INT TERM
+  if ! _stage="$(_mdm_run_maybe_as_user /usr/bin/mktemp -d \
+      "$_parent/.claude-starter-kit.mdm-stage.XXXXXX" 2>/dev/null)"; then
+    _mdm_arm_transient_cleanup
+    return 1
+  fi
   _stage_name="${_stage##*/}"
-  case "$_stage" in "$_parent"/.claude-starter-kit.mdm-stage.*) : ;; *) return 1 ;; esac
-  case "$_stage_name" in .claude-starter-kit.mdm-stage.*) : ;; *) return 1 ;; esac
-  _stage_identity="$(_mdm_persistent_dir_identity "$_stage" || true)"
-  case "$_stage_identity" in *:Directory|*:directory) : ;; *) return 1 ;; esac
+  case "$_stage" in
+    "$_parent"/.claude-starter-kit.mdm-stage.*) : ;;
+    *) _mdm_arm_transient_cleanup
+       return 1 ;;
+  esac
+  case "$_stage_name" in
+    .claude-starter-kit.mdm-stage.*) : ;;
+    *) _mdm_arm_transient_cleanup
+       return 1 ;;
+  esac
   _MDM_PERSISTENT_STAGE="$_stage"
-  _MDM_PERSISTENT_STAGE_IDENTITY="$_stage_identity"
+  _MDM_PERSISTENT_STAGE_IDENTITY=""
+  _MDM_PERSISTENT_INSTALL_DIR="$_install_dir"
+  _MDM_PERSISTENT_TARGET_UID="$_target_uid"
+  _MDM_PERSISTENT_PARENT_IDENTITY="$_parent_identity"
+  if [[ "$_transactional" == true ]]; then
+    _MDM_PERSISTENT_TRANSACTION_STATE="allocated"
+  fi
   _mdm_arm_transient_cleanup
+  _stage_identity="$(_mdm_persistent_dir_identity "$_stage" || true)"
+  case "$_stage_identity" in
+    *:Directory|*:directory) : ;;
+    *)
+      if [[ "$_transactional" == true ]]; then
+        _mdm_transaction_abort_persistent || true
+      else
+        _mdm_cleanup_persistent_stage || true
+      fi
+      return 1 ;;
+  esac
+  _MDM_PERSISTENT_STAGE_IDENTITY="$_stage_identity"
   [[ -d "$_stage" && ! -L "$_stage" \
     && "$(_mdm_canonical_dir "$_stage" || true)" == "$_stage" \
     && "$(_mdm_stat_uid "$_stage" || true)" == "$_target_uid" ]] \
@@ -2847,10 +7437,10 @@ _mdm_rebuild_persistent_checkout() { # <install-dir> <repo-url> <full-sha> <targ
   [[ "$_mode" == 0700 ]] \
     || { _mdm_cleanup_persistent_stage || true; return 1; }
 
-  _mdm_git -c core.hooksPath=/dev/null clone --quiet --no-checkout --no-local \
+  _mdm_git_network -c core.hooksPath=/dev/null clone --quiet --no-checkout --no-local \
     "$_repo_url" "$_stage" 2>/dev/null \
     || { _mdm_cleanup_persistent_stage || true; return 1; }
-  _mdm_git -C "$_stage" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+  _mdm_git_network -C "$_stage" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
     fetch --quiet "$_repo_url" "$_sha" 2>/dev/null \
     || { _mdm_cleanup_persistent_stage || true; return 1; }
   _fetched="$(_mdm_git -C "$_stage" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
@@ -2861,6 +7451,8 @@ _mdm_rebuild_persistent_checkout() { # <install-dir> <repo-url> <full-sha> <targ
     || { _mdm_cleanup_persistent_stage || true; return 1; }
   _head="$(_mdm_git -C "$_stage" rev-parse --verify HEAD 2>/dev/null || true)"
   [[ "$_head" == "$_sha" ]] \
+    || { _mdm_cleanup_persistent_stage || true; return 1; }
+  _mdm_normalize_persistent_worktree "$_stage" "$_target_uid" \
     || { _mdm_cleanup_persistent_stage || true; return 1; }
   _status="$(_mdm_git -C "$_stage" status --porcelain --untracked-files=all 2>/dev/null)" \
     || { _mdm_cleanup_persistent_stage || true; return 1; }
@@ -2873,22 +7465,62 @@ _mdm_rebuild_persistent_checkout() { # <install-dir> <repo-url> <full-sha> <targ
     && _mdm_detached_head_matches "$_stage" "$_sha" "$_target_uid" \
     || { _mdm_cleanup_persistent_stage || true; return 1; }
 
+  if [[ "$_transactional" == true ]]; then
+    _candidate_digest="$(_mdm_artifact_digest tree \
+      "$_stage" "$_target_uid")" \
+      || { _mdm_cleanup_persistent_stage || true; return 1; }
+    _MDM_PERSISTENT_INSTALL_DIR="$_install_dir"
+    _MDM_PERSISTENT_TARGET_UID="$_target_uid"
+    _MDM_PERSISTENT_PARENT_IDENTITY="$_parent_identity"
+    _MDM_PERSISTENT_CANDIDATE_IDENTITY="$_stage_identity"
+    _MDM_PERSISTENT_CANDIDATE_DIGEST="$_candidate_digest"
+    _MDM_PERSISTENT_PREVIOUS_IDENTITY="$_install_identity"
+    _MDM_PERSISTENT_PREVIOUS_DIGEST="$_previous_digest"
+    _MDM_PERSISTENT_TRANSACTION_STATE="prepared"
+    _mdm_arm_transient_cleanup
+  fi
+
   if [[ "$_existing" == true ]]; then
     # Bind the destination again after the long clone/fetch window. This does
     # not claim to defeat continuous hostile mutation, but prevents a stale
     # preflight result from authorizing deletion of a replacement directory.
     _mdm_persistent_checkout_matches_identity \
       "$_install_dir" "$_target_uid" "$_install_identity" \
-      || { _mdm_cleanup_persistent_stage || true; return 1; }
-    _mdm_promote_persistent_stage "$_stage" "$_install_dir" swap \
-      || { _mdm_cleanup_persistent_stage || true; return 1; }
+      || {
+        if [[ "$_transactional" == true ]]; then
+          _mdm_transaction_abort_persistent || true
+        else
+          _mdm_cleanup_persistent_stage || true
+        fi
+        return 1
+      }
+    [[ "$_transactional" == true ]] && trap '' HUP INT TERM
+    if ! _mdm_promote_persistent_stage "$_stage" "$_install_dir" swap \
+      "$_stage_identity" "$_install_identity" "$_target_uid" \
+      "$_parent_identity"; then
+      [[ "$_transactional" == true ]] && _mdm_arm_transient_cleanup
+      if [[ "$_transactional" == true ]]; then
+        _mdm_transaction_abort_persistent || true
+      else
+        _mdm_cleanup_persistent_stage || true
+      fi
+      return 1
+    fi
+    if [[ "$_transactional" == true ]]; then
+      _MDM_PERSISTENT_TRANSACTION_STATE="swapped"
+      _mdm_arm_transient_cleanup
+    fi
     _current_stage="$(_mdm_persistent_dir_identity "$_stage" || true)"
     _current_install="$(_mdm_persistent_dir_identity "$_install_dir" || true)"
     if [[ "$_current_stage" != "$_install_identity" \
       || "$_current_install" != "$_stage_identity" ]]; then
-      _mdm_restore_previous_persistent_checkout \
-        "$_stage" "$_install_dir" "$_target_uid" \
-        "$_stage_identity" "$_install_identity" || return 1
+      if [[ "$_transactional" == true ]]; then
+        _mdm_transaction_abort_persistent || return 1
+      else
+        _mdm_restore_previous_persistent_checkout \
+          "$_stage" "$_install_dir" "$_target_uid" \
+          "$_stage_identity" "$_install_identity" || return 1
+      fi
       return 1
     fi
     _MDM_PERSISTENT_STAGE_IDENTITY="$_install_identity"
@@ -2896,33 +7528,61 @@ _mdm_rebuild_persistent_checkout() { # <install-dir> <repo-url> <full-sha> <targ
         "$_install_dir" "$_target_uid" "$_stage_identity" \
       || ! _mdm_detached_head_matches \
         "$_install_dir" "$_sha" "$_target_uid"; then
-      _mdm_restore_previous_persistent_checkout \
-        "$_stage" "$_install_dir" "$_target_uid" \
-        "$_stage_identity" "$_install_identity" || return 1
+      if [[ "$_transactional" == true ]]; then
+        _mdm_transaction_abort_persistent || return 1
+      else
+        _mdm_restore_previous_persistent_checkout \
+          "$_stage" "$_install_dir" "$_target_uid" \
+          "$_stage_identity" "$_install_identity" || return 1
+      fi
       return 1
     fi
-    # The stage pathname still names the exact directory bound before swap.
-    _mdm_cleanup_persistent_stage || return 1
+    if [[ "$_transactional" != true ]]; then
+      # Legacy/source-only calls without an outer transaction keep their
+      # historical immediate cleanup behavior.
+      _mdm_cleanup_persistent_stage || return 1
+    fi
   else
-    _mdm_promote_persistent_stage "$_stage" "$_install_dir" create \
-      || { _mdm_cleanup_persistent_stage || true; return 1; }
+    [[ "$_transactional" == true ]] && trap '' HUP INT TERM
+    if ! _mdm_promote_persistent_stage "$_stage" "$_install_dir" create \
+      "$_stage_identity" absent "$_target_uid" "$_parent_identity"; then
+      [[ "$_transactional" == true ]] && _mdm_arm_transient_cleanup
+      if [[ "$_transactional" == true ]]; then
+        _mdm_transaction_abort_persistent || true
+      else
+        _mdm_cleanup_persistent_stage || true
+      fi
+      return 1
+    fi
+    if [[ "$_transactional" == true ]]; then
+      _MDM_PERSISTENT_TRANSACTION_STATE="created"
+      _mdm_arm_transient_cleanup
+    fi
     if ! _mdm_persistent_checkout_matches_identity \
         "$_install_dir" "$_target_uid" "$_stage_identity" \
       || ! _mdm_detached_head_matches \
         "$_install_dir" "$_sha" "$_target_uid"; then
-      _mdm_retract_initial_persistent_checkout \
-        "$_stage" "$_install_dir" "$_stage_identity" || return 1
+      if [[ "$_transactional" == true ]]; then
+        _mdm_transaction_abort_persistent || return 1
+      else
+        _mdm_retract_initial_persistent_checkout \
+          "$_stage" "$_install_dir" "$_stage_identity" || return 1
+      fi
       return 1
     fi
-    _MDM_PERSISTENT_STAGE=""
-    _MDM_PERSISTENT_STAGE_IDENTITY=""
+    if [[ "$_transactional" != true ]]; then
+      _MDM_PERSISTENT_STAGE=""
+      _MDM_PERSISTENT_STAGE_IDENTITY=""
+    fi
   fi
   return 0
 }
 
 _mdm_run_root_user_phase() { # <user> <home> <bound-target-uid>
   local _user="$1" _home="$2" _uid="$3" _ref _dry_run _install_dir _repo_url _cli_required
-  local _persistent_identity=""
+  local _persistent_identity="" _post_kit_digest=""
+  local _auth_worktree_digest="" _retained_worktree_digest=""
+  local _wce_required=false _component
   local _setup_rc=0
   # UID >= 501 と local/search-policy 一致は main の identity binding 済み。
   [[ "$_uid" =~ ^[0-9]+$ ]] \
@@ -2958,18 +7618,54 @@ _mdm_run_root_user_phase() { # <user> <home> <bound-target-uid>
   MDM_RCPT_GIT_REF="$_ref"
   MDM_RCPT_INSTALL_DIR="$_install_dir"
   _MDM_GIT_SAFE_DIRECTORY=""
+  _MDM_WCE_VERIFIED_BUNDLE=""
+  _MDM_WCE_CARRIER_ACTIVE=false
+  _MDM_EXPECTED_WCE_COMPONENT_SHA256=""
   _MDM_GIT_DROP_UID=""
   _MDM_GIT_DROP_USER=""
   _MDM_GIT_DROP_HOME=""
   _mdm_prepare_authoritative_checkout "$_ref" "$_uid" || return $?
   _repo_url="$(_mdm_repo_url)"
-  if [[ "$_dry_run" != "true" ]]; then
-    _mdm_capture_prior_inventory "$_user" "$_home" "$_uid" || return 1
-    _mdm_prepare_expected_state "$_home" || return 1
+  _mdm_capture_prior_inventory \
+    "$_user" "$_home" "$_uid" "$_MDM_TARGET_GENERATED_UID" || return 1
+  _mdm_prepare_expected_state "$_home" || return $?
+  _mdm_load_expected_required_components || return 1
+  for _component in "${MDM_REQUIRED_COMPONENTS[@]}"; do
+    if [[ "$_component" == web_content_runtime ]]; then
+      _wce_required=true
+      break
+    fi
+  done
+  if [[ "${KIT_MDM_REQUIRE_NODE_RUNTIME:-false}" == true ]]; then
+    if [[ "$_dry_run" == true ]]; then
+      _mdm_node_runtime_trusted "$(_mdm_node_runtime_path)" \
+        && _mdm_node_runtime_activation_valid "$_user" "$_home" "$_uid" \
+        || return "$MDM_EXIT_PREREQ"
+    else
+      mdm_log U1b "固定 Node.js private runtime を準備"
+      _mdm_ensure_node_runtime "$_user" "$_home" "$_uid" \
+        || return "$MDM_EXIT_PREREQ"
+    fi
   fi
+  if [[ "$_wce_required" == true ]]; then
+    if [[ "$_dry_run" == true ]]; then
+      _mdm_wce_runtime_validate_dryrun "$_user" "$_home" "$_uid" \
+        || return "$MDM_EXIT_PREREQ"
+    else
+      mdm_log U1b "固定 web-content-extraction private runtime を準備"
+      _mdm_ensure_wce_runtime "$_user" "$_home" "$_uid" \
+        || return "$MDM_EXIT_PREREQ"
+    fi
+    [[ "${_MDM_WCE_VERIFIED_BUNDLE:-}" == "$(_mdm_wce_runtime_path)" \
+      && "${_MDM_EXPECTED_WCE_COMPONENT_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+      || return "$MDM_EXIT_PREREQ"
+  fi
+  _auth_worktree_digest="$(_mdm_worktree_content_digest \
+    "$_MDM_AUTH_CHECKOUT" authority)" || return 1
 
-  # The target-user-owned checkout is a persistence artifact only.  It is
-  # rebuilt fresh at the already-resolved SHA and is never used as code.
+  # The target-user-owned checkout is a persistence artifact.  It is rebuilt
+  # fresh at the resolved SHA and is never root-remediation execution authority;
+  # later same-user interactive update workflows may use their own checkout.
   if [[ "$_dry_run" != "true" ]]; then
     _MDM_GIT_DROP_UID="$_uid"
     _MDM_GIT_DROP_USER="$_user"
@@ -2980,23 +7676,57 @@ _mdm_run_root_user_phase() { # <user> <home> <bound-target-uid>
     _persistent_identity="$(_mdm_persistent_dir_identity "$_install_dir" || true)"
     _mdm_persistent_checkout_matches_identity \
       "$_install_dir" "$_uid" "$_persistent_identity" || return 1
+    _retained_worktree_digest="$(_mdm_worktree_content_digest \
+      "$_install_dir" retained)" || return 1
+    [[ "$_retained_worktree_digest" == "$_auth_worktree_digest" ]] || return 1
+    # Freeze the entire retained checkout (including .git and the managed
+    # marker) before setup can mutate user state.  Clean/full-SHA checks on
+    # both sides prevent a one-time pre-attestation replacement from becoming
+    # its own trusted baseline.
+    _mdm_persistent_worktree_clean "$_install_dir" || return 1
+    _mdm_detached_head_matches \
+      "$_install_dir" "$MDM_RCPT_RESOLVED_SHA" "$_uid" || return 1
+    _retained_worktree_digest="$(_mdm_worktree_content_digest \
+      "$_install_dir" retained)" || return 1
+    [[ "$_retained_worktree_digest" == "$_auth_worktree_digest" ]] || return 1
+    _MDM_EXPECTED_KIT_COMPONENT_SHA256="$(_mdm_artifact_digest tree "$_install_dir" "$_uid")" \
+      || return 1
+    [[ "$_MDM_EXPECTED_KIT_COMPONENT_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    _mdm_persistent_worktree_clean "$_install_dir" || return 1
+    _mdm_detached_head_matches \
+      "$_install_dir" "$MDM_RCPT_RESOLVED_SHA" "$_uid" || return 1
   fi
 
   _cli_required="true"
   if [[ -n "${KIT_MDM_INSTALL_CLAUDE_CLI:-}" ]]; then
     _cli_required="$(_mdm_root_bool "$KIT_MDM_INSTALL_CLAUDE_CLI" 2>/dev/null || echo true)"
   fi
-  if [[ "$_cli_required" == "true" && "$_dry_run" != "true" ]]; then
-    MDM_RCPT_REQUIRED_COMPONENTS='["kit","claude_cli"]'
-  else
-    MDM_RCPT_REQUIRED_COMPONENTS='["kit"]'
+  if [[ "$_dry_run" != true \
+    && "${_MDM_TRANSACTION_STATE:-idle}" == active ]]; then
+    mdm_log U2 "outer transaction 用の ~/.claude candidate を準備"
+    _mdm_transaction_prepare_claude "$_home" "$_uid" || return 1
+    _MDM_OUTER_TRANSACTION_ACTIVE=true
+    if [[ "${_MDM_CLAUDE_TRANSACTION_STATE:-idle}" == swapped ]]; then
+      _MDM_OUTER_TRANSACTION_BACKUP="$_MDM_CLAUDE_BACKUP"
+    else
+      _MDM_OUTER_TRANSACTION_BACKUP=""
+    fi
   fi
-
   mdm_build_setup_argv "$_home"
   mdm_log U2 "authoritative setup.sh を対象ユーザーで実行: ${MDM_SETUP_ARGV[*]}"
   _MDM_GIT_SAFE_DIRECTORY="$_MDM_AUTH_CHECKOUT"
-  _mdm_exec_as_user "$_uid" "$_user" "$_home" \
+  if [[ "$_wce_required" == true ]]; then
+    _MDM_WCE_RUNTIME_DIGEST=""
+    _mdm_wce_runtime_trusted "$_MDM_WCE_VERIFIED_BUNDLE" \
+      && [[ "$_MDM_WCE_RUNTIME_DIGEST" \
+        == "$_MDM_EXPECTED_WCE_COMPONENT_SHA256" ]] || return 1
+    _MDM_WCE_CARRIER_ACTIVE=true
+  fi
+  _mdm_exec_setup_as_user "$_uid" "$_user" "$_home" \
     /bin/bash "$_MDM_AUTH_CHECKOUT/setup.sh" "${MDM_SETUP_ARGV[@]}" || _setup_rc=$?
+  _MDM_WCE_CARRIER_ACTIVE=false
+  _MDM_OUTER_TRANSACTION_ACTIVE=false
+  _MDM_OUTER_TRANSACTION_BACKUP=""
   if [[ "$_setup_rc" -ne 0 ]]; then
     _MDM_GIT_SAFE_DIRECTORY=""
     mdm_log U2 "setup.sh の実行に失敗 (exit=$_setup_rc)"
@@ -3005,18 +7735,42 @@ _mdm_run_root_user_phase() { # <user> <home> <bound-target-uid>
   fi
   _MDM_GIT_SAFE_DIRECTORY=""
 
+  if [[ "$_wce_required" == true ]]; then
+    if [[ "$_dry_run" == true ]]; then
+      _mdm_wce_runtime_validate_dryrun "$_user" "$_home" "$_uid" \
+        || return 1
+    else
+      _MDM_WCE_RUNTIME_DIGEST=""
+      _mdm_wce_runtime_trusted "$_MDM_WCE_VERIFIED_BUNDLE" \
+        && [[ "$_MDM_WCE_RUNTIME_DIGEST" \
+          == "$_MDM_EXPECTED_WCE_COMPONENT_SHA256" ]] \
+        && _mdm_wce_runtime_activation_valid \
+          "$_user" "$_home" "$_uid" "$_MDM_WCE_VERIFIED_BUNDLE" \
+        || return 1
+    fi
+  fi
+
   # No post-setup Git process is allowed against either checkout.
   _mdm_auth_tree_trusted "$_MDM_AUTH_CHECKOUT" || return 1
   _mdm_detached_head_matches "$_MDM_AUTH_CHECKOUT" "$MDM_RCPT_RESOLVED_SHA" \
     "$(_mdm_auth_expected_uid)" || return 1
+  [[ "$(_mdm_worktree_content_digest "$_MDM_AUTH_CHECKOUT" authority)" \
+    == "$_auth_worktree_digest" ]] || return 1
   if [[ "$_dry_run" != "true" ]]; then
     _mdm_persistent_checkout_matches_identity \
-      "$_install_dir" "$_uid" "$_persistent_identity" \
-      && _mdm_detached_head_matches \
-        "$_install_dir" "$MDM_RCPT_RESOLVED_SHA" "$_uid" \
-      && _mdm_persistent_checkout_matches_identity \
-        "$_install_dir" "$_uid" "$_persistent_identity" \
-      || return 1
+      "$_install_dir" "$_uid" "$_persistent_identity" || return 1
+    _mdm_detached_head_matches \
+      "$_install_dir" "$MDM_RCPT_RESOLVED_SHA" "$_uid" || return 1
+    _retained_worktree_digest="$(_mdm_worktree_content_digest \
+      "$_install_dir" retained)" || return 1
+    [[ "$_retained_worktree_digest" == "$_auth_worktree_digest" ]] || return 1
+    _post_kit_digest="$(_mdm_artifact_digest tree "$_install_dir" "$_uid")" || return 1
+    [[ "$_post_kit_digest" == "$_MDM_EXPECTED_KIT_COMPONENT_SHA256" ]] || return 1
+    _retained_worktree_digest="$(_mdm_worktree_content_digest \
+      "$_install_dir" retained)" || return 1
+    [[ "$_retained_worktree_digest" == "$_auth_worktree_digest" ]] || return 1
+    _mdm_persistent_checkout_matches_identity \
+      "$_install_dir" "$_uid" "$_persistent_identity" || return 1
   fi
   _mdm_cleanup_auth_entry_list || return 1
   _mdm_cleanup_auth_checkout || return 1
@@ -3065,7 +7819,7 @@ _mdm_run_user_phase() {
 
   # Root returned through the authoritative path above.  The remaining path is
   # the explicitly allowed non-root preview and never writes a receipt.
-  local _uid="" _setup_rc=0
+  local _uid="$_euid" _setup_rc=0
 
   local _install_dir="${KIT_MDM_INSTALL_DIR:-}"
   if [[ "$_dry_run" == "true" ]]; then
@@ -3120,7 +7874,7 @@ _mdm_run_user_phase() {
   if [[ -e "$_install_dir" || -L "$_install_dir" ]]; then
     _mdm_run_maybe_as_user /bin/rm -rf "$_install_dir" 2>/dev/null || return 1
   fi
-  if ! _mdm_git -c core.hooksPath=/dev/null clone --quiet --no-checkout \
+  if ! _mdm_git_network -c core.hooksPath=/dev/null clone --quiet --no-checkout \
     "$_repo_url" "$_install_dir" 2>/dev/null; then
     mdm_log U1b "clone に失敗: $_install_dir"
     return 1
@@ -3137,13 +7891,15 @@ _mdm_run_user_phase() {
     mdm_log U1b "checkout に失敗: $_sha"
     return 1
   fi
-  local _head_sha
+  local _head_sha _status
   _head_sha="$(_mdm_git -C "$_install_dir" rev-parse HEAD 2>/dev/null || true)"
   if [[ "$_head_sha" != "$_sha" ]]; then
     mdm_log U1b "checkout 後の HEAD が解決 SHA と不一致: $_head_sha != $_sha"
     return 1
   fi
-  if [[ -n "$(_mdm_git -C "$_install_dir" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+  _status="$(_mdm_git -C "$_install_dir" status --porcelain --untracked-files=all 2>/dev/null)" \
+    || return 1
+  if [[ -n "$_status" ]]; then
     mdm_log U1b "checkout に未追跡または変更済みファイルがある"
     return 1
   fi
@@ -3164,12 +7920,13 @@ _mdm_run_user_phase() {
 
   # U2: setup.sh を直接実行（root 時のみ環境分離降格）。
   # 引数は mdm_build_setup_argv がグローバル配列 MDM_SETUP_ARGV へ直接構築する
-  # （既存 manifest 検出で --update、KIT_MDM_DRY_RUN=true で --dry-run を付与。
-  # 改行シリアライズは行わない）。
+  # （既存 manifest の有無に関係なく fresh reconciliation とし、
+  # KIT_MDM_DRY_RUN=true のときだけ --dry-run を付与。改行シリアライズは
+  # 行わない）。
   mdm_build_setup_argv "$_home"
   mdm_log U2 "setup.sh を実行: ${MDM_SETUP_ARGV[*]}"
   if [[ "$_euid" -eq 0 ]]; then
-    _mdm_exec_as_user "$_uid" "$_user" "$_home" /bin/bash \
+    _mdm_exec_setup_as_user "$_uid" "$_user" "$_home" /bin/bash \
       "$_install_dir/setup.sh" "${MDM_SETUP_ARGV[@]}" || _setup_rc=$?
     if [[ "$_setup_rc" -ne 0 ]]; then
       mdm_log U2 "setup.sh の実行に失敗 (exit=$_setup_rc)"
@@ -3177,7 +7934,10 @@ _mdm_run_user_phase() {
       return 1
     fi
   else
-    /bin/bash "$_install_dir/setup.sh" "${MDM_SETUP_ARGV[@]}" || _setup_rc=$?
+    mdm_build_drop_argv "$_uid" "$_user" "$_home" \
+      /bin/bash "$_install_dir/setup.sh" "${MDM_SETUP_ARGV[@]}" || return 1
+    _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+      "$_MDM_TIMEOUT_SETUP_SECONDS")" "${MDM_DROP_ARGV[@]}" || _setup_rc=$?
     if [[ "$_setup_rc" -ne 0 ]]; then
       mdm_log U2 "setup.sh の実行に失敗 (exit=$_setup_rc)"
       [[ "$_setup_rc" -eq "$MDM_EXIT_PREREQ" ]] && return "$MDM_EXIT_PREREQ"
@@ -3335,10 +8095,9 @@ _mdm_open_log_fd() {
 }
 
 # MDM 配布固有の既定値を適用する（本体 profiles/*.conf の既定と異なる値を
-# MDM 配布でだけ上書きする場所）。_mdm_root_config_apply の**後**に呼ぶこと —
-# conf/env で既に明示された値（既存 env 値）は変更せず、未設定のキーにのみ
-# MDM 既定を適用する（_mdm_root_config_apply と同じ「既存 env 値は
-# 上書きしない」優先順位を踏襲）。
+# MDM 配布でだけ上書きする場所）。_mdm_root_config_apply の**後**に呼ぶこと。
+# production は clean env で起動し、ここで見える値は検証済み CLI/root config
+# から移送された状態なので、明示値を保ち未設定キーだけ MDM 既定で補う。
 #   - ENABLE_GHOSTTY_SETUP: 本体既定は standard/full プロファイルで true だが、
 #     MDM 配布では GUI アプリの既定導入を避けるため既定 off とする。
 #     mdm-config.conf で ENABLE_GHOSTTY_SETUP=true を明示すれば on にできる。
@@ -3352,51 +8111,157 @@ _mdm_apply_mdm_defaults() {
     ENABLE_WEB_CONTENT_UPDATE ENABLE_CODEX_PLUGIN
 }
 
+_mdm_json_query() { # <file> <valid|get|count|item> [key] [index]
+  local _file="$1" _operation="$2" _key="${3:-}" _index="${4:-}"
+  local _python
+  case "$_operation" in valid|get|count|item) : ;; *) return 1 ;; esac
+  [[ -f "$_file" && ! -L "$_file" ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_file" "$_operation" "$_key" "$_index" <<'PY'
+import json
+import os
+import stat
+import sys
+
+path, operation, key, index_raw = sys.argv[1:]
+
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+            value.st_uid, value.st_gid, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns, getattr(value, "st_flags", 0),
+            getattr(value, "st_gen", 0))
+
+
+def unique_object(pairs):
+    result = {}
+    for name, item in pairs:
+        if name in result:
+            raise ValueError("duplicate JSON key")
+        result[name] = item
+    return result
+
+
+def reject_constant(_value):
+    raise ValueError("non-finite JSON number")
+
+
+def control_free(value):
+    return (isinstance(value, str)
+            and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                        or 0xD800 <= ord(char) <= 0xDFFF
+                        for char in value))
+
+
+def validate_strings(value, depth=0):
+    if depth > 128:
+        raise ValueError("JSON nesting exceeds limit")
+    if isinstance(value, str):
+        if not control_free(value):
+            raise ValueError("JSON string contains a control character")
+    elif isinstance(value, list):
+        for item in value:
+            validate_strings(item, depth + 1)
+    elif isinstance(value, dict):
+        for name, item in value.items():
+            if not control_free(name):
+                raise ValueError("JSON key contains a control character")
+            validate_strings(item, depth + 1)
+
+
+def emit_scalar(value):
+    if isinstance(value, str):
+        if not control_free(value):
+            raise ValueError("unsafe JSON scalar")
+        output = value
+    elif type(value) is bool:
+        output = "true" if value else "false"
+    elif type(value) is int:
+        output = str(value)
+    else:
+        raise ValueError("JSON value is not a supported scalar")
+    sys.stdout.buffer.write(output.encode("utf-8", "strict"))
+
+
+try:
+    before = os.lstat(path)
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+            or before.st_size < 3 or before.st_size > 64 * 1024 * 1024):
+        raise ValueError("unsafe JSON file")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
+                         | getattr(os, "O_CLOEXEC", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if identity(opened) != identity(before):
+            raise ValueError("JSON identity changed")
+        chunks = []
+        remaining = opened.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise ValueError("short JSON read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise ValueError("JSON grew during read")
+    finally:
+        os.close(descriptor)
+    if identity(os.lstat(path)) != identity(before):
+        raise ValueError("JSON file changed")
+    data = b"".join(chunks)
+    if (not data.startswith(b"{") or not data.endswith(b"}\n")
+            or b"\x00" in data or b"\r" in data or b"\t" in data):
+        raise ValueError("JSON bytes are not canonical at the document edge")
+    text = data.decode("utf-8", "strict")
+    value = json.loads(text, object_pairs_hook=unique_object,
+                       parse_constant=reject_constant)
+    if type(value) is not dict:
+        raise ValueError("JSON root must be an object")
+    validate_strings(value)
+    if operation == "valid":
+        raise SystemExit(0)
+    current = value
+    if not key or any(not part for part in key.split(".")):
+        raise ValueError("invalid JSON key path")
+    for part in key.split("."):
+        if type(current) is not dict or part not in current:
+            raise ValueError("missing JSON key")
+        current = current[part]
+    if operation == "get":
+        emit_scalar(current)
+    elif operation == "count":
+        if type(current) is not list:
+            raise ValueError("JSON value is not an array")
+        sys.stdout.write(str(len(current)))
+    else:
+        if (not index_raw.isascii() or not index_raw.isdigit()
+                or (len(index_raw) > 1 and index_raw.startswith("0"))):
+            raise ValueError("invalid JSON array index")
+        index = int(index_raw)
+        if type(current) is not list or index >= len(current):
+            raise ValueError("JSON array index is out of range")
+        emit_scalar(current[index])
+except (IndexError, OSError, RecursionError, UnicodeError, ValueError,
+        json.JSONDecodeError):
+    raise SystemExit(1)
+PY
+}
+
 _mdm_json_valid() {
-  if _mdm_is_darwin; then
-    /usr/bin/plutil -convert json -o /dev/null -- "$1" >/dev/null 2>&1
-  elif [[ -x /usr/bin/jq ]]; then
-    /usr/bin/jq empty "$1" >/dev/null 2>&1
-  else
-    return 1
-  fi
+  _mdm_json_query "$1" valid
 }
 
 _mdm_json_get() { # <file> <key>
-  local _file="$1" _key="$2"
-  if _mdm_is_darwin; then
-    /usr/bin/plutil -extract "$_key" raw -o - "$_file" 2>/dev/null
-  elif [[ -x /usr/bin/jq ]]; then
-    /usr/bin/jq -r --arg key "$_key" \
-      'getpath($key | split(".")) // empty' "$_file" 2>/dev/null
-  else
-    return 1
-  fi
+  _mdm_json_query "$1" get "$2"
 }
 
 _mdm_json_array_count() { # <file> <key>
-  local _file="$1" _key="$2"
-  if _mdm_is_darwin; then
-    /usr/bin/plutil -extract "$_key" raw -o - "$_file" 2>/dev/null
-  elif [[ -x /usr/bin/jq ]]; then
-    /usr/bin/jq -r --arg key "$_key" \
-      'getpath($key | split(".")) | if type == "array" then length else empty end' \
-      "$_file" 2>/dev/null
-  else
-    return 1
-  fi
+  _mdm_json_query "$1" count "$2"
 }
 
 _mdm_json_array_get() { # <file> <key> <index>
-  local _file="$1" _key="$2" _index="$3"
-  if _mdm_is_darwin; then
-    /usr/bin/plutil -extract "${_key}.${_index}" raw -o - "$_file" 2>/dev/null
-  elif [[ -x /usr/bin/jq ]]; then
-    /usr/bin/jq -r --arg key "$_key" --argjson index "$_index" \
-      'getpath($key | split("."))[$index] // empty' "$_file" 2>/dev/null
-  else
-    return 1
-  fi
+  _mdm_json_query "$1" item "$2" "$3"
 }
 
 _mdm_canonical_dir() {
@@ -3416,9 +8281,20 @@ _mdm_canonical_file() {
 
 _MDM_MARKER_BEGIN='<!-- BEGIN STARTER-KIT-MANAGED -->'
 _MDM_MARKER_END='<!-- END STARTER-KIT-MANAGED -->'
+_mdm_text_file_is_byte_exact() { # <input>
+  local _input="$1" _last_byte
+  [[ -f "$_input" && ! -L "$_input" ]] || return 1
+  _last_byte="$(LC_ALL=C /usr/bin/tail -c 1 "$_input" \
+    | /usr/bin/od -An -tu1 | /usr/bin/tr -d '[:space:]')" || return 1
+  [[ "$_last_byte" == 10 ]] || return 1
+  LC_ALL=C /usr/bin/tr -d '\000' < "$_input" \
+    | /usr/bin/cmp -s "$_input" -
+}
+
 _mdm_extract_managed_section() { # <input> <output> <require-entire:0|1>
   local _input="$1" _output="$2" _require_entire="$3"
   [[ "$_require_entire" == 0 || "$_require_entire" == 1 ]] || return 1
+  _mdm_text_file_is_byte_exact "$_input" || return 1
   if ! /usr/bin/awk -v begin="$_MDM_MARKER_BEGIN" -v end="$_MDM_MARKER_END" \
     -v entire="$_require_entire" '
       {
@@ -3554,7 +8430,7 @@ finally:
 ' "$_root" "$_relative"
 }
 
-_mdm_deployment_digest() { # <manifest-snapshot> <claude-dir> <snapshot-dir> <target-uid>
+_mdm_deployment_digest() ( # <manifest-snapshot> <claude-dir> <snapshot-dir> <target-uid>
   local _manifest="$1" _claude_dir="$2" _snapshot="$3" _target_uid="$4"
   local _expected="${_MDM_EXPECTED_OUTPUT:-}" _expected_manifest _expected_modes _expected_tree
   local _count _expected_count _mode_count _index=0 _file _relative _snap_file _canonical
@@ -3562,6 +8438,21 @@ _mdm_deployment_digest() { # <manifest-snapshot> <claude-dir> <snapshot-dir> <ta
   local _live_copy _snap_copy _live_hash _snap_hash _live_mode _snap_mode _input _digest
   local _live_size _snap_size _aggregate=0 _workspace _live_managed _snap_managed _expected_managed
   local _absent_count _expected_absent_count _absent_index=0 _absent_relative _expected_absent
+  _mdm_cleanup_attest_workspace() {
+    local _base
+    [[ -n "$_workspace" ]] || return 0
+    _base="$(_mdm_safe_tmpdir)" || return 1
+    case "$_workspace" in "$_base"/claude-kit-mdm-attest.*) : ;; *) return 1 ;; esac
+    if [[ -e "$_workspace" || -L "$_workspace" ]]; then
+      [[ -d "$_workspace" && ! -L "$_workspace" ]] || return 1
+      /bin/rm -rf "$_workspace" || return 1
+    fi
+    _workspace=""
+  }
+  trap '_mdm_cleanup_attest_workspace' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   [[ "$_target_uid" =~ ^[0-9]+$ ]] || return 1
   [[ -n "$_expected" ]] || return 1
   _mdm_expected_tree_trusted "$_expected" || return 1
@@ -3673,14 +8564,94 @@ _mdm_deployment_digest() { # <manifest-snapshot> <claude-dir> <snapshot-dir> <ta
   _MDM_ABSENCE_PYTHON=""
   _digest="$(_mdm_sha256_file "$_input")"
   /bin/rm -rf "$_workspace"
+  _workspace=""
   [[ "$_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
   printf '%s' "$_digest"
+)
+
+_mdm_deployment_manifest_schema_valid() { # <strict-json-manifest>
+  local _manifest="$1" _python
+  _mdm_json_valid "$_manifest" || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_manifest" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+ordered_keys = (
+    "version", "timestamp", "kit_version", "kit_commit", "profile",
+    "language", "editor", "commit_attribution", "new_init", "plugins",
+    "codex_plugin", "files", "cleanup_paths", "mdm_absent_files",
+    "mdm_managed", "snapshot_dir", "claude_dir", "policy_sha256",
+)
+keys = set(ordered_keys)
+
+
+def valid_text(value, limit=4096):
+    return (type(value) is str and 0 < len(value.encode("utf-8")) <= limit
+            and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                        or 0xD800 <= ord(char) <= 0xDFFF
+                        for char in value))
+
+
+try:
+    with open(path, "r", encoding="utf-8", errors="strict") as handle:
+        raw = handle.read()
+    value = json.loads(raw)
+    if type(value) is not dict or set(value) != keys:
+        raise ValueError("invalid deployment manifest keys")
+    string_fields = (
+        "version", "timestamp", "kit_version", "kit_commit", "profile",
+        "language", "editor", "commit_attribution", "new_init",
+        "codex_plugin", "snapshot_dir", "claude_dir", "policy_sha256",
+    )
+    if (any(not valid_text(value[name]) for name in string_fields)
+            or type(value["plugins"]) is not str
+            or len(value["plugins"].encode("utf-8")) > 4096
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159
+                   for char in value["plugins"])):
+        raise ValueError("invalid deployment manifest scalar")
+    if (value["version"] != "2" or value["mdm_managed"] is not True
+            or value["editor"] not in {
+                "none", "vscode", "cursor", "zed", "neovim"}
+            or value["commit_attribution"] not in {"true", "false"}
+            or value["new_init"] not in {"true", "false"}
+            or value["codex_plugin"] != "false"
+            or not re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+                value["timestamp"])):
+        raise ValueError("invalid deployment manifest identity")
+    files = value["files"]
+    cleanup = value["cleanup_paths"]
+    absent = value["mdm_absent_files"]
+    if (type(files) is not list or not 1 <= len(files) <= 1000
+            or type(cleanup) is not list or len(cleanup) > 2000
+            or type(absent) is not list or len(absent) > 1000):
+        raise ValueError("invalid deployment manifest inventory")
+    for items in (files, cleanup, absent):
+        if (any(not valid_text(item) for item in items)
+                or len(set(items)) != len(items)):
+            raise ValueError("invalid deployment manifest path")
+    canonical = json.dumps(
+        {name: value[name] for name in ordered_keys},
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+    if raw != canonical:
+        raise ValueError("non-canonical deployment manifest bytes")
+except (OSError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+PY
 }
 
 _mdm_validate_manifest_snapshot() { # <snapshot-file> <home> <target-uid>
   local _manifest="$1" _home="$2" _target_uid="$3"
-  local _version _commit _claude_dir _snapshot _profile _language _digest
-  _mdm_json_valid "$_manifest" || return 1
+  local _version _commit _claude_dir _snapshot _profile _language _policy _digest
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
+    _mdm_deployment_manifest_schema_valid "$_manifest" || return 1
   _version="$(_mdm_json_get "$_manifest" version)"
   [[ "$_version" == "2" ]] || return 1
   [[ "$(_mdm_json_get "$_manifest" mdm_managed)" == "true" ]] || return 1
@@ -3693,11 +8664,17 @@ _mdm_validate_manifest_snapshot() { # <snapshot-file> <home> <target-uid>
   _commit="$(_mdm_json_get "$_manifest" kit_commit)"
   [[ "$_commit" =~ ^[0-9a-f]{7,40}$ && "$MDM_RCPT_RESOLVED_SHA" =~ ^[0-9a-f]{40}$ ]] || return 1
   [[ "$MDM_RCPT_RESOLVED_SHA" == "$_commit"* ]] || return 1
+  _policy="$(_mdm_json_get "$_manifest" policy_sha256)" || return 1
+  [[ "$_policy" =~ ^[0-9a-f]{64}$ \
+    && "${MDM_RCPT_POLICY_SHA256:-}" =~ ^[0-9a-f]{64}$ \
+    && "$_policy" == "$MDM_RCPT_POLICY_SHA256" ]] || return 1
   _profile="$(_mdm_json_get "$_manifest" profile)"
   _language="$(_mdm_json_get "$_manifest" language)"
   [[ "$_profile" == "${PROFILE:-standard}" ]] || return 1
   [[ "$_language" == "${LANGUAGE:-en}" ]] || return 1
-  _digest="$(_mdm_deployment_digest "$_manifest" "$_claude_dir" "$_snapshot" "$_target_uid")" || return 1
+  _digest="$(_mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" _mdm_deployment_digest \
+      "$_manifest" "$_claude_dir" "$_snapshot" "$_target_uid")" || return 1
   MDM_RCPT_PROFILE="$_profile"
   MDM_RCPT_LANGUAGE="$_language"
   MDM_RCPT_DEPLOYMENT_SHA256="$_digest"
@@ -3723,6 +8700,3492 @@ _mdm_capture_postcondition() {
   fi
   /bin/rm -f "$_manifest_copy"
   return "$_rc"
+}
+
+# Recompute every user-controlled success claim after history persistence and
+# immediately before the success receipt. A digest captured earlier in the
+# run must never authorize a deployment or activation that changed meanwhile.
+_mdm_revalidate_success_state() { # <user> <home> <uid> <generated-uid>
+  local _user="$1" _home="$2" _uid="$3" _generated_uid="$4"
+  local _manifest_path="$MDM_RCPT_MANIFEST_PATH"
+  local _manifest_sha="$MDM_RCPT_MANIFEST_SHA256"
+  local _deployment_sha="$MDM_RCPT_DEPLOYMENT_SHA256"
+  local _component_path="$MDM_RCPT_COMPONENT_MANIFEST_PATH"
+  local _component_sha="$MDM_RCPT_COMPONENT_MANIFEST_SHA256"
+  local _profile="$MDM_RCPT_PROFILE" _language="$MDM_RCPT_LANGUAGE"
+  [[ "$_manifest_path" == /* && "$_manifest_sha" =~ ^[0-9a-f]{64}$ \
+    && "$_deployment_sha" =~ ^[0-9a-f]{64}$ \
+    && "$_component_path" == /* && "$_component_sha" =~ ^[0-9a-f]{64}$ ]] \
+    || return 1
+  if ! _mdm_revalidate_target_identity \
+      "$_user" "$_home" "$_uid" "$_generated_uid"; then
+    mdm_log R4 "success revalidation: account identity drift"
+    return 1
+  fi
+  if ! _mdm_capture_postcondition "$_home" "$_uid"; then
+    mdm_log R4 "success revalidation: deployment capture failed"
+    return 1
+  fi
+  [[ "$MDM_RCPT_MANIFEST_PATH" == "$_manifest_path" \
+    && "$MDM_RCPT_MANIFEST_SHA256" == "$_manifest_sha" \
+    && "$MDM_RCPT_DEPLOYMENT_SHA256" == "$_deployment_sha" \
+    && "$MDM_RCPT_PROFILE" == "$_profile" \
+    && "$MDM_RCPT_LANGUAGE" == "$_language" ]] || {
+      mdm_log R4 "success revalidation: deployment claim drift"
+      return 1
+    }
+  if ! _mdm_attest_components \
+      "$_user" "$_home" "$_uid" "$_generated_uid"; then
+    mdm_log R4 "success revalidation: component attestation failed"
+    return 1
+  fi
+  [[ "$MDM_RCPT_COMPONENT_MANIFEST_PATH" == "$_component_path" \
+    && "$MDM_RCPT_COMPONENT_MANIFEST_SHA256" == "$_component_sha" ]] || {
+      mdm_log R4 "success revalidation: component claim drift"
+      return 1
+    }
+  # Component checks can execute user-access probes. Close that window by
+  # measuring the deployment once more, then bind the account tuple last.
+  if ! _mdm_capture_postcondition "$_home" "$_uid"; then
+    mdm_log R4 "success revalidation: final deployment capture failed"
+    return 1
+  fi
+  [[ "$MDM_RCPT_MANIFEST_PATH" == "$_manifest_path" \
+    && "$MDM_RCPT_MANIFEST_SHA256" == "$_manifest_sha" \
+    && "$MDM_RCPT_DEPLOYMENT_SHA256" == "$_deployment_sha" \
+    && "$MDM_RCPT_PROFILE" == "$_profile" \
+    && "$MDM_RCPT_LANGUAGE" == "$_language" ]] || {
+      mdm_log R4 "success revalidation: final deployment claim drift"
+      return 1
+    }
+  if ! _mdm_revalidate_target_identity \
+      "$_user" "$_home" "$_uid" "$_generated_uid"; then
+    mdm_log R4 "success revalidation: final account identity drift"
+    return 1
+  fi
+}
+
+_mdm_revalidate_target_identity() { # <user> <home> <uid> <generated-uid>
+  local _user="$1" _home="$2" _uid="$3" _generated_uid="$4" _tuple _bound_home
+  _tuple="$(_mdm_bind_target_identity_tuple "$_user" "$_uid")" || return 1
+  [[ "${_tuple%%$'\t'*}" == "$_uid" \
+    && "${_tuple#*$'\t'}" == "$_generated_uid" ]] || return 1
+  _bound_home="$(mdm_validate_user_home "$_user" "$_uid")" || return 1
+  [[ "$_bound_home" == "$_home" ]]
+}
+
+# ── MDM private Node.js runtime ────────────────────────────────────────────
+# MDM-managed setup never trusts a user PATH or an independently mutable
+# Homebrew Cellar for Node.js.  One pinned, root-owned distribution is kept in
+# the system support directory and exposed to the target user only through an
+# exact absolute symlink.  Test-only overrides are accepted only while this
+# file is sourced with MDM_SOURCE_ONLY=1.
+_MDM_NODE_VERSION="v24.18.0"
+_MDM_NODE_NPM_VERSION="11.16.0"
+_MDM_NODE_TEAM_ID="HX7739G8FX"
+_MDM_NODE_PROVENANCE_FILE=".claude-code-starter-kit-node-runtime"
+
+_mdm_node_sysctl() {
+  /usr/sbin/sysctl "$@"
+}
+
+_mdm_node_uname() {
+  /usr/bin/uname "$@"
+}
+
+_mdm_node_runtime_arch() {
+  local _machine _arm64
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 && -n "${MDM_NODE_ARCH_OVERRIDE:-}" ]]; then
+    _machine="$MDM_NODE_ARCH_OVERRIDE"
+  elif _mdm_is_darwin; then
+    # Intel macOS does not expose hw.optional.arm64.  -i turns that expected
+    # unknown OID into an empty value, while the hardware bit remains stable
+    # across native and Rosetta-translated MDM agents on Apple Silicon.
+    _arm64="$(_mdm_node_sysctl -in hw.optional.arm64 2>/dev/null)" || return 1
+    _machine="$(_mdm_node_uname -m 2>/dev/null)" || return 1
+    case "$_arm64:$_machine" in
+      1:arm64|1:x86_64) printf '%s' arm64 ;;
+      0:x86_64|:x86_64) printf '%s' x64 ;;
+      *) return 1 ;;
+    esac
+    return 0
+  else
+    _machine="$(_mdm_node_uname -m 2>/dev/null)" || return 1
+  fi
+  case "$_machine" in
+    arm64) printf '%s' arm64 ;;
+    x86_64|x64) printf '%s' x64 ;;
+    *) return 1 ;;
+  esac
+}
+
+_mdm_node_runtime_source() { # <arch> <url-var> <sha256-var> <top-var>
+  local _arch="$1" _url_var="$2" _sha_var="$3" _top_var="$4"
+  local _source_top _source_url _source_sha
+  [[ "$_url_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_sha_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_top_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _source_top="node-${_MDM_NODE_VERSION}-darwin-${_arch}"
+  _source_url="https://nodejs.org/dist/${_MDM_NODE_VERSION}/${_source_top}.tar.xz"
+  case "$_arch" in
+    arm64) _source_sha="4477b9f78efb77744cf5eb57a0e9594dba66466b38b4e93fa9f35cb907a095a6" ;;
+    x64) _source_sha="4a3b6bc81542154430825128d9a279e8b364e8d90581544e506ef7579fd1ab6f" ;;
+    *) return 1 ;;
+  esac
+  printf -v "$_url_var" '%s' "$_source_url"
+  printf -v "$_sha_var" '%s' "$_source_sha"
+  printf -v "$_top_var" '%s' "$_source_top"
+}
+
+_mdm_node_runtime_base() {
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_NODE_RUNTIME_ROOT_OVERRIDE:-}" ]]; then
+    [[ "$MDM_NODE_RUNTIME_ROOT_OVERRIDE" == /* \
+      && "$MDM_NODE_RUNTIME_ROOT_OVERRIDE" != / \
+      && ! "$MDM_NODE_RUNTIME_ROOT_OVERRIDE" =~ [[:cntrl:]] ]] || return 1
+    printf '%s' "$MDM_NODE_RUNTIME_ROOT_OVERRIDE"
+  else
+    printf '%s' "/Library/Application Support/ClaudeCodeStarterKit/runtime"
+  fi
+}
+
+_mdm_node_runtime_path() {
+  local _arch _base
+  _arch="$(_mdm_node_runtime_arch)" || return 1
+  _base="$(_mdm_node_runtime_base)" || return 1
+  printf '%s/node-%s-darwin-%s' "$_base" "$_MDM_NODE_VERSION" "$_arch"
+}
+
+_mdm_node_runtime_bin() {
+  local _path
+  _path="$(_mdm_node_runtime_path)" || return 1
+  printf '%s/bin' "$_path"
+}
+
+_mdm_node_runtime_owner_uid() {
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_NODE_OWNER_UID_OVERRIDE:-}" ]]; then
+    [[ "$MDM_NODE_OWNER_UID_OVERRIDE" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$MDM_NODE_OWNER_UID_OVERRIDE"
+  else
+    printf '0'
+  fi
+}
+
+_mdm_node_runtime_owner_gid() {
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_NODE_OWNER_GID_OVERRIDE:-}" ]]; then
+    [[ "$MDM_NODE_OWNER_GID_OVERRIDE" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$MDM_NODE_OWNER_GID_OVERRIDE"
+  else
+    printf '0'
+  fi
+}
+
+_mdm_node_runtime_codesign_requirement() {
+  printf '%s' '=identifier "node" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "HX7739G8FX"'
+}
+
+_mdm_node_runtime_codesign() {
+  /usr/bin/codesign "$@"
+}
+
+_mdm_node_runtime_node_version() { # <node-binary>
+  /usr/bin/env -i HOME=/var/empty PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    "$1" --version 2>/dev/null
+}
+
+_mdm_node_runtime_process_arch() { # <node-binary>
+  /usr/bin/env -i HOME=/var/empty PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    "$1" -p process.arch 2>/dev/null
+}
+
+_mdm_node_runtime_npm_version() { # <runtime-tree>
+  /usr/bin/env -i HOME=/var/empty \
+    "PATH=$1/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$1/bin/npm" --version 2>/dev/null
+}
+
+_mdm_node_runtime_bundled_npm_valid() { # <runtime-tree>
+  local _root="$1" _npm_target _npx_target
+  [[ -L "$_root/bin/npm" && -x "$_root/bin/npm" \
+    && -L "$_root/bin/npx" && -x "$_root/bin/npx" \
+    && -f "$_root/lib/node_modules/npm/package.json" \
+    && ! -L "$_root/lib/node_modules/npm/package.json" \
+    && -f "$_root/lib/node_modules/npm/bin/npm-cli.js" \
+    && ! -L "$_root/lib/node_modules/npm/bin/npm-cli.js" \
+    && -f "$_root/lib/node_modules/npm/bin/npx-cli.js" \
+    && ! -L "$_root/lib/node_modules/npm/bin/npx-cli.js" ]] || return 1
+  _mdm_readlink_exact "$_root/bin/npm" _npm_target || return 1
+  _mdm_readlink_exact "$_root/bin/npx" _npx_target || return 1
+  [[ "$_npm_target" == ../lib/node_modules/npm/bin/npm-cli.js \
+    && "$_npx_target" == ../lib/node_modules/npm/bin/npx-cli.js ]]
+}
+
+_mdm_node_runtime_lipo() {
+  /usr/bin/lipo "$@"
+}
+
+_mdm_node_runtime_thin_arch_valid() { # <node-binary> <logical-arch>
+  local _slices
+  _slices="$(_mdm_node_runtime_lipo -archs "$1" 2>/dev/null)" || return 1
+  case "$2:$_slices" in arm64:arm64|x64:x86_64) return 0 ;; esac
+  return 1
+}
+
+_mdm_node_runtime_otool() {
+  /usr/bin/otool "$@"
+}
+
+_mdm_node_runtime_system_dylibs_only() { # <node-binary>
+  local _node="$1" _output _line _dependency _first=1 _count=0
+  _output="$(_mdm_node_runtime_otool -L "$_node" 2>/dev/null)" || return 1
+  while IFS= read -r _line || [[ -n "$_line" ]]; do
+    if [[ "$_first" -eq 1 ]]; then
+      [[ "$_line" == "$_node:" ]] || return 1
+      _first=0
+      continue
+    fi
+    _line="${_line#"${_line%%[![:space:]]*}"}"
+    _dependency="${_line%%[[:space:]]*}"
+    [[ -n "$_dependency" && ! "$_dependency" =~ [[:cntrl:]] ]] || return 1
+    case "$_dependency" in
+      /usr/lib/*|/System/Library/*) : ;;
+      *) return 1 ;;
+    esac
+    _count=$((_count + 1))
+  done <<< "$_output"
+  [[ "$_first" -eq 0 && "$_count" -ge 1 ]]
+}
+
+_mdm_node_runtime_root_metadata_valid() { # <runtime-tree> <uid> <gid>
+  local _tree="$1" _uid="$2" _gid="$3" _python
+  [[ "$_uid" =~ ^[0-9]+$ && "$_gid" =~ ^[0-9]+$ ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_tree" "$_uid" "$_gid" <<'PY'
+import os
+import stat
+import sys
+
+root, expected_uid, expected_gid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+count = 0
+for directory, names, files in os.walk(root, topdown=True, followlinks=False):
+    for path in [directory] + [os.path.join(directory, value)
+                               for value in names + files]:
+        value = os.lstat(path)
+        count += 1
+        if count > 100000 or value.st_uid != expected_uid or value.st_gid != expected_gid:
+            raise SystemExit(1)
+        if not (stat.S_ISDIR(value.st_mode) or stat.S_ISREG(value.st_mode)
+                or stat.S_ISLNK(value.st_mode)):
+            raise SystemExit(1)
+if count < 2:
+    raise SystemExit(1)
+PY
+}
+
+_mdm_node_runtime_expected_content_sha256() { # <logical-arch>
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_NODE_CONTENT_SHA256_OVERRIDE:-}" ]]; then
+    [[ "$MDM_NODE_CONTENT_SHA256_OVERRIDE" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s' "$MDM_NODE_CONTENT_SHA256_OVERRIDE"
+    return 0
+  fi
+  case "$1" in
+    arm64) printf '%s' 3b87679d20e675468b9281755c823b528b6406ba7af6cc7086ef00e5c8af6533 ;;
+    x64) printf '%s' a9f69014ea08981c1b1822f565a39ae6970a319518ebf3e43d96ba9fc70aa209 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Owner, group, timestamps, xattrs, and the local provenance marker are not
+# release content.  Everything else is canonicalized exactly like the pinned
+# official tar inventory: UTF-8 byte-sorted path/type/mode plus file bytes or
+# symlink target.  This prevents fail mode from accepting a signed-node TOFU
+# tree with added or changed package content.
+_mdm_node_runtime_content_sha256() { # <runtime-tree>
+  local _tree="$1" _python
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_tree" "$_MDM_NODE_PROVENANCE_FILE" <<'PY'
+import hashlib
+import json
+import os
+import stat
+import sys
+
+root, provenance = sys.argv[1:]
+records = []
+count = 0
+total = 0
+
+
+def visit(path, relative):
+    global count, total
+    before = os.lstat(path)
+    count += 1
+    if count > 100000:
+        raise ValueError("runtime inventory too large")
+    mode = format(stat.S_IMODE(before.st_mode), "04o")
+    base = {"path": relative, "mode": mode}
+    if stat.S_ISDIR(before.st_mode):
+        records.append(dict(base, kind="dir"))
+        names = sorted(os.listdir(path), key=lambda value: value.encode("utf-8", "strict"))
+        for name in names:
+            if not relative and name == provenance:
+                continue
+            visit(os.path.join(path, name), name if not relative else relative + "/" + name)
+        if sorted(os.listdir(path), key=lambda value: value.encode("utf-8", "strict")) != names:
+            raise ValueError("runtime inventory changed")
+    elif stat.S_ISREG(before.st_mode):
+        digest = hashlib.sha256()
+        size = 0
+        with open(path, "rb", buffering=0) as handle:
+            while True:
+                block = handle.read(1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
+                size += len(block)
+                total += len(block)
+                if size > 512 * 1024 * 1024 or total > 2 * 1024 * 1024 * 1024:
+                    raise ValueError("runtime content too large")
+        if size != before.st_size:
+            raise ValueError("runtime file changed")
+        records.append(dict(base, kind="file", sha256=digest.hexdigest(), size=size))
+    elif stat.S_ISLNK(before.st_mode):
+        target = os.readlink(path)
+        target.encode("utf-8", "strict")
+        records.append(dict(base, kind="symlink", mode="0777", target=target))
+    else:
+        raise ValueError("unsupported runtime entry")
+    after = os.lstat(path)
+    if (before.st_dev, before.st_ino, before.st_mode, before.st_nlink,
+            before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+            after.st_dev, after.st_ino, after.st_mode, after.st_nlink,
+            after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        raise ValueError("runtime entry changed")
+
+
+try:
+    visit(root, "")
+    records.sort(key=lambda value: value["path"].encode("utf-8", "strict"))
+    canonical = (json.dumps(records, ensure_ascii=True, sort_keys=True,
+                            separators=(",", ":")) + "\n").encode("ascii")
+    print(hashlib.sha256(canonical).hexdigest())
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_node_runtime_signature_valid() { # <node-binary>
+  local _node="$1" _requirement _details
+  _requirement="$(_mdm_node_runtime_codesign_requirement)" || return 1
+  _mdm_node_runtime_codesign --verify --strict -R "$_requirement" \
+    -- "$_node" >/dev/null 2>&1 || return 1
+  _details="$(_mdm_node_runtime_codesign -dv --verbose=4 -- "$_node" 2>&1)" \
+    || return 1
+  printf '%s\n' "$_details" | /usr/bin/grep -qx 'Identifier=node' \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      "TeamIdentifier=${_MDM_NODE_TEAM_ID}" \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      'Authority=Developer ID Application: Node.js Foundation (HX7739G8FX)' \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      'Authority=Developer ID Certification Authority' \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      'Authority=Apple Root CA'
+}
+
+_mdm_node_runtime_provenance() { # <arch> <url> <sha256>
+  printf 'schema=1\nversion=%s\narch=%s\nurl=%s\nsha256=%s\n' \
+    "$_MDM_NODE_VERSION" "$1" "$2" "$3"
+}
+
+_mdm_exact_text_file() { # <regular-file> <expected-without-final-LF>
+  local _path="$1" _expected="$2" _python
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_path" "$_expected" <<'PY'
+import os
+import stat
+import sys
+
+path, expected_text = sys.argv[1:]
+expected = expected_text.encode("utf-8", "strict") + b"\n"
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+            value.st_uid, value.st_gid, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns, getattr(value, "st_flags", 0),
+            getattr(value, "st_gen", 0))
+
+try:
+    before = os.lstat(path)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
+                         | getattr(os, "O_CLOEXEC", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or identity(opened) != identity(before)
+                or opened.st_size != len(expected)):
+            raise ValueError("unsafe exact-text file")
+        actual = os.read(descriptor, len(expected) + 1)
+        if actual != expected or os.read(descriptor, 1):
+            raise ValueError("exact-text mismatch")
+    finally:
+        os.close(descriptor)
+    if identity(os.lstat(path)) != identity(before):
+        raise ValueError("exact-text file changed")
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_node_runtime_provenance_valid() { # <runtime-tree> <arch> <url> <sha256>
+  local _marker="$1/$_MDM_NODE_PROVENANCE_FILE" _expected
+  [[ -f "$_marker" && ! -L "$_marker" ]] || return 1
+  _expected="$(_mdm_node_runtime_provenance "$2" "$3" "$4")" || return 1
+  _mdm_exact_text_file "$_marker" "$_expected"
+}
+
+_mdm_node_runtime_structure_safe() { # <runtime-tree|same-dir-stage>
+  local _tree="$1" _expected _base _owner _group _digest
+  _expected="$(_mdm_node_runtime_path)" || return 1
+  _base="$(_mdm_node_runtime_base)" || return 1
+  case "$_tree" in
+    "$_expected"|"$_base"/.node-stage.*) : ;;
+    *) return 1 ;;
+  esac
+  [[ -d "$_tree" && ! -L "$_tree" ]] || return 1
+  [[ "$(_mdm_canonical_dir "$_tree" 2>/dev/null || true)" == "$_tree" ]] \
+    || return 1
+  _owner="$(_mdm_node_runtime_owner_uid)" || return 1
+  _group="$(_mdm_node_runtime_owner_gid)" || return 1
+  _digest="$(_mdm_artifact_digest tree "$_tree" "$_owner" "$_group")" \
+    || return 1
+  [[ "$_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _mdm_node_runtime_root_metadata_valid "$_tree" "$_owner" "$_group" \
+    || return 1
+  _MDM_NODE_RUNTIME_DIGEST="$_digest"
+}
+
+_mdm_node_runtime_payload_trusted() { # <runtime-tree>
+  local _tree="$1" _arch _url _sha _top _owner _group _before _after
+  local _content _expected_content
+  _mdm_node_runtime_structure_safe "$_tree" || return 1
+  _before="$_MDM_NODE_RUNTIME_DIGEST"
+  _arch="$(_mdm_node_runtime_arch)" || return 1
+  _mdm_node_runtime_source "$_arch" _url _sha _top || return 1
+  _expected_content="$(_mdm_node_runtime_expected_content_sha256 "$_arch")" \
+    || return 1
+  _content="$(_mdm_node_runtime_content_sha256 "$_tree")" || return 1
+  [[ "$_content" == "$_expected_content" ]] || return 1
+  _MDM_NODE_RUNTIME_CONTENT_SHA256="$_content"
+  _owner="$(_mdm_node_runtime_owner_uid)" || return 1
+  _group="$(_mdm_node_runtime_owner_gid)" || return 1
+  [[ -f "$_tree/bin/node" && ! -L "$_tree/bin/node" \
+    && -x "$_tree/bin/node" ]] || return 1
+  _mdm_node_runtime_signature_valid "$_tree/bin/node" || return 1
+  [[ "$(_mdm_node_runtime_node_version "$_tree/bin/node")" \
+    == "$_MDM_NODE_VERSION" ]] || return 1
+  [[ "$(_mdm_node_runtime_process_arch "$_tree/bin/node")" == "$_arch" ]] \
+    || return 1
+  _mdm_node_runtime_thin_arch_valid "$_tree/bin/node" "$_arch" || return 1
+  _mdm_node_runtime_system_dylibs_only "$_tree/bin/node" || return 1
+  _mdm_node_runtime_bundled_npm_valid "$_tree" || return 1
+  [[ "$(_mdm_node_runtime_npm_version "$_tree")" \
+      == "$_MDM_NODE_NPM_VERSION" ]] || return 1
+  _after="$(_mdm_artifact_digest tree "$_tree" "$_owner" "$_group")" \
+    || return 1
+  [[ "$_after" == "$_before" ]] || return 1
+  _MDM_NODE_RUNTIME_DIGEST="$_after"
+}
+
+_mdm_node_runtime_ancestors_trusted() { # <fixed-tree|same-dir-stage>
+  local _tree="$1" _base _expected _owner _group _dir _mode
+  local _system_dirs=() _managed_dirs=()
+  _base="$(_mdm_node_runtime_base)" || return 1
+  _expected="$(_mdm_node_runtime_path)" || return 1
+  case "$_tree" in
+    "$_expected"|"$_base"/.node-stage.*) : ;;
+    *) return 1 ;;
+  esac
+  _owner="$(_mdm_node_runtime_owner_uid)" || return 1
+  _group="$(_mdm_node_runtime_owner_gid)" || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_NODE_RUNTIME_ROOT_OVERRIDE:-}" ]]; then
+    _managed_dirs=("$_base" "$_tree")
+  else
+    _system_dirs=(/ /Library "/Library/Application Support")
+    _managed_dirs=(
+      "/Library/Application Support/ClaudeCodeStarterKit"
+      "$_base"
+      "$_tree"
+    )
+  fi
+  for _dir in "${_system_dirs[@]+"${_system_dirs[@]}"}"; do
+    [[ -d "$_dir" && ! -L "$_dir" \
+      && "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" \
+      && "$(_mdm_stat_uid "$_dir" 2>/dev/null || true)" == 0 ]] \
+      || return 1
+    _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
+    [[ "$_mode" == 0755 ]] || return 1
+    _mdm_has_extended_acl "$_dir" && return 1
+  done
+  for _dir in "${_managed_dirs[@]+"${_managed_dirs[@]}"}"; do
+    [[ -d "$_dir" && ! -L "$_dir" \
+      && "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" \
+      && "$(_mdm_stat_uid "$_dir" 2>/dev/null || true)" == "$_owner" \
+      && "$(_mdm_stat_gid "$_dir" 2>/dev/null || true)" == "$_group" ]] \
+      || return 1
+    _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
+    [[ "$_mode" == 0755 ]] || return 1
+    _mdm_has_extended_acl "$_dir" && return 1
+  done
+  return 0
+}
+
+_mdm_node_runtime_trusted() { # <runtime-tree>
+  local _tree="$1" _arch _url _sha _top
+  _mdm_node_runtime_ancestors_trusted "$_tree" || return 1
+  _mdm_node_runtime_payload_trusted "$_tree" || return 1
+  _arch="$(_mdm_node_runtime_arch)" || return 1
+  _mdm_node_runtime_source "$_arch" _url _sha _top || return 1
+  _mdm_node_runtime_provenance_valid "$_tree" "$_arch" "$_url" "$_sha" \
+    || return 1
+}
+
+_mdm_node_runtime_archive_sha256() {
+  _mdm_sha256_file "$1"
+}
+
+_mdm_node_runtime_curl() {
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    /usr/bin/curl "$@"
+}
+
+_mdm_node_runtime_curl_quote() {
+  local _value="$1"
+  [[ ! "$_value" =~ [[:cntrl:]] ]] || return 1
+  _value="${_value//\\/\\\\}"
+  _value="${_value//\"/\\\"}"
+  printf '%s' "$_value"
+}
+
+_mdm_node_runtime_download() { # <fixed-url> <destination>
+  local _url="$1" _destination="$2" _proxy="" _no_proxy=""
+  local _quoted_url _quoted_destination _quoted_proxy="" _quoted_no_proxy=""
+  case "$_url" in
+    https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-arm64.tar.xz|\
+    https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-x64.tar.xz) : ;;
+    *) return 1 ;;
+  esac
+  [[ "$_destination" == /* && -f "$_destination" \
+    && ! -L "$_destination" ]] || return 1
+  if [[ -n "${HTTPS_PROXY:-}" ]]; then
+    _proxy="$HTTPS_PROXY"
+  elif [[ -n "${HTTP_PROXY:-}" ]]; then
+    _proxy="$HTTP_PROXY"
+  fi
+  if [[ -n "$_proxy" ]]; then
+    _mdm_root_proxy_url "$_proxy" >/dev/null || return "$MDM_EXIT_CONFIG"
+  fi
+  if [[ -n "${NO_PROXY:-}" ]]; then
+    [[ ! "$NO_PROXY" =~ [[:space:][:cntrl:]] ]] || return "$MDM_EXIT_CONFIG"
+    _no_proxy="$NO_PROXY"
+  fi
+  _quoted_url="$(_mdm_node_runtime_curl_quote "$_url")" || return 1
+  _quoted_destination="$(_mdm_node_runtime_curl_quote "$_destination")" || return 1
+  [[ -z "$_proxy" ]] \
+    || _quoted_proxy="$(_mdm_node_runtime_curl_quote "$_proxy")" || return 1
+  [[ -z "$_no_proxy" ]] \
+    || _quoted_no_proxy="$(_mdm_node_runtime_curl_quote "$_no_proxy")" || return 1
+  (
+    # POSIX file-size units are 512-byte blocks.  This bounds a response even
+    # when a server omits Content-Length and curl cannot enforce max-filesize
+    # before writing.
+    ulimit -f 204800 || exit 1
+    {
+      printf 'url = "%s"\n' "$_quoted_url"
+      printf 'output = "%s"\n' "$_quoted_destination"
+      printf 'proto = "=https"\nproto-redir = "=https"\n'
+      printf 'tlsv1.2\nfail\nsilent\nshow-error\nlocation\n'
+      printf 'connect-timeout = 30\nmax-time = 600\nmax-filesize = 104857600\n'
+      [[ -z "$_quoted_proxy" ]] || printf 'proxy = "%s"\n' "$_quoted_proxy"
+      [[ -z "$_quoted_no_proxy" ]] || printf 'noproxy = "%s"\n' "$_quoted_no_proxy"
+    } | _mdm_node_runtime_curl -q --config -
+  )
+}
+
+_mdm_node_runtime_archive_size_valid() {
+  local _identity _size
+  _identity="$(_mdm_stat_identity "$1")" || return 1
+  case "$_identity" in *:Regular\ File:*|*:regular\ file:*) : ;; *) return 1 ;; esac
+  _size="${_identity##*:}"
+  [[ "$_size" =~ ^[0-9]+$ && "$_size" -gt 0 && "$_size" -le 104857600 ]]
+}
+
+# Validate the complete tar inventory before creating the first child.  The
+# extractor strips exactly one pinned top-level directory, creates regular
+# files with O_EXCL|O_NOFOLLOW, delays symlinks until every directory/file is
+# complete, ignores archive ownership, and never restores ACL/xattr metadata.
+_mdm_node_runtime_extract_archive() { # <tar.xz> <empty-destination> <top-name>
+  local _archive="$1" _destination="$2" _top="$3" _python _owner _group
+  [[ -f "$_archive" && ! -L "$_archive" \
+    && -d "$_destination" && ! -L "$_destination" \
+    && "$_top" =~ ^node-v[0-9]+\.[0-9]+\.[0-9]+-darwin-(arm64|x64)$ ]] \
+    || return 1
+  _python="$(_mdm_system_python)" || return 1
+  _owner="$(_mdm_node_runtime_owner_uid)" || return 1
+  _group="$(_mdm_node_runtime_owner_gid)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_archive" "$_destination" "$_top" \
+      "$_owner" "$_group" <<'PY'
+import os
+import posixpath
+import stat
+import sys
+import tarfile
+
+archive, destination, expected_top = sys.argv[1:4]
+expected_uid, expected_gid = int(sys.argv[4]), int(sys.argv[5])
+MAX_ENTRIES = 100000
+MAX_DEPTH = 256
+MAX_FILE = 512 * 1024 * 1024
+MAX_TOTAL = 2 * 1024 * 1024 * 1024
+PROVENANCE = ".claude-code-starter-kit-node-runtime"
+
+
+def invalid_text(value):
+    return (not isinstance(value, str) or not value
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159
+                   or 0xD800 <= ord(char) <= 0xDFFF for char in value))
+
+
+def member_path(member):
+    name = member.name[:-1] if member.name.endswith("/") else member.name
+    if invalid_text(name) or name.startswith("/") or "\\" in name:
+        raise ValueError("invalid archive pathname")
+    parts = name.split("/")
+    if (not parts or parts[0] != expected_top
+            or any(part in ("", ".", "..") for part in parts)):
+        raise ValueError("archive pathname escapes pinned root")
+    relative = tuple(parts[1:])
+    if len(relative) > MAX_DEPTH or (relative and relative[0] == PROVENANCE):
+        raise ValueError("reserved or over-deep archive pathname")
+    return relative
+
+
+def safe_link_target(relative, target):
+    if invalid_text(target) or target.startswith("/") or "\\" in target:
+        raise ValueError("invalid archive symlink")
+    stack = list(relative[:-1])
+    for part in target.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not stack:
+                raise ValueError("archive symlink escapes pinned root")
+            stack.pop()
+        else:
+            stack.append(part)
+        if len(stack) > MAX_DEPTH:
+            raise ValueError("over-deep archive symlink")
+    if not stack:
+        raise ValueError("archive symlink resolves to root")
+    return tuple(stack)
+
+
+destination_stat = os.lstat(destination)
+if (not stat.S_ISDIR(destination_stat.st_mode)
+        or os.path.islink(destination) or os.listdir(destination)):
+    raise SystemExit(1)
+
+try:
+    with tarfile.open(archive, mode="r:xz") as package:
+        members = package.getmembers()
+        if not members or len(members) > MAX_ENTRIES:
+            raise ValueError("invalid archive entry count")
+        records = {}
+        total = 0
+        for member in members:
+            relative = member_path(member)
+            if relative in records:
+                raise ValueError("duplicate archive pathname")
+            if member.mode & ~0o777:
+                raise ValueError("unsafe archive permissions")
+            pax_names = set(member.pax_headers)
+            if any(("acl" in name.lower() or "xattr" in name.lower()
+                    or name.startswith("GNU.sparse")) for name in pax_names):
+                raise ValueError("archive ACL/xattr/sparse metadata")
+            if member.isdir():
+                kind = "dir"
+            elif member.isreg():
+                kind = "file"
+                if member.size < 0 or member.size > MAX_FILE:
+                    raise ValueError("archive file too large")
+                total += member.size
+                if total > MAX_TOTAL:
+                    raise ValueError("archive aggregate too large")
+            elif member.issym():
+                kind = "symlink"
+            elif member.islnk():
+                raise ValueError("archive hardlink")
+            else:
+                raise ValueError("unsupported archive entry")
+            if kind != "symlink" and member.mode & 0o022:
+                raise ValueError("writable archive entry")
+            records[relative] = (member, kind)
+
+        root_record = records.get(())
+        if root_record is None or root_record[1] != "dir":
+            raise ValueError("archive root directory is missing")
+        for relative, (_, kind) in records.items():
+            if not relative:
+                continue
+            for depth in range(1, len(relative)):
+                parent = records.get(relative[:depth])
+                if parent is None or parent[1] != "dir":
+                    raise ValueError("archive parent is not a directory")
+            if kind == "symlink":
+                resolved = safe_link_target(relative, records[relative][0].linkname)
+                if resolved not in records:
+                    raise ValueError("dangling archive symlink")
+
+        directories = sorted(
+            ((relative, value[0]) for relative, value in records.items()
+             if relative and value[1] == "dir"), key=lambda item: len(item[0]))
+        files = sorted(
+            ((relative, value[0]) for relative, value in records.items()
+             if value[1] == "file"), key=lambda item: item[1].offset_data)
+        links = sorted(
+            ((relative, value[0]) for relative, value in records.items()
+             if value[1] == "symlink"), key=lambda item: item[0])
+
+        for relative, _ in directories:
+            target = os.path.join(destination, *relative)
+            os.mkdir(target, 0o700)
+            os.chown(target, expected_uid, expected_gid, follow_symlinks=False)
+        # getmembers() leaves the xz stream at EOF.  Reopen it before payload
+        # reads and consume regular files by offset_data so the decompressor
+        # only moves forward instead of repeatedly seeking through ~1 GiB of
+        # uncompressed release data in pathname order.
+        with tarfile.open(archive, mode="r:xz") as payloads:
+            for relative, member in files:
+                target = os.path.join(destination, *relative)
+                source = payloads.extractfile(member)
+                if source is None:
+                    raise ValueError("archive regular file has no payload")
+                descriptor = os.open(
+                    target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600)
+                written = 0
+                try:
+                    os.fchown(descriptor, expected_uid, expected_gid)
+                    while True:
+                        block = source.read(1024 * 1024)
+                        if not block:
+                            break
+                        view = memoryview(block)
+                        while view:
+                            count = os.write(descriptor, view)
+                            if count <= 0:
+                                raise OSError("short archive write")
+                            written += count
+                            view = view[count:]
+                    if written != member.size or source.read(1):
+                        raise ValueError("archive payload size mismatch")
+                    os.fchmod(descriptor, stat.S_IMODE(member.mode))
+                finally:
+                    os.close(descriptor)
+                    source.close()
+        for relative, member in links:
+            target = os.path.join(destination, *relative)
+            os.symlink(member.linkname, target)
+            os.chown(target, expected_uid, expected_gid, follow_symlinks=False)
+        for relative, member in sorted(
+                directories, key=lambda item: len(item[0]), reverse=True):
+            os.chmod(os.path.join(destination, *relative),
+                     stat.S_IMODE(member.mode), follow_symlinks=False)
+        os.chmod(destination, stat.S_IMODE(root_record[0].mode),
+                 follow_symlinks=False)
+        os.chown(destination, expected_uid, expected_gid, follow_symlinks=False)
+except (OSError, OverflowError, tarfile.TarError, UnicodeError, ValueError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_node_runtime_write_provenance() { # <tree> <arch> <url> <sha256>
+  local _marker="$1/$_MDM_NODE_PROVENANCE_FILE" _owner _group _python
+  [[ -d "$1" && ! -L "$1" && ! -e "$_marker" && ! -L "$_marker" ]] \
+    || return 1
+  if ! ( set -C; umask 022
+    _mdm_node_runtime_provenance "$2" "$3" "$4" > "$_marker"
+  ) 2>/dev/null; then
+    return 1
+  fi
+  _owner="$(_mdm_node_runtime_owner_uid)" || return 1
+  _group="$(_mdm_node_runtime_owner_gid)" || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_marker" "$_owner" "$_group" <<'PY'
+import os
+import sys
+
+path, owner, group = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    os.fchown(descriptor, owner, group)
+    os.fchmod(descriptor, 0o444)
+finally:
+    os.close(descriptor)
+PY
+}
+
+_mdm_node_runtime_prepare_base() {
+  local _base _anchor _support _dir _mode _owner _group
+  local _system_dirs=()
+  local _dirs=()
+  _base="$(_mdm_node_runtime_base)" || return 1
+  _owner="$(_mdm_node_runtime_owner_uid)" || return 1
+  _group="$(_mdm_node_runtime_owner_gid)" || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_NODE_RUNTIME_ROOT_OVERRIDE:-}" ]]; then
+    _anchor="$(/usr/bin/dirname "$_base")"
+    _dirs=("$_base")
+  else
+    _anchor="/Library/Application Support"
+    _support="/Library/Application Support/ClaudeCodeStarterKit"
+    _system_dirs=(/ /Library "$_anchor")
+    _dirs=("$_support" "$_base")
+  fi
+  [[ -d "$_anchor" && ! -L "$_anchor" \
+    && "$(_mdm_canonical_dir "$_anchor" 2>/dev/null || true)" == "$_anchor" ]] \
+    || return 1
+  _mdm_component_trusted "$_anchor" || return 1
+  for _dir in "${_system_dirs[@]+"${_system_dirs[@]}"}"; do
+    [[ -d "$_dir" && ! -L "$_dir" \
+      && "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" \
+      && "$(_mdm_stat_uid "$_dir" 2>/dev/null || true)" == 0 ]] \
+      || return 1
+    _mdm_component_trusted "$_dir" || return 1
+    _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
+    [[ "$_mode" == 0755 ]] || return 1
+  done
+  for _dir in "${_dirs[@]+"${_dirs[@]}"}"; do
+    if [[ -e "$_dir" || -L "$_dir" ]]; then
+      [[ -d "$_dir" && ! -L "$_dir" ]] || return 1
+    else
+      /bin/mkdir -m 0755 "$_dir" || return 1
+    fi
+    [[ "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" ]] \
+      || return 1
+    _mdm_wce_runtime_normalize_base_dir "$_dir" "$_owner" "$_group" \
+      || return 1
+  done
+}
+
+_mdm_node_runtime_cleanup_work() { # <work-path>
+  local _path="$1" _base _parent _name
+  [[ -n "$_path" ]] || return 0
+  _base="$(_mdm_node_runtime_base)" || return 1
+  _parent="$(/usr/bin/dirname "$_path")"; _name="${_path##*/}"
+  [[ "$_parent" == "$_base" ]] || return 1
+  case "$_name" in .node-download.*|.node-stage.*) : ;; *) return 1 ;; esac
+  [[ "$_path" != "$_base" && "$_path" != / ]] || return 1
+  /bin/rm -rf "$_path"
+}
+
+_mdm_node_runtime_quarantine_path() {
+  local _base _path _old_umask
+  _base="$(_mdm_node_runtime_base)" || return 1
+  _old_umask="$(umask)"; umask 077
+  _path="$(/usr/bin/mktemp -d "$_base/.node-quarantine.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  [[ "$(/usr/bin/dirname "$_path")" == "$_base" \
+    && "${_path##*/}" == .node-quarantine.* \
+    && -d "$_path" && ! -L "$_path" ]] \
+    || return 1
+  /bin/rmdir "$_path" || return 1
+  [[ ! -e "$_path" && ! -L "$_path" ]] || return 1
+  printf '%s' "$_path"
+}
+
+_mdm_node_runtime_promote() { # <source> <destination> <operation>
+  local _stage="$1" _target="$2" _operation="$3" _rename_operation _base
+  _base="$(_mdm_node_runtime_base)" || return 1
+  case "$_operation" in
+    create|swap)
+      [[ "$(/usr/bin/dirname "$_stage")" == "$_base" \
+        && "$(/usr/bin/dirname "$_target")" == "$_base" \
+        && "${_stage##*/}" == .node-stage.* \
+        && "$_target" == "$(_mdm_node_runtime_path)" \
+        && -d "$_stage" && ! -L "$_stage" ]] || return 1
+      if [[ "$_operation" == create ]]; then
+        [[ ! -e "$_target" && ! -L "$_target" ]] || return 1
+      else
+        [[ -e "$_target" || -L "$_target" ]] || return 1
+      fi
+      _rename_operation="$_operation" ;;
+    retract)
+      [[ "$_stage" == "$(_mdm_node_runtime_path)" \
+        && "$(/usr/bin/dirname "$_stage")" == "$_base" \
+        && "$(/usr/bin/dirname "$_target")" == "$_base" \
+        && "${_target##*/}" == .node-stage.* \
+        && -d "$_stage" && ! -L "$_stage" \
+        && ! -e "$_target" && ! -L "$_target" ]] || return 1
+      _rename_operation=create ;;
+    quarantine)
+      [[ "$_stage" == "$(_mdm_node_runtime_path)" \
+        && "$(/usr/bin/dirname "$_stage")" == "$_base" \
+        && "$(/usr/bin/dirname "$_target")" == "$_base" \
+        && "${_target##*/}" == .node-quarantine.* \
+        && ( -e "$_stage" || -L "$_stage" ) \
+        && ! -e "$_target" && ! -L "$_target" ]] || return 1
+      _rename_operation=create ;;
+    restore)
+      [[ "$(/usr/bin/dirname "$_stage")" == "$_base" \
+        && "${_stage##*/}" == .node-quarantine.* \
+        && ( -e "$_stage" || -L "$_stage" ) \
+        && "$_target" == "$(_mdm_node_runtime_path)" \
+        && "$(/usr/bin/dirname "$_target")" == "$_base" \
+        && ! -e "$_target" && ! -L "$_target" ]] || return 1
+      _rename_operation=create ;;
+    *) return 1 ;;
+  esac
+  _mdm_node_runtime_atomic_rename \
+    "$_stage" "$_target" "$_rename_operation"
+}
+
+_mdm_node_runtime_atomic_rename() { # <source> <destination> <create|swap>
+  _mdm_node_runtime_atomic_rename_system "$@"
+}
+
+_mdm_node_runtime_atomic_rename_system() { # test seam around the syscall only
+  local _source="$1" _destination="$2" _operation="$3" _python
+  case "$_operation" in create|swap) : ;; *) return 1 ;; esac
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_source" "$_destination" "$_operation" <<'PY'
+import ctypes
+import os
+import sys
+
+source, destination, operation = sys.argv[1:]
+libc = ctypes.CDLL(None, use_errno=True)
+if sys.platform == "darwin":
+    rename = libc.renamex_np
+    rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    flags = 4 if operation == "create" else 2  # RENAME_EXCL / RENAME_SWAP
+    result = rename(os.fsencode(source), os.fsencode(destination), flags)
+elif sys.platform.startswith("linux"):
+    rename = libc.renameat2
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                       ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    flags = 1 if operation == "create" else 2  # NOREPLACE / EXCHANGE
+    result = rename(-100, os.fsencode(source),
+                    -100, os.fsencode(destination), flags)
+else:
+    raise SystemExit(1)
+if result != 0:
+    error = ctypes.get_errno()
+    raise OSError(error, os.strerror(error))
+PY
+}
+
+_mdm_node_runtime_user_dir_valid() { # <directory> <target-uid>
+  local _dir="$1" _uid="$2" _mode
+  [[ "$_uid" =~ ^[0-9]+$ && -d "$_dir" && ! -L "$_dir" ]] || return 1
+  [[ "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" \
+    && "$(_mdm_stat_uid "$_dir" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
+  _mdm_mode_is_safe "$_mode" || return 1
+  ! _mdm_has_extended_acl "$_dir"
+}
+
+_mdm_node_runtime_activation_valid() { # <user> <home> <target-uid>
+  local _user="$1" _home="$2" _uid="$3" _link _target _expected
+  local _metadata _rest _links _runtime _arch _value
+  [[ -n "$_user" && "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _link="$_home/.local/bin/node"
+  _expected="$(_mdm_node_runtime_path)/bin/node" || return 1
+  _mdm_node_runtime_user_dir_valid "$_home/.local" "$_uid" || return 1
+  _mdm_node_runtime_user_dir_valid "$_home/.local/bin" "$_uid" || return 1
+  [[ -L "$_link" \
+    && "$(_mdm_stat_uid "$_link" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+  _metadata="$(_mdm_stat_managed_metadata "$_link")" || return 1
+  _rest="${_metadata#*:}"; _links="${_rest%%:*}"
+  [[ "$_links" == 1 ]] || return 1
+  _mdm_has_extended_acl "$_link" && return 1
+  _mdm_readlink_exact "$_link" _target || return 1
+  [[ "$_target" == "$_expected" ]] || return 1
+  _mdm_exec_as_user "$_uid" "$_user" "$_home" /bin/test -x "$_expected" \
+    >/dev/null 2>&1 || return 1
+  _arch="$(_mdm_node_runtime_arch)" || return 1
+  _value="$(_mdm_exec_as_user "$_uid" "$_user" "$_home" \
+    "$_expected" --version 2>/dev/null)" || return 1
+  [[ "$_value" == "$_MDM_NODE_VERSION" ]] || return 1
+  _value="$(_mdm_exec_as_user "$_uid" "$_user" "$_home" \
+    "$_expected" -p process.arch 2>/dev/null)" || return 1
+  [[ "$_value" == "$_arch" ]] || return 1
+  _runtime="${_expected%/bin/node}"
+  _value="$(_mdm_exec_as_user "$_uid" "$_user" "$_home" /usr/bin/env \
+    "PATH=$_runtime/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$_runtime/bin/npm" --version 2>/dev/null)" || return 1
+  [[ "$_value" == "$_MDM_NODE_NPM_VERSION" ]]
+}
+
+_mdm_node_runtime_replace_activation() { # <user> <home> <target-uid> <target>
+  local _user="$1" _home="$2" _uid="$3" _target="$4" _python
+  _python="$(_mdm_system_python)" || return 1
+  _mdm_exec_as_user "$_uid" "$_user" "$_home" \
+    "$_python" -I -B -c '
+import errno
+import os
+import secrets
+import stat
+import sys
+
+directory, target = sys.argv[1:]
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+descriptor = os.open(directory, flags)
+temporary = None
+try:
+    before = os.fstat(descriptor)
+    try:
+        current = os.stat("node", dir_fd=descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        current = None
+    if current is not None:
+        if (current.st_uid != os.geteuid() or current.st_nlink != 1
+                or not (stat.S_ISREG(current.st_mode)
+                        or stat.S_ISLNK(current.st_mode))):
+            raise SystemExit(1)
+    for _ in range(32):
+        temporary = ".node.mdm." + secrets.token_hex(12)
+        try:
+            os.symlink(target, temporary, dir_fd=descriptor)
+            break
+        except FileExistsError:
+            temporary = None
+    if temporary is None:
+        raise SystemExit(1)
+    os.replace(temporary, "node", src_dir_fd=descriptor, dst_dir_fd=descriptor)
+    temporary = None
+    os.fsync(descriptor)
+    after = os.fstat(descriptor)
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise SystemExit(1)
+finally:
+    if temporary is not None:
+        try:
+            os.unlink(temporary, dir_fd=descriptor)
+        except OSError as error:
+            if error.errno != errno.ENOENT:
+                raise
+    os.close(descriptor)
+' "$_home/.local/bin" "$_target"
+}
+
+_mdm_node_runtime_bind_activation() { # <user> <home> <target-uid>
+  local _user="$1" _home="$2" _uid="$3" _local _bin _link _target
+  _local="$_home/.local"; _bin="$_local/bin"; _link="$_bin/node"
+  _target="$(_mdm_node_runtime_path)/bin/node" || return 1
+  if [[ -e "$_link" || -L "$_link" ]]; then
+    if _mdm_node_runtime_activation_valid "$_user" "$_home" "$_uid"; then
+      return 0
+    fi
+  fi
+  if [[ ! -e "$_local" && ! -L "$_local" ]]; then
+    _mdm_exec_as_user "$_uid" "$_user" "$_home" \
+      /bin/mkdir -m 0755 "$_local" || return 1
+  fi
+  _mdm_node_runtime_user_dir_valid "$_local" "$_uid" || return 1
+  if [[ ! -e "$_bin" && ! -L "$_bin" ]]; then
+    _mdm_exec_as_user "$_uid" "$_user" "$_home" \
+      /bin/mkdir -m 0755 "$_bin" || return 1
+  fi
+  _mdm_node_runtime_user_dir_valid "$_bin" "$_uid" || return 1
+  _mdm_node_runtime_replace_activation \
+    "$_user" "$_home" "$_uid" "$_target" || return 1
+  _mdm_node_runtime_activation_valid "$_user" "$_home" "$_uid"
+}
+
+_mdm_node_runtime_rebuild() ( # <target>; unsafe existing leaf is quarantined
+  local _target="$1" _base _arch _url _sha _top _archive="" _stage=""
+  local _existing=false _existing_safe=false _old_identity="" _stage_identity _current
+  local _quarantine="" _quarantine_identity=""
+  _base="$(_mdm_node_runtime_base)" || return 1
+  _arch="$(_mdm_node_runtime_arch)" || return 1
+  _mdm_node_runtime_source "$_arch" _url _sha _top || return 1
+  _mdm_node_runtime_prepare_base || return 1
+  if [[ -e "$_target" || -L "$_target" ]]; then
+    _existing=true
+    _old_identity="$(_mdm_stat_identity "$_target")" || return 1
+    if _mdm_node_runtime_structure_safe "$_target"; then
+      _existing_safe=true
+    fi
+  fi
+  local _old_umask
+  _old_umask="$(umask)"; umask 077
+  _archive="$(/usr/bin/mktemp "$_base/.node-download.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  _stage="$(/usr/bin/mktemp -d "$_base/.node-stage.XXXXXX")" \
+    || { umask "$_old_umask"; _mdm_node_runtime_cleanup_work "$_archive"; return 1; }
+  umask "$_old_umask"
+  trap '_mdm_node_runtime_cleanup_work "$_archive" || true; _mdm_node_runtime_cleanup_work "$_stage" || true' EXIT
+  trap '_mdm_node_runtime_cleanup_work "$_archive" || true; _mdm_node_runtime_cleanup_work "$_stage" || true; exit 1' HUP INT TERM
+  _mdm_node_runtime_download "$_url" "$_archive" || return 1
+  _mdm_node_runtime_archive_size_valid "$_archive" || return 1
+  [[ "$(_mdm_node_runtime_archive_sha256 "$_archive")" == "$_sha" ]] || return 1
+  _mdm_node_runtime_extract_archive "$_archive" "$_stage" "$_top" || return 1
+  _mdm_node_runtime_write_provenance "$_stage" "$_arch" "$_url" "$_sha" \
+    || return 1
+  _mdm_node_runtime_trusted "$_stage" || return 1
+  _stage_identity="$(_mdm_stat_identity "$_stage")" || return 1
+  if [[ "$_existing" == true && "$_existing_safe" == true ]]; then
+    _mdm_node_runtime_promote "$_stage" "$_target" swap || return 1
+    _current="$(_mdm_stat_identity "$_stage" 2>/dev/null || true)"
+    if [[ "$_current" != "$_old_identity" \
+      || "$(_mdm_stat_identity "$_target" 2>/dev/null || true)" != "$_stage_identity" ]] \
+      || ! _mdm_node_runtime_trusted "$_target"; then
+      if ! _mdm_node_runtime_promote "$_stage" "$_target" swap; then
+        _stage=""
+      fi
+      return 1
+    fi
+  elif [[ "$_existing" == false ]]; then
+    _mdm_node_runtime_promote "$_stage" "$_target" create || return 1
+    if [[ "$(_mdm_stat_identity "$_target" 2>/dev/null || true)" != "$_stage_identity" ]] \
+      || ! _mdm_node_runtime_trusted "$_target"; then
+      _mdm_node_runtime_promote "$_target" "$_stage" retract || true
+      return 1
+    fi
+  else
+    # Metadata-unsafe or non-directory fixed leaves are never traversed or
+    # recursively removed.  Move the exact inode to a root-only sibling name,
+    # publish the verified candidate into the now-absent fixed path, and keep
+    # the quarantine for forensic/manual cleanup after a successful repair.
+    _quarantine="$(_mdm_node_runtime_quarantine_path)" || return 1
+    _mdm_node_runtime_promote "$_target" "$_quarantine" quarantine || return 1
+    _quarantine_identity="$(_mdm_stat_identity "$_quarantine" 2>/dev/null || true)"
+    if [[ "$_quarantine_identity" != "$_old_identity" \
+      || -e "$_target" || -L "$_target" ]]; then
+      if [[ ! -e "$_target" && ! -L "$_target" \
+        && "$_quarantine_identity" == "$_old_identity" ]]; then
+        _mdm_node_runtime_promote "$_quarantine" "$_target" restore || true
+      fi
+      return 1
+    fi
+    if ! _mdm_node_runtime_promote "$_stage" "$_target" create; then
+      _mdm_node_runtime_promote "$_quarantine" "$_target" restore || true
+      return 1
+    fi
+    if [[ "$(_mdm_stat_identity "$_target" 2>/dev/null || true)" \
+        != "$_stage_identity" ]] \
+      || ! _mdm_node_runtime_trusted "$_target"; then
+      if [[ "$(_mdm_stat_identity "$_target" 2>/dev/null || true)" \
+        == "$_stage_identity" ]]; then
+        _mdm_node_runtime_promote "$_target" "$_stage" retract || true
+      fi
+      if [[ ! -e "$_target" && ! -L "$_target" \
+        && "$(_mdm_stat_identity "$_quarantine" 2>/dev/null || true)" \
+          == "$_old_identity" ]]; then
+        _mdm_node_runtime_promote "$_quarantine" "$_target" restore || true
+      fi
+      return 1
+    fi
+    mdm_log U1b "不正な既存 Node.js runtime leaf を隔離: $_quarantine"
+  fi
+  _mdm_node_runtime_cleanup_work "$_archive" || return 1
+  _archive=""
+  _mdm_node_runtime_cleanup_work "$_stage" || return 1
+  _stage=""
+  trap - EXIT HUP INT TERM
+)
+
+_mdm_ensure_node_runtime() { # <user> <home> <target-uid>
+  local _user="$1" _home="$2" _uid="$3" _mode _target _euid
+  [[ -n "$_user" && "$_home" == /* && "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _mode="${KIT_MDM_PREREQ_MODE:-auto}"
+  case "$_mode" in auto|fail) : ;; *) return 1 ;; esac
+  _target="$(_mdm_node_runtime_path)" || return 1
+  _euid="${MDM_EUID_OVERRIDE:-$(/usr/bin/id -u)}"
+  if [[ "${_MDM_TEST_MODE:-0}" != 1 && "$_euid" -ne 0 ]]; then
+    return 1
+  fi
+  if [[ "$_mode" == fail ]]; then
+    # MDM packages may preseed only the immutable root-owned runtime.  Setup
+    # creates the per-user activation link, and the post-setup component
+    # attestation binds it before a success receipt is written.
+    _mdm_node_runtime_trusted "$_target"
+    return
+  fi
+  if ! _mdm_node_runtime_trusted "$_target"; then
+    _mdm_node_runtime_rebuild "$_target" || return 1
+  fi
+  _mdm_node_runtime_trusted "$_target" || return 1
+  _mdm_node_runtime_bind_activation "$_user" "$_home" "$_uid" || return 1
+  _mdm_node_runtime_activation_valid "$_user" "$_home" "$_uid"
+}
+
+# ── Root-owned web-content-extraction runtime ──────────────────────
+# npm is allowed to consume only the authenticated checkout's package files
+# with the private Node runtime above.  The published bundle is immutable to
+# target users; their skill-local node_modules path is only an activation link.
+_MDM_WCE_NODE_VERSION="v24.18.0"
+_MDM_WCE_NPM_VERSION="11.16.0"
+_MDM_WCE_REGISTRY="https://registry.npmjs.org/"
+_MDM_WCE_MARKER_FILE=".claude-code-starter-kit-wce-runtime.json"
+_MDM_WCE_RUNTIME_DIGEST=""
+_MDM_EXPECTED_WCE_COMPONENT_SHA256=""
+_MDM_WCE_PACKAGE_SHA256="e63fb86cb553a034ecafd4ca11334d317b8b5d115775daa728e56c3bf5b1749c"
+_MDM_WCE_LOCK_SHA256="f39ea3b4028710e986afb1c423b7895845e0d41839521e6cee866ed37cdb33cd"
+
+_mdm_wce_runtime_owner_uid() {
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_WCE_OWNER_UID_OVERRIDE:-}" ]]; then
+    [[ "$MDM_WCE_OWNER_UID_OVERRIDE" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$MDM_WCE_OWNER_UID_OVERRIDE"
+  else
+    printf '0'
+  fi
+}
+
+_mdm_wce_runtime_owner_gid() {
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_WCE_OWNER_GID_OVERRIDE:-}" ]]; then
+    [[ "$MDM_WCE_OWNER_GID_OVERRIDE" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$MDM_WCE_OWNER_GID_OVERRIDE"
+  else
+    printf '0'
+  fi
+}
+
+_mdm_wce_runtime_hardware_arch() {
+  local _arch
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_WCE_ARCH_OVERRIDE:-}" ]]; then
+    _arch="$MDM_WCE_ARCH_OVERRIDE"
+  else
+    _arch="$(_mdm_node_runtime_arch)" || return 1
+  fi
+  case "$_arch" in
+    arm64) printf '%s' arm64 ;;
+    x64|x86_64) printf '%s' x64 ;;
+    *) return 1 ;;
+  esac
+}
+
+_mdm_wce_runtime_base() {
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_WCE_RUNTIME_ROOT_OVERRIDE:-}" ]]; then
+    [[ "$MDM_WCE_RUNTIME_ROOT_OVERRIDE" == /* \
+      && "$MDM_WCE_RUNTIME_ROOT_OVERRIDE" != / \
+      && ! "$MDM_WCE_RUNTIME_ROOT_OVERRIDE" =~ [[:cntrl:]] ]] || return 1
+    printf '%s' "$MDM_WCE_RUNTIME_ROOT_OVERRIDE"
+  else
+    printf '%s' "/Library/Application Support/ClaudeCodeStarterKit/runtime/web-content-extraction"
+  fi
+}
+
+_mdm_wce_runtime_source_paths() { # <package-out-var> <lock-out-var>
+  local _package_out="$1" _lock_out="$2" _checkout _package_path _lock_path
+  [[ "$_package_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_lock_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_package_out" != "$_lock_out" ]] || return 1
+  _checkout="${_MDM_AUTH_CHECKOUT:-}"
+  [[ "$_checkout" == /* && -d "$_checkout" && ! -L "$_checkout" ]] || return 1
+  _package_path="$_checkout/skills/web-content-extraction/package.json"
+  _lock_path="$_checkout/skills/web-content-extraction/package-lock.json"
+  [[ -f "$_package_path" && ! -L "$_package_path" \
+    && -f "$_lock_path" && ! -L "$_lock_path" ]] || return 1
+  [[ "$(_mdm_canonical_file "$_package_path")" == "$_package_path" \
+    && "$(_mdm_canonical_file "$_lock_path")" == "$_lock_path" ]] || return 1
+  printf -v "$_package_out" '%s' "$_package_path"
+  printf -v "$_lock_out" '%s' "$_lock_path"
+}
+
+_mdm_wce_runtime_source_hashes() { # <package-sha-out-var> <lock-sha-out-var>
+  local _package_out="$1" _lock_out="$2" _source_package _source_lock
+  local _package_sha_value _lock_sha_value _owner
+  [[ "$_package_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_lock_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_package_out" != "$_lock_out" ]] || return 1
+  _mdm_wce_runtime_source_paths _source_package _source_lock || return 1
+  _owner="$(_mdm_auth_expected_uid)" || return 1
+  _mdm_artifact_digest file "$_source_package" "$_owner" >/dev/null || return 1
+  _mdm_artifact_digest file "$_source_lock" "$_owner" >/dev/null || return 1
+  _package_sha_value="$(_mdm_sha256_file "$_source_package")" || return 1
+  _lock_sha_value="$(_mdm_sha256_file "$_source_lock")" || return 1
+  [[ "$_package_sha_value" =~ ^[0-9a-f]{64}$ \
+    && "$_lock_sha_value" =~ ^[0-9a-f]{64}$ \
+    && "$_package_sha_value" == "$_MDM_WCE_PACKAGE_SHA256" \
+    && "$_lock_sha_value" == "$_MDM_WCE_LOCK_SHA256" ]] || return 1
+  printf -v "$_package_out" '%s' "$_package_sha_value"
+  printf -v "$_lock_out" '%s' "$_lock_sha_value"
+}
+
+_mdm_wce_runtime_path() { # [package-sha256 lock-sha256]
+  local _package_sha_value="${1:-}" _lock_sha_value="${2:-}" _arch _base
+  if [[ -z "$_package_sha_value" && -z "$_lock_sha_value" ]]; then
+    _package_sha_value="$_MDM_WCE_PACKAGE_SHA256"
+    _lock_sha_value="$_MDM_WCE_LOCK_SHA256"
+  fi
+  [[ "$#" -eq 0 || "$#" -eq 2 ]] || return 1
+  [[ "$_package_sha_value" =~ ^[0-9a-f]{64}$ \
+    && "$_lock_sha_value" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _arch="$(_mdm_wce_runtime_hardware_arch)" || return 1
+  _base="$(_mdm_wce_runtime_base)" || return 1
+  printf '%s/node-%s-npm-v%s-darwin-%s/%s-%s' \
+    "$_base" "$_MDM_WCE_NODE_VERSION" "$_MDM_WCE_NPM_VERSION" "$_arch" \
+    "$_package_sha_value" "$_lock_sha_value"
+}
+
+_mdm_wce_runtime_json_contract_valid() { # <package.json> <lock> <pkg-sha> <lock-sha>
+  local _package="$1" _lock="$2" _package_sha="$3" _lock_sha="$4" _python
+  [[ -f "$_package" && ! -L "$_package" && -f "$_lock" && ! -L "$_lock" \
+    && "$_package_sha" =~ ^[0-9a-f]{64}$ \
+    && "$_lock_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ "$(_mdm_sha256_file "$_package")" == "$_package_sha" \
+    && "$(_mdm_sha256_file "$_lock")" == "$_lock_sha" ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_package" "$_lock" <<'PY'
+import base64
+import json
+import re
+import sys
+import urllib.parse
+
+package_path, lock_path = sys.argv[1:]
+
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON key")
+        value[key] = item
+    return value
+
+def load(path):
+    if not 0 < __import__("os").stat(path).st_size <= 4 * 1024 * 1024:
+        raise ValueError("invalid JSON size")
+    with open(path, "r", encoding="utf-8", errors="strict") as handle:
+        return json.load(handle, object_pairs_hook=unique_object)
+
+def dependency_sources_safe(value):
+    if value is None:
+        return
+    if type(value) is not dict:
+        raise ValueError("dependency map is not an object")
+    for name, spec in value.items():
+        if (type(name) is not str or type(spec) is not str or not name or not spec
+                or re.search(r"(?:^|[+])git(?:\+|:)|^file:|^https?://|^github:|^\.\.?/", spec,
+                             re.IGNORECASE)):
+            raise ValueError("untrusted dependency source")
+
+try:
+    package = load(package_path)
+    lock = load(lock_path)
+    if type(package) is not dict or package.get("private") is not True:
+        raise ValueError("package must be private")
+    if (type(package.get("name")) is not str
+            or type(package.get("version")) is not str
+            or type(package.get("dependencies")) is not dict
+            or not package["dependencies"]):
+        raise ValueError("invalid package metadata")
+    dependency_sources_safe(package.get("dependencies"))
+    dependency_sources_safe(package.get("optionalDependencies"))
+    if (type(lock) is not dict or lock.get("lockfileVersion") != 3
+            or type(lock.get("packages")) is not dict
+            or type(lock.get("name")) is not str
+            or type(lock.get("version")) is not str):
+        raise ValueError("invalid lockfile v3")
+    root = lock["packages"].get("")
+    if (type(root) is not dict or root.get("name") != package["name"]
+            or root.get("version") != package["version"]
+            or root.get("dependencies") != package["dependencies"]):
+        raise ValueError("package/lock root mismatch")
+    if lock["name"] != package["name"] or lock["version"] != package["version"]:
+        raise ValueError("package/lock identity mismatch")
+    for key, metadata in lock["packages"].items():
+        if type(key) is not str or type(metadata) is not dict:
+            raise ValueError("invalid package entry")
+        dependency_sources_safe(metadata.get("dependencies"))
+        dependency_sources_safe(metadata.get("optionalDependencies"))
+        if "link" in metadata or "hasInstallScript" in metadata:
+            raise ValueError("links/install scripts are forbidden")
+        if key == "":
+            continue
+        if (not key.startswith("node_modules/") and "/node_modules/" not in key
+                or "\\" in key or "/../" in "/" + key + "/"
+                or "/./" in "/" + key + "/" or "//" in key):
+            raise ValueError("invalid lock package path")
+        resolved = metadata.get("resolved")
+        integrity = metadata.get("integrity")
+        if type(metadata.get("version")) is not str or type(resolved) is not str:
+            raise ValueError("missing pinned package metadata")
+        parsed = urllib.parse.urlsplit(resolved)
+        if (parsed.scheme != "https" or parsed.hostname != "registry.npmjs.org"
+                or parsed.port is not None or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment
+                or not parsed.path.startswith("/") or not parsed.path.endswith(".tgz")
+                or not resolved.startswith("https://registry.npmjs.org/")):
+            raise ValueError("non-registry package source")
+        if type(integrity) is not str or not re.fullmatch(r"sha512-[A-Za-z0-9+/]+={0,2}", integrity):
+            raise ValueError("invalid package integrity")
+        decoded = base64.b64decode(integrity[7:], validate=True)
+        if len(decoded) != 64:
+            raise ValueError("integrity is not sha512")
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError, TypeError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_wce_runtime_marker_json() { # <arch> <package-sha> <lock-sha>
+  [[ "$1" == arm64 || "$1" == x64 ]] || return 1
+  [[ "$2" =~ ^[0-9a-f]{64}$ && "$3" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '{"arch":"%s","lock_sha256":"%s","node_version":"%s","npm_version":"%s","package_sha256":"%s","registry":"%s","schema_version":1}\n' \
+    "$1" "$3" "$_MDM_WCE_NODE_VERSION" "$_MDM_WCE_NPM_VERSION" "$2" \
+    "$_MDM_WCE_REGISTRY"
+}
+
+_mdm_wce_runtime_marker_valid() { # <bundle> <arch> <package-sha> <lock-sha>
+  local _marker="$1/$_MDM_WCE_MARKER_FILE" _python
+  [[ -f "$_marker" && ! -L "$_marker" ]] || return 1
+  [[ "$2" == arm64 || "$2" == x64 ]] || return 1
+  [[ "$3" =~ ^[0-9a-f]{64}$ && "$4" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_marker" "$2" "$3" "$4" \
+      "$_MDM_WCE_NODE_VERSION" "$_MDM_WCE_NPM_VERSION" \
+      "$_MDM_WCE_REGISTRY" <<'PY'
+import json
+import os
+import stat
+import sys
+
+path, arch, package_sha, lock_sha, node_version, npm_version, registry = sys.argv[1:]
+expected = (json.dumps({
+    "arch": arch,
+    "lock_sha256": lock_sha,
+    "node_version": node_version,
+    "npm_version": npm_version,
+    "package_sha256": package_sha,
+    "registry": registry,
+    "schema_version": 1,
+}, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+            value.st_gid, value.st_nlink, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns)
+
+try:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_size != len(expected)):
+            raise ValueError("unsafe marker")
+        actual = b""
+        while len(actual) < len(expected) + 1:
+            block = os.read(descriptor, len(expected) + 1 - len(actual))
+            if not block:
+                break
+            actual += block
+        after = os.fstat(descriptor)
+        current = os.stat(path, follow_symlinks=False)
+        if (actual != expected or identity(before) != identity(after)
+                or identity(before) != identity(current)):
+            raise ValueError("marker changed")
+    finally:
+        os.close(descriptor)
+except (OSError, ValueError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_wce_runtime_dir_metadata_valid() {
+  # <directory> <owner-uid> <owner-gid> <allow-xattr|allow-provenance>
+  local _dir="$1" _owner="$2" _group="$3" _xattr_policy="$4" _python
+  [[ "$_owner" =~ ^[0-9]+$ && "$_group" =~ ^[0-9]+$ ]] || return 1
+  case "$_xattr_policy" in allow-xattr|allow-provenance) : ;; *) return 1 ;; esac
+  _mdm_has_extended_acl "$_dir" && return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_dir" "$_owner" "$_group" \
+      "$_xattr_policy" <<'PY'
+import ctypes
+import errno
+import os
+import stat
+import sys
+
+path, uid_raw, gid_raw, xattr_policy = sys.argv[1:]
+uid, gid = int(uid_raw), int(gid_raw)
+libc = ctypes.CDLL(None, use_errno=True)
+
+try:
+    value = os.lstat(path)
+    if (not stat.S_ISDIR(value.st_mode)
+            or stat.S_IMODE(value.st_mode) != 0o755
+            or value.st_uid != uid or value.st_gid != gid):
+        raise ValueError("unsafe WCE directory")
+    if xattr_policy == "allow-provenance":
+        raw = os.fsencode(path)
+        ctypes.set_errno(0)
+        if sys.platform == "darwin":
+            libc.listxattr.argtypes = [ctypes.c_char_p, ctypes.c_void_p,
+                                       ctypes.c_size_t, ctypes.c_int]
+            libc.listxattr.restype = ctypes.c_ssize_t
+            size = libc.listxattr(raw, None, 0, 1)
+        else:
+            libc.llistxattr.argtypes = [ctypes.c_char_p, ctypes.c_void_p,
+                                        ctypes.c_size_t]
+            libc.llistxattr.restype = ctypes.c_ssize_t
+            size = libc.llistxattr(raw, None, 0)
+        if size < 0:
+            error = ctypes.get_errno()
+            raise OSError(error or errno.EIO, "listxattr")
+        if size:
+            buffer = ctypes.create_string_buffer(size)
+            actual = (libc.listxattr(raw, buffer, size, 1)
+                      if sys.platform == "darwin"
+                      else libc.llistxattr(raw, buffer, size))
+            if actual != size:
+                raise OSError(ctypes.get_errno() or errno.EIO, "listxattr")
+            names = {name for name in bytes(buffer[:actual]).split(b"\0") if name}
+            if names - {b"com.apple.provenance"}:
+                raise ValueError("WCE directory has an unapproved xattr")
+except (OSError, ValueError, ctypes.ArgumentError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_wce_runtime_ancestors_trusted() { # <bundle> <owner-uid> <owner-gid>
+  local _bundle="$1" _owner="$2" _group="$3" _base _version _expected _dir
+  local _support _runtime
+  local _managed_dirs=()
+  _base="$(_mdm_wce_runtime_base)" || return 1
+  _expected="$(_mdm_wce_runtime_path \
+    "$_MDM_WCE_PACKAGE_SHA256" "$_MDM_WCE_LOCK_SHA256")" || return 1
+  _version="${_expected%/*}"
+  case "$_bundle" in
+    "$_expected") : ;;
+    "$_version"/.wce-stage.*)
+      [[ "${_bundle%/*}" == "$_version" \
+        && "${_bundle##*/}" =~ ^\.wce-stage\.[A-Za-z0-9]+$ ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  if [[ "${_MDM_TEST_MODE:-0}" != 1 \
+    || -z "${MDM_WCE_RUNTIME_ROOT_OVERRIDE:-}" ]]; then
+    for _dir in / /Library "/Library/Application Support"; do
+      [[ "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" ]] \
+        || return 1
+      _mdm_component_trusted "$_dir" || return 1
+      [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" == 0755 ]] \
+        || return 1
+    done
+    _mdm_verify_dir_chain "$_base" "/Library/Application Support" || return 1
+    _support="/Library/Application Support/ClaudeCodeStarterKit"
+    _runtime="$_support/runtime"
+    _managed_dirs=("$_support" "$_runtime" "$_base" "$_version")
+  else
+    _managed_dirs=("$_base" "$_version")
+  fi
+  for _dir in "${_managed_dirs[@]}"; do
+    [[ "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" ]] \
+      || return 1
+    _mdm_wce_runtime_dir_metadata_valid "$_dir" "$_owner" "$_group" \
+      allow-xattr || return 1
+  done
+  [[ "$(_mdm_canonical_dir "$_bundle" 2>/dev/null || true)" == "$_bundle" ]] \
+    || return 1
+  _mdm_wce_runtime_dir_metadata_valid \
+    "$_bundle" "$_owner" "$_group" allow-provenance
+}
+
+_mdm_wce_runtime_metadata_valid() { # <bundle> <owner-uid> <owner-gid>
+  local _bundle="$1" _owner="$2" _group="$3" _python
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_bundle" "$_owner" "$_group" \
+      "$_MDM_WCE_MARKER_FILE" <<'PY'
+import ctypes
+import json
+import os
+import re
+import stat
+import sys
+
+root, uid_raw, gid_raw, marker = sys.argv[1:]
+uid, gid = int(uid_raw), int(gid_raw)
+expected = {marker, "package.json", "package-lock.json", "node_modules"}
+libc = ctypes.CDLL(None, use_errno=True)
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+def load_json(path):
+    value = os.lstat(path)
+    if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
+            or not 0 < value.st_size <= 4 * 1024 * 1024):
+        raise ValueError("unsafe JSON file")
+    with open(path, "r", encoding="utf-8", errors="strict") as handle:
+        return json.load(handle, object_pairs_hook=unique_object)
+
+def dependency_parts(name):
+    if type(name) is not str or not name or "\\" in name:
+        raise ValueError("invalid dependency name")
+    parts = name.split("/")
+    if name.startswith("@"):
+        if len(parts) != 2:
+            raise ValueError("invalid scoped dependency")
+        parts[0] = parts[0][1:]
+    elif len(parts) != 1:
+        raise ValueError("invalid dependency path")
+    for part in parts:
+        if (part in ("", ".", "..")
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._~-]*", part)):
+            raise ValueError("invalid dependency segment")
+    if name.startswith("@"):
+        parts[0] = "@" + parts[0]
+    return parts
+
+def xattrs_allowed(path):
+    raw = os.fsencode(path)
+    if sys.platform == "darwin":
+        call = libc.listxattr
+        call.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t,
+                         ctypes.c_int]
+        call.restype = ctypes.c_ssize_t
+        size = call(raw, None, 0, 1)  # XATTR_NOFOLLOW
+        if size < 0:
+            raise OSError(ctypes.get_errno(), "listxattr")
+        if not size:
+            return True
+        buffer = ctypes.create_string_buffer(size)
+        actual = call(raw, buffer, size, 1)
+    else:
+        call = libc.llistxattr
+        call.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t]
+        call.restype = ctypes.c_ssize_t
+        size = call(raw, None, 0)
+        if size < 0:
+            raise OSError(ctypes.get_errno(), "listxattr")
+        if not size:
+            return True
+        buffer = ctypes.create_string_buffer(size)
+        actual = call(raw, buffer, size)
+    if actual != size:
+        raise OSError(ctypes.get_errno(), "listxattr")
+    names = {name for name in bytes(buffer[:actual]).split(b"\0") if name}
+    return not (names - {b"com.apple.provenance"})
+
+try:
+    if set(os.listdir(root)) != expected:
+        raise ValueError("bundle inventory mismatch")
+    package_path = os.path.join(root, "package.json")
+    lock_path = os.path.join(root, "package-lock.json")
+    package = load_json(package_path)
+    lock = load_json(lock_path)
+    if (type(package) is not dict or type(lock) is not dict
+            or type(package.get("name")) is not str
+            or type(package.get("version")) is not str
+            or type(package.get("dependencies")) is not dict
+            or not package["dependencies"]):
+        raise ValueError("invalid installed package gate")
+    for name in package["dependencies"]:
+        dependency = os.path.join(root, "node_modules", *dependency_parts(name))
+        dependency_json = os.path.join(dependency, "package.json")
+        dependency_value = os.lstat(dependency)
+        package_value = os.lstat(dependency_json)
+        if (not stat.S_ISDIR(dependency_value.st_mode)
+                or not stat.S_ISREG(package_value.st_mode)
+                or package_value.st_nlink != 1):
+            raise ValueError("direct dependency missing")
+    count = 0
+    for directory, dirs, files in os.walk(root, topdown=True, followlinks=False):
+        for path in [directory] + [os.path.join(directory, value)
+                                   for value in dirs + files]:
+            value = os.lstat(path)
+            count += 1
+            if (count > 100000 or value.st_uid != uid or value.st_gid != gid
+                    or not xattrs_allowed(path)):
+                raise ValueError("unsafe metadata")
+            mode = stat.S_IMODE(value.st_mode)
+            if stat.S_ISDIR(value.st_mode):
+                if mode != 0o755:
+                    raise ValueError("invalid directory mode")
+            elif stat.S_ISREG(value.st_mode):
+                if value.st_nlink != 1 or mode not in (0o644, 0o755):
+                    raise ValueError("invalid file metadata")
+            else:
+                raise ValueError("links and special files are forbidden")
+    for name in (marker, "package.json", "package-lock.json"):
+        value = os.lstat(os.path.join(root, name))
+        if stat.S_IMODE(value.st_mode) != 0o644:
+            raise ValueError("invalid fixed-file mode")
+    if count < 9:
+        raise ValueError("empty runtime")
+except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError,
+        ctypes.ArgumentError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_wce_runtime_trusted() { # <bundle> [package-sha lock-sha]
+  local _bundle="$1" _package_sha="${2:-}" _lock_sha="${3:-}" _expected
+  local _arch _owner _group _before _after
+  _MDM_WCE_RUNTIME_DIGEST=""
+  if [[ -z "$_package_sha" && -z "$_lock_sha" ]]; then
+    _package_sha="$_MDM_WCE_PACKAGE_SHA256"
+    _lock_sha="$_MDM_WCE_LOCK_SHA256"
+  fi
+  [[ "$#" -eq 1 || "$#" -eq 3 ]] || return 1
+  [[ "$_package_sha" =~ ^[0-9a-f]{64}$ && "$_lock_sha" =~ ^[0-9a-f]{64}$ ]] \
+    || return 1
+  _expected="$(_mdm_wce_runtime_path "$_package_sha" "$_lock_sha")" || return 1
+  case "$_bundle" in
+    "$_expected"|"${_expected%/*}"/.wce-stage.*) : ;;
+    *) return 1 ;;
+  esac
+  [[ -d "$_bundle" && ! -L "$_bundle" \
+    && "$(_mdm_canonical_dir "$_bundle")" == "$_bundle" ]] || return 1
+  _arch="$(_mdm_wce_runtime_hardware_arch)" || return 1
+  _owner="$(_mdm_wce_runtime_owner_uid)" || return 1
+  _group="$(_mdm_wce_runtime_owner_gid)" || return 1
+  _mdm_wce_runtime_ancestors_trusted \
+    "$_bundle" "$_owner" "$_group" || return 1
+  _before="$(_mdm_artifact_digest tree "$_bundle" "$_owner" "$_group")" \
+    || return 1
+  _mdm_wce_runtime_metadata_valid "$_bundle" "$_owner" "$_group" || return 1
+  _mdm_wce_runtime_marker_valid "$_bundle" "$_arch" "$_package_sha" \
+    "$_lock_sha" || return 1
+  _mdm_wce_runtime_json_contract_valid "$_bundle/package.json" \
+    "$_bundle/package-lock.json" "$_package_sha" "$_lock_sha" || return 1
+  _after="$(_mdm_artifact_digest tree "$_bundle" "$_owner" "$_group")" \
+    || return 1
+  [[ "$_after" == "$_before" ]] || return 1
+  _MDM_WCE_RUNTIME_DIGEST="$_after"
+}
+
+_mdm_wce_runtime_user_dir_valid() {
+  # <directory> <target-uid> <user> <home>
+  _mdm_node_runtime_user_dir_valid "$1" "$2" \
+    && _mdm_component_target_dir_accessible "$1" "$2" "$3" "$4"
+}
+
+_mdm_wce_runtime_activation_valid() { # <user> <home> <uid> <bundle>
+  local _user="$1" _home="$2" _uid="$3" _bundle="$4"
+  local _claude _skills _skill _link _expected _metadata _rest _links _target
+  [[ -n "$_user" && "$_home" == /* && "$_uid" =~ ^[0-9]+$ \
+    && "$_bundle" == /* && ! "$_bundle" =~ [[:cntrl:]] ]] || return 1
+  _claude="$_home/.claude"
+  _skills="$_claude/skills"
+  _skill="$_skills/web-content-extraction"
+  _link="$_skill/node_modules"
+  _expected="$_bundle/node_modules"
+  # The home directory can carry the standard macOS deny-delete ACL, so bind
+  # its owner/mode/effective searchability without imposing the child-dir ACL
+  # policy.  This keeps the issuer aligned with the detector's activation
+  # boundary and prevents a success receipt for an unsafe/unsearchable home.
+  _mdm_component_target_dir_accessible \
+    "$_home" "$_uid" "$_user" "$_home" || return 1
+  _mdm_wce_runtime_user_dir_valid \
+    "$_claude" "$_uid" "$_user" "$_home" || return 1
+  _mdm_wce_runtime_user_dir_valid \
+    "$_skills" "$_uid" "$_user" "$_home" || return 1
+  _mdm_wce_runtime_user_dir_valid \
+    "$_skill" "$_uid" "$_user" "$_home" || return 1
+  [[ -d "$_bundle" && ! -L "$_bundle" \
+    && -d "$_expected" && ! -L "$_expected" ]] || return 1
+  [[ -L "$_link" && "$(_mdm_stat_uid "$_link" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+  _metadata="$(_mdm_stat_managed_metadata "$_link")" || return 1
+  _rest="${_metadata#*:}"; _links="${_rest%%:*}"
+  [[ "$_links" == 1 ]] || return 1
+  _mdm_has_extended_acl "$_link" && return 1
+  _mdm_readlink_exact "$_link" _target || return 1
+  [[ "$_target" == "$_expected" ]] || return 1
+  _mdm_exec_as_user "$_uid" "$_user" "$_home" \
+    /bin/test -r "$_expected" >/dev/null 2>&1 \
+    && _mdm_exec_as_user "$_uid" "$_user" "$_home" \
+      /bin/test -x "$_expected" >/dev/null 2>&1
+}
+
+_mdm_wce_runtime_normalize_base_dir() { # <directory> <owner-uid> <owner-gid>
+  local _dir="$1" _owner="$2" _group="$3" _python
+  [[ "$_owner" =~ ^[0-9]+$ && "$_group" =~ ^[0-9]+$ ]] || return 1
+  [[ -d "$_dir" && ! -L "$_dir" ]] || return 1
+  # Existing root-owned parents created below /Library/Application Support
+  # commonly inherit its admin group on macOS.  Accept only a non-writable,
+  # ACL-free directory owned by the expected authority, then bind and
+  # normalize that exact inode to the root:wheel managed contract.
+  _mdm_has_extended_acl "$_dir" && return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_dir" "$_owner" "$_group" <<'PY'
+import os
+import stat
+import sys
+
+path, uid_raw, gid_raw = sys.argv[1:]
+uid, gid = int(uid_raw), int(gid_raw)
+
+try:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        current = os.stat(path, follow_symlinks=False)
+        if ((before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)
+                or not stat.S_ISDIR(before.st_mode)
+                or before.st_uid != uid
+                or stat.S_IMODE(before.st_mode) & 0o7022):
+            raise ValueError("unsafe WCE managed directory")
+        os.fchown(descriptor, uid, gid)
+        os.fchmod(descriptor, 0o755)
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        current = os.stat(path, follow_symlinks=False)
+        if ((after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+                or (current.st_dev, current.st_ino)
+                    != (before.st_dev, before.st_ino)
+                or after.st_uid != uid or after.st_gid != gid
+                or stat.S_IMODE(after.st_mode) != 0o755):
+            raise ValueError("WCE directory normalization drift")
+    finally:
+        os.close(descriptor)
+except (OSError, ValueError):
+    raise SystemExit(1)
+PY
+  ! _mdm_has_extended_acl "$_dir"
+}
+
+_mdm_wce_runtime_prepare_base() {
+  local _base _target _version _owner _group _dir
+  local _support _runtime
+  local _dirs=()
+  _base="$(_mdm_wce_runtime_base)" || return 1
+  _target="$(_mdm_wce_runtime_path)" || return 1
+  _version="${_target%/*}"
+  _owner="$(_mdm_wce_runtime_owner_uid)" || return 1
+  _group="$(_mdm_wce_runtime_owner_gid)" || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_WCE_RUNTIME_ROOT_OVERRIDE:-}" ]]; then
+    _dir="$(/usr/bin/dirname "$_base")"
+    [[ -d "$_dir" && ! -L "$_dir" \
+      && "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" ]] \
+      || return 1
+    _dirs=("$_base" "$_version")
+  else
+    for _dir in / /Library "/Library/Application Support"; do
+      [[ -d "$_dir" && ! -L "$_dir" \
+        && "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" ]] \
+        || return 1
+      _mdm_component_trusted "$_dir" || return 1
+      [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" == 0755 ]] \
+        || return 1
+    done
+    _support="/Library/Application Support/ClaudeCodeStarterKit"
+    _runtime="$_support/runtime"
+    _dirs=("$_support" "$_runtime" "$_base" "$_version")
+  fi
+  for _dir in "${_dirs[@]}"; do
+    if [[ -e "$_dir" || -L "$_dir" ]]; then
+      [[ -d "$_dir" && ! -L "$_dir" ]] || return 1
+    else
+      /bin/mkdir -m 0755 "$_dir" || return 1
+    fi
+    _mdm_wce_runtime_normalize_base_dir \
+      "$_dir" "$_owner" "$_group" || return 1
+    [[ "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" ]] \
+      || return 1
+    _mdm_wce_runtime_dir_metadata_valid \
+      "$_dir" "$_owner" "$_group" allow-xattr || return 1
+  done
+}
+
+_mdm_wce_runtime_cleanup_work() { # <stage-or-work-path>
+  local _path="$1" _target _version _parent _name
+  [[ -n "$_path" ]] || return 0
+  _target="$(_mdm_wce_runtime_path)" || return 1
+  _version="${_target%/*}"
+  _parent="$(/usr/bin/dirname "$_path")"
+  _name="${_path##*/}"
+  [[ "$_parent" == "$_version" && "$_path" != "$_version" \
+    && "$_path" != / ]] || return 1
+  case "$_name" in .wce-stage.*|.wce-work.*) : ;; *) return 1 ;; esac
+  /bin/rm -rf "$_path"
+}
+
+_mdm_wce_runtime_quarantine_path() {
+  local _target _version _path _old_umask
+  _target="$(_mdm_wce_runtime_path)" || return 1
+  _version="${_target%/*}"
+  _old_umask="$(umask)"; umask 077
+  _path="$(/usr/bin/mktemp -d "$_version/.wce-quarantine.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  [[ "$(/usr/bin/dirname "$_path")" == "$_version" \
+    && "${_path##*/}" == .wce-quarantine.* \
+    && -d "$_path" && ! -L "$_path" ]] || return 1
+  /bin/rmdir "$_path" || return 1
+  [[ ! -e "$_path" && ! -L "$_path" ]] || return 1
+  printf '%s' "$_path"
+}
+
+_mdm_wce_runtime_promote() { # <source> <destination> <create|quarantine|restore|retract>
+  local _source="$1" _destination="$2" _operation="$3"
+  local _target _version
+  _target="$(_mdm_wce_runtime_path)" || return 1
+  _version="${_target%/*}"
+  case "$_operation" in
+    create)
+      [[ "$(/usr/bin/dirname "$_source")" == "$_version" \
+        && "${_source##*/}" == .wce-stage.* \
+        && "$_destination" == "$_target" \
+        && -d "$_source" && ! -L "$_source" \
+        && ! -e "$_destination" && ! -L "$_destination" ]] || return 1 ;;
+    quarantine)
+      [[ "$_source" == "$_target" \
+        && ( -e "$_source" || -L "$_source" ) \
+        && "$(/usr/bin/dirname "$_destination")" == "$_version" \
+        && "${_destination##*/}" == .wce-quarantine.* \
+        && ! -e "$_destination" && ! -L "$_destination" ]] || return 1 ;;
+    restore)
+      [[ "$(/usr/bin/dirname "$_source")" == "$_version" \
+        && "${_source##*/}" == .wce-quarantine.* \
+        && ( -e "$_source" || -L "$_source" ) \
+        && "$_destination" == "$_target" \
+        && ! -e "$_destination" && ! -L "$_destination" ]] || return 1 ;;
+    retract)
+      [[ "$_source" == "$_target" \
+        && -d "$_source" && ! -L "$_source" \
+        && "$(/usr/bin/dirname "$_destination")" == "$_version" \
+        && "${_destination##*/}" == .wce-stage.* \
+        && ! -e "$_destination" && ! -L "$_destination" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  _mdm_node_runtime_atomic_rename_system \
+    "$_source" "$_destination" create
+}
+
+_mdm_wce_runtime_copy_sources() { # <stage> <package-sha> <lock-sha>
+  local _stage="$1" _package_sha="$2" _lock_sha="$3"
+  local _source_package _source_lock _owner _group _python
+  _mdm_wce_runtime_source_paths _source_package _source_lock || return 1
+  _owner="$(_mdm_wce_runtime_owner_uid)" || return 1
+  _group="$(_mdm_wce_runtime_owner_gid)" || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_stage" "$_owner" "$_group" \
+      "$_source_package" package.json "$_source_lock" package-lock.json <<'PY'
+import os
+import stat
+import sys
+
+stage, uid_raw, gid_raw, *sources = sys.argv[1:]
+uid, gid = int(uid_raw), int(gid_raw)
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+            value.st_gid, value.st_nlink, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns)
+
+try:
+    if len(sources) != 4:
+        raise ValueError("invalid source list")
+    for source, name in zip(sources[::2], sources[1::2]):
+        destination = os.path.join(stage, name)
+        source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        destination_fd = None
+        try:
+            before = os.fstat(source_fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or not 0 < before.st_size <= 4 * 1024 * 1024):
+                raise ValueError("unsafe package source")
+            destination_fd = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600)
+            os.fchown(destination_fd, uid, gid)
+            while True:
+                block = os.read(source_fd, 1024 * 1024)
+                if not block:
+                    break
+                view = memoryview(block)
+                while view:
+                    written = os.write(destination_fd, view)
+                    if written <= 0:
+                        raise OSError("short package write")
+                    view = view[written:]
+            os.fchmod(destination_fd, 0o644)
+            os.fsync(destination_fd)
+            after = os.fstat(source_fd)
+            current = os.stat(source, follow_symlinks=False)
+            if identity(before) != identity(after) or identity(before) != identity(current):
+                raise ValueError("package source changed")
+        finally:
+            if destination_fd is not None:
+                os.close(destination_fd)
+            os.close(source_fd)
+except (OSError, ValueError):
+    raise SystemExit(1)
+PY
+  _mdm_wce_runtime_json_contract_valid "$_stage/package.json" \
+    "$_stage/package-lock.json" "$_package_sha" "$_lock_sha"
+}
+
+_mdm_wce_runtime_write_marker() { # <stage> <arch> <package-sha> <lock-sha>
+  local _stage="$1" _marker _owner _group _python
+  _marker="$_stage/$_MDM_WCE_MARKER_FILE"
+  [[ -d "$_stage" && ! -L "$_stage" \
+    && ! -e "$_marker" && ! -L "$_marker" ]] || return 1
+  if ! ( set -C; umask 077
+    _mdm_wce_runtime_marker_json "$2" "$3" "$4" > "$_marker"
+  ) 2>/dev/null; then
+    return 1
+  fi
+  _owner="$(_mdm_wce_runtime_owner_uid)" || return 1
+  _group="$(_mdm_wce_runtime_owner_gid)" || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_marker" "$_owner" "$_group" <<'PY'
+import os
+import sys
+
+path, uid_raw, gid_raw = sys.argv[1:]
+try:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fchown(descriptor, int(uid_raw), int(gid_raw))
+        os.fchmod(descriptor, 0o644)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+except OSError:
+    raise SystemExit(1)
+PY
+}
+
+_mdm_wce_runtime_normalize_stage() { # <stage>
+  local _stage="$1" _owner _group _python
+  _owner="$(_mdm_wce_runtime_owner_uid)" || return 1
+  _group="$(_mdm_wce_runtime_owner_gid)" || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_stage" "$_owner" "$_group" <<'PY'
+import ctypes
+import errno
+import os
+import stat
+import sys
+
+root, uid_raw, gid_raw = sys.argv[1:]
+uid, gid = int(uid_raw), int(gid_raw)
+allowed_xattrs = {"com.apple.provenance"}
+count = 0
+
+def xattrs_allowed(path):
+    raw = os.fsencode(path)
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        call = libc.listxattr
+        call.argtypes = [ctypes.c_char_p, ctypes.c_void_p,
+                         ctypes.c_size_t, ctypes.c_int]
+        call.restype = ctypes.c_ssize_t
+        size = call(raw, None, 0, 1)  # XATTR_NOFOLLOW
+        if size < 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, "listxattr")
+        if not size:
+            return True
+        buffer = ctypes.create_string_buffer(size)
+        actual = call(raw, buffer, size, 1)
+    else:
+        call = libc.llistxattr
+        call.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t]
+        call.restype = ctypes.c_ssize_t
+        size = call(raw, None, 0)
+        if size < 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, "listxattr")
+        if not size:
+            return True
+        buffer = ctypes.create_string_buffer(size)
+        actual = call(raw, buffer, size)
+    if actual != size:
+        raise OSError(ctypes.get_errno() or errno.EIO, "listxattr")
+    names = {os.fsdecode(name) for name in bytes(buffer[:actual]).split(b"\0")
+             if name}
+    return not (names - allowed_xattrs)
+
+try:
+    for directory, dirs, files in os.walk(root, topdown=True, followlinks=False):
+        for path in [directory] + [os.path.join(directory, name)
+                                   for name in dirs + files]:
+            value = os.lstat(path)
+            count += 1
+            if count > 100000:
+                raise ValueError("runtime too large")
+            if not xattrs_allowed(path):
+                raise ValueError("unapproved xattr")
+            if stat.S_ISDIR(value.st_mode):
+                mode = 0o755
+            elif stat.S_ISREG(value.st_mode):
+                if value.st_nlink != 1:
+                    raise ValueError("hardlinked runtime file")
+                mode = 0o755 if stat.S_IMODE(value.st_mode) & 0o111 else 0o644
+            else:
+                raise ValueError("links and special files are forbidden")
+            os.chown(path, uid, gid, follow_symlinks=False)
+            os.chmod(path, mode, follow_symlinks=False)
+    if count < 9:
+        raise ValueError("empty runtime")
+except (OSError, TypeError, ValueError, ctypes.ArgumentError):
+    raise SystemExit(1)
+PY
+}
+
+_mdm_wce_runtime_npm_command() { # test seam for the exact npm process
+  "$@"
+}
+
+_mdm_wce_runtime_npm_exec() {
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_WCE_NPM_SECONDS")" _mdm_wce_runtime_npm_command "$@"
+}
+
+_mdm_wce_runtime_npm_ci() { # <stage> <work-directory>
+  local _stage="$1" _work="$2" _target _version _node_root _node _npm_cli
+  local _proxy_key _proxy_value
+  local _clean_env=()
+  _target="$(_mdm_wce_runtime_path)" || return 1
+  _version="${_target%/*}"
+  [[ "$(/usr/bin/dirname "$_stage")" == "$_version" \
+    && "${_stage##*/}" == .wce-stage.* \
+    && "$(/usr/bin/dirname "$_work")" == "$_version" \
+    && "${_work##*/}" == .wce-work.* \
+    && -d "$_stage" && ! -L "$_stage" \
+    && -d "$_work" && ! -L "$_work" ]] || return 1
+  _node_root="$(_mdm_node_runtime_path)" || return 1
+  _mdm_node_runtime_trusted "$_node_root" || return 1
+  _node="$_node_root/bin/node"
+  _npm_cli="$_node_root/lib/node_modules/npm/bin/npm-cli.js"
+  [[ -x "$_node" && -f "$_npm_cli" && ! -L "$_npm_cli" ]] || return 1
+  /bin/mkdir -m 0700 "$_work/home" "$_work/cache" "$_work/tmp" || return 1
+  ( umask 077
+    : > "$_work/user.npmrc"
+    : > "$_work/global.npmrc"
+  ) || return 1
+  _clean_env=(/usr/bin/env -i
+    "HOME=$_work/home"
+    "TMPDIR=$_work/tmp"
+    "USER=root"
+    "LOGNAME=root"
+    "PATH=$_node_root/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    "LC_ALL=C"
+    "LANG=C"
+    "npm_config_cache=$_work/cache"
+    "npm_config_registry=$_MDM_WCE_REGISTRY"
+    "npm_config_userconfig=$_work/user.npmrc"
+    "npm_config_globalconfig=$_work/global.npmrc"
+    "npm_config_update_notifier=false")
+  for _proxy_key in HTTP_PROXY HTTPS_PROXY NO_PROXY; do
+    _proxy_value="${!_proxy_key:-}"
+    [[ -n "$_proxy_value" ]] || continue
+    if [[ "$_proxy_key" == NO_PROXY ]]; then
+      [[ ! "$_proxy_value" =~ [[:space:][:cntrl:]] ]] || return "$MDM_EXIT_CONFIG"
+    else
+      _mdm_root_proxy_url "$_proxy_value" >/dev/null \
+        || return "$MDM_EXIT_CONFIG"
+    fi
+    _clean_env[${#_clean_env[@]}]="$_proxy_key=$_proxy_value"
+  done
+  mdm_log U1b "固定 lock から web-content-extraction runtime を構築"
+  ( builtin cd -P "$_stage" \
+    && _mdm_wce_runtime_npm_exec "${_clean_env[@]}" \
+      "$_node" "$_npm_cli" ci \
+      --omit=dev --ignore-scripts --no-bin-links --no-audit --no-fund \
+      "--registry=$_MDM_WCE_REGISTRY" ) >/dev/null 2>&1
+}
+
+_mdm_wce_runtime_rebuild() ( # <exact-target>; invalid old leaf is quarantined
+  local _target="$1" _expected _version _arch _package_sha _lock_sha
+  local _post_package_sha _post_lock_sha
+  local _stage="" _work="" _stage_identity _old_identity=""
+  local _quarantine="" _quarantine_identity="" _old_umask
+  _expected="$(_mdm_wce_runtime_path)" || return 1
+  [[ "$_target" == "$_expected" ]] || return 1
+  _version="${_target%/*}"
+  _arch="$(_mdm_wce_runtime_hardware_arch)" || return 1
+  _mdm_wce_runtime_source_hashes _package_sha _lock_sha || return 1
+  _mdm_wce_runtime_prepare_base || return 1
+  _mdm_node_runtime_trusted "$(_mdm_node_runtime_path)" || return 1
+  _old_umask="$(umask)"; umask 077
+  _stage="$(/usr/bin/mktemp -d "$_version/.wce-stage.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  _work="$(/usr/bin/mktemp -d "$_version/.wce-work.XXXXXX")" \
+    || { umask "$_old_umask"; _mdm_wce_runtime_cleanup_work "$_stage"; return 1; }
+  umask "$_old_umask"
+  trap '_mdm_wce_runtime_cleanup_work "$_work" || true; _mdm_wce_runtime_cleanup_work "$_stage" || true' EXIT
+  trap '_mdm_stop_active_timeout_supervisor HUP || true; _mdm_wce_runtime_cleanup_work "$_work" || true; _mdm_wce_runtime_cleanup_work "$_stage" || true; exit 129' HUP
+  trap '_mdm_stop_active_timeout_supervisor INT || true; _mdm_wce_runtime_cleanup_work "$_work" || true; _mdm_wce_runtime_cleanup_work "$_stage" || true; exit 130' INT
+  trap '_mdm_stop_active_timeout_supervisor TERM || true; _mdm_wce_runtime_cleanup_work "$_work" || true; _mdm_wce_runtime_cleanup_work "$_stage" || true; exit 143' TERM
+  _mdm_wce_runtime_copy_sources "$_stage" "$_package_sha" "$_lock_sha" \
+    || return 1
+  _mdm_wce_runtime_npm_ci "$_stage" "$_work" || return 1
+  _mdm_wce_runtime_write_marker \
+    "$_stage" "$_arch" "$_package_sha" "$_lock_sha" || return 1
+  _mdm_wce_runtime_normalize_stage "$_stage" || return 1
+  _mdm_wce_runtime_source_hashes _post_package_sha _post_lock_sha || return 1
+  [[ "$_post_package_sha" == "$_package_sha" \
+    && "$_post_lock_sha" == "$_lock_sha" ]] || return 1
+  _mdm_wce_runtime_trusted "$_stage" "$_package_sha" "$_lock_sha" \
+    || return 1
+  _stage_identity="$(_mdm_stat_identity "$_stage")" || return 1
+  if [[ -e "$_target" || -L "$_target" ]]; then
+    _old_identity="$(_mdm_stat_identity "$_target")" || return 1
+    _quarantine="$(_mdm_wce_runtime_quarantine_path)" || return 1
+    _mdm_wce_runtime_promote "$_target" "$_quarantine" quarantine || return 1
+    _quarantine_identity="$(_mdm_stat_identity "$_quarantine" 2>/dev/null || true)"
+    if [[ "$_quarantine_identity" != "$_old_identity" \
+      || -e "$_target" || -L "$_target" ]]; then
+      if [[ ! -e "$_target" && ! -L "$_target" \
+        && "$_quarantine_identity" == "$_old_identity" ]]; then
+        _mdm_wce_runtime_promote "$_quarantine" "$_target" restore || true
+      fi
+      return 1
+    fi
+  fi
+  if ! _mdm_wce_runtime_promote "$_stage" "$_target" create; then
+    [[ -z "$_quarantine" ]] \
+      || _mdm_wce_runtime_promote "$_quarantine" "$_target" restore || true
+    return 1
+  fi
+  if [[ "$(_mdm_stat_identity "$_target" 2>/dev/null || true)" \
+      != "$_stage_identity" ]] \
+    || ! _mdm_wce_runtime_trusted "$_target" "$_package_sha" "$_lock_sha"; then
+    if [[ "$(_mdm_stat_identity "$_target" 2>/dev/null || true)" \
+      == "$_stage_identity" ]]; then
+      _mdm_wce_runtime_promote "$_target" "$_stage" retract || true
+    fi
+    if [[ -n "$_quarantine" && ! -e "$_target" && ! -L "$_target" \
+      && "$(_mdm_stat_identity "$_quarantine" 2>/dev/null || true)" \
+        == "$_old_identity" ]]; then
+      _mdm_wce_runtime_promote "$_quarantine" "$_target" restore || true
+    fi
+    return 1
+  fi
+  _stage=""
+  if [[ -n "$_quarantine" ]]; then
+    mdm_log U1b "不正な既存 web-content-extraction runtime leaf を隔離: $_quarantine"
+  fi
+  _mdm_wce_runtime_cleanup_work "$_work" || return 1
+  _work=""
+  trap - EXIT HUP INT TERM
+)
+
+_mdm_wce_runtime_capture_verified() { # <exact-target>
+  local _target="$1"
+  _MDM_WCE_VERIFIED_BUNDLE=""
+  _MDM_EXPECTED_WCE_COMPONENT_SHA256=""
+  _MDM_WCE_RUNTIME_DIGEST=""
+  [[ "$_target" == "$(_mdm_wce_runtime_path)" ]] || return 1
+  _mdm_wce_runtime_trusted "$_target" || return 1
+  [[ "${_MDM_WCE_RUNTIME_DIGEST:-}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _MDM_WCE_VERIFIED_BUNDLE="$_target"
+  _MDM_EXPECTED_WCE_COMPONENT_SHA256="$_MDM_WCE_RUNTIME_DIGEST"
+}
+
+_mdm_wce_runtime_validate_existing() { # <user> <home> <target-uid>
+  local _user="$1" _home="$2" _uid="$3" _target _package_sha _lock_sha
+  [[ -n "$_user" && "$_home" == /* && "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _mdm_wce_runtime_source_hashes _package_sha _lock_sha || return 1
+  _mdm_node_runtime_trusted "$(_mdm_node_runtime_path)" || return 1
+  _target="$(_mdm_wce_runtime_path "$_package_sha" "$_lock_sha")" || return 1
+  _mdm_wce_runtime_capture_verified "$_target" || return 1
+  _mdm_wce_runtime_activation_valid "$_user" "$_home" "$_uid" "$_target"
+}
+
+_mdm_wce_runtime_activation_previewable() { # <user> <home> <uid> <bundle>
+  local _user="$1" _home="$2" _uid="$3" _bundle="$4"
+  local _dir _link _metadata _rest _links _mode
+  [[ -n "$_user" && "$_home" == /* && "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _mdm_component_target_dir_accessible \
+    "$_home" "$_uid" "$_user" "$_home" || return 1
+  for _dir in "$_home/.claude" "$_home/.claude/skills" \
+    "$_home/.claude/skills/web-content-extraction"; do
+    if [[ ! -e "$_dir" && ! -L "$_dir" ]]; then
+      # setup will create this directory and every remaining descendant.
+      return 0
+    fi
+    _mdm_wce_runtime_user_dir_valid \
+      "$_dir" "$_uid" "$_user" "$_home" || return 1
+  done
+  _link="$_home/.claude/skills/web-content-extraction/node_modules"
+  [[ -e "$_link" || -L "$_link" ]] || return 0
+  _mdm_wce_runtime_activation_valid \
+    "$_user" "$_home" "$_uid" "$_bundle" && return 0
+  # Match deploy.sh's atomic repair boundary. A safe real directory is the
+  # normal non-MDM npm layout and will be atomically retained under a random
+  # pre-MDM backup name while the activation symlink is published.
+  [[ "$(_mdm_stat_uid "$_link" 2>/dev/null || true)" == "$_uid" ]] || return 1
+  _metadata="$(_mdm_stat_managed_metadata "$_link")" || return 1
+  _rest="${_metadata#*:}"; _links="${_rest%%:*}"; _mode="${_rest#*:}"
+  _mdm_has_extended_acl "$_link" && return 1
+  if [[ -d "$_link" && ! -L "$_link" ]]; then
+    _mdm_mode_is_safe "$_mode"
+    return
+  fi
+  [[ "$_links" == 1 ]] || return 1
+  [[ -L "$_link" || ( -f "$_link" && ! -L "$_link" ) ]] || return 1
+  _mdm_mode_is_safe "$_mode"
+}
+
+_mdm_wce_runtime_validate_dryrun() { # <user> <home> <target-uid>
+  local _user="$1" _home="$2" _uid="$3" _target _package_sha _lock_sha
+  [[ -n "$_user" && "$_home" == /* && "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _mdm_wce_runtime_source_hashes _package_sha _lock_sha || return 1
+  _mdm_node_runtime_trusted "$(_mdm_node_runtime_path)" || return 1
+  _target="$(_mdm_wce_runtime_path "$_package_sha" "$_lock_sha")" || return 1
+  _mdm_wce_runtime_capture_verified "$_target" || return 1
+  # setup --dry-run intentionally does not apply the user activation change.
+  # Accept absent or safely replaceable leaves as planned remediation only.
+  _mdm_wce_runtime_activation_previewable \
+    "$_user" "$_home" "$_uid" "$_target"
+}
+
+_mdm_ensure_wce_runtime() { # <user> <home> <target-uid>
+  local _user="$1" _home="$2" _uid="$3" _mode _target _euid
+  local _package_sha _lock_sha
+  [[ -n "$_user" && "$_home" == /* && "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _mode="${KIT_MDM_PREREQ_MODE:-auto}"
+  case "$_mode" in auto|fail) : ;; *) return 1 ;; esac
+  _euid="${MDM_EUID_OVERRIDE:-$(/usr/bin/id -u)}"
+  if [[ "${_MDM_TEST_MODE:-0}" != 1 && "$_euid" -ne 0 ]]; then
+    return 1
+  fi
+  if [[ "$_mode" == fail ]]; then
+    _mdm_wce_runtime_source_hashes _package_sha _lock_sha || return 1
+    _mdm_node_runtime_trusted "$(_mdm_node_runtime_path)" || return 1
+    _target="$(_mdm_wce_runtime_path "$_package_sha" "$_lock_sha")" || return 1
+    # A package may preseed only the immutable root-owned bundle.  Setup owns
+    # the per-user activation link and the post-setup root check binds both.
+    _mdm_wce_runtime_capture_verified "$_target"
+    return
+  fi
+  _mdm_wce_runtime_source_hashes _package_sha _lock_sha || return 1
+  _mdm_node_runtime_trusted "$(_mdm_node_runtime_path)" || return 1
+  _target="$(_mdm_wce_runtime_path "$_package_sha" "$_lock_sha")" || return 1
+  if ! _mdm_wce_runtime_capture_verified "$_target"; then
+    _mdm_wce_runtime_rebuild "$_target" || return 1
+    _mdm_wce_runtime_capture_verified "$_target" || return 1
+  fi
+}
+
+_MDM_COMPONENT_ENTRIES=""
+_MDM_COMPONENT_TARGET_UID=""
+_mdm_component_append_entry() { # <component> <path> <file|tree> [expected-sha256]
+  local _component="$1" _path="$2" _kind="$3" _expected="${4:-}"
+  local _digest _before _after
+  case "$_component" in
+    biome|claude_cli|fonts|ghostty|kit|node_runtime|safety_net|web_content_runtime) : ;;
+    *) return 1 ;;
+  esac
+  case "$_kind" in file|tree) : ;; *) return 1 ;; esac
+  [[ "$_path" == /* && ! "$_path" =~ [[:cntrl:]] ]] || return 1
+  [[ -z "$_expected" || "$_expected" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _before="$(_mdm_stat_identity "$_path")" || return 1
+  local _owner_csv="${_MDM_COMPONENT_TARGET_UID:-}" _group_csv=""
+  case "$_component" in
+    ghostty) [[ -z "$_owner_csv" ]] || _owner_csv="0,$_owner_csv" ;;
+    node_runtime|web_content_runtime) _owner_csv=0; _group_csv=0 ;;
+  esac
+  _digest="$(_mdm_artifact_digest \
+    "$_kind" "$_path" "$_owner_csv" "$_group_csv")" || return 1
+  [[ "$_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _after="$(_mdm_stat_identity "$_path")" || return 1
+  [[ "$_after" == "$_before" \
+    && ( -z "$_expected" || "$_digest" == "$_expected" ) ]] || return 1
+  printf '{"component":"%s","path":"%s","kind":"%s","sha256":"%s"}\n' \
+    "$_component" "$(mdm_json_escape "$_path")" "$_kind" "$_digest" \
+    >> "$_MDM_COMPONENT_ENTRIES"
+}
+
+_mdm_component_sort_entries() { # <json-lines-file>
+  local _input="$1" _python _sorted _old_umask
+  [[ -f "$_input" && ! -L "$_input" ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  _old_umask="$(umask)"; umask 077
+  _sorted="$(/usr/bin/mktemp "$(_mdm_safe_tmpdir)/claude-kit-mdm-components-sort.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  if ! /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_input" > "$_sorted" <<'PY'
+import json
+import re
+import sys
+
+source = sys.argv[1]
+allowed = {
+    "biome", "claude_cli", "fonts", "ghostty", "kit", "node_runtime",
+    "safety_net", "web_content_runtime",
+}
+records = []
+
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate object key")
+        value[key] = item
+    return value
+
+with open(source, "r", encoding="utf-8", errors="strict") as handle:
+    for line in handle:
+        if not line.endswith("\n") or not line.strip():
+            raise SystemExit(1)
+        value = json.loads(line, object_pairs_hook=unique_object)
+        if set(value) != {"component", "path", "kind", "sha256"}:
+            raise SystemExit(1)
+        if value["component"] not in allowed or value["kind"] not in ("file", "tree"):
+            raise SystemExit(1)
+        if not isinstance(value["path"], str) or not value["path"].startswith("/"):
+            raise SystemExit(1)
+        if any(ord(char) < 32 or 127 <= ord(char) <= 159
+               or 0xD800 <= ord(char) <= 0xDFFF for char in value["path"]):
+            raise SystemExit(1)
+        if not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"]):
+            raise SystemExit(1)
+        records.append(value)
+if not records or len(records) > 1000:
+    raise SystemExit(1)
+records.sort(key=lambda value: (value["component"].encode("ascii"),
+                                value["path"].encode("utf-8"),
+                                value["kind"].encode("ascii"),
+                                value["sha256"].encode("ascii")))
+seen = set()
+for value in records:
+    identity = (value["component"], value["path"])
+    if identity in seen:
+        raise SystemExit(1)
+    seen.add(identity)
+    print(json.dumps(value, ensure_ascii=True, sort_keys=True,
+                     separators=(",", ":")))
+PY
+  then
+    /bin/rm -f "$_sorted"
+    return 1
+  fi
+  /bin/chmod 600 "$_sorted" || { /bin/rm -f "$_sorted"; return 1; }
+  /bin/mv -f "$_sorted" "$_input"
+}
+
+_mdm_component_effective_paths() {
+  # <target-uid> <user> <home> <-r|-x> <absolute-path>...
+  local _uid="$1" _user="$2" _home="$3" _test="$4"; shift 4
+  local _path
+  [[ "$_uid" =~ ^[0-9]+$ && -n "$_user" && "$_home" == /* \
+    && "$#" -ge 1 ]] || return 1
+  case "$_test" in -r|-x) : ;; *) return 1 ;; esac
+  for _path in "$@"; do
+    [[ "$_path" == /* && ! "$_path" =~ [[:cntrl:]] ]] || return 1
+  done
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && "$(/usr/bin/id -u 2>/dev/null || true)" == "$_uid" ]]; then
+    for _path in "$@"; do
+      /bin/test "$_test" "$_path" || return 1
+    done
+    return 0
+  fi
+  _mdm_exec_as_user "$_uid" "$_user" "$_home" \
+    /bin/bash --noprofile --norc -c '
+      _test=$1; shift
+      for _path do /bin/test "$_test" "$_path" || exit 1; done
+    ' mdm-component-access "$_test" "$@"
+}
+
+_mdm_component_effective_test() { # <uid> <user> <home> <-r|-x> <path>
+  _mdm_component_effective_paths "$@"
+}
+
+_mdm_component_target_dir_accessible() { # <dir> <uid> <user> <home>
+  local _dir="$1" _uid="$2" _user="$3" _home="$4" _before _after _mode
+  [[ "$_uid" =~ ^[0-9]+$ && -d "$_dir" && ! -L "$_dir" ]] || return 1
+  [[ "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" \
+    && "$(_mdm_stat_uid "$_dir" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
+  _mdm_mode_is_safe "$_mode" || return 1
+  _mdm_user_dir_acl_safe "$_dir" || return 1
+  _before="$(_mdm_persistent_dir_identity "$_dir")" || return 1
+  case "$_before" in *:Directory|*:directory) : ;; *) return 1 ;; esac
+  _mdm_component_effective_test \
+    "$_uid" "$_user" "$_home" -x "$_dir" || return 1
+  _after="$(_mdm_persistent_dir_identity "$_dir")" || return 1
+  [[ "$_after" == "$_before" ]]
+}
+
+_mdm_component_ancestors_searchable() { # <path> <uid> <user> <home>
+  local _path="$1" _uid="$2" _user="$3" _home="$4" _current
+  local _ancestors=()
+  [[ "$_path" == /* && "$_home" == /* && "$_home" != / \
+    && "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _current="${_path%/*}"; [[ -n "$_current" ]] || _current=/
+  while :; do
+    [[ -d "$_current" && ! -L "$_current" ]] || return 1
+    case "$_current" in
+      "$_home"|"$_home"/*)
+        _mdm_component_target_dir_accessible \
+          "$_current" "$_uid" "$_user" "$_home" || return 1 ;;
+      *)
+        # Effective search alone is insufficient: an allow-write ACE can make
+        # an otherwise 0755 ancestor replaceable by another principal.  Keep
+        # the same exact ACL contract as target-owned directories (no ACL, or
+        # macOS's single non-inheriting everyone deny-delete entry).
+        _mdm_user_dir_acl_safe "$_current" || return 1 ;;
+    esac
+    _ancestors[${#_ancestors[@]}]="$_current"
+    [[ "$_current" == / ]] && break
+    _current="${_current%/*}"; [[ -n "$_current" ]] || _current=/
+  done
+  _mdm_component_effective_paths \
+    "$_uid" "$_user" "$_home" -x "${_ancestors[@]}"
+}
+
+_mdm_component_path_accessible() { # <path> <uid> <user> <home>
+  _mdm_component_ancestors_searchable "$@" \
+    && _mdm_component_effective_test "$2" "$3" "$4" -x "$1"
+}
+
+_mdm_component_tree_accessible() { # <tree> <uid> <user> <home>
+  [[ -d "$1" && ! -L "$1" ]] || return 1
+  _mdm_component_ancestors_searchable "$@" \
+    && ! _mdm_has_extended_acl "$1" \
+    && _mdm_component_effective_test "$2" "$3" "$4" -r "$1" \
+    && _mdm_component_effective_test "$2" "$3" "$4" -x "$1"
+}
+
+_mdm_component_file_readable() { # <file> <uid> <user> <home>
+  [[ -f "$1" && ! -L "$1" ]] || return 1
+  _mdm_component_ancestors_searchable "$@" \
+    && ! _mdm_has_extended_acl "$1" \
+    && _mdm_component_effective_test "$2" "$3" "$4" -r "$1"
+}
+
+_mdm_component_resolve_command() { # <uid> <user> <home> <name> <output-var>
+  local _uid="$1" _user="$2" _home="$3" _name="$4" _out_var="$5"
+  local _path _canonical _mode
+  [[ "$_name" =~ ^[A-Za-z0-9._+-]+$ \
+    && "$_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _path="$(_mdm_exec_as_user "$_uid" "$_user" "$_home" \
+    /bin/bash --noprofile --norc -c 'command -v "$1"' mdm-component "$_name")" \
+    || return 1
+  [[ "$_path" == /* && ! "$_path" =~ [[:cntrl:]] ]] || return 1
+  _canonical="$(_mdm_canonical_any "$_path")" || return 1
+  [[ -f "$_canonical" && ! -L "$_canonical" ]] || return 1
+  _mode="$(_mdm_stat_mode "$_canonical")" || return 1
+  _mdm_mode_owner_executable "$_mode" || return 1
+  _mdm_exec_as_user "$_uid" "$_user" "$_home" /bin/test -x "$_canonical" \
+    >/dev/null 2>&1 || return 1
+  printf -v "$_out_var" '%s' "$_canonical"
+}
+
+_mdm_component_fixed_executable() { # <uid> <user> <home> <path> <output-var>
+  local _uid="$1" _user="$2" _home="$3" _path="$4" _out_var="$5"
+  local _canonical _mode
+  [[ "$_path" == /* && "$_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _canonical="$(_mdm_canonical_any "$_path")" || return 1
+  [[ -f "$_canonical" && ! -L "$_canonical" \
+    && "$(_mdm_stat_uid "$_canonical" || true)" == "$_uid" ]] || return 1
+  _mode="$(_mdm_stat_mode "$_canonical")" || return 1
+  _mdm_mode_owner_executable "$_mode" || return 1
+  _mdm_exec_as_user "$_uid" "$_user" "$_home" /bin/test -x "$_canonical" \
+    >/dev/null 2>&1 || return 1
+  printf -v "$_out_var" '%s' "$_canonical"
+}
+
+_mdm_component_cli_target() { # <user> <home> <target-uid> <output-var>
+  local _user="$1" _home="$2" _uid="$3" _out_var="$4"
+  local _link _target _canonical _version _dir
+  local _metadata _metadata_rest _links _mode
+  [[ -n "$_user" && "$_uid" =~ ^[0-9]+$ \
+    && "$_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+    || return 1
+  _link="$_home/.local/bin/claude"
+  for _dir in "$_home" "$_home/.local" "$_home/.local/bin" \
+    "$_home/.local/share" "$_home/.local/share/claude" \
+    "$_home/.local/share/claude/versions"; do
+    _mdm_component_target_dir_accessible \
+      "$_dir" "$_uid" "$_user" "$_home" || return 1
+  done
+  [[ -L "$_link" && "$(_mdm_stat_uid "$_link" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+  _mdm_has_extended_acl "$_link" && return 1
+  _metadata="$(_mdm_stat_managed_metadata "$_link")" || return 1
+  _metadata_rest="${_metadata#*:}"; _links="${_metadata_rest%%:*}"
+  [[ "$_links" == 1 ]] || return 1
+  _mdm_readlink_exact "$_link" _target || return 1
+  case "$_target" in "$_home/.local/share/claude/versions"/*) : ;; *) return 1 ;; esac
+  _version="${_target#"$_home/.local/share/claude/versions"/}"
+  [[ -n "$_version" && "$_version" != */* \
+    && "$_version" =~ ^[0-9A-Za-z._+-]+$ ]] || return 1
+  _canonical="$(_mdm_canonical_file "$_target")" || return 1
+  [[ "$_canonical" == "$_target" \
+    && "$(_mdm_stat_uid "$_canonical" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+  _mode="$(_mdm_stat_mode "$_canonical")" || return 1
+  _mdm_mode_owner_executable "$_mode" || return 1
+  _mdm_component_path_accessible \
+    "$_link" "$_uid" "$_user" "$_home" || return 1
+  _mdm_component_path_accessible \
+    "$_canonical" "$_uid" "$_user" "$_home" || return 1
+  printf -v "$_out_var" '%s' "$_canonical"
+}
+
+_mdm_component_fixed_launcher() {
+  # <uid> <user> <home> <component-dir> <version> <executable-relative> <out>
+  local _uid="$1" _user="$2" _home="$3" _component="$4" _version="$5"
+  local _relative="$6" _out_var="$7" _tree _link _expected_link _canonical
+  local _mode _meta _rest _links _dir
+  [[ "$_component" =~ ^[a-z0-9-]+$ \
+    && "$_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ \
+    && "$_relative" != /* && "$_relative" != *..* \
+    && ! "$_relative" =~ [[:cntrl:]] \
+    && "$_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _tree="$_home/.local/lib/claude-code-starter-kit/$_component/$_version"
+  _link="$_home/.local/bin/$_component"
+  _expected_link="../lib/claude-code-starter-kit/$_component/$_version/$_relative"
+  [[ -d "$_tree" && ! -L "$_tree" && -L "$_link" ]] || return 1
+  for _dir in "$_home" "$_home/.local" "$_home/.local/bin" \
+    "$_home/.local/lib" "$_home/.local/lib/claude-code-starter-kit" \
+    "${_tree%/*}" "$_tree"; do
+    _mdm_component_target_dir_accessible \
+      "$_dir" "$_uid" "$_user" "$_home" || return 1
+  done
+  _dir="${_tree}/$_relative"; _dir="${_dir%/*}"
+  while [[ "$_dir" != "$_tree" ]]; do
+    _mdm_component_target_dir_accessible \
+      "$_dir" "$_uid" "$_user" "$_home" || return 1
+    _dir="${_dir%/*}"
+  done
+  _mdm_component_tree_accessible \
+    "$_tree" "$_uid" "$_user" "$_home" || return 1
+  local _link_value
+  _mdm_readlink_exact "$_link" _link_value || return 1
+  [[ "$_link_value" == "$_expected_link" \
+    && "$(_mdm_stat_uid "$_link" || true)" == "$_uid" ]] || return 1
+  _mdm_has_extended_acl "$_link" && return 1
+  _meta="$(_mdm_stat_managed_metadata "$_link")" || return 1
+  _rest="${_meta#*:}"; _links="${_rest%%:*}"
+  [[ "$_links" == 1 ]] || return 1
+  _canonical="$(_mdm_canonical_any "$_link")" || return 1
+  [[ "$_canonical" == "$_tree/$_relative" \
+    && -f "$_canonical" && ! -L "$_canonical" \
+    && "$(_mdm_stat_uid "$_canonical" || true)" == "$_uid" ]] || return 1
+  _mode="$(_mdm_stat_mode "$_canonical")" || return 1
+  _mdm_mode_owner_executable "$_mode" || return 1
+  _mdm_component_path_accessible \
+    "$_link" "$_uid" "$_user" "$_home" || return 1
+  _mdm_component_path_accessible \
+    "$_canonical" "$_uid" "$_user" "$_home" || return 1
+  printf -v "$_out_var" '%s' "$_canonical"
+}
+
+_mdm_component_private_tree_shape_is_exact() { # <biome|safety_net> <tree>
+  local _component="$1" _root="$2" _python
+  case "$_component" in biome|safety_net) : ;; *) return 1 ;; esac
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_component" "$_root" <<'PY'
+import os
+import stat
+import sys
+
+component, root = sys.argv[1:]
+try:
+    if component == "biome":
+        expected = {"": {"biome", "package.json"}}
+        files = {"biome", "package.json"}
+        directories = set()
+    else:
+        expected = {
+            "": {"bin", "dist", "package.json"},
+            "bin": {"cc-safety-net"},
+            "dist": {"bin"},
+            "dist/bin": {"cc-safety-net.js"},
+        }
+        files = {
+            "bin/cc-safety-net", "dist/bin/cc-safety-net.js", "package.json",
+        }
+        directories = {"bin", "dist", "dist/bin"}
+    if not stat.S_ISDIR(os.lstat(root).st_mode):
+        raise ValueError("component root is not a directory")
+    for relative, names in expected.items():
+        path = os.path.join(root, relative) if relative else root
+        if set(os.listdir(path)) != names:
+            raise ValueError("component inventory mismatch")
+    for relative in files:
+        if not stat.S_ISREG(os.lstat(os.path.join(root, relative)).st_mode):
+            raise ValueError("component file type mismatch")
+    for relative in directories:
+        if not stat.S_ISDIR(os.lstat(os.path.join(root, relative)).st_mode):
+            raise ValueError("component directory type mismatch")
+except (OSError, ValueError):
+    sys.exit(1)
+PY
+}
+
+_mdm_component_biome_tree_is_trusted() { # <tree> <canonical-command>
+  local _root="$1" _command="$2" _arch _binary_sha _package_sha
+  _arch="$(_mdm_node_runtime_arch)" || return 1
+  case "$_arch" in
+    arm64)
+      _binary_sha=1250bb41a0409cf6c3133fc47819237eb61251624297f87158d2bed3ec123c3c
+      _package_sha=54947a4827f0a6960d84eae39de98dba707b6f9222a276beaaa54ab4014dc68c ;;
+    x64)
+      _binary_sha=b3dfae5422dbd86272bb8ed40afec66670ea7754531d8fbcbae7e445e5430387
+      _package_sha=f25fac4d876cbd18fe78753dd06fde9a12607a76006546cf6a9549a8f1fb511f ;;
+    *) return 1 ;;
+  esac
+  _mdm_component_private_tree_shape_is_exact biome "$_root" || return 1
+  [[ "$_command" == "$_root/biome" \
+    && "$(_mdm_sha256_file "$_root/biome")" == "$_binary_sha" \
+    && "$(_mdm_sha256_file "$_root/package.json")" == "$_package_sha" \
+    && "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_root/biome")")" == 0755 \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_root/package.json")")" == 0644 ]]
+}
+
+_mdm_component_safety_wrapper_is_bound() { # <home> <wrapper> <private-node>
+  local _home="$1" _wrapper="$2" _node="$3" _script _expected
+  _script="$_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/dist/bin/cc-safety-net.js"
+  [[ "$_wrapper" \
+    == "$_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin/cc-safety-net" \
+    && -f "$_script" && ! -L "$_script" ]] || return 1
+  _expected="$(printf \
+    '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
+    "$_node" "$_script")" || return 1
+  _mdm_exact_text_file "$_wrapper" "$_expected"
+}
+
+_mdm_component_safety_tree_is_trusted() {
+  # <home> <tree> <canonical-command> <private-node>
+  local _home="$1" _root="$2" _command="$3" _node="$4"
+  _mdm_component_private_tree_shape_is_exact safety_net "$_root" || return 1
+  [[ "$_command" == "$_root/bin/cc-safety-net" \
+    && "$(_mdm_sha256_file "$_root/dist/bin/cc-safety-net.js")" \
+      == 1ffbfafabf2fe4fc9b6bf64a8088ca3a96c2714cf8fd8afd5b1b326582c982d4 \
+    && "$(_mdm_sha256_file "$_root/package.json")" \
+      == 2e57b465553ba97e1e6f7a37655fc52e31cad4ca739140bb7af40d052e3d88c8 \
+    && "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_command")")" == 0755 \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_root/dist/bin/cc-safety-net.js")")" == 0644 \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_root/package.json")")" == 0644 ]] || return 1
+  _mdm_component_safety_wrapper_is_bound "$_home" "$_command" "$_node"
+}
+
+_mdm_component_cli_path_signed() { # <path> <target-uid>
+  local _path="$1" _uid="$2" _snapshot _old_umask _rc=1
+  [[ "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _old_umask="$(umask)"; umask 077
+  _snapshot="$(/usr/bin/mktemp "$(_mdm_safe_tmpdir)/claude-kit-mdm-cli-component.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  if _mdm_snapshot_bound_to "$_path" "$_snapshot" cli "$_uid" \
+    && _mdm_mode_owner_executable "$_MDM_BOUND_SNAPSHOT_MODE" \
+    && /bin/chmod 700 "$_snapshot" \
+    && _mdm_claude_cli_signature_trusted "$_snapshot"; then
+    _rc=0
+  fi
+  /bin/rm -f "$_snapshot"
+  return "$_rc"
+}
+
+_mdm_component_ghostty_codesign_requirement() {
+  printf '%s' '=identifier "com.mitchellh.ghostty" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "24VZTF6M5V"'
+}
+
+_mdm_component_ghostty_codesign() {
+  /usr/bin/codesign "$@"
+}
+
+_mdm_component_ghostty_xattr() {
+  /usr/bin/xattr "$@"
+}
+
+_mdm_component_ghostty_signed() { # <application-bundle>
+  local _app="$1" _requirement _details _executable _mode
+  [[ -d "$_app" && ! -L "$_app" ]] || return 1
+  _executable="$_app/Contents/MacOS/ghostty"
+  [[ -f "$_executable" && ! -L "$_executable" \
+    && "$(_mdm_canonical_file "$_executable")" == "$_executable" ]] \
+    || return 1
+  _mode="$(_mdm_stat_mode "$_executable")" || return 1
+  _mdm_mode_owner_executable "$_mode" || return 1
+  /bin/test -x "$_executable" || return 1
+  if _mdm_component_ghostty_xattr -p com.apple.quarantine -- "$_app" \
+    >/dev/null 2>&1; then
+    return 1
+  fi
+  _requirement="$(_mdm_component_ghostty_codesign_requirement)" || return 1
+  _mdm_component_ghostty_codesign --verify --deep --strict -R "$_requirement" \
+    -- "$_app" >/dev/null 2>&1 \
+    && _details="$(_mdm_component_ghostty_codesign \
+      -dv --verbose=4 -- "$_app" 2>&1)" \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      'Identifier=com.mitchellh.ghostty' \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      'TeamIdentifier=24VZTF6M5V' \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      'Authority=Developer ID Application: Mitchell Hashimoto (24VZTF6M5V)' \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      'Authority=Developer ID Certification Authority' \
+    && printf '%s\n' "$_details" | /usr/bin/grep -qx \
+      'Authority=Apple Root CA'
+}
+
+# This inventory mirrors lib/fonts-mdm.sh. The unit contract compares the
+# canonical bytes so an installer/detector pin cannot silently drift from the
+# files that the MDM font installer actually deploys.
+_mdm_component_font_expected_inventory() {
+  printf '%s\n' \
+    'IBMPlexMono-Bold.ttf ca403c56931baef307d20ba64b69acb71abcad61f75e66414661d57484b690ec ibm' \
+    'IBMPlexMono-BoldItalic.ttf 0e45a5a540992163229d2a29662553f313fab391757ca2ab3dc8f4e0d9be0979 ibm' \
+    'IBMPlexMono-ExtraLight.ttf 9c84b764bfc85441f53ce5d261c369156b0612a02837f1483ae525916c846486 ibm' \
+    'IBMPlexMono-ExtraLightItalic.ttf 2c168787c187535d0d42e2150e10841887e0f94bddc0ebd0ee936520621ca854 ibm' \
+    'IBMPlexMono-Italic.ttf 8ebe04c8c6cc82f0be19896ddc61d9935cdd0f027b0173c1945b8d247d7dfc2a ibm' \
+    'IBMPlexMono-Light.ttf f2a7e41a2bb183a1ba82b415eb176ac2dd81d2ca9fc8d2a2c23e5d413b89540e ibm' \
+    'IBMPlexMono-LightItalic.ttf 14c3e18514d64a95b82cacf8a6d77a173fadff92c90aed9905faf9a71fa83876 ibm' \
+    'IBMPlexMono-Medium.ttf 0bede3debdea8488bbb927f8f0650d915073209734a67fe8cd5a3320b572511c ibm' \
+    'IBMPlexMono-MediumItalic.ttf 71bd1f5f16fa0d10b101e050c67db3a2276f274e59cccfb3e9f9af3fc007a5a3 ibm' \
+    'IBMPlexMono-Regular.ttf fe11304a5fe956d5744e9b6a246cc83d90425245e75a62230044966ca96a7f50 ibm' \
+    'IBMPlexMono-SemiBold.ttf c9417148ce13f8fa7d2d5c9180bbc141f72aa0d814ffeb280f6904dc2b1bbd7a ibm' \
+    'IBMPlexMono-SemiBoldItalic.ttf 7b4b32e3b8beb4fda5605a619671e61c27efc98f64fdc078ce225556f40aa8c5 ibm' \
+    'IBMPlexMono-Text.ttf 650b37d83353821b19000dc8db573e27290aa82bb3b5e7366613eaa7260ca0fe ibm' \
+    'IBMPlexMono-TextItalic.ttf fd037a88a0f0b29b95db086ee50450a69ac3a7cbb752ed286fca23d65711bc9c ibm' \
+    'IBMPlexMono-Thin.ttf 34ce19c385afdd31726866c4797314f78ae59de41da04e898e4b3a04fc709ecd ibm' \
+    'IBMPlexMono-ThinItalic.ttf 059d9f9bdd35a26bbdfd8e68ccc18a4a5fe4f9af22cbc80509206936583f122c ibm' \
+    'HackGen35ConsoleNF-Bold.ttf ba3f1d6f97961d18cedc565f6a7399d1d0fd115e0d9d2f251f5d8d6ac6453f1c hackgen' \
+    'HackGen35ConsoleNF-Regular.ttf 83c32fe20da5e5a8fd3c5624db872811282b6380774436b2011bfc42bba149c1 hackgen' \
+    'HackGenConsoleNF-Bold.ttf 43b554e7ffccca4c1587d34ec139605bd3fa4b4843446bfb3334ab95cfb44e53 hackgen' \
+    'HackGenConsoleNF-Regular.ttf 6c2d654cceb7ad2164d23e068bbae69647295413432ecfc970400b401d6f9873 hackgen'
+}
+
+_mdm_component_font_expected_record() { # <basename>
+  local _wanted="$1" _name _sha _family
+  while read -r _name _sha _family; do
+    if [[ "$_name" == "$_wanted" ]]; then
+      printf '%s\t%s' "$_sha" "$_family"
+      return 0
+    fi
+  done < <(_mdm_component_font_expected_inventory)
+  return 1
+}
+
+_mdm_component_font_file_is_trusted() { # <font-file>
+  local _path="$1" _name="${1##*/}" _record _sha _family _python
+  _record="$(_mdm_component_font_expected_record "$_name")" || return 1
+  _sha="${_record%%$'\t'*}"
+  _family="${_record#*$'\t'}"
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_path" "$_name" "$_sha" "$_family" <<'PY'
+import hashlib
+import os
+import stat
+import struct
+import sys
+
+path, logical_name, expected_sha, family = sys.argv[1:]
+IBM_NAMES = {
+    "IBMPlexMono-Bold.ttf", "IBMPlexMono-BoldItalic.ttf",
+    "IBMPlexMono-ExtraLight.ttf", "IBMPlexMono-ExtraLightItalic.ttf",
+    "IBMPlexMono-Italic.ttf", "IBMPlexMono-Light.ttf",
+    "IBMPlexMono-LightItalic.ttf", "IBMPlexMono-Medium.ttf",
+    "IBMPlexMono-MediumItalic.ttf", "IBMPlexMono-Regular.ttf",
+    "IBMPlexMono-SemiBold.ttf", "IBMPlexMono-SemiBoldItalic.ttf",
+    "IBMPlexMono-Text.ttf", "IBMPlexMono-TextItalic.ttf",
+    "IBMPlexMono-Thin.ttf", "IBMPlexMono-ThinItalic.ttf",
+}
+HACK_NAMES = {
+    "HackGen35ConsoleNF-Bold.ttf", "HackGen35ConsoleNF-Regular.ttf",
+    "HackGenConsoleNF-Bold.ttf", "HackGenConsoleNF-Regular.ttf",
+}
+
+def identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+            value.st_uid, value.st_gid, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns, getattr(value, "st_flags", 0),
+            getattr(value, "st_gen", 0))
+
+try:
+    allowed = IBM_NAMES if family == "ibm" else HACK_NAMES
+    if family not in ("ibm", "hackgen") or logical_name not in allowed:
+        raise ValueError("unexpected font name")
+    before = os.lstat(path)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode)
+                or identity(opened) != identity(before)
+                or opened.st_nlink != 1
+                or opened.st_size < 256
+                or opened.st_size > 16 * 1024 * 1024):
+            raise ValueError("unsafe font file")
+        chunks = []
+        remaining = opened.st_size
+        while remaining:
+            block = os.read(descriptor, min(1024 * 1024, remaining))
+            if not block:
+                raise ValueError("short font read")
+            chunks.append(block)
+            remaining -= len(block)
+        data = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    if identity(os.lstat(path)) != identity(before):
+        raise ValueError("font changed during validation")
+    if hashlib.sha256(data).hexdigest() != expected_sha:
+        raise ValueError("font digest mismatch")
+    if data[:4] != b"\x00\x01\x00\x00":
+        raise ValueError("not TrueType sfnt")
+    table_count = struct.unpack_from(">H", data, 4)[0]
+    directory_end = 12 + table_count * 16
+    if table_count < 8 or table_count > 256 or directory_end > len(data):
+        raise ValueError("invalid sfnt directory")
+    tables = {}
+    for index in range(table_count):
+        offset = 12 + index * 16
+        tag, _checksum, table_offset, table_length = struct.unpack_from(
+            ">4sIII", data, offset)
+        if (tag in tables or table_offset < directory_end
+                or table_length == 0
+                or table_offset + table_length > len(data)):
+            raise ValueError("invalid sfnt table")
+        tables[tag] = (table_offset, table_length)
+    required = {b"cmap", b"glyf", b"head", b"hhea", b"hmtx", b"loca",
+                b"maxp", b"name"}
+    if not required.issubset(tables):
+        raise ValueError("missing sfnt table")
+    head_offset, head_length = tables[b"head"]
+    if (head_length < 54
+            or data[head_offset + 12:head_offset + 16] != b"_\x0f<\xf5"):
+        raise ValueError("invalid head table")
+    name_offset, name_length = tables[b"name"]
+    if name_length < 6:
+        raise ValueError("invalid name table")
+    name_format, record_count, strings_offset = struct.unpack_from(
+        ">HHH", data, name_offset)
+    records_end = 6 + record_count * 12
+    if name_format not in (0, 1) or not 1 <= record_count <= 4096:
+        raise ValueError("invalid name records")
+    if (records_end > name_length or strings_offset < records_end
+            or strings_offset > name_length):
+        raise ValueError("invalid name storage")
+    names = {1: set(), 5: set(), 6: set()}
+    for index in range(record_count):
+        record = name_offset + 6 + index * 12
+        platform, _encoding, _language, name_id, length, relative = (
+            struct.unpack_from(">HHHHHH", data, record))
+        if name_id not in names:
+            continue
+        start = name_offset + strings_offset + relative
+        end = start + length
+        if start < name_offset or end > name_offset + name_length:
+            raise ValueError("invalid name string")
+        codec = "utf-16-be" if platform in (0, 3) else "mac_roman"
+        try:
+            value = data[start:end].decode(codec)
+        except UnicodeError:
+            continue
+        if value:
+            names[name_id].add(value)
+    if not all(names.values()):
+        raise ValueError("missing internal font names")
+    if family == "ibm":
+        if (not any(value.startswith("IBM Plex Mono") for value in names[1])
+                or "Version 2.004" not in names[5]
+                or not any(value.startswith("IBMPlexMono")
+                           for value in names[6])):
+            raise ValueError("IBM font identity mismatch")
+    else:
+        expected_family = ("HackGen35 Console NF"
+                           if logical_name.startswith("HackGen35")
+                           else "HackGen Console NF")
+        if (expected_family not in names[1]
+                or not any(value.startswith("Version 2.10.0")
+                           for value in names[5])
+                or logical_name[:-4] not in names[6]):
+            raise ValueError("HackGen font identity mismatch")
+except (OSError, ValueError, struct.error):
+    sys.exit(1)
+PY
+}
+
+_mdm_component_receipt_dir_is_trusted() { # <receipt-dir>
+  local _dir="$1" _canonical _mode
+  [[ -d "$_dir" && ! -L "$_dir" ]] || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_SYSTEM_RCPT_DIR_OVERRIDE:-}" ]]; then
+    [[ "$_dir" == "$MDM_SYSTEM_RCPT_DIR_OVERRIDE" ]] || return 1
+  else
+    [[ "$_dir" == "/Library/Application Support/ClaudeCodeStarterKit" ]] \
+      || return 1
+    _mdm_verify_dir_chain "$_dir" "/Library/Application Support" || return 1
+  fi
+  _mdm_component_trusted "$_dir" || return 1
+  _canonical="$(_mdm_canonical_dir "$_dir")" || return 1
+  [[ "$_canonical" == "$_dir" ]] || return 1
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
+  [[ "$_mode" == 0755 ]]
+}
+
+_mdm_component_generated_manifest_is_exact() {
+  # <manifest> <home> <user> <uid> <generated-uid> <policy> <required...>
+  local _manifest="$1" _home="$2" _user="$3" _uid="$4" _generated="$5"
+  local _policy="$6" _python _name _sha _family _component
+  local _node_runtime _wce_runtime=""
+  local _font_names=()
+  shift 6
+  _node_runtime="$(_mdm_node_runtime_path)" || return 1
+  for _component in "$@"; do
+    if [[ "$_component" == web_content_runtime ]]; then
+      [[ "${_MDM_WCE_PACKAGE_SHA256:-}" =~ ^[0-9a-f]{64}$ \
+        && "${_MDM_WCE_LOCK_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || return 1
+      _wce_runtime="$(_mdm_wce_runtime_path \
+        "$_MDM_WCE_PACKAGE_SHA256" "$_MDM_WCE_LOCK_SHA256")" || return 1
+      break
+    fi
+  done
+  while read -r _name _sha _family; do
+    [[ "$_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    _font_names[${#_font_names[@]}]="$_name"
+  done < <(_mdm_component_font_expected_inventory)
+  [[ "${#_font_names[@]}" -eq 20 ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B - "$_manifest" "$_home" "$_user" "$_uid" \
+    "$_generated" "$_policy" "$_node_runtime" "$_wce_runtime" \
+    "$#" "$@" "${_font_names[@]}" <<'PY'
+import collections
+import json
+import re
+import sys
+
+manifest, home, user, uid_raw, generated, policy, node_runtime, wce_runtime, required_count_raw, *rest = sys.argv[1:]
+allowed = {
+    "biome", "claude_cli", "fonts", "ghostty", "kit", "node_runtime",
+    "safety_net", "web_content_runtime",
+}
+outer_keys = {
+    "entries", "policy_sha256", "schema_version", "target_generated_uid",
+    "target_uid", "target_user",
+}
+entry_keys = {"component", "kind", "path", "sha256"}
+
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate object key")
+        value[key] = item
+    return value
+
+def safe_path(value):
+    return (type(value) is str and value.startswith("/")
+            and not any(ord(char) < 32 or 127 <= ord(char) <= 159
+                        or 0xD800 <= ord(char) <= 0xDFFF
+                        for char in value))
+
+try:
+    required_count = int(required_count_raw)
+    if not 1 <= required_count <= len(allowed):
+        raise ValueError("invalid required count")
+    required = rest[:required_count]
+    font_names = rest[required_count:]
+    if (len(required) != required_count or len(set(required)) != required_count
+            or not set(required).issubset(allowed)):
+        raise ValueError("invalid required components")
+    if len(font_names) != 20 or len(set(font_names)) != 20:
+        raise ValueError("invalid font inventory")
+    if not safe_path(node_runtime) or (wce_runtime and not safe_path(wce_runtime)):
+        raise ValueError("invalid runtime path")
+    with open(manifest, "rb") as handle:
+        raw = handle.read(64 * 1024 * 1024 + 1)
+    if len(raw) > 64 * 1024 * 1024:
+        raise ValueError("component manifest is too large")
+    text = raw.decode("utf-8", "strict")
+    value = json.loads(text, object_pairs_hook=unique_object,
+                       parse_constant=lambda _value: (_ for _ in ()).throw(
+                           ValueError("non-finite JSON number")))
+    if type(value) is not dict or set(value) != outer_keys:
+        raise ValueError("invalid manifest keys")
+    if (type(value["schema_version"]) is not int
+            or value["schema_version"] != 1
+            or type(value["target_user"]) is not str
+            or value["target_user"] != user
+            or type(value["target_uid"]) is not int
+            or value["target_uid"] != int(uid_raw)
+            or type(value["target_generated_uid"]) is not str
+            or value["target_generated_uid"] != generated
+            or type(value["policy_sha256"]) is not str
+            or value["policy_sha256"] != policy
+            or not re.fullmatch(r"[0-9a-f]{64}", policy)
+            or type(value["entries"]) is not list):
+        raise ValueError("invalid manifest identity")
+
+    entries = value["entries"]
+    identities = set()
+    counts = collections.Counter()
+    expected_fixed = {
+        "biome": (home + "/.local/lib/claude-code-starter-kit/biome/2.5.4", "tree"),
+        "ghostty": ("/Applications/Ghostty.app", "tree"),
+        "kit": (home + "/.claude-starter-kit", "tree"),
+        "safety_net": (home + "/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6", "tree"),
+        "web_content_runtime": (wce_runtime, "tree"),
+    }
+    expected_fonts = {home + "/Library/Fonts/" + name for name in font_names}
+    for entry in entries:
+        if type(entry) is not dict or set(entry) != entry_keys:
+            raise ValueError("invalid entry keys")
+        component = entry["component"]
+        path = entry["path"]
+        kind = entry["kind"]
+        digest = entry["sha256"]
+        if (type(component) is not str or component not in allowed
+                or not safe_path(path)
+                or type(kind) is not str or kind not in ("file", "tree")
+                or type(digest) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+            raise ValueError("invalid entry value")
+        identity = (component, path)
+        if identity in identities:
+            raise ValueError("duplicate entry")
+        identities.add(identity)
+        counts[component] += 1
+        if component in expected_fixed:
+            if (path, kind) != expected_fixed[component]:
+                raise ValueError("invalid fixed entry")
+        elif component == "claude_cli":
+            prefix = home + "/.local/share/claude/versions/"
+            version = path[len(prefix):] if path.startswith(prefix) else ""
+            if kind != "file" or not re.fullmatch(r"[0-9A-Za-z._+-]+", version):
+                raise ValueError("invalid claude entry")
+        elif component == "fonts":
+            if kind != "file" or path not in expected_fonts:
+                raise ValueError("invalid font entry")
+        elif component == "node_runtime":
+            if (path, kind) != (node_runtime, "tree"):
+                raise ValueError("invalid node runtime entry")
+    ordered = sorted(entries, key=lambda item: (
+        item["component"].encode("ascii"), item["path"].encode("utf-8")))
+    if entries != ordered:
+        raise ValueError("entries are not decoded-value sorted")
+    if set(counts) != set(required):
+        raise ValueError("component set mismatch")
+    for component in required:
+        expected_count = 20 if component == "fonts" else 1
+        if counts[component] != expected_count:
+            raise ValueError("component count mismatch")
+    if "fonts" in required:
+        actual_fonts = {entry["path"] for entry in entries
+                        if entry["component"] == "fonts"}
+        if actual_fonts != expected_fonts:
+            raise ValueError("font set mismatch")
+    entry_lines = []
+    for entry in entries:
+        entry_lines.append("    " + json.dumps(
+            entry, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+    quote = lambda item: json.dumps(
+        item, ensure_ascii=False, separators=(",", ":"))
+    canonical = (
+        "{\n  \"schema_version\": 1,\n"
+        + "  \"target_user\": " + quote(user) + ",\n"
+        + "  \"target_uid\": " + str(int(uid_raw)) + ",\n"
+        + "  \"target_generated_uid\": " + quote(generated) + ",\n"
+        + "  \"policy_sha256\": " + quote(policy) + ",\n"
+        + "  \"entries\": ["
+        + ("\n" + ",\n".join(entry_lines) if entry_lines else "")
+        + "\n  ]\n}\n")
+    if raw != canonical.encode("utf-8", "strict"):
+        raise ValueError("component manifest bytes are not writer-canonical")
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+    sys.exit(1)
+PY
+}
+
+_mdm_attest_components() { # <user> <home> <uid> <generated-uid>
+  local _user="$1" _home="$2" _uid="$3" _generated_uid="$4"
+  local _component _path _active _canonical _dir _target _tmp _raw _old_umask
+  local _node
+  local _pre_digest
+  local _first=1 _font_count=0 _meta _rest _links _mode
+  local _name _sha _family
+  [[ "$_uid" =~ ^[0-9]+$ && "$_uid" -ge 501 ]] || return 1
+  _MDM_COMPONENT_TARGET_UID="$_uid"
+  _generated_uid="$(_mdm_normalize_generated_uid "$_generated_uid")" || return 1
+  _old_umask="$(umask)"; umask 077
+  _MDM_COMPONENT_ENTRIES="$(/usr/bin/mktemp "$(_mdm_safe_tmpdir)/claude-kit-mdm-components.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  for _component in "${MDM_REQUIRED_COMPONENTS[@]}"; do
+    case "$_component" in
+      kit)
+        _path="$_home/.claude-starter-kit"
+        [[ -d "$_path" && ! -L "$_path" ]] || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "${_MDM_EXPECTED_KIT_COMPONENT_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_append_entry kit "$_path" tree \
+          "$_MDM_EXPECTED_KIT_COMPONENT_SHA256" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; } ;;
+      claude_cli)
+        _mdm_component_cli_target "$_user" "$_home" "$_uid" _path \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _pre_digest="$(_mdm_artifact_digest file "$_path" "$_uid")" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_cli_path_signed "$_path" "$_uid" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_append_entry claude_cli "$_path" file "$_pre_digest" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_cli_target "$_user" "$_home" "$_uid" _active \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$_active" == "$_path" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_cli_path_signed "$_active" "$_uid" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$(_mdm_artifact_digest file "$_active" "$_uid")" \
+          == "$_pre_digest" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; } ;;
+      safety_net)
+        _dir="$_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6"
+        _node="$(_mdm_node_runtime_path)/bin/node" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_fixed_launcher "$_uid" "$_user" "$_home" \
+          cc-safety-net 1.0.6 bin/cc-safety-net _path \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$_path" == "$_dir/bin/cc-safety-net" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _pre_digest="$(_mdm_artifact_digest tree "$_dir" "$_uid")" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_safety_tree_is_trusted \
+          "$_home" "$_dir" "$_path" "$_node" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_append_entry safety_net "$_dir" tree "$_pre_digest" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_safety_tree_is_trusted \
+          "$_home" "$_dir" "$_path" "$_node" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_fixed_launcher "$_uid" "$_user" "$_home" \
+          cc-safety-net 1.0.6 bin/cc-safety-net _active \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$_active" == "$_path" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; } ;;
+      biome)
+        _dir="$_home/.local/lib/claude-code-starter-kit/biome/2.5.4"
+        _mdm_component_fixed_launcher "$_uid" "$_user" "$_home" \
+          biome 2.5.4 biome _path \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$_path" == "$_dir/biome" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _pre_digest="$(_mdm_artifact_digest tree "$_dir" "$_uid")" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_biome_tree_is_trusted "$_dir" "$_path" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_append_entry biome "$_dir" tree "$_pre_digest" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_biome_tree_is_trusted "$_dir" "$_path" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_fixed_launcher "$_uid" "$_user" "$_home" \
+          biome 2.5.4 biome _active \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$_active" == "$_path" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; } ;;
+      node_runtime)
+        _path="$(_mdm_node_runtime_path)" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_node_runtime_activation_valid "$_user" "$_home" "$_uid" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _MDM_NODE_RUNTIME_DIGEST=""
+        _mdm_node_runtime_trusted "$_path" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "${_MDM_NODE_RUNTIME_DIGEST:-}" =~ ^[0-9a-f]{64}$ ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_append_entry node_runtime "$_path" tree \
+          "$_MDM_NODE_RUNTIME_DIGEST" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _pre_digest="$_MDM_NODE_RUNTIME_DIGEST"
+        _MDM_NODE_RUNTIME_DIGEST=""
+        _mdm_node_runtime_trusted "$_path" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$_MDM_NODE_RUNTIME_DIGEST" == "$_pre_digest" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_node_runtime_activation_valid "$_user" "$_home" "$_uid" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; } ;;
+      web_content_runtime)
+        [[ "${_MDM_WCE_PACKAGE_SHA256:-}" =~ ^[0-9a-f]{64}$ \
+          && "${_MDM_WCE_LOCK_SHA256:-}" =~ ^[0-9a-f]{64}$ \
+          && "${_MDM_EXPECTED_WCE_COMPONENT_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _path="$(_mdm_wce_runtime_path \
+          "$_MDM_WCE_PACKAGE_SHA256" "$_MDM_WCE_LOCK_SHA256")" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "${_MDM_WCE_VERIFIED_BUNDLE:-}" == "$_path" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_wce_runtime_activation_valid \
+          "$_user" "$_home" "$_uid" "$_path" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _MDM_WCE_RUNTIME_DIGEST=""
+        _mdm_wce_runtime_trusted "$_path" \
+          "$_MDM_WCE_PACKAGE_SHA256" "$_MDM_WCE_LOCK_SHA256" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "${_MDM_WCE_RUNTIME_DIGEST:-}" \
+          == "$_MDM_EXPECTED_WCE_COMPONENT_SHA256" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _pre_digest="$_MDM_WCE_RUNTIME_DIGEST"
+        _mdm_component_append_entry web_content_runtime "$_path" tree \
+          "$_MDM_EXPECTED_WCE_COMPONENT_SHA256" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _MDM_WCE_RUNTIME_DIGEST=""
+        _mdm_wce_runtime_trusted "$_path" \
+          "$_MDM_WCE_PACKAGE_SHA256" "$_MDM_WCE_LOCK_SHA256" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$_MDM_WCE_RUNTIME_DIGEST" == "$_pre_digest" \
+          && "$_MDM_WCE_RUNTIME_DIGEST" \
+            == "$_MDM_EXPECTED_WCE_COMPONENT_SHA256" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_wce_runtime_activation_valid \
+          "$_user" "$_home" "$_uid" "$_path" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; } ;;
+      ghostty)
+        _path=/Applications/Ghostty.app
+        [[ -d "$_path" && ! -L "$_path" ]] || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_tree_accessible "$_path" "$_uid" "$_user" "$_home" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _pre_digest="$(_mdm_artifact_digest tree "$_path" "0,$_uid")" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_ghostty_signed "$_path" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_append_entry ghostty "$_path" tree "$_pre_digest" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_tree_accessible "$_path" "$_uid" "$_user" "$_home" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        _mdm_component_ghostty_signed "$_path" \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        [[ "$(_mdm_artifact_digest tree "$_path" "0,$_uid")" == "$_pre_digest" ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; } ;;
+      fonts)
+        _dir="$_home/Library/Fonts"
+        [[ -d "$_dir" && ! -L "$_dir" ]] || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+        while read -r _name _sha _family; do
+          [[ "$_sha" =~ ^[0-9a-f]{64}$ \
+            && ( "$_family" == ibm || "$_family" == hackgen ) ]] \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _target="$_dir/$_name"
+          [[ -f "$_target" && ! -L "$_target" ]] \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _canonical="$(_mdm_canonical_file "$_target")" || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          [[ "$_canonical" == "$_target" ]] \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _mdm_component_file_readable \
+            "$_canonical" "$_uid" "$_user" "$_home" \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _pre_digest="$(_mdm_artifact_digest file "$_canonical" "$_uid")" \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _mdm_component_font_file_is_trusted "$_canonical" \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _mdm_component_append_entry fonts "$_canonical" file "$_pre_digest" \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _active="$(_mdm_canonical_file "$_target")" \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          [[ "$_active" == "$_target" ]] \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _mdm_component_file_readable \
+            "$_active" "$_uid" "$_user" "$_home" \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _mdm_component_font_file_is_trusted "$_active" \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          [[ "$(_mdm_artifact_digest file "$_active" "$_uid")" \
+            == "$_pre_digest" ]] \
+            || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+          _font_count=$((_font_count + 1))
+        done < <(_mdm_component_font_expected_inventory)
+        [[ "$_font_count" -eq 20 ]] \
+          || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; } ;;
+    esac
+  done
+  [[ "$MDM_RCPT_POLICY_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+  _mdm_component_sort_entries "$_MDM_COMPONENT_ENTRIES" \
+    || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+  _dir="$(_mdm_receipt_dir_for "$_home")"
+  _mdm_component_receipt_dir_is_trusted "$_dir" \
+    || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+  _path="$_dir/components-$_generated_uid.json"
+  if [[ -L "$_path" ]]; then
+    /bin/rm -f "$_path" \
+      || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+    [[ ! -e "$_path" && ! -L "$_path" ]] \
+      || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+  elif [[ -e "$_path" && ! -f "$_path" ]]; then
+    /bin/rm -f "$_MDM_COMPONENT_ENTRIES"
+    return 1
+  fi
+  _tmp="$(/usr/bin/mktemp "$_dir/.components.XXXXXX")" \
+    || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES"; return 1; }
+  {
+    printf '{\n  "schema_version": 1,\n'
+    printf '  "target_user": "%s",\n' "$(mdm_json_escape "$_user")"
+    printf '  "target_uid": %s,\n' "$_uid"
+    printf '  "target_generated_uid": "%s",\n' "$_generated_uid"
+    printf '  "policy_sha256": "%s",\n' "$MDM_RCPT_POLICY_SHA256"
+    printf '  "entries": ['
+    while IFS= read -r _raw; do
+      [[ -n "$_raw" ]] || continue
+      if [[ "$_first" -eq 0 ]]; then printf ','; fi
+      printf '\n    %s' "$_raw"
+      _first=0
+    done < "$_MDM_COMPONENT_ENTRIES"
+    printf '\n  ]\n}\n'
+  } > "$_tmp" || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES" "$_tmp"; return 1; }
+  _mdm_json_valid "$_tmp" \
+    || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES" "$_tmp"; return 1; }
+  _mdm_component_generated_manifest_is_exact "$_tmp" "$_home" "$_user" \
+    "$_uid" "$_generated_uid" "$MDM_RCPT_POLICY_SHA256" \
+    "${MDM_REQUIRED_COMPONENTS[@]}" \
+    || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES" "$_tmp"; return 1; }
+  _mdm_component_receipt_dir_is_trusted "$_dir" \
+    || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES" "$_tmp"; return 1; }
+  /bin/chmod 600 "$_tmp" && /bin/mv -f "$_tmp" "$_path" \
+    || { /bin/rm -f "$_MDM_COMPONENT_ENTRIES" "$_tmp"; return 1; }
+  [[ -f "$_path" && ! -L "$_path" ]] || return 1
+  _mdm_component_receipt_dir_is_trusted "$_dir" || return 1
+  _mdm_component_trusted "$_path" || return 1
+  _meta="$(_mdm_stat_managed_metadata "$_path")" || return 1
+  _rest="${_meta#*:}"; _links="${_rest%%:*}"
+  _mode="$(_mdm_mode_normalize "${_rest#*:}")" || return 1
+  [[ "$_links" == 1 && "$_mode" == 0600 ]] || return 1
+  MDM_RCPT_COMPONENT_MANIFEST_SHA256="$(_mdm_sha256_file "$_path")" || return 1
+  [[ "$MDM_RCPT_COMPONENT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  MDM_RCPT_COMPONENT_MANIFEST_PATH="$_path"
+  /bin/rm -f "$_MDM_COMPONENT_ENTRIES"
+  _MDM_COMPONENT_ENTRIES=""
 }
 
 _mdm_user_phase_exit_code() { # <user-phase-rc> <dry-run>
@@ -3765,8 +12228,10 @@ mdm_main() {
   GIT_NO_REPLACE_OBJECTS=1
   export GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL GIT_TERMINAL_PROMPT GIT_NO_REPLACE_OBJECTS
 
-  # OS ガード
-  [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || { mdm_log R1 "非対応 OS"; exit "$MDM_EXIT_OS"; }
+  # The pinned Node.js 24 runtime requires macOS 13.5 or newer. Treat a
+  # missing/malformed product version exactly like any other unsupported OS.
+  _mdm_supported_macos_host \
+    || { mdm_log R1 "非対応 OS (macOS 13.5+ が必要)"; exit "$MDM_EXIT_OS"; }
 
   # R1: root never sources an adjacent/user-owned library.  The launcher has
   # a data-only parser and executable mode has already discarded inherited env.
@@ -3791,14 +12256,18 @@ mdm_main() {
   fi
 
   # R2: ユーザー・home 解決（root の失敗時だけ system receipt を best-effort で試す）
-  local _user="" _home _target_uid=""
+  local _user="" _home _target_uid="" _identity_tuple=""
   if [[ "$_euid" -eq 0 ]]; then
-    if ! _mdm_resolve_target_identity _user _target_uid; then
+    if ! _mdm_resolve_target_username _user; then
       _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
     fi
-    _target_uid="$(_mdm_bind_target_uid "$_user" "$_target_uid")" \
+    _identity_tuple="$(_mdm_bind_target_identity_tuple "$_user")" \
       || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
+    _target_uid="${_identity_tuple%%$'\t'*}"
+    _MDM_TARGET_GENERATED_UID="${_identity_tuple#*$'\t'}"
     _home="$(mdm_validate_user_home "$_user" "$_target_uid")" \
+      || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
+    _MDM_TARGET_SHELL="$(_mdm_user_shell "$_user")" \
       || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
   else
     _user="$(/usr/bin/id -un)"; _home="$HOME"     # ユーザーモード
@@ -3807,15 +12276,28 @@ mdm_main() {
       mdm_log R2 "非 root 実行で別ユーザーは指定できない"
       exit "$MDM_EXIT_USER"
     fi
+    _MDM_TARGET_SHELL="$(_mdm_user_shell "$_user")" || exit "$MDM_EXIT_USER"
   fi
   MDM_RCPT_TARGET_USER="$_user"
+  MDM_RCPT_TARGET_UID="$_target_uid"
+  MDM_RCPT_TARGET_GENERATED_UID="$_MDM_TARGET_GENERATED_UID"
+
+  # Production-only ref/install-dir/log semantics are configuration errors,
+  # and must be rejected before lock/log/CLT/Homebrew side effects.
+  _mdm_validate_semantic_config "$_euid" "$_home" "$_target_uid" "$_dry_run" \
+    || exit "$MDM_EXIT_CONFIG"
 
   # Serialize every mutating run before any path can write a receipt. A
   # competing run exits without changing checkout, history, or compliance.
   if [[ "$_euid" -eq 0 && "$_dry_run" != true ]] \
     && ! _mdm_acquire_run_lock "$_user" "$_home"; then
-    mdm_log R2 "同一ユーザーの MDM remediation が実行中"
-    exit "$MDM_EXIT_CONTEXT"
+    if [[ "${_MDM_RUN_LOCK_ERROR:-backend}" == contention ]]; then
+      mdm_log R2 "host-global MDM remediation が実行中"
+      exit "$MDM_EXIT_CONTEXT"
+    else
+      mdm_log R2 "host-global remediation lock backend を安全に確立できない"
+      exit "$MDM_EXIT_OS"
+    fi
   fi
 
   # ログ開始（設定確定後 = KIT_MDM_LOG_DIR が管理設定/CLI からも効く）。
@@ -3854,6 +12336,14 @@ mdm_main() {
     esac
   fi
 
+  if [[ "$_euid" -eq 0 && "$_dry_run" != true ]]; then
+    if ! _mdm_transaction_begin "$_user" "$_home" "$_target_uid" \
+      "$_MDM_TARGET_GENERATED_UID"; then
+      mdm_log R4 "outer transaction の開始に失敗"
+      _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_SETUP"
+    fi
+  fi
+
   # U1b..U3: キット取得(ref 固定) + setup 実行 + CLI 導入の確認。
   # root 時は git 操作・setup.sh 実行とも検証済みユーザーへ環境分離降格（Critical#2）。
   local _user_rc=0 _final_user_rc
@@ -3880,14 +12370,32 @@ mdm_main() {
     _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_SETUP"
   fi
 
+  if ! _mdm_revalidate_target_identity \
+    "$_user" "$_home" "$_target_uid" "$_MDM_TARGET_GENERATED_UID"; then
+    mdm_log R4 "対象account identityが実行中に変化"
+    _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_USER"
+  fi
+
   if ! _mdm_capture_postcondition "$_home" "$_target_uid"; then
     mdm_log R4 "配備 postcondition の検証に失敗"
     _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_SETUP"
   fi
+  if ! _mdm_attest_components \
+    "$_user" "$_home" "$_target_uid" "$_MDM_TARGET_GENERATED_UID"; then
+    mdm_log R4 "required component attestation に失敗"
+    _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_SETUP"
+  fi
   # Persist deletion authority only after root has verified that these paths
   # are the files actually deployed in both live and snapshot state.
-  if ! _mdm_persist_managed_history "$_user" "$_home"; then
+  if ! _mdm_persist_managed_history \
+    "$_user" "$_home" "$_target_uid" "$_MDM_TARGET_GENERATED_UID"; then
     mdm_log R4 "root managed history の永続化に失敗"
+    _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_SETUP"
+  fi
+
+  if ! _mdm_revalidate_success_state \
+    "$_user" "$_home" "$_target_uid" "$_MDM_TARGET_GENERATED_UID"; then
+    mdm_log R4 "成功レシート直前の再検証に失敗"
     _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_SETUP"
   fi
 

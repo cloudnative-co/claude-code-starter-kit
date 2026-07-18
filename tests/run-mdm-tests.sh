@@ -4,8 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MDM_TEST_BASH="${MDM_TEST_BASH:-${BASH:-/bin/bash}}"
-readonly MIN_MDM_TEST_FILES=7
-readonly MIN_MDM_ASSERTIONS=270
+# The current suite has 11 files and roughly 770 passing assertions. Keep a
+# small allowance for deliberate consolidation while still failing if multiple
+# test files or a substantial validation block is accidentally dropped.
+readonly MIN_MDM_TEST_FILES=10
+readonly MIN_MDM_ASSERTIONS=700
 
 MDM_TEST_SYSTEM_PYTHON=""
 if [[ -x /usr/bin/python3 ]]; then

@@ -9,10 +9,18 @@ local _shell_paths _shell_modes _renderer_output _builder_bash _candidate _major
 local _oracle_rc _render_rc _payload_mismatch _path _tail _feature _relative _source
 local _manifest_check _fixture _bad_rc _unsafe_parent _unknown _unknown_rejected
 local _case_root _case_dir _case _case_profile _case_language _case_render _parity_fail
+local _case_components _expected_components _opt_in_render _component_check
+local _profile_override_render _safety_override_render _biome_override_render
+local _policy_base _policy_peer _policy_hash _peer_hash _policy_variant
+local _policy_drift_fail _variant_hash _policy_check _variant_output
+local _variant_args _oracle_log _renderer_policy_args _missing_arg_fail
+local _c1_first _c1_last _c1_rejected
 _expected_tmp="$(mktemp -d)"
 chmod 700 "$_expected_tmp"
+_renderer_policy_args=(--editor none --claude-cli-required true)
 _logical_home=/Users/mdm-fixture
 _case_root="$_expected_tmp/cases"
+_oracle_log="$_expected_tmp/oracle.log"
 _case_dir="$_case_root/standard-ja"
 _shell_settings="$_case_dir/shell-settings.json"
 _shell_claude="$_case_dir/shell-claude.md"
@@ -69,6 +77,7 @@ _SETUP_TMP_FILES=()
 source "$PROJECT_DIR/lib/features.sh"
 source "$PROJECT_DIR/lib/template.sh"
 source "$PROJECT_DIR/lib/json-builder.sh"
+source "$PROJECT_DIR/lib/snapshot.sh"
 source "$PROJECT_DIR/lib/deploy.sh"
 HOME="$logical_home"
 build_settings_file "$output/shell-settings.json" >/dev/null
@@ -88,7 +97,24 @@ for pair in \
 done
 deploy_hook_scripts simple >/dev/null
 collect_managed_target_files
-_normalize_mdm_managed_modes "${_MANAGED_TARGET_FILES[@]}"
+# Deliberately invert the executable class of each managed file. The oracle
+# therefore proves that the production normalizer restores modes from trusted
+# source metadata; trusting the mutable live-file -x bit cannot pass.
+flipped_executable=0
+flipped_plain=0
+for mode_file in "${_MANAGED_TARGET_FILES[@]}"; do
+  [[ -f "$mode_file" ]] || continue
+  if [[ -x "$mode_file" ]]; then
+    chmod 0600 "$mode_file"
+    flipped_executable=$((flipped_executable + 1))
+  else
+    chmod 0700 "$mode_file"
+    flipped_plain=$((flipped_plain + 1))
+  fi
+done
+[[ "$flipped_plain" -gt 0 ]] || exit 1
+[[ "$profile" == minimal || "$flipped_executable" -gt 0 ]] || exit 1
+write_managed_snapshot >/dev/null
 
 # Observe the real managed_files_json sort environment without replacing its
 # sorting behavior. This fails if the function stops pinning LC_ALL=C.
@@ -109,21 +135,32 @@ managed_files_json | jq -r ".[]" | while IFS= read -r file; do
   esac
 done > "$output/shell-paths"
 while IFS= read -r path; do
-  mode=0600; [[ -x "$CLAUDE_DIR/$path" ]] && mode=0700
-  printf "%s\t%s\t%s\n" "$path" "$mode" "$mode"
+  if [[ "$(uname -s)" == Darwin ]]; then
+    live_mode="$(stat -f "%Lp" "$CLAUDE_DIR/$path")"
+    snapshot_mode="$(stat -f "%Lp" \
+      "$CLAUDE_DIR/.starter-kit-snapshot/$path")"
+  else
+    live_mode="$(stat -c "%a" "$CLAUDE_DIR/$path")"
+    snapshot_mode="$(stat -c "%a" \
+      "$CLAUDE_DIR/.starter-kit-snapshot/$path")"
+  fi
+  [[ "$live_mode" =~ ^[0-7]{3}$ && "$snapshot_mode" =~ ^[0-7]{3}$ ]] \
+    || exit 1
+  printf "%s\t0%s\t0%s\n" "$path" "$live_mode" "$snapshot_mode"
 done < "$output/shell-paths" > "$output/shell-modes.tsv"
 )
 render_case standard ja
 render_case minimal en
 render_case full en
 ' mdm-expected-oracle "$PROJECT_DIR" "$_case_root" "$_logical_home" \
-  >/dev/null 2>&1 || _oracle_rc=$?
+  >"$_oracle_log" 2>&1 || _oracle_rc=$?
 if [[ "$_oracle_rc" -eq 0 && -s "$_shell_settings" && -s "$_shell_claude" \
   && -s "$_shell_paths" && -s "$_shell_modes" \
   && "$(cat "$_case_dir/shell-sort-locale" 2>/dev/null || true)" == C ]]; then
   pass "mdm-expected: Bash 4+ shell-builder oracle completed in isolation"
 else
   fail "mdm-expected: shell-builder oracle failed or produced incomplete fixtures"
+  sed 's/^/  oracle: /' "$_oracle_log" >&2 || true
   rm -rf "$_expected_tmp"
   return 0
 fi
@@ -134,6 +171,7 @@ _render_rc=0
   --output "$_renderer_output" \
   --profile standard \
   --language ja \
+  "${_renderer_policy_args[@]}" \
   --logical-home "$_logical_home" \
   --override ENABLE_DOC_SIZE_GUARD=true \
   --override COMMIT_ATTRIBUTION=true \
@@ -142,6 +180,27 @@ if [[ "$_render_rc" -eq 0 ]]; then
   pass "mdm-expected: authoritative checkout renders successfully with /usr/bin/python3"
 else
   fail "mdm-expected: renderer failed (rc=$_render_rc)"
+fi
+
+_missing_arg_fail=0
+_bad_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" \
+  --output "$_expected_tmp/missing-editor" \
+  --profile minimal --language en --claude-cli-required true \
+  --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
+[[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/missing-editor" ]] \
+  && _missing_arg_fail=$((_missing_arg_fail + 1))
+_bad_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" \
+  --output "$_expected_tmp/missing-cli-policy" \
+  --profile minimal --language en --editor none \
+  --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
+[[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/missing-cli-policy" ]] \
+  && _missing_arg_fail=$((_missing_arg_fail + 1))
+if [[ "$_missing_arg_fail" -eq 2 ]]; then
+  pass "mdm-expected: editor and CLI policy inputs are mandatory"
+else
+  fail "mdm-expected: a missing policy input silently used a default"
 fi
 
 if cmp -s "$_shell_settings" "$_renderer_output/tree/settings.json"; then
@@ -213,20 +272,233 @@ valid = (
     and value.get("absent_files") == sorted(value.get("absent_files", []))
     and not set(value.get("files", [])).intersection(value.get("absent_files", []))
     and len(value.get("entries", [])) == len(value.get("files", []))
+    and value.get("required_components")
+        == ["claude_cli", "kit", "node_runtime", "safety_net", "web_content_runtime"]
+    and value.get("required_components")
+        == sorted(set(value.get("required_components", [])))
 )
 print("yes" if valid else "no")
 PY
 )"
 if [[ "$_manifest_check" == yes ]]; then
-  pass "mdm-expected: manifest metadata and sorted file list are deterministic"
+  pass "mdm-expected: manifest metadata, files, and components are deterministic"
 else
   fail "mdm-expected: manifest metadata is invalid"
+fi
+
+_component_check="$($PYTHON - "$_renderer_output/manifest.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "rb") as source:
+    raw = source.read()
+try:
+    value = json.loads(raw.decode("utf-8", "strict"))
+except (UnicodeDecodeError, ValueError):
+    raise SystemExit(1)
+valid = (
+    raw.endswith(b"\n")
+    and b"\r" not in raw
+    and b"\x00" not in raw
+    and value["required_components"]
+        == ["claude_cli", "kit", "node_runtime", "safety_net", "web_content_runtime"]
+)
+print("yes" if valid else "no")
+PY
+)"
+if [[ "$_component_check" == yes ]]; then
+  pass "mdm-expected: required-components contract has canonical byte framing"
+else
+  fail "mdm-expected: required-components byte contract is not canonical"
+fi
+
+_policy_check="$($PYTHON - \
+  "$_renderer_output/manifest.json" \
+  "$_renderer_output/policy.json" \
+  "$PROJECT_DIR/profiles/standard.conf" <<'PY'
+import hashlib
+import json
+import sys
+
+manifest_path, policy_path, profile_path = sys.argv[1:]
+with open(manifest_path, encoding="utf-8") as source:
+    manifest = json.load(source)
+with open(policy_path, "rb") as source:
+    raw = source.read()
+with open(profile_path, encoding="utf-8") as source:
+    profile_keys = {
+        line.split("=", 1)[0]
+        for line in source
+        if line.startswith(("ENABLE_", "INSTALL_"))
+    }
+try:
+    policy = json.loads(raw.decode("ascii", "strict"))
+except (UnicodeDecodeError, ValueError):
+    raise SystemExit(1)
+canonical = (
+    json.dumps(
+        policy,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    + "\n"
+).encode("ascii")
+valid = (
+    raw == canonical
+    and raw.count(b"\n") == 1
+    and raw.endswith(b"\n")
+    and set(policy) == {
+        "schema_version",
+        "profile",
+        "language",
+        "editor_choice",
+        "commit_attribution",
+        "values",
+        "required_components",
+    }
+    and policy["schema_version"] == 1
+    and policy["profile"] == "standard"
+    and policy["language"] == "ja"
+    and policy["editor_choice"] == "none"
+    and policy["commit_attribution"] is True
+    and set(policy["values"]) == profile_keys
+    and all(type(value) is bool for value in policy["values"].values())
+    and policy["required_components"] == manifest["required_components"]
+    and hashlib.sha256(raw).hexdigest() == manifest["policy_sha256"]
+)
+print("yes" if valid else "no")
+PY
+)"
+if [[ "$_policy_check" == yes \
+  && "$(test_stat_mode "$_renderer_output/policy.json")" == 600 ]]; then
+  pass "mdm-expected: policy.json is canonical, complete, hashed, and mode 0600"
+else
+  fail "mdm-expected: canonical policy contract is invalid"
+fi
+
+_opt_in_render="$_expected_tmp/opt-in-render"
+_render_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" --output "$_opt_in_render" \
+  --profile standard --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test \
+  --override ENABLE_GHOSTTY_SETUP=true \
+  --override ENABLE_FONTS_SETUP=true \
+  >/dev/null 2>&1 || _render_rc=$?
+if [[ "$_render_rc" -eq 0 ]] \
+  && [[ "$(jq -c '.required_components' "$_opt_in_render/manifest.json")" \
+    == '["claude_cli","fonts","ghostty","kit","node_runtime","safety_net","web_content_runtime"]' ]]; then
+  pass "mdm-expected: explicit Ghostty/font opt-ins remain required components"
+else
+  fail "mdm-expected: explicit Ghostty/font component contract was lost"
+fi
+
+_profile_override_render="$_expected_tmp/profile-override-render"
+_render_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" \
+  --output "$_profile_override_render" --profile minimal --language en \
+  "${_renderer_policy_args[@]}" --logical-home /Users/test \
+  --override INSTALL_SKILLS=true >/dev/null 2>&1 || _render_rc=$?
+if [[ "$_render_rc" -eq 0 \
+  && "$(jq -c '.required_components' \
+    "$_profile_override_render/manifest.json")" \
+    == '["claude_cli","kit","node_runtime","web_content_runtime"]' ]] \
+  && jq -e '.files | any(startswith("skills/"))' \
+    "$_profile_override_render/manifest.json" >/dev/null; then
+  pass "mdm-expected: every declared INSTALL_* profile key is overridable"
+else
+  fail "mdm-expected: a declared INSTALL_* override was rejected or ignored"
+fi
+
+_safety_override_render="$_expected_tmp/safety-override-render"
+_render_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" \
+  --output "$_safety_override_render" --profile minimal --language en \
+  "${_renderer_policy_args[@]}" --logical-home /Users/test \
+  --override ENABLE_SAFETY_NET=true >/dev/null 2>&1 || _render_rc=$?
+if [[ "$_render_rc" -eq 0 \
+  && "$(jq -c '.required_components' \
+    "$_safety_override_render/manifest.json")" \
+    == '["claude_cli","kit","node_runtime","safety_net"]' ]]; then
+  pass "mdm-expected: Safety Net also requires its effective Node runtime"
+else
+  fail "mdm-expected: Safety Net lost its Node runtime dependency"
+fi
+
+_biome_override_render="$_expected_tmp/biome-override-render"
+_render_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" \
+  --output "$_biome_override_render" --profile minimal --language en \
+  "${_renderer_policy_args[@]}" --logical-home /Users/test \
+  --override ENABLE_BIOME_HOOKS=true >/dev/null 2>&1 || _render_rc=$?
+if [[ "$_render_rc" -eq 0 \
+  && "$(jq -c '.required_components' \
+    "$_biome_override_render/manifest.json")" \
+    == '["biome","claude_cli","kit"]' ]]; then
+  pass "mdm-expected: native Biome remains independent of Node runtime"
+else
+  fail "mdm-expected: native Biome acquired an unintended Node dependency"
+fi
+
+_policy_base="$_expected_tmp/policy-base"
+_policy_peer="$_expected_tmp/policy-peer"
+_render_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" --output "$_policy_base" \
+  --profile standard --language en --editor none \
+  --claude-cli-required true --logical-home /Users/policy-one \
+  >/dev/null 2>&1 || _render_rc=$?
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" --output "$_policy_peer" \
+  --profile standard --language en --editor none \
+  --claude-cli-required true --logical-home /Users/policy-two \
+  >/dev/null 2>&1 || _render_rc=$?
+_policy_hash="$(jq -r '.policy_sha256 // empty' "$_policy_base/manifest.json" 2>/dev/null || true)"
+_peer_hash="$(jq -r '.policy_sha256 // empty' "$_policy_peer/manifest.json" 2>/dev/null || true)"
+if [[ "$_render_rc" -eq 0 && "$_policy_hash" =~ ^[0-9a-f]{64}$ \
+  && "$_peer_hash" == "$_policy_hash" ]] \
+  && cmp -s "$_policy_base/policy.json" "$_policy_peer/policy.json"; then
+  pass "mdm-expected: policy identity is independent of target user and home"
+else
+  fail "mdm-expected: user/home data leaked into policy identity"
+fi
+
+_policy_drift_fail=""
+for _policy_variant in profile language feature cli editor; do
+  _variant_output="$_expected_tmp/policy-drift-$_policy_variant"
+  _variant_args=(--profile standard --language en --editor none \
+    --claude-cli-required true)
+  case "$_policy_variant" in
+    profile) _variant_args=(--profile minimal --language en --editor none \
+      --claude-cli-required true) ;;
+    language) _variant_args=(--profile standard --language ja --editor none \
+      --claude-cli-required true) ;;
+    feature) _variant_args=(--profile standard --language en --editor none \
+      --claude-cli-required true --override ENABLE_DOC_SIZE_GUARD=true) ;;
+    cli) _variant_args=(--profile standard --language en --editor none \
+      --claude-cli-required false) ;;
+    editor) _variant_args=(--profile standard --language en --editor vscode \
+      --claude-cli-required true) ;;
+  esac
+  _render_rc=0
+  "$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" --output "$_variant_output" \
+    "${_variant_args[@]}" --logical-home /Users/policy-one \
+    >/dev/null 2>&1 || _render_rc=$?
+  _variant_hash="$(jq -r '.policy_sha256 // empty' \
+    "$_variant_output/manifest.json" 2>/dev/null || true)"
+  if [[ "$_render_rc" -ne 0 || ! "$_variant_hash" =~ ^[0-9a-f]{64}$ \
+    || "$_variant_hash" == "$_policy_hash" ]]; then
+    _policy_drift_fail="$_policy_drift_fail $_policy_variant"
+  fi
+done
+if [[ -z "$_policy_drift_fail" ]]; then
+  pass "mdm-expected: profile/language/feature/CLI/editor drift changes policy identity"
+else
+  fail "mdm-expected: policy drift was not detected:$_policy_drift_fail"
 fi
 
 _prior_render="$_expected_tmp/prior-render"
 _render_rc=0
 "$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" --output "$_prior_render" \
-  --profile minimal --language en --logical-home /Users/test \
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test \
   --prior-managed commands/retired-from-history.md \
   >/dev/null 2>&1 || _render_rc=$?
 if [[ "$_render_rc" -eq 0 ]] \
@@ -235,6 +507,32 @@ if [[ "$_render_rc" -eq 0 ]] \
   pass "mdm-expected: prior root inventory is carried into the absent contract"
 else
   fail "mdm-expected: prior root inventory was lost from the absent contract"
+fi
+
+_c1_first="$("$PYTHON" -c 'import sys; sys.stdout.write(chr(0x80))')"
+_c1_last="$("$PYTHON" -c 'import sys; sys.stdout.write(chr(0x9f))')"
+_c1_rejected=0
+_bad_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" \
+  --output "$_expected_tmp/c1-prior-out" \
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test \
+  --prior-managed "commands/c1-${_c1_first}.md" \
+  >/dev/null 2>&1 || _bad_rc=$?
+[[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/c1-prior-out" ]] \
+  && _c1_rejected=$((_c1_rejected + 1))
+_bad_rc=0
+"$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" \
+  --output "$_expected_tmp/c1-home-out" \
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home "/Users/c1-${_c1_last}" \
+  >/dev/null 2>&1 || _bad_rc=$?
+[[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/c1-home-out" ]] \
+  && _c1_rejected=$((_c1_rejected + 1))
+if [[ "$_c1_rejected" -eq 2 ]]; then
+  pass "mdm-expected: C1 controls are rejected in tracked and absolute paths"
+else
+  fail "mdm-expected: a C1 control reached renderer output"
 fi
 
 # Cover the smallest and largest profiles through the same real builder oracle.
@@ -250,6 +548,7 @@ for _case in minimal:en full:en; do
     --output "$_case_render" \
     --profile "$_case_profile" \
     --language "$_case_language" \
+    "${_renderer_policy_args[@]}" \
     --logical-home "$_logical_home" \
     >/dev/null 2>&1 || _render_rc=$?
   if [[ "$_render_rc" -ne 0 ]]; then
@@ -272,8 +571,21 @@ PY
     || _parity_fail="$_parity_fail $_case_profile/$_case_language:inventory"
   cmp -s "$_case_dir/shell-modes.tsv" "$_case_render/modes.tsv" \
     || _parity_fail="$_parity_fail $_case_profile/$_case_language:modes"
+  _case_components="$(jq -c '.required_components' "$_case_render/manifest.json" 2>/dev/null || true)"
+  case "$_case_profile" in
+    minimal) _expected_components='["claude_cli","kit"]' ;;
+    full) _expected_components='["biome","claude_cli","kit","node_runtime","safety_net","web_content_runtime"]' ;;
+    *) _expected_components='' ;;
+  esac
+  [[ "$_case_components" == "$_expected_components" ]] \
+    || _parity_fail="$_parity_fail $_case_profile/$_case_language:components"
   [[ "$(cat "$_case_dir/shell-sort-locale" 2>/dev/null || true)" == C ]] \
     || _parity_fail="$_parity_fail $_case_profile/$_case_language:locale"
+  if [[ "$_case_profile" == "full" ]]; then
+    _wce_runtime_wrapper="$_case_render/tree/skills/web-content-extraction/scripts/run-node.sh"
+    [[ -x "$_wce_runtime_wrapper" ]] \
+      || _parity_fail="$_parity_fail $_case_profile/$_case_language:wce-node-wrapper"
+  fi
 done
 if [[ -z "$_parity_fail" ]]; then
   pass "mdm-expected: minimal/en and full/en match settings, CLAUDE, inventory, and modes"
@@ -288,7 +600,7 @@ mkdir -p "$_fixture/lib" "$_fixture/config" "$_fixture/i18n/en" \
   "$_fixture/features/agent-teams" \
   "$_fixture/agents" "$_fixture/rules" "$_fixture/commands" \
   "$_fixture/skills" "$_fixture/profiles"
-for _feature in doc-blocker tmux-hooks prettier-hooks biome-hooks \
+for _feature in safety-net doc-blocker tmux-hooks prettier-hooks biome-hooks \
   pr-creation-log auto-update statusline doc-size-guard feature-recommendation; do
   mkdir -p "$_fixture/features/$_feature/scripts"
 done
@@ -302,7 +614,8 @@ cp -R "$PROJECT_DIR/rules/." "$_fixture/rules/"
 ln -s /etc/passwd "$_fixture/agents/linked.md"
 _bad_rc=0
 "$PYTHON" "$RENDERER" --checkout "$_fixture" --output "$_expected_tmp/symlink-out" \
-  --profile minimal --language en --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
 if [[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/symlink-out" ]]; then
   pass "mdm-expected: managed source symlinks fail closed without partial output"
 else
@@ -325,7 +638,8 @@ PY
 _bad_rc=0
 "$PYTHON" "$RENDERER" --checkout "$_fixture" \
   --output "$_expected_tmp/non-lf-out" \
-  --profile minimal --language en --logical-home /Users/test \
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test \
   >/dev/null 2>&1 || _bad_rc=$?
 if [[ "$_bad_rc" -eq 0 ]] && "$PYTHON" - "$_expected_tmp/non-lf-out/tree/CLAUDE.md" <<'PY'
 import sys
@@ -343,7 +657,8 @@ cp "$PROJECT_DIR/i18n/en/CLAUDE.md.base" "$_fixture/i18n/en/CLAUDE.md.base"
 printf '{"hooks": {}, "hooks": {}}\n' >"$_fixture/config/settings-base.json"
 _bad_rc=0
 "$PYTHON" "$RENDERER" --checkout "$_fixture" --output "$_expected_tmp/json-out" \
-  --profile minimal --language en --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
 if [[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/json-out" ]]; then
   pass "mdm-expected: duplicate JSON keys fail closed without partial output"
 else
@@ -359,7 +674,8 @@ with open(sys.argv[1], "wb") as destination:
 PY
 _bad_rc=0
 "$PYTHON" "$RENDERER" --checkout "$_fixture" --output "$_expected_tmp/oversized-out" \
-  --profile minimal --language en --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
 if [[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/oversized-out" ]]; then
   pass "mdm-expected: oversized managed payloads fail closed without partial output"
 else
@@ -376,7 +692,8 @@ for _unknown in ENABLE_UNKNOWN_RENDERER_COMPONENT INSTALL_UNKNOWN_RENDERER_TREE;
   _bad_rc=0
   "$PYTHON" "$RENDERER" --checkout "$_fixture" \
     --output "$_expected_tmp/unknown-$_unknown" \
-    --profile minimal --language en --logical-home /Users/test \
+    --profile minimal --language en "${_renderer_policy_args[@]}" \
+    --logical-home /Users/test \
     >/dev/null 2>&1 || _bad_rc=$?
   if [[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/unknown-$_unknown" ]]; then
     _unknown_rejected=$((_unknown_rejected + 1))
@@ -390,8 +707,9 @@ fi
 
 _bad_rc=0
 "$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" --output "$_expected_tmp/override-out" \
-  --profile minimal --language en --logical-home /Users/test \
-  --override INSTALL_SKILLS=true >/dev/null 2>&1 || _bad_rc=$?
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test \
+  --override INSTALL_UNKNOWN_OVERRIDE=true >/dev/null 2>&1 || _bad_rc=$?
 if [[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/override-out" ]]; then
   pass "mdm-expected: non-allowlisted overrides fail closed"
 else
@@ -403,7 +721,8 @@ for _fixed_key in ENABLE_AUTO_UPDATE ENABLE_WEB_CONTENT_UPDATE ENABLE_CODEX_PLUG
   _bad_rc=0
   "$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" \
     --output "$_expected_tmp/fixed-$_fixed_key" \
-    --profile minimal --language en --logical-home /Users/test \
+    --profile minimal --language en "${_renderer_policy_args[@]}" \
+    --logical-home /Users/test \
     --override "$_fixed_key=true" >/dev/null 2>&1 || _bad_rc=$?
   [[ "$_bad_rc" -ne 0 && ! -e "$_expected_tmp/fixed-$_fixed_key" ]] \
     && _fixed_true_rejected=$((_fixed_true_rejected + 1))
@@ -419,7 +738,8 @@ mkdir "$_unsafe_parent"
 chmod 777 "$_unsafe_parent"
 _bad_rc=0
 "$PYTHON" "$RENDERER" --checkout "$PROJECT_DIR" --output "$_unsafe_parent/output" \
-  --profile minimal --language en --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
+  --profile minimal --language en "${_renderer_policy_args[@]}" \
+  --logical-home /Users/test >/dev/null 2>&1 || _bad_rc=$?
 if [[ "$_bad_rc" -ne 0 && ! -e "$_unsafe_parent/output" ]]; then
   pass "mdm-expected: group/other-writable output parents are rejected"
 else

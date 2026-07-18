@@ -67,7 +67,7 @@ _load_merge_prefs() {
   fi
   if [[ "${_RESET_MERGE_PREFS:-false}" == "true" ]]; then
     _MERGE_PREFS="{}"
-    rm -f "$_MERGE_PREFS_FILE"
+    rm -f "$_MERGE_PREFS_FILE" || return 1
     _MERGE_PREFS_LOADED=true
     return
   fi
@@ -82,9 +82,10 @@ _load_merge_prefs() {
 # _get_merge_pref <key> — prints "keep-mine", "use-kit", or empty string
 _get_merge_pref() {
   local key="$1"
-  _load_merge_prefs
+  _load_merge_prefs || return 1
   local val
-  val="$(printf '%s' "$_MERGE_PREFS" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null || true)"
+  val="$(printf '%s' "$_MERGE_PREFS" \
+    | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null)" || return 1
   printf '%s' "$val"
 }
 
@@ -93,9 +94,9 @@ _save_merge_pref() {
   local key="$1"
   local value="$2"
   _merge_prefs_file
-  _load_merge_prefs
-  _MERGE_PREFS="$(printf '%s' "$_MERGE_PREFS" | jq --arg k "$key" --arg v "$value" '.[$k] = $v')"
-  printf '%s\n' "$_MERGE_PREFS" > "$_MERGE_PREFS_FILE"
+  _load_merge_prefs || return 1
+  _MERGE_PREFS="$(printf '%s' "$_MERGE_PREFS" | jq --arg k "$key" --arg v "$value" '.[$k] = $v')" || return 1
+  printf '%s\n' "$_MERGE_PREFS" > "$_MERGE_PREFS_FILE" || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -115,24 +116,24 @@ _json_key_or_null() {
   local key="$2"
   local v
   v="$(jq -cn --argjson o "$doc" --arg k "$key" \
-    'if ($o | has($k)) then $o[$k] else null end' 2>/dev/null || printf '')"
-  [[ -z "$v" ]] && v="null"
+    'if ($o | has($k)) then $o[$k] else null end' 2>/dev/null)" || return 1
+  [[ -n "$v" ]] || return 1
   printf '%s' "$v"
 }
 
 # _json_equal <a> <b> — prints "true"/"false" (jq semantic equality)
 _json_equal() {
-  jq -n --argjson a "$1" --argjson b "$2" '$a == $b' 2>/dev/null || printf 'false'
+  jq -n --argjson a "$1" --argjson b "$2" '$a == $b' 2>/dev/null
 }
 
 # _json_type <v> — prints jq type name (object/array/string/number/boolean/null)
 _json_type() {
-  jq -rn --argjson v "$1" '$v | type' 2>/dev/null || printf 'null'
+  jq -rn --argjson v "$1" '$v | type' 2>/dev/null
 }
 
 _merge_mdm_managed() {
-  case "${KIT_MDM_MANAGED:-}" in
-    true|TRUE|1|yes|YES|on|ON) return 0 ;;
+  case "$(printf '%s' "${KIT_MDM_MANAGED:-}" | /usr/bin/tr '[:upper:]' '[:lower:]')" in
+    true|1|yes|y|on) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -143,7 +144,7 @@ _merge_mdm_managed() {
 _merge_settings_mdm_documents() {
   local n_doc="$3" output="$4"
   local tmp_out
-  tmp_out="$(mktemp)"
+  tmp_out="$(mktemp)" || return 1
   if ! jq -n \
     --argjson n "$n_doc" '$n | if type == "object" then . else error("settings must be an object") end' \
     > "$tmp_out"; then
@@ -151,7 +152,7 @@ _merge_settings_mdm_documents() {
     error "MDM authoritative settings merge failed"
     return 1
   fi
-  mv "$tmp_out" "$output"
+  mv "$tmp_out" "$output" || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -180,7 +181,7 @@ _merge_arrays_3way() {
   user_added="$(jq -n \
     --argjson s "$s_val" \
     --argjson c "$c_val" \
-    '[$c[] | select(. as $item | $s | map(. == $item) | any | not)]')"
+    '[$c[] | select(. as $item | $s | map(. == $item) | any | not)]')" || return 1
 
   kit_removed="$(jq -n \
     --argjson s "$s_val" \
@@ -192,7 +193,7 @@ _merge_arrays_3way() {
         ($n | map(. == $item) | any | not) and
         ($c | map(. == $item) | any)
       )
-    ]')"
+    ]')" || return 1
 
   # Base result: newkit array (authoritative — already includes kit_added items)
   # plus user additions (items the user added that the kit never had)
@@ -200,11 +201,11 @@ _merge_arrays_3way() {
   merged="$(jq -n \
     --argjson n "$n_val" \
     --argjson ua "$user_added" \
-    '$n + $ua | unique')"
+    '$n + $ua | unique')" || return 1
 
   # Handle kit-removed items that still exist in current
   local removed_count
-  removed_count="$(printf '%s' "$kit_removed" | jq 'length')"
+  removed_count="$(printf '%s' "$kit_removed" | jq 'length')" || return 1
 
   if [[ "$removed_count" -gt 0 ]]; then
     if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
@@ -212,13 +213,13 @@ _merge_arrays_3way() {
       merged="$(jq -n \
         --argjson m "$merged" \
         --argjson kr "$kit_removed" \
-        '$m + $kr | unique')"
+        '$m + $kr | unique')" || return 1
     else
       # Interactive: ask for each removed item
       local i=0
       while [[ "$i" -lt "$removed_count" ]]; do
         local item
-        item="$(printf '%s' "$kit_removed" | jq ".[$i]")"
+        item="$(printf '%s' "$kit_removed" | jq ".[$i]")" || return 1
         warn "$STR_MERGE_ARRAY_KIT_REMOVED"
         printf "  %s\n" "$item" >&2
         printf "  %s " "$STR_MERGE_ARRAY_KEEP_REMOVE" >&2
@@ -237,7 +238,7 @@ _merge_arrays_3way() {
             merged="$(jq -n \
               --argjson m "$merged" \
               --argjson item "$item" \
-              '$m + [$item] | unique')"
+              '$m + [$item] | unique')" || return 1
             ;;
         esac
         i=$((i + 1))
@@ -266,11 +267,11 @@ _prompt_array_conflict() {
   local n_val="$4"
 
   local arr_sv
-  arr_sv="$(jq -n --argjson v "$s_val" 'if $v == null then [] else $v end')"
+  arr_sv="$(jq -n --argjson v "$s_val" 'if $v == null then [] else $v end')" || return 1
 
   # Check saved preference
   local saved_pref
-  saved_pref="$(_get_merge_pref "$key")"
+  saved_pref="$(_get_merge_pref "$key")" || return 1
   if [[ "$saved_pref" == "keep-mine" ]]; then
     _merge_progress_stderr_detail "  [remembered] ${key} ${STR_MERGE_REMEMBERED_KEEP}"
     printf '%s' "$c_val"
@@ -284,14 +285,14 @@ _prompt_array_conflict() {
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
     # Non-interactive: element-level merge preserves both user and kit additions
     _merge_progress_stderr_detail "  [merge-array] ${key} (non-interactive)"
-    _merge_arrays_3way "$arr_sv" "$c_val" "$n_val"
+    _merge_arrays_3way "$arr_sv" "$c_val" "$n_val" || return 1
     return
   fi
 
   # Interactive: show summary and prompt
   local c_count n_count
-  c_count="$(printf '%s' "$c_val" | jq 'length')"
-  n_count="$(printf '%s' "$n_val" | jq 'length')"
+  c_count="$(printf '%s' "$c_val" | jq 'length')" || return 1
+  n_count="$(printf '%s' "$n_val" | jq 'length')" || return 1
 
   local c_preview n_preview
   c_preview="$(printf '%s' "$c_val" | jq -r '.[0:3][] // empty' 2>/dev/null | head -3)"
@@ -320,12 +321,12 @@ _prompt_array_conflict() {
         continue
         ;;
       rk|RK|Rk)
-        _save_merge_pref "$key" "keep-mine"
+        _save_merge_pref "$key" "keep-mine" || return 1
         printf '%s' "$c_val"
         return
         ;;
       ru|RU|Ru)
-        _save_merge_pref "$key" "use-kit"
+        _save_merge_pref "$key" "use-kit" || return 1
         printf '%s' "$n_val"
         return
         ;;
@@ -357,7 +358,7 @@ _prompt_scalar_conflict() {
 
   # Check saved preference first
   local saved_pref
-  saved_pref="$(_get_merge_pref "$key")"
+  saved_pref="$(_get_merge_pref "$key")" || return 1
   if [[ "$saved_pref" == "keep-mine" ]]; then
     _merge_progress_stderr_detail "  [remembered] ${key} ${STR_MERGE_REMEMBERED_KEEP}"
     printf '%s' "$c_val"
@@ -389,11 +390,11 @@ _prompt_scalar_conflict() {
 
   case "$reply" in
     rk|RK|Rk)
-      _save_merge_pref "$key" "keep-mine"
+      _save_merge_pref "$key" "keep-mine" || return 1
       printf '%s' "$c_val"
       ;;
     ru|RU|Ru)
-      _save_merge_pref "$key" "use-kit"
+      _save_merge_pref "$key" "use-kit" || return 1
       printf '%s' "$n_val"
       ;;
     [Uu]*)
@@ -469,7 +470,7 @@ _resolve_key_bootstrap() {
     _RK_CLASS="identical"
     return 0
   fi
-  _resolve_conflict_by_type "bootstrap" "$key" "null" "$cv" "$nv" "bootstrap"
+  _resolve_conflict_by_type "bootstrap" "$key" "null" "$cv" "$nv" "bootstrap" || return 1
 }
 
 _resolve_key_3way() {
@@ -483,7 +484,7 @@ _resolve_key_3way() {
   _RK_CLASS=""
 
   if [[ "$mode" == "bootstrap" ]]; then
-    _resolve_key_bootstrap "$key" "$cv" "$nv"
+    _resolve_key_bootstrap "$key" "$cv" "$nv" || return 1
     return 0
   fi
 
@@ -510,13 +511,13 @@ _resolve_key_3way() {
       _RK_CLASS="identical"
       return 0
     fi
-    _resolve_conflict_by_type "$mode" "$key" "$sv" "$cv" "$nv" "independent"
+    _resolve_conflict_by_type "$mode" "$key" "$sv" "$cv" "$nv" "independent" || return 1
     return 0
   fi
 
   local s_eq_c s_eq_n
-  s_eq_c="$(_json_equal "$sv" "$cv")"
-  s_eq_n="$(_json_equal "$sv" "$nv")"
+  s_eq_c="$(_json_equal "$sv" "$cv")" || return 1
+  s_eq_n="$(_json_equal "$sv" "$nv")" || return 1
 
   if [[ "$s_eq_c" == "true" ]]; then
     # User didn't change → adopt kit's new value
@@ -538,7 +539,7 @@ _resolve_key_3way() {
     return 0
   fi
 
-  _resolve_conflict_by_type "$mode" "$key" "$sv" "$cv" "$nv" "both-changed"
+  _resolve_conflict_by_type "$mode" "$key" "$sv" "$cv" "$nv" "both-changed" || return 1
 }
 
 # _resolve_conflict_by_type <mode> <key_label> <sv> <cv> <nv> <origin>
@@ -555,7 +556,9 @@ _resolve_conflict_by_type() {
   # Identical values are never a conflict — short-circuit before any prompt.
   # Reachable when the snapshot lacks the key but current == new-kit (e.g.
   # nested sub-keys under a snapshot-missing object recursed from top mode).
-  if [[ "$(_json_equal "$cv" "$nv")" == "true" ]]; then
+  local values_equal
+  values_equal="$(_json_equal "$cv" "$nv")" || return 1
+  if [[ "$values_equal" == "true" ]]; then
     _RK_CLASS="identical"
     if [[ "$mode" == "nested" ]]; then
       _rk_apply_chosen "$cv"
@@ -564,13 +567,13 @@ _resolve_conflict_by_type() {
   fi
 
   local cv_type nv_type chosen
-  cv_type="$(_json_type "$cv")"
-  nv_type="$(_json_type "$nv")"
+  cv_type="$(_json_type "$cv")" || return 1
+  nv_type="$(_json_type "$nv")" || return 1
 
   if [[ "$cv_type" == "array" && "$nv_type" == "array" ]]; then
     local arr_sv="$sv"
     [[ "$origin" == "bootstrap" ]] && arr_sv="[]"
-    chosen="$(_prompt_array_conflict "$key" "$arr_sv" "$cv" "$nv")"
+    chosen="$(_prompt_array_conflict "$key" "$arr_sv" "$cv" "$nv")" || return 1
     _RK_CLASS="conflict-array"
     _rk_apply_chosen "$chosen"
     return 0
@@ -587,7 +590,7 @@ _resolve_conflict_by_type() {
         _RK_ACTION="set"
         _RK_VALUE="$(jq -cn --argjson c "$cv" --argjson n "$nv" '
           $c + ($n | to_entries | map(select(.key as $k | $c | has($k) | not)) | from_entries)
-        ')"
+        ')" || return 1
         _RK_CLASS="merge-object"
         ;;
       *)
@@ -602,7 +605,7 @@ _resolve_conflict_by_type() {
   if [[ "$mode" == "top" && "$origin" == "both-changed" ]]; then
     warn "  [conflict] $key — prompting for resolution"
   fi
-  chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")"
+  chosen="$(_prompt_scalar_conflict "$key" "$cv" "$nv")" || return 1
   _RK_CLASS="conflict-scalar"
   _rk_apply_chosen "$chosen"
 }
@@ -638,22 +641,22 @@ _merge_object_3way() {
     --argjson s "$s_val" \
     --argjson c "$c_val" \
     --argjson n "$n_val" \
-    '(($s // {} | keys) + ($c // {} | keys) + ($n // {} | keys)) | unique[]')"
+    '(($s // {} | keys) + ($c // {} | keys) + ($n // {} | keys)) | unique[]')" || return 1
 
   # Start with the current state of the parent key in merged
   local obj_merged
-  obj_merged="$(printf '%s' "${!merged_var}" | jq --arg k "$parent_key" '.[$k] // {}')"
+  obj_merged="$(printf '%s' "${!merged_var}" | jq --arg k "$parent_key" '.[$k] // {}')" || return 1
 
   local sub_key
   while IFS= read -r sub_key; do
     [[ -z "$sub_key" ]] && continue
 
     local sv cv nv
-    sv="$(_json_key_or_null "$s_val" "$sub_key")"
-    cv="$(_json_key_or_null "$c_val" "$sub_key")"
-    nv="$(_json_key_or_null "$n_val" "$sub_key")"
+    sv="$(_json_key_or_null "$s_val" "$sub_key")" || return 1
+    cv="$(_json_key_or_null "$c_val" "$sub_key")" || return 1
+    nv="$(_json_key_or_null "$n_val" "$sub_key")" || return 1
 
-    _resolve_key_3way "nested" "${parent_key}.${sub_key}" "$sv" "$cv" "$nv"
+    _resolve_key_3way "nested" "${parent_key}.${sub_key}" "$sv" "$cv" "$nv" || return 1
 
     case "$_RK_ACTION" in
       keep)
@@ -663,14 +666,14 @@ _merge_object_3way() {
         obj_merged="$(jq -n \
           --argjson obj "$obj_merged" \
           --arg k "$sub_key" \
-          '$obj | del(.[$k])')"
+          '$obj | del(.[$k])')" || return 1
         ;;
       *)
         obj_merged="$(jq -n \
           --argjson obj "$obj_merged" \
           --arg k "$sub_key" \
           --argjson v "$_RK_VALUE" \
-          '$obj | .[$k] = $v')"
+          '$obj | .[$k] = $v')" || return 1
         ;;
     esac
   done <<EOF
@@ -682,7 +685,7 @@ EOF
   new_merged="$(printf '%s' "${!merged_var}" | jq \
     --arg k "$parent_key" \
     --argjson v "$obj_merged" \
-    '.[$k] = $v')"
+    '.[$k] = $v')" || return 1
   printf -v "$merged_var" '%s' "$new_merged"
 }
 
@@ -741,7 +744,7 @@ merge_settings_3way() {
   n_doc="$(< "$new_kit")"
 
   if _merge_mdm_managed; then
-    _merge_settings_mdm_documents "$s_doc" "$c_doc" "$n_doc" "$output"
+    _merge_settings_mdm_documents "$s_doc" "$c_doc" "$n_doc" "$output" || return 1
     ok "MDM authoritative 3-way merge complete: $output"
     return 0
   fi
@@ -752,9 +755,9 @@ merge_settings_3way() {
     --argjson s "$s_doc" \
     --argjson c "$c_doc" \
     --argjson n "$n_doc" \
-    '(($s | keys) + ($c | keys) + ($n | keys)) | unique[]')"
+    '(($s | keys) + ($c | keys) + ($n | keys)) | unique[]')" || return 1
   local total_keys=0 current_key=0
-  total_keys="$(printf '%s\n' "$all_keys" | sed '/^$/d' | wc -l | tr -d ' ')"
+  total_keys="$(printf '%s\n' "$all_keys" | sed '/^$/d' | wc -l | tr -d ' ')" || return 1
 
   # Start merged from current (preserves everything by default)
   local merged
@@ -770,21 +773,21 @@ merge_settings_3way() {
     # Always take $schema from new_kit unchanged
     if [[ "$key" == "\$schema" ]]; then
       local schema_val
-      schema_val="$(jq -rn --argjson n "$n_doc" '$n["$schema"] // empty')"
+      schema_val="$(jq -rn --argjson n "$n_doc" '$n["$schema"] // empty')" || return 1
       if [[ -n "$schema_val" ]]; then
         merged="$(printf '%s' "$merged" | jq \
           --arg v "$schema_val" \
-          '.["$schema"] = $v')"
+          '.["$schema"] = $v')" || return 1
       fi
       continue
     fi
 
     local sv cv nv
-    sv="$(_json_key_or_null "$s_doc" "$key")"
-    cv="$(_json_key_or_null "$c_doc" "$key")"
-    nv="$(_json_key_or_null "$n_doc" "$key")"
+    sv="$(_json_key_or_null "$s_doc" "$key")" || return 1
+    cv="$(_json_key_or_null "$c_doc" "$key")" || return 1
+    nv="$(_json_key_or_null "$n_doc" "$key")" || return 1
 
-    _resolve_key_3way "top" "$key" "$sv" "$cv" "$nv"
+    _resolve_key_3way "top" "$key" "$sv" "$cv" "$nv" || return 1
 
     case "$_RK_CLASS" in
       user-added)
@@ -821,18 +824,18 @@ merge_settings_3way() {
         continue
         ;;
       delete)
-        merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')"
+        merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')" || return 1
         ;;
       object)
         local obj_sv
-        obj_sv="$(jq -cn --argjson v "$sv" 'if $v == null then {} else $v end')"
-        _merge_object_3way "$key" "$obj_sv" "$cv" "$nv" merged
+        obj_sv="$(jq -cn --argjson v "$sv" 'if $v == null then {} else $v end')" || return 1
+        _merge_object_3way "$key" "$obj_sv" "$cv" "$nv" merged || return 1
         ;;
       *)
         merged="$(printf '%s' "$merged" | jq \
           --arg k "$key" \
           --argjson v "$_RK_VALUE" \
-          '.[$k] = $v')"
+          '.[$k] = $v')" || return 1
         ;;
     esac
   done <<EOF
@@ -841,8 +844,8 @@ EOF
 
   # Write output
   local tmp_out
-  tmp_out="$(mktemp)"
-  printf '%s\n' "$merged" > "$tmp_out"
+  tmp_out="$(mktemp)" || return 1
+  printf '%s\n' "$merged" > "$tmp_out" || return 1
 
   if ! jq empty "$tmp_out" 2>/dev/null; then
     error "Merge produced invalid JSON — aborting"
@@ -850,7 +853,7 @@ EOF
     return 1
   fi
 
-  mv "$tmp_out" "$output"
+  mv "$tmp_out" "$output" || return 1
   _progress_summary \
     "settings.json merge summary" \
     "keep-user=${keep_user_count}, kit-add=${kit_add_count}, kit-update=${kit_update_count}, kit-remove=${kit_remove_count}, merge-object=${merge_object_count}, conflicts=${conflict_count}"
@@ -875,6 +878,12 @@ _merge_settings_bootstrap() {
   local new_kit="$2"
   local output="$3"
 
+  local f
+  for f in "$current" "$new_kit"; do
+    [[ -f "$f" ]] || { error "File not found: $f"; return 1; }
+    jq empty "$f" 2>/dev/null || { error "Invalid JSON: $f"; return 1; }
+  done
+
   local c_doc n_doc
   c_doc="$(< "$current")"
   n_doc="$(< "$new_kit")"
@@ -883,7 +892,7 @@ _merge_settings_bootstrap() {
   merged="$c_doc"
 
   if _merge_mdm_managed; then
-    _merge_settings_mdm_documents '{}' "$c_doc" "$n_doc" "$output"
+    _merge_settings_mdm_documents '{}' "$c_doc" "$n_doc" "$output" || return 1
     ok "MDM authoritative bootstrap merge complete: $output"
     return 0
   fi
@@ -893,9 +902,9 @@ _merge_settings_bootstrap() {
   all_keys="$(jq -rn \
     --argjson c "$c_doc" \
     --argjson n "$n_doc" \
-    '(($c | keys) + ($n | keys)) | unique[]')"
+    '(($c | keys) + ($n | keys)) | unique[]')" || return 1
   local total_keys=0 current_key=0
-  total_keys="$(printf '%s\n' "$all_keys" | sed '/^$/d' | wc -l | tr -d ' ')"
+  total_keys="$(printf '%s\n' "$all_keys" | sed '/^$/d' | wc -l | tr -d ' ')" || return 1
 
   local key
   while IFS= read -r key; do
@@ -905,10 +914,10 @@ _merge_settings_bootstrap() {
     [[ "$key" == "\$schema" ]] && continue
 
     local cv nv
-    cv="$(_json_key_or_null "$c_doc" "$key")"
-    nv="$(_json_key_or_null "$n_doc" "$key")"
+    cv="$(_json_key_or_null "$c_doc" "$key")" || return 1
+    nv="$(_json_key_or_null "$n_doc" "$key")" || return 1
 
-    _resolve_key_3way "bootstrap" "$key" "null" "$cv" "$nv"
+    _resolve_key_3way "bootstrap" "$key" "null" "$cv" "$nv" || return 1
 
     if [[ "$_RK_CLASS" == "kit-add" ]]; then
       _merge_progress_detail "  [kit-add] $key"
@@ -919,11 +928,11 @@ _merge_settings_bootstrap() {
         continue
         ;;
       delete)
-        merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')"
+        merged="$(printf '%s' "$merged" | jq --arg k "$key" 'del(.[$k])')" || return 1
         ;;
       *)
         merged="$(printf '%s' "$merged" | jq \
-          --arg k "$key" --argjson v "$_RK_VALUE" '.[$k] = $v')"
+          --arg k "$key" --argjson v "$_RK_VALUE" '.[$k] = $v')" || return 1
         ;;
     esac
 
@@ -935,8 +944,8 @@ $all_keys
 EOF
 
   local tmp_out
-  tmp_out="$(mktemp)"
-  printf '%s\n' "$merged" > "$tmp_out"
+  tmp_out="$(mktemp)" || return 1
+  printf '%s\n' "$merged" > "$tmp_out" || return 1
 
   if ! jq empty "$tmp_out" 2>/dev/null; then
     error "Bootstrap merge produced invalid JSON — aborting"
@@ -944,5 +953,5 @@ EOF
     return 1
   fi
 
-  mv "$tmp_out" "$output"
+  mv "$tmp_out" "$output" || return 1
 }

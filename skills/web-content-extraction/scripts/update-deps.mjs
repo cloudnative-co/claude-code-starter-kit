@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // update-deps.mjs [--force]
 //
-// Auto-updates this skill's dependencies (defuddle, jsdom, pdfjs-dist) to the
+// Auto-updates this skill's dependencies (defuddle, jsdom, pdfjs-dist, undici) to the
 // latest released versions, then runs the test suite. If tests fail, the
 // update is rolled back. Intended to run in the background from a SessionStart
 // hook when Claude Code starts.
@@ -16,9 +16,28 @@
 // the installable published release and tracks the upstream GitHub release.
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import {
+  closeSync,
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  rmdirSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 const SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
 const LOG_DIR = join(SKILL_DIR, 'logs')
@@ -30,20 +49,23 @@ const PKG_JSON = join(SKILL_DIR, 'package.json')
 const LOCK_JSON = join(SKILL_DIR, 'package-lock.json')
 const KIT_MANIFEST = join(SKILL_DIR, '..', '..', '.starter-kit-manifest.json')
 
-const TARGETS = ['defuddle', 'jsdom', 'pdfjs-dist']
+const TARGETS = ['defuddle', 'jsdom', 'pdfjs-dist', 'undici']
 const THROTTLE_MS = 24 * 60 * 60 * 1000 // next check after a clean run
 const BACKOFF_MS = 60 * 60 * 1000 // shorter retry after a failed run
-const LOCK_STALE_MS = 30 * 60 * 1000 // a lock older than this is considered dead
 const force = process.argv.includes('--force')
 
 function ensureLogDir() {
   if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true })
+  const stat = lstatSync(LOG_DIR)
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`unsafe log directory: ${LOG_DIR}`)
+  }
 }
 
 function log(message) {
-  ensureLogDir()
   const line = `[${new Date().toISOString()}] ${message}\n`
   try {
+    ensureLogDir()
     writeFileSync(LOG_FILE, line, { flag: 'a' })
   } catch {
     /* logging must never throw */
@@ -89,35 +111,163 @@ function latestVersion(pkg) {
   return out.trim()
 }
 
-function acquireLock() {
-  ensureLogDir()
+export function acquireLock(lockFile = LOCK_FILE) {
+  const logDir = dirname(lockFile)
+  mkdirSync(logDir, { recursive: true })
+  const logStat = lstatSync(logDir)
+  if (!logStat.isDirectory() || logStat.isSymbolicLink()) {
+    throw new Error(`unsafe lock parent: ${logDir}`)
+  }
+  const token = `${process.pid}:${randomUUID()}`
   try {
-    writeFileSync(LOCK_FILE, String(process.pid), { flag: 'wx' }) // atomic create
-    return true
+    // mkdir is the common shell/Node lock primitive. Unlike shell noclobber
+    // redirection it never opens an existing FIFO, symlink, or device.
+    mkdirSync(lockFile, { mode: 0o700 })
   } catch (error) {
-    if (error?.code !== 'EEXIST') throw error
-    // Lock exists: take it over only if it is stale (previous run likely died).
-    try {
-      const age = Date.now() - statSync(LOCK_FILE).mtimeMs
-      if (age < LOCK_STALE_MS) return false
-    } catch {
-      return false
-    }
-    try {
-      rmSync(LOCK_FILE, { force: true })
-      writeFileSync(LOCK_FILE, String(process.pid), { flag: 'wx' })
-      return true
-    } catch {
-      return false // lost a race with another reclaiming run
+    if (error?.code === 'EEXIST') return null
+    throw error
+  }
+  try {
+    writeFileSync(join(lockFile, 'owner'), `${token}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    })
+    return token
+  } catch (error) {
+    // The directory is ours because this call created it. Remove only the
+    // expected empty/owner-only shape; any foreign addition fails closed.
+    try { rmdirSync(lockFile) } catch { /* leave residue for inspection */ }
+    throw error
+  }
+}
+
+function openOwnedLock(token, lockDirectory) {
+  let ownerFd
+  try {
+    const lockStat = lstatSync(lockDirectory)
+    const ownerPath = join(lockDirectory, 'owner')
+    if (!lockStat.isDirectory() || lockStat.isSymbolicLink()) return null
+    ownerFd = openSync(ownerPath,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)
+    const expected = Buffer.from(`${token}\n`)
+    const before = fstatSync(ownerFd)
+    if (!before.isFile() || before.size !== expected.length) return null
+    const actual = Buffer.alloc(expected.length + 1)
+    const bytes = readSync(ownerFd, actual, 0, actual.length, 0)
+    const after = fstatSync(ownerFd)
+    if (bytes !== expected.length
+      || after.dev !== before.dev
+      || after.ino !== before.ino
+      || after.size !== expected.length
+      || !actual.subarray(0, bytes).equals(expected)) return null
+    const owned = { fd: ownerFd, dev: before.dev, ino: before.ino }
+    ownerFd = undefined
+    return owned
+  } catch {
+    return null
+  } finally {
+    if (ownerFd !== undefined) {
+      try { closeSync(ownerFd) } catch { /* ignore */ }
     }
   }
 }
 
-function releaseLock() {
+function closeOwnedLock(owned) {
+  if (!owned) return
+  try { closeSync(owned.fd) } catch { /* ignore */ }
+}
+
+function lockOwnerMatchesPinned(owned, lockDirectory) {
   try {
-    rmSync(LOCK_FILE, { force: true })
+    const ownerStat = lstatSync(join(lockDirectory, 'owner'))
+    const fdStat = fstatSync(owned.fd)
+    return ownerStat.isFile()
+      && !ownerStat.isSymbolicLink()
+      && ownerStat.dev === owned.dev
+      && ownerStat.ino === owned.ino
+      && fdStat.dev === owned.dev
+      && fdStat.ino === owned.ino
   } catch {
-    /* ignore */
+    return false
+  }
+}
+
+function lockOwnerOnly(lockDirectory) {
+  try {
+    const entries = readdirSync(lockDirectory)
+    return entries.length === 1 && entries[0] === 'owner'
+  } catch {
+    return false
+  }
+}
+
+function pathExistsNoFollow(path) {
+  try {
+    lstatSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function releaseLock(token, lockFile = LOCK_FILE) {
+  if (!/^[A-Za-z0-9._:-]+$/.test(token)) return false
+  const quarantine = `${lockFile}.release-${token.replaceAll(':', '-')}`
+  let owned = null
+  try {
+    if (pathExistsNoFollow(quarantine)) {
+      owned = openOwnedLock(token, quarantine)
+      if (!owned || !lockOwnerOnly(quarantine)) return false
+    } else {
+      owned = openOwnedLock(token, lockFile)
+      if (!owned || !lockOwnerOnly(lockFile)) return false
+      renameSync(lockFile, quarantine)
+    }
+    if (!lockOwnerMatchesPinned(owned, quarantine) || !lockOwnerOnly(quarantine)) {
+      // A foreign directory won the read->rename race. Restore it to the
+      // canonical name only when no successor owns that name; otherwise
+      // retain both paths and let the new canonical owner proceed.
+      if (!pathExistsNoFollow(lockFile)) {
+        try {
+          renameSync(quarantine, lockFile)
+        } catch {
+          // Preserve every foreign inode for explicit recovery.
+        }
+      }
+      return false
+    }
+    unlinkSync(join(quarantine, 'owner'))
+    rmdirSync(quarantine)
+    return true
+  } catch {
+    return false
+  } finally {
+    closeOwnedLock(owned)
+  }
+}
+
+export function installLockSignalHandlers(tokenOrGetter, lockFile = LOCK_FILE) {
+  const signalStatuses = [
+    ['SIGHUP', 129],
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ]
+  const handlers = new Map()
+  for (const [signal, status] of signalStatuses) {
+    const handler = () => {
+      const token = typeof tokenOrGetter === 'function'
+        ? tokenOrGetter()
+        : tokenOrGetter
+      if (token) releaseLock(token, lockFile)
+      process.exit(status)
+    }
+    handlers.set(signal, handler)
+    process.once(signal, handler)
+  }
+  return () => {
+    for (const [signal, handler] of handlers) {
+      process.off(signal, handler)
+    }
   }
 }
 
@@ -210,13 +360,15 @@ function main() {
     return 0
   }
   if (throttled()) return 0
-  if (!acquireLock()) {
-    log('skip: another update run is active (lock held)')
-    return 0
-  }
-
+  let lockToken = null
+  const removeLockSignalHandlers = installLockSignalHandlers(() => lockToken)
   let outcome = 'ok' // becomes 'failed' on any check/install/test failure -> short backoff
   try {
+    lockToken = acquireLock()
+    if (!lockToken) {
+      log('skip: another update run is active (lock held)')
+      return 0
+    }
     if (!recoverInterruptedUpdate()) {
       outcome = 'failed'
       return 1
@@ -299,11 +451,25 @@ function main() {
     return 0
   } finally {
     // Stamp AFTER a completed run: 24h on a clean run, 1h backoff on failure, so
-    // transient npm/network failures retry sooner. Runs skipped by throttle/lock
-    // never reach here, so they don't reset the timer.
-    log(`run outcome: ${outcome}`)
-    stampOutcome(outcome)
-    releaseLock()
+    // transient npm/network failures retry sooner. Runs skipped by
+    // throttle/lock do not own a token and therefore do not reset the timer.
+    if (lockToken) {
+      log(`run outcome: ${outcome}`)
+      try {
+        stampOutcome(outcome)
+      } catch (error) {
+        // The stamp is advisory. Preserve main's original result while still
+        // guaranteeing release of the token-bound writer lock.
+        log(`outcome stamp failed: ${error?.message ?? error}`)
+      } finally {
+        if (!releaseLock(lockToken)) {
+          log('lock release skipped: lock owner token changed or lock is missing')
+        }
+      }
+    }
+    // Keep signal cleanup installed through one event-loop turn so a signal
+    // queued during a synchronous release syscall can publish status 128+n.
+    setImmediate(removeLockSignalHandlers)
   }
 }
 
@@ -331,4 +497,10 @@ function rollback(backups) {
   }
 }
 
-process.exit(main())
+if (process.argv[1]
+  && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
+  // Let the event loop deliver a signal queued during a synchronous
+  // stamp/release syscall. The installed handler then preserves 128+signal;
+  // process.exit(main()) would discard that pending callback immediately.
+  process.exitCode = main()
+}

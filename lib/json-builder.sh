@@ -46,8 +46,8 @@ replace_home_path() {
   fi
 
   local tmp_file
-  tmp_file="$(mktemp)"
-  _register_tmp "$tmp_file"
+  tmp_file="$(mktemp)" || return 1
+  _register_tmp "$tmp_file" || return 1
 
   # jq --arg passes HOME as a literal string; replacement-side escaping would
   # corrupt Windows-style paths that contain backslashes.
@@ -57,9 +57,9 @@ replace_home_path() {
       else .
       end
     )
-  ' "$file" > "$tmp_file"
+  ' "$file" > "$tmp_file" || return 1
 
-  mv "$tmp_file" "$file"
+  mv "$tmp_file" "$file" || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ build_settings_json() {
 
   # Start with base merged with permissions (deep merge via * operator)
   local merged
-  merged="$(jq -s '.[0] * .[1]' "$base_file" "$permissions_file")"
+  merged="$(jq -s '.[0] * .[1]' "$base_file" "$permissions_file")" || return 1
 
   # Merge each hook fragment (iterating "$@" is safe even when empty on Bash 3.2)
   for fragment in "$@"; do
@@ -117,13 +117,17 @@ build_settings_json() {
           else .[$e.key] = $e.value
           end
         );
-      merge_deep(.; $frag[0])')"
+      merge_deep(.; $frag[0])')" || return 1
   done
 
-  printf '%s\n' "$merged" > "$output_file"
+  local tmp_file
+  tmp_file="$(mktemp)" || return 1
+  _register_tmp "$tmp_file" || return 1
+  printf '%s\n' "$merged" > "$tmp_file" || return 1
 
   # Final validation
-  if validate_json "$output_file"; then
+  if validate_json "$tmp_file"; then
+    mv "$tmp_file" "$output_file" || return 1
     ok "Built settings JSON: $output_file"
   else
     error "Generated JSON is invalid: $output_file"

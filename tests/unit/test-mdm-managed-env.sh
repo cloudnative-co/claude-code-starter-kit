@@ -1,14 +1,11 @@
 #!/bin/bash
 # MDM_TEST_BASH_MIN=4
-# tests/unit/test-mdm-managed-env.sh - MDM 管理 env が update/fresh の設定復元に
-# 上書きされないこと（R2-High）+ capture の改行注入排除（R3-Medium）
+# tests/unit/test-mdm-managed-env.sh - MDM 管理 env だけを policy authority とし、
+# target-user state を読まないこと + capture の改行注入排除（R3-Medium）
 #
-# 背景: setup.sh の update 経路（_restore_config_from_manifest）と fresh 経路
-# （_load_config_preserving_cli_overrides → _safe_source_config）は、既存の
-# 環境変数値を無条件に上書きする。MDM ラッパーが検証済みで注入した設定
-# （例: ENABLE_GHOSTTY_SETUP=false）が保存済みユーザー設定に負けると、
-# 管理端末で MDM 管理者の意図が更新のたびに巻き戻る。
-# KIT_MDM_MANAGED=true のとき、復元後に MDM 注入 env を再適用する。
+# 背景: target user が書ける manifest/config は MDM policy の入力にも、
+# update/fresh の選択権限にもできない。KIT_MDM_MANAGED=true のときは wrapper
+# が検証済みで注入した値だけから authoritative fresh reconciliation を行う。
 
 # wizard.sh は source 時に registry.sh / steps.sh を読み込む（test-wizard-utils.sh と同じ手法）
 # shellcheck source=wizard/wizard.sh
@@ -38,6 +35,17 @@ _reset_mdm_config_vars() {
   done
   _CLI_OVERRIDES=()
 }
+
+# MDM authority 判定は target-user PATH 上のコマンドに依存しない。
+(
+  tr() { printf 'false'; }
+  export KIT_MDM_MANAGED=TrUe
+  if [[ "$(_bool_normalize TrUe)" == "true" ]] && _wizard_mdm_managed; then
+    pass "mdm-managed: 偽 tr で managed authority を無効化できない"
+  else
+    fail "mdm-managed: managed authority 判定が PATH 上の tr に依存する"
+  fi
+)
 
 # ── _capture_mdm_env_overrides: KIT_MDM_MANAGED=true のとき _CONFIG_KEYS の
 #    非空 env 値をグローバル配列 _MDM_ENV_OVERRIDES へ直接構築する（R3-M: 配列化）──
@@ -121,12 +129,12 @@ _mdm_env_has() { local _e; for _e in "${_MDM_ENV_OVERRIDES[@]+"${_MDM_ENV_OVERRI
     || fail "mdm-managed: 不正キー名で restore が失敗 (rc=$_rc)"
 )
 
-# ── run_wizard の配線（static）: update 分岐と fresh 経路の両方で再適用される ──
+# ── run_wizard の配線（static）: managed policy input を直接 capture する ──
 if grep -q '_capture_mdm_env_overrides' "$PROJECT_DIR/wizard/wizard.sh" \
   && [[ "$(grep -c '_MDM_ENV_OVERRIDES\[@\]' "$PROJECT_DIR/wizard/wizard.sh")" -ge 2 ]]; then
-  pass "mdm-managed: run_wizard が update/fresh 両経路で MDM env を再適用する配線"
+  pass "mdm-managed: run_wizard が authoritative MDM env を capture する配線"
 else
-  fail "mdm-managed: run_wizard の MDM env 再適用配線が無い/不完全"
+  fail "mdm-managed: run_wizard の MDM env authority 配線が無い/不完全"
 fi
 
 # ── production context: _CONFIG_KEYS の空 separator で errexit しない ──
@@ -187,6 +195,7 @@ CONF
   _rc=0
   run_wizard >/dev/null 2>&1 || _rc=$?
   if [[ "$_rc" -eq 0 ]] \
+    && [[ "$UPDATE_MODE" == "false" ]] \
     && [[ "$PROFILE" == "full" ]] \
     && [[ "$INSTALL_COMMANDS" == "true" && "$INSTALL_SKILLS" == "true" ]] \
     && [[ "$ENABLE_DOC_BLOCKER" == "true" && "$ENABLE_CODEX_PLUGIN" == "false" ]] \
@@ -347,7 +356,10 @@ JSON
 
 (
   export KIT_MDM_MANAGED=true
+  KIT_MDM_POLICY_SHA256="$(printf 'a%.0s' {1..64})"
+  export KIT_MDM_POLICY_SHA256
   _tmp="$(mktemp -d)"
+  _tmp="$(cd -P "$_tmp" && pwd -P)"
   CLAUDE_DIR="$_tmp/.claude"
   mkdir -p "$CLAUDE_DIR"
   _SETUP_TMP_FILES=()
@@ -357,7 +369,8 @@ JSON
   _rc=0
   write_manifest >/dev/null 2>&1 || _rc=$?
   if [[ "$_rc" -eq 0 ]] \
-    && jq -e '.version == "2" and .mdm_managed == true' \
+    && jq -e --arg policy "$KIT_MDM_POLICY_SHA256" \
+      '.version == "2" and .mdm_managed == true and .policy_sha256 == $policy' \
       "$CLAUDE_DIR/.starter-kit-manifest.json" >/dev/null 2>&1; then
     pass "mdm-managed: manifest が runtime mutation 抑止 marker を記録"
   else
@@ -471,11 +484,14 @@ JSON
 (
   export KIT_MDM_MANAGED=true
   _tmp="$(mktemp -d)"
+  PROJECT_DIR="$_tmp/project"
   CLAUDE_DIR="$_tmp/.claude"
-  mkdir -p "$CLAUDE_DIR/hooks/test"
+  mkdir -p "$PROJECT_DIR/features/test/scripts" "$CLAUDE_DIR/hooks/test"
+  printf '#!/bin/sh\n' > "$PROJECT_DIR/features/test/scripts/run.sh"
   printf 'data\n' > "$CLAUDE_DIR/settings.json"
   printf '#!/bin/sh\n' > "$CLAUDE_DIR/hooks/test/run.sh"
-  chmod 755 "$CLAUDE_DIR/hooks/test/run.sh"
+  chmod 600 "$PROJECT_DIR/features/test/scripts/run.sh" \
+    "$CLAUDE_DIR/hooks/test/run.sh"
   _MANAGED_TARGET_FILES=("$CLAUDE_DIR/settings.json" "$CLAUDE_DIR/hooks/test/run.sh")
   collect_managed_target_files() { :; }
   _snapshot_claude_md() { :; }
@@ -657,12 +673,12 @@ JSON
   collect_managed_target_files() { _MANAGED_TARGET_FILES=(); }
   _rc=0
   _remove_retired_managed_files "$_tmp" "$_tmp/snapshot" >/dev/null 2>&1 || _rc=$?
-  if [[ "$_rc" -ne 0 && -e "$_tmp/rules/retired.md" ]] \
+  if [[ "$_rc" -eq 0 && -e "$_tmp/rules/retired.md" ]] \
     && [[ -e "$_tmp/snapshot/rules/retired.md" ]] \
     && [[ -e "$_tmp/rules/user-personal.md" ]]; then
-    pass "mdm-managed: target-user manifest+snapshot だけでは retired file を削除しない"
+    pass "mdm-managed: target-user manifest は収束や削除の authority にしない"
   else
-    fail "mdm-managed: forged manifest+snapshot が user file を削除した"
+    fail "mdm-managed: forged manifest が収束を阻害または user file を削除した"
   fi
 
   # A target-user-controlled manifest cannot escape CLAUDE_DIR, and a
@@ -676,10 +692,10 @@ JSON
     > "$_tmp/.starter-kit-manifest.json"
   _rc=0
   _remove_retired_managed_files "$_tmp" "$_tmp/snapshot" >/dev/null 2>&1 || _rc=$?
-  if [[ "$_rc" -ne 0 && -f "$_tmp/outside.md" && -f "$_tmp/rules/manifest-only.md" ]]; then
-    pass "mdm-managed: traversal と baseline 無し manifest entry は削除しない"
+  if [[ "$_rc" -eq 0 && -f "$_tmp/outside.md" && -f "$_tmp/rules/manifest-only.md" ]]; then
+    pass "mdm-managed: untrusted manifest entry は無視して user file を保持"
   else
-    fail "mdm-managed: untrusted manifest entry が任意ファイルを削除した"
+    fail "mdm-managed: untrusted manifest entry が収束を阻害または file を削除した"
   fi
 
   # Even a syntactically safe relative path must not traverse a symlinked
@@ -757,6 +773,7 @@ JSON
   _rc=0
   run_wizard >/dev/null 2>&1 || _rc=$?
   if [[ "$_rc" -eq 0 ]] \
+    && [[ "$UPDATE_MODE" == "false" ]] \
     && [[ "$PROFILE" == "full" ]] \
     && [[ "$INSTALL_COMMANDS" == "true" && "$INSTALL_SKILLS" == "true" ]] \
     && [[ "$ENABLE_DOC_BLOCKER" == "true" && "$ENABLE_CODEX_PLUGIN" == "false" ]] \
@@ -769,6 +786,109 @@ JSON
     pass "mdm-managed: update は manifest を explicit 扱いせず full profile へ収束"
   else
     fail "mdm-managed: update authoritative profile の収束に失敗"
+  fi
+  rm -rf "$_tmp"
+)
+
+# ── malformed user state cannot obstruct authoritative self-healing ───────
+(
+  _reset_mdm_config_vars
+  _tmp="$(mktemp -d)"
+  mkdir -p "$_tmp/.claude"
+  printf '{not-json\n' > "$_tmp/.claude/.starter-kit-manifest.json"
+  cat > "$_tmp/saved.conf" <<'CONF'
+PROFILE="minimal"
+LANGUAGE="en"
+ENABLE_STATUSLINE="true"
+SELECTED_PLUGINS="user-controlled"
+CONF
+  export HOME="$_tmp" KIT_MDM_MANAGED=true PROFILE=full LANGUAGE=ja
+  export ENABLE_STATUSLINE=false
+  WIZARD_CONFIG_FILE="$_tmp/saved.conf"
+  WIZARD_NONINTERACTIVE=true
+  UPDATE_MODE=true
+  _rc=0
+  run_wizard >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq 0 && "$UPDATE_MODE" == "false" ]] \
+    && [[ "$PROFILE" == "full" && "$LANGUAGE" == "ja" ]] \
+    && [[ "$ENABLE_STATUSLINE" == "false" ]] \
+    && [[ "$ENABLE_AUTO_UPDATE" == "false" ]] \
+    && [[ -z "$SELECTED_PLUGINS" ]]; then
+    pass "mdm-managed: malformed manifest/config を無視して authoritative fresh へ収束"
+  else
+    fail "mdm-managed: malformed user state が managed reconciliation を阻害"
+  fi
+  rm -rf "$_tmp"
+)
+
+(
+  _reset_mdm_config_vars
+  _tmp="$(mktemp -d)"
+  mkdir -p "$_tmp/.claude"
+  mkfifo "$_tmp/.claude/.starter-kit-manifest.json" "$_tmp/saved.conf"
+  export HOME="$_tmp" KIT_MDM_MANAGED=true PROFILE=standard LANGUAGE=en
+  WIZARD_CONFIG_FILE="$_tmp/saved.conf"
+  WIZARD_NONINTERACTIVE=true
+  UPDATE_MODE=true
+  _rc=0
+  run_wizard >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq 0 && "$UPDATE_MODE" == "false" ]] \
+    && [[ "$PROFILE" == "standard" && "$WIZARD_RESULT" == "deploy" ]]; then
+    pass "mdm-managed: special manifest/config path を読まず zero-touch 収束"
+  else
+    fail "mdm-managed: special user state path で managed run が停止"
+  fi
+  rm -rf "$_tmp"
+)
+
+# Managed initialization failures must survive callers that capture status
+# with `cmd || rc=$?` (which disables Bash errexit in the dynamic call tree).
+(
+  _reset_mdm_config_vars
+  export KIT_MDM_MANAGED=true PROFILE=standard LANGUAGE=en
+  WIZARD_NONINTERACTIVE=true
+  load_profile_config() { return 37; }
+  _rc=0
+  run_wizard >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq 37 ]]; then
+    pass "mdm-managed: authoritative initialization failure を明示伝播"
+  else
+    fail "mdm-managed: authoritative initialization failure を成功で上書き"
+  fi
+)
+
+# Normal update/non-interactive branches must also preserve helper failures;
+# production callers may capture run_wizard status and thereby disable errexit.
+(
+  _reset_mdm_config_vars
+  unset KIT_MDM_MANAGED
+  UPDATE_MODE=true
+  WIZARD_NONINTERACTIVE=true
+  _restore_config_from_manifest() { return 41; }
+  _rc=0
+  run_wizard >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq 41 ]]; then
+    pass "mdm-managed: non-MDM update helper failure を明示伝播"
+  else
+    fail "mdm-managed: non-MDM update helper failure を成功で上書き"
+  fi
+)
+
+(
+  _reset_mdm_config_vars
+  unset KIT_MDM_MANAGED
+  _tmp="$(mktemp -d)"
+  export HOME="$_tmp"
+  WIZARD_CONFIG_FILE="$_tmp/missing.conf"
+  UPDATE_MODE=false
+  WIZARD_NONINTERACTIVE=true
+  _fill_noninteractive_defaults() { return 42; }
+  _rc=0
+  run_wizard >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq 42 ]]; then
+    pass "mdm-managed: non-MDM noninteractive helper failure を明示伝播"
+  else
+    fail "mdm-managed: non-MDM noninteractive helper failure を成功で上書き"
   fi
   rm -rf "$_tmp"
 )

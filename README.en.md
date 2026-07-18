@@ -63,7 +63,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 
 ## Prerequisites
 
-Missing prerequisites are installed automatically when possible: `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, `node`, `tmux`, and `gh`. On macOS, the kit also detects the system Bash 3.2 limitation, installs Bash 4+ when needed, and re-execs automatically. Manual commands are shown only if automatic installation fails.
+Missing or unsupported prerequisites are installed or upgraded automatically when possible: `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, Node.js `22.19+`, `tmux`, and `gh`. On macOS, the kit also detects the system Bash 3.2 limitation, installs Bash 4+ when needed, and re-execs automatically. If automatic installation fails, setup exits with an error and shows the manual commands.
 
 ### Claude Account (Paid)
 
@@ -179,9 +179,9 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 
 When reading a URL, official docs, a blog/news article, or an OSS page, this executable skill **extracts the main content with [Defuddle](https://github.com/kepano/defuddle) into Markdown/JSON instead of reading raw HTML** (installed in Standard / Full). The `/web-article`, `/oss-analyze`, and `/web-source-review` commands and the CLAUDE.md standard rule rely on it.
 
-- **Requires Node.js 22+** (tested on 22/24). `npm ci --omit=dev` runs automatically on deploy. If Node is missing, the skill is still placed but URL/PDF features are disabled (a warning is shown; setup does not fail).
+- **Requires Node.js 22.19+** (tested on 22/24). Setup attempts an automatic install or upgrade when needed and fails before deployment if the minimum cannot be met. `npm ci --omit=dev` runs automatically on deploy.
 - **Security**: layered SSRF defense (http(s) only, internal/private IPs rejected, connection IP pinned, each redirect hop re-validated), a non-fetching DOM (no external sub-resource fetch, no script execution), and CJK-aware, decompression-bomb-guarded PDF extraction. Set `ALLOW_PRIVATE_URLS=true` for internal URLs in development only.
-- **Opt-in dependency auto-update**: the `web-content-update` hook updates the skill's deps (defuddle/jsdom/pdfjs-dist) on SessionStart (24h throttle, test gate + rollback). **Enabled by default in Full only**; opt-in in Standard. Manual update: `npm run update:deps`.
+- **Opt-in dependency auto-update**: the `web-content-update` hook updates the skill's deps (defuddle/jsdom/pdfjs-dist/undici) on SessionStart (24h throttle, test gate + rollback). **Enabled by default in Full only**; opt-in in Standard. Manual update: `npm run update:deps`.
 
 ### Hooks
 
@@ -367,9 +367,9 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 
 ## MDM Deployment (macOS)
 
-This kit can be silently deployed to managed macOS devices via MDM (Jamf, Intune, Workspace ONE, Ivanti, and others). Production remediation requires root, a pinned lowercase 40-character commit SHA, and a trusted two-file bundle containing `mdm/install-mdm.sh` plus `mdm/render-expected.py` from the same release. The trusted static renderer defines both files that must be present and managed paths that must be absent; a root-owned schema-v2 receipt is issued only after live and snapshot postconditions pass.
+This kit can deploy the Claude Code CLI and starter kit to managed devices running macOS 13.5 or later without end-user prompts through MDM (Jamf, Intune, Workspace ONE, Ivanti, and others). The default zero-touch workflow assumes Xcode Command Line Tools have already been delivered as an MDM package baseline. Production remediation requires root, a pinned lowercase 40-character commit SHA, and a trusted two-file bundle containing `mdm/install-mdm.sh` plus `mdm/render-expected.py` from the same release. The static renderer defines present and absent paths, required runtime components, and the desired policy. A root-owned schema-v3 receipt containing the policy SHA-256, bound UID/GeneratedUID, and the runtime component manifest path/hash is issued only after postconditions pass.
 
-`settings.json` is fully MDM-managed, while the `CLAUDE.md` user section and unrelated user-created files are preserved. Auto-update, the web updater, regular marketplace plugins, and the Codex Plugin are always disabled under MDM; Ghostty and fonts remain explicit opt-ins. A per-user lock (contention exits 21), root history containing only successfully attested present paths, and a dedicated one-generation backup protect reruns. See [`docs/mdm/README.md`](docs/mdm/README.md) for the full contract. **That guide is currently Japanese-only, and only the macOS implementation exists today**.
+`settings.json` is fully MDM-managed, while the `CLAUDE.md` user section and unrelated user-created files are preserved. Auto-update, the web updater, regular marketplace plugins, and the Codex Plugin are always disabled under MDM; Ghostty and fonts remain explicit opt-ins. A global remediation lock, root history bound to the account UID and GeneratedUID, and a dedicated one-generation backup protect reruns. Production detection is root-only and requires both the expected commit and expected policy SHA-256. See [`docs/mdm/README.md`](docs/mdm/README.md) for the full contract and the still-unverified root end-to-end path from real MDM products. **That guide is currently Japanese-only, and the implementation currently supports only macOS 13.5 or later**.
 
 ## Directory Structure
 

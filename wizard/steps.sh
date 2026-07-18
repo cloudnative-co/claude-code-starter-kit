@@ -340,6 +340,7 @@ _step_confirm() {
 }
 
 _fill_noninteractive_defaults() {
+  local _rc=0
   [[ -z "$LANGUAGE" ]] && LANGUAGE="en"
   [[ -z "$PROFILE" ]] && PROFILE="standard"
 
@@ -349,8 +350,12 @@ _fill_noninteractive_defaults() {
   done < <(_capture_cli_overrides)
 
   _load_profile_preserving_values "$PROFILE"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
@@ -363,6 +368,8 @@ _fill_noninteractive_defaults() {
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
   [[ -z "$ENABLE_FONTS_SETUP" ]] && ENABLE_FONTS_SETUP="false"
   _normalize_formatter_hooks "$_PROFILE_FILL_FORMATTER_PREFER"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   if [[ "$(uname -s)" != "Darwin" ]]; then
     ENABLE_GHOSTTY_SETUP="false"
@@ -375,8 +382,14 @@ _fill_noninteractive_defaults() {
     SELECTED_PLUGINS=""
   elif [[ -z "$SELECTED_PLUGINS" ]]; then
     _load_plugins
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     _init_plugins_for_profile "$PROFILE"
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     _compute_selected_plugins
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
   fi
 
   WIZARD_RESULT="deploy"

@@ -57,6 +57,142 @@ load_strings en
 )
 
 (
+  export KIT_MDM_MANAGED=false
+  _tmp="$(mktemp -d)"
+  printf 'snapshot bytes\n' > "$_tmp/CLAUDE.md"
+  grep() { return 2; }
+  _rc=0
+  _repair_snapshot_markers "$_tmp/CLAUDE.md" >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -ne 0 ]]; then
+    pass "mdm-write: snapshot marker read error を zero-match として握り潰さない"
+  else
+    fail "mdm-write: snapshot marker read error が success 扱い"
+  fi
+  rm -rf "$_tmp"
+)
+
+(
+  export KIT_MDM_MANAGED=true
+  _tmp="$(mktemp -d)"
+  CLAUDE_DIR="$_tmp/claude"
+  mkdir -p "$CLAUDE_DIR/.starter-kit-snapshot"
+  printf '%s\n' \
+    '<!-- BEGIN STARTER-KIT-MANAGED -->' '# desired' \
+    '<!-- END STARTER-KIT-MANAGED -->' > "$CLAUDE_DIR/CLAUDE.md"
+  printf '{"desired":true}\n' > "$CLAUDE_DIR/settings.json"
+  _SETUP_TMP_FILES=()
+  _mdm_ensure_real_distribution_dir() { return 0; }
+  _mdm_atomic_replace_managed_file() { return 42; }
+  _write_rc=0
+  _write_snapshot "$CLAUDE_DIR" "$CLAUDE_DIR/settings.json" \
+    >/dev/null 2>&1 || _write_rc=$?
+  _claude_rc=0
+  _snapshot_claude_md "$CLAUDE_DIR" "$CLAUDE_DIR/CLAUDE.md" \
+    >/dev/null 2>&1 || _claude_rc=$?
+  if [[ "$_write_rc" -ne 0 && "$_claude_rc" -ne 0 ]]; then
+    pass "mdm-write: snapshot atomic replace failure を成功扱いしない"
+  else
+    fail "mdm-write: snapshot atomic replace failure が握り潰された"
+  fi
+  rm -rf "$_tmp"
+)
+
+(
+  export KIT_MDM_MANAGED=true
+  _tmp="$(mktemp -d)"
+  PROJECT_DIR="$_tmp/project"
+  CLAUDE_DIR="$_tmp/claude"
+  mkdir -p "$PROJECT_DIR/features/test/scripts" "$PROJECT_DIR/rules" \
+    "$CLAUDE_DIR/hooks/test" "$CLAUDE_DIR/rules" \
+    "$CLAUDE_DIR/.starter-kit-snapshot/hooks/test" \
+    "$CLAUDE_DIR/.starter-kit-snapshot/rules" "$_tmp/external"
+  printf 'managed bytes\n' > "$PROJECT_DIR/features/test/scripts/run.sh"
+  printf 'plain bytes\n' > "$PROJECT_DIR/rules/plain.md"
+  printf 'managed bytes\n' > "$CLAUDE_DIR/hooks/test/run.sh"
+  printf 'plain bytes\n' > "$CLAUDE_DIR/rules/plain.md"
+  cp "$CLAUDE_DIR/hooks/test/run.sh" \
+    "$CLAUDE_DIR/.starter-kit-snapshot/hooks/test/run.sh"
+  cp "$CLAUDE_DIR/rules/plain.md" \
+    "$CLAUDE_DIR/.starter-kit-snapshot/rules/plain.md"
+  chmod 600 "$PROJECT_DIR/features/test/scripts/run.sh" \
+    "$PROJECT_DIR/rules/plain.md" "$CLAUDE_DIR/hooks/test/run.sh" \
+    "$CLAUDE_DIR/.starter-kit-snapshot/hooks/test/run.sh"
+  chmod 700 "$CLAUDE_DIR/rules/plain.md" \
+    "$CLAUDE_DIR/.starter-kit-snapshot/rules/plain.md"
+  ln "$CLAUDE_DIR/hooks/test/run.sh" "$_tmp/external/linked.sh"
+  _SETUP_TMP_FILES=()
+  _rc=0
+  _normalize_mdm_managed_modes \
+    "$CLAUDE_DIR/hooks/test/run.sh" "$CLAUDE_DIR/rules/plain.md" \
+    "$CLAUDE_DIR/.starter-kit-snapshot/hooks/test/run.sh" \
+    "$CLAUDE_DIR/.starter-kit-snapshot/rules/plain.md" \
+    >/dev/null 2>&1 || _rc=$?
+  if [[ "$(uname -s)" == Darwin ]]; then
+    _managed_links="$(stat -f '%l' "$CLAUDE_DIR/hooks/test/run.sh")"
+    _external_mode="$(stat -f '%Lp' "$_tmp/external/linked.sh")"
+  else
+    _managed_links="$(stat -c '%h' "$CLAUDE_DIR/hooks/test/run.sh")"
+    _external_mode="$(stat -c '%a' "$_tmp/external/linked.sh")"
+  fi
+  if [[ "$_rc" -eq 0 && "$_managed_links" -eq 1 ]] \
+    && [[ "$_external_mode" == 600 ]] \
+    && [[ "$(< "$_tmp/external/linked.sh")" == "managed bytes" ]] \
+    && [[ "$(test_stat_mode "$CLAUDE_DIR/hooks/test/run.sh")" == 700 ]] \
+    && [[ "$(test_stat_mode "$CLAUDE_DIR/rules/plain.md")" == 600 ]] \
+    && [[ "$(test_stat_mode "$CLAUDE_DIR/.starter-kit-snapshot/hooks/test/run.sh")" == 700 ]] \
+    && [[ "$(test_stat_mode "$CLAUDE_DIR/.starter-kit-snapshot/rules/plain.md")" == 600 ]]; then
+    pass "mdm-write: hardlink と inverse mode drift は trusted source から自己修復"
+  else
+    fail "mdm-write: hardlink/mode drift が未修復または外部inodeへ伝播"
+  fi
+  rm -rf "$_tmp"
+)
+
+(
+  _ok=true
+  for _value in true TRUE TrUe 1 yes YeS y Y on On; do
+    KIT_MDM_MANAGED="$_value"
+    _deploy_mdm_managed && _update_mdm_managed \
+      && _snapshot_mdm_managed && _merge_mdm_managed \
+      && _prereq_mdm_managed || _ok=false
+  done
+  for _value in false 0 no off invalid ''; do
+    KIT_MDM_MANAGED="$_value"
+    if _deploy_mdm_managed || _update_mdm_managed \
+      || _snapshot_mdm_managed || _merge_mdm_managed \
+      || _prereq_mdm_managed; then
+      _ok=false
+    fi
+  done
+  if [[ "$_ok" == true ]]; then
+    pass "mdm-write: 全libの MDM boolean 判定を共通語彙で正規化"
+  else
+    fail "mdm-write: lib間で MDM boolean 判定が不一致"
+  fi
+)
+
+(
+  export KIT_MDM_MANAGED=true
+  _tmp="$(mktemp -d)"
+  CLAUDE_DIR="$_tmp/claude"
+  mkdir -p "$CLAUDE_DIR" "$_tmp/snapshot"
+  printf '{malformed\n' > "$CLAUDE_DIR/.starter-kit-manifest.json"
+  _mdm_reconcile_absent_managed_files() {
+    : > "$_tmp/reconciled"
+    return 0
+  }
+  _rc=0
+  _remove_retired_managed_files "$CLAUDE_DIR" "$_tmp/snapshot" \
+    >/dev/null 2>&1 || _rc=$?
+  if [[ "$_rc" -eq 0 && -f "$_tmp/reconciled" ]]; then
+    pass "mdm-write: retired削除は malformed user manifest でなく trusted inventory 経路を使用"
+  else
+    fail "mdm-write: malformed user manifest が MDM retired reconciliation を阻害"
+  fi
+  rm -rf "$_tmp"
+)
+
+(
   export KIT_MDM_MANAGED=true
   _tmp="$(mktemp -d)"
   CLAUDE_DIR="$_tmp/claude"

@@ -12,7 +12,8 @@ argument-hint: <url>
 1. **web-content-extraction skill の URL 検証手順に従って抽出する**（生HTMLを直接読まない）。
    `$ARGUMENTS` は信頼できない入力として扱い、検証済みの単一 URL だけを単一引数で渡す:
    ```bash
-   node ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs '<検証済みURL>'
+   ~/.claude/skills/web-content-extraction/scripts/run-node.sh \
+     ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs '<検証済みURL>'
    ```
 2. **PDF URL は自動でフォールバック抽出される**（`content-type: application/pdf` か `.pdf`、
    または先頭が `%PDF-`）。その場合 `extractorEngine:"pdf"` となり、`content` はMarkdownでなく
