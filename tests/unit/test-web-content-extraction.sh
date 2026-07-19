@@ -1034,9 +1034,9 @@ _wce_mdm_results="$_wce_tmp/mdm-runtime-results"
   }
   _wce_lstat_inode() {
     if [[ "$(/usr/bin/uname -s 2>/dev/null)" == Darwin ]]; then
-      /usr/bin/stat -f '%d:%i' "$1" 2>/dev/null
+      /usr/bin/stat -f '%d:%i' "$1" 2>/dev/null || true
     else
-      /usr/bin/stat -c '%d:%i' "$1" 2>/dev/null
+      /usr/bin/stat -c '%d:%i' "$1" 2>/dev/null || true
     fi
   }
   export KIT_MDM_MANAGED=true KIT_MDM_PREREQ_MODE=auto
@@ -1107,10 +1107,12 @@ EOF
   _wce_orig_trust_base="$(declare -f _wce_mdm_trust_base)"
   _wce_orig_owner_uid="$(declare -f _wce_mdm_expected_owner_uid)"
   _wce_orig_owner_gid="$(declare -f _wce_mdm_expected_owner_gid)"
+  _wce_orig_runtime_arch="$(declare -f _mdm_current_darwin_arch)"
   _wce_mdm_expected_bundle() { printf '%s' "$_wce_bundle"; }
   _wce_mdm_trust_base() { printf '%s' "$_wce_trust_base"; }
   _wce_mdm_expected_owner_uid() { /usr/bin/id -u; }
   _wce_mdm_expected_owner_gid() { /usr/bin/id -g; }
+  _mdm_current_darwin_arch() { printf '%s' arm64; }
 
   _wce_rc=0
   maybe_install_web_content_deps >/dev/null 2>&1 || _wce_rc=$?
@@ -1531,6 +1533,7 @@ EOF
   eval "$_wce_orig_trust_base"
   eval "$_wce_orig_owner_uid"
   eval "$_wce_orig_owner_gid"
+  eval "$_wce_orig_runtime_arch"
 )
 _wce_mdm_result_count=0
 while IFS=$'\t' read -r _wce_result_status _wce_result_message; do

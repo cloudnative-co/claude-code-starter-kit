@@ -337,14 +337,19 @@ _font_mdm_ttf_is_trusted() {
 }
 
 _font_mdm_family_is_trusted() {
-  local family="$1" font_dir="$2" name target count=0
+  local family="$1" font_dir="$2" name target expected_names count=0
   [[ -d "$font_dir" && ! -L "$font_dir" ]] || return 1
+  # Materialize the small trusted inventory before inspecting user-controlled
+  # files. An early validation return must not close a process-substitution
+  # pipe while its producer is still writing (which leaks EPIPE diagnostics).
+  expected_names="$(_font_mdm_expected_names "$family")" || return 1
+  [[ -n "$expected_names" ]] || return 1
   while IFS= read -r name; do
     target="$font_dir/$name"
     [[ -f "$target" && ! -L "$target" ]] || return 1
     _font_mdm_ttf_is_trusted "$target" "$family" "$name" || return 1
     count=$((count + 1))
-  done < <(_font_mdm_expected_names "$family")
+  done <<< "$expected_names"
   [[ "$count" -gt 0 ]]
 }
 

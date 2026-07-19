@@ -905,8 +905,16 @@ PY
     _mdm_native_cli_acl_safe "$_acl_path" || return 1
   done
 
-  _tmp_base="${TMPDIR:-/private/tmp}"
-  [[ "$_tmp_base" == /* && -d "$_tmp_base" ]] || _tmp_base=/private/tmp
+  _tmp_base="${TMPDIR:-}"
+  if [[ "$_tmp_base" == /* && -d "$_tmp_base" ]]; then
+    :
+  elif [[ "$(/usr/bin/uname -s 2>/dev/null)" == Darwin ]]; then
+    _tmp_base=/private/tmp
+  else
+    # MDM production is Darwin-only. Keep the same snapshot contract testable
+    # on Linux CI, where /private/tmp does not normally exist.
+    _tmp_base=/tmp
+  fi
   _snapshot="$(/usr/bin/mktemp "$_tmp_base/claude-kit-cli.XXXXXX")" \
     || return 1
   _SETUP_TMP_FILES+=("$_snapshot")

@@ -68,11 +68,21 @@ _ccsk_safety_expected_cli_sha256() {
   printf '%s' "1ffbfafabf2fe4fc9b6bf64a8088ca3a96c2714cf8fd8afd5b1b326582c982d4"
 }
 
+_ccsk_safety_system_python_is_trusted() {
+  local system
+  system="$(/usr/bin/uname -s 2>/dev/null)" || return 1
+  # macOS MDM keeps the interpreter bound to the SIP-protected regular file.
+  # Linux distributions commonly expose the root-managed fixed path as a
+  # symlink, which is still outside an unprivileged user's write authority.
+  [[ -x /usr/bin/python3 \
+    && ( "$system" != Darwin || ! -L /usr/bin/python3 ) ]]
+}
+
 _ccsk_safety_snapshot_cli() {
   local cli="$1" expected_sha
   expected_sha="$(_ccsk_safety_expected_cli_sha256)" || return 1
-  [[ "$expected_sha" =~ ^[0-9a-f]{64}$ \
-    && -x /usr/bin/python3 && ! -L /usr/bin/python3 ]] || return 1
+  [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _ccsk_safety_system_python_is_trusted || return 1
   /usr/bin/env -i HOME="${HOME:-/}" LC_ALL=C \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin \
     /usr/bin/python3 -I -B - "$cli" "$expected_sha" 2>/dev/null <<'PY'
