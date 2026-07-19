@@ -2630,7 +2630,7 @@ _mdm_biome_tree_is_trusted() { # <tree> <command> <uid> <home>
 }
 
 _mdm_safety_wrapper_is_bound() { # <home> <wrapper> <private-node>
-  local _home="$1" _wrapper="$2" _node="$3" _script _expected _python
+  local _home="$1" _wrapper="$2" _node="$3" _script _expected _python LC_ALL=C
   _script="$_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/dist/bin/cc-safety-net.js"
   [[ "$_wrapper" \
     == "$_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin/cc-safety-net" \

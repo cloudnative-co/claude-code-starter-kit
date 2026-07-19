@@ -469,8 +469,11 @@ _wul_skip_rc=0
   HOME="$_wul_skip_home"
   # shellcheck source=setup.sh
   source "$PROJECT_DIR/setup.sh"
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   UPDATE_MODE=false DRY_RUN=false KIT_MDM_MANAGED=false
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   INSTALL_AGENTS=false INSTALL_RULES=false INSTALL_COMMANDS=false
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   INSTALL_SKILLS=true WIZARD_NONINTERACTIVE=true
   _MERGE_INTERACTIVE=true _TTY_INPUT="$_wul_skip/reply"
   unset KIT_MDM_OUTER_TRANSACTION KIT_MDM_OUTER_TRANSACTION_BACKUP
@@ -490,11 +493,17 @@ _wul_skip_rc=0
   info() { :; }
   warn() { :; }
   ok() { :; }
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   STR_DRYRUN_OFFER_EXISTING=dry-run
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   STR_EXISTING_CLAUDE_MERGE_NOTE=merge
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   STR_FRESH_DIR_EXISTS=exists
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   STR_FRESH_DIR_PROMPT=prompt
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   STR_FRESH_SKIPPED=skipped
+  # shellcheck disable=SC2034 # consumed indirectly by sourced setup_deploy
   STR_FRESH_NEW_ONLY=new
   setup_deploy
   [[ "${#_FRESH_SKIPPED_FILES[@]}" -eq 1 \
@@ -612,6 +621,7 @@ cp "$_wul_disabled_skill/package-lock.json" "$_wul_disabled_owned/lock.saved"
 _wul_disabled_rc=0
 (
   CLAUDE_DIR="$_wul_disabled_home"
+  # shellcheck disable=SC2034 # consumed indirectly by snapshot helpers
   INSTALL_SKILLS=false KIT_MDM_MANAGED=false DRY_RUN=false
   _FRESH_SKIPPED_FILES=()
   _wul_disabled_snapshot_body() {

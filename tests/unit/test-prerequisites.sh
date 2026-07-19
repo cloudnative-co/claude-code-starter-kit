@@ -13,6 +13,40 @@ detect_os
 # shellcheck source=lib/prerequisites.sh
 source "$PROJECT_DIR/lib/prerequisites.sh"
 
+# MDM-owned CLI versions are an exact stdout protocol, not a first-line hint.
+# Pipe raw bytes to the trusted comparator so NUL, CRLF, extra lines, and a
+# failing producer cannot be hidden by command substitution.
+_mdm_test_cli_output() {
+  case "$1" in
+    exact) printf '1.2.3\n' ;;
+    version) printf 'Version: 1.2.3\n' ;;
+    biome) printf 'biome 1.2.3\n' ;;
+    safety) printf 'cc-safety-net 1.2.3\n' ;;
+    no-lf) printf '1.2.3' ;;
+    crlf) printf '1.2.3\r\n' ;;
+    extra) printf '1.2.3\nextra\n' ;;
+    blank) printf '1.2.3\n\n' ;;
+    nul) printf '1.2.3\000\n' ;;
+    failing) printf '1.2.3\n'; return 7 ;;
+    *) return 1 ;;
+  esac
+}
+if _prereq_cli_output_matches 1.2.3 false _mdm_test_cli_output exact \
+  && _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output version \
+  && _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output biome \
+  && _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output safety \
+  && ! _prereq_cli_output_matches 1.2.3 false _mdm_test_cli_output version \
+  && ! _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output no-lf \
+  && ! _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output crlf \
+  && ! _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output extra \
+  && ! _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output blank \
+  && ! _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output nul \
+  && ! _prereq_cli_output_matches 1.2.3 true _mdm_test_cli_output failing; then
+  pass "prerequisites: MDM CLI version output requires exact successful bytes"
+else
+  fail "prerequisites: MDM CLI version output accepted a malformed result"
+fi
+
 # GNU tool detection must consume complete version output under pipefail.
 # A short-circuiting reader makes this producer exit with SIGPIPE.
 _gnu_detect_saved_path="$PATH"
@@ -669,7 +703,7 @@ if [[ "$_mdm_provenance_exact_rc" -eq 0 \
   && "$_mdm_provenance_restored_rc" -eq 0 ]]; then
   pass "prerequisites: private Node provenance requires exact canonical bytes"
 else
-  fail "prerequisites: private Node provenance accepted trailing bytes"
+  fail "prerequisites: private Node provenance exact-byte validation failed"
 fi
 
 _mdm_resolver_source="$(declare -f _mdm_resolve_private_node_toolchain)"
@@ -1239,6 +1273,25 @@ fi
 # byte-exact: shell-visible canonical text plus a trailing NUL is not valid.
 _safety_wrapper="$HOME/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin/cc-safety-net"
 _safety_script="$HOME/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/dist/bin/cc-safety-net.js"
+_safety_unicode_node="$HOME/利用者 node"
+_safety_unicode_script="$HOME/安全 script.js"
+_safety_wrapper_utf8="$(
+  /usr/bin/env LC_ALL=C.UTF-8 /bin/bash --noprofile --norc -c '
+    source "$1"
+    _mdm_expected_safety_wrapper "$2" "$3"
+  ' prerequisite-wrapper-locale "$PROJECT_DIR/lib/prerequisites.sh" \
+    "$_safety_unicode_node" "$_safety_unicode_script"
+)"
+_safety_user_octets='\345\210\251\347\224\250\350\200\205'
+_safety_script_octets='\345\256\211\345\205\250'
+if [[ "$_safety_wrapper_utf8" == *"$_safety_user_octets"* \
+  && "$_safety_wrapper_utf8" == *"$_safety_script_octets"* \
+  && "$_safety_wrapper_utf8" != *'利用者'* \
+  && "$_safety_wrapper_utf8" != *'安全'* ]]; then
+  pass "prerequisites: MDM Safety wrapper uses canonical C-locale bytes"
+else
+  fail "prerequisites: MDM Safety wrapper depends on the caller locale"
+fi
 _safety_wrapper_exact_rc=0
 check_mdm_cc_safety_net_baseline \
   >/dev/null 2>&1 || _safety_wrapper_exact_rc=$?

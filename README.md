@@ -1125,8 +1125,7 @@ claude-code-starter-kit/
 シェルスクリプトの静的解析には [ShellCheck](https://www.shellcheck.net/) を使用しています。PR 作成時に GitHub Actions で自動実行されます。ローカルで実行する場合:
 
 ```bash
-shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh \
-  mdm/*.sh tests/run-*.sh tests/unit/test-mdm-*.sh
+git ls-files -z '*.sh' | xargs -0 -n 1 shellcheck -S warning
 ```
 
 ---

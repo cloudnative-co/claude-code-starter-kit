@@ -106,6 +106,7 @@ EOF
     LANGUAGE=en
     INSTALL_COMMANDS=false
     INSTALL_SKILLS=false
+    # shellcheck disable=SC2034 # consumed indirectly by the template builder
     ENABLE_CODEX_PLUGIN=false
     _build_rc=0
     build_claude_md_to_file "$_build_tmp/out.md" >/dev/null 2>&1 || _build_rc=$?
@@ -163,7 +164,9 @@ EOF
     printf '{invalid existing settings\n' > "$CLAUDE_DIR/settings.json"
     build_settings_file() { printf '{"kit":true}\n' > "$1"; }
     export KIT_MDM_MANAGED=false
+    # shellcheck disable=SC2034 # consumed indirectly by _build_settings_safe
     STR_FRESH_MERGE_SETTINGS=merge
+    # shellcheck disable=SC2034 # consumed indirectly by _build_settings_safe
     STR_FRESH_MERGE_SETTINGS_DONE="done"
     _build_rc=0
     _build_settings_safe >/dev/null 2>&1 || _build_rc=$?
@@ -371,6 +374,7 @@ EOF
     CLAUDE_DIR="$_dist_tmp/claude"
     mkdir -p "$PROJECT_DIR/agents" "$CLAUDE_DIR"
     printf 'managed\n' > "$PROJECT_DIR/agents/test.md"
+    # shellcheck disable=SC2034 # consumed indirectly by collection helpers
     INSTALL_AGENTS=true INSTALL_RULES=false INSTALL_COMMANDS=false INSTALL_SKILLS=false
     _FEATURE_SCRIPT_ORDER=()
     _SETUP_TMP_FILES=()

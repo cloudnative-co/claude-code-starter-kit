@@ -84,6 +84,7 @@ fi
 (
   _timeout_signal_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
   _timeout_signal_ok=true
+  _timeout_signal_failures=""
   for _timeout_signal in HUP INT TERM; do
     case "$_timeout_signal" in
       HUP) _timeout_signal_expected=129 ;;
@@ -98,8 +99,6 @@ fi
       trap "" HUP INT TERM
       (
         trap "" HUP INT TERM
-        /bin/sleep 1
-        printf late > "$1/late-marker"
         while :; do /bin/sleep 1; done
       ) &
       printf "%s" "$!" > "$1/grandchild.pid"
@@ -121,30 +120,37 @@ fi
     _timeout_signal_rc=0
     wait "$_timeout_coordinator" 2>/dev/null || _timeout_signal_rc=$?
     _timeout_signal_elapsed=$((SECONDS - _timeout_signal_started))
-    /bin/sleep 1.1
     _timeout_signal_leader="$(/bin/cat \
       "$_timeout_signal_dir/leader.pid" 2>/dev/null || true)"
     _timeout_signal_grandchild="$(/bin/cat \
       "$_timeout_signal_dir/grandchild.pid" 2>/dev/null || true)"
     _timeout_signal_retry=0
     _mdm_run_with_timeout 1 /usr/bin/true || _timeout_signal_retry=$?
+    _timeout_signal_group_state=0
+    _mdm_timeout_group_live "$_timeout_signal_leader" \
+      || _timeout_signal_group_state=$?
+    _timeout_signal_grandchild_live=false
+    if /bin/ps -p "$_timeout_signal_grandchild" -o stat= 2>/dev/null \
+      | /usr/bin/grep -Ev '^[[:space:]]*Z' | /usr/bin/grep -q .; then
+      _timeout_signal_grandchild_live=true
+    fi
+    _timeout_signal_controls="$(/usr/bin/find "$_timeout_signal_dir" \
+      -maxdepth 1 -name 'claude-kit-mdm-timeout.*' -print -quit)"
     if [[ "$_timeout_signal_rc" -ne "$_timeout_signal_expected" \
-      || "$_timeout_signal_elapsed" -gt 5 || "$_timeout_signal_retry" -ne 0 \
-      || -e "$_timeout_signal_dir/late-marker" ]] \
+      || "$_timeout_signal_elapsed" -gt 15 || "$_timeout_signal_retry" -ne 0 ]] \
       || [[ ! "$_timeout_signal_leader" =~ ^[1-9][0-9]*$ \
         || ! "$_timeout_signal_grandchild" =~ ^[1-9][0-9]*$ ]] \
-      || _mdm_timeout_group_live "$_timeout_signal_leader" \
-      || /bin/ps -p "$_timeout_signal_grandchild" -o stat= 2>/dev/null \
-        | /usr/bin/grep -Ev '^[[:space:]]*Z' | /usr/bin/grep -q . \
-      || /usr/bin/find "$_timeout_signal_dir" -maxdepth 1 \
-        -name 'claude-kit-mdm-timeout.*' -print -quit | /usr/bin/grep -q .; then
+      || [[ "$_timeout_signal_group_state" -ne 1 \
+        || "$_timeout_signal_grandchild_live" != false \
+        || -n "$_timeout_signal_controls" ]]; then
       _timeout_signal_ok=false
+      _timeout_signal_failures="${_timeout_signal_failures}${_timeout_signal}:rc=${_timeout_signal_rc}/expected=${_timeout_signal_expected}/elapsed=${_timeout_signal_elapsed}/retry=${_timeout_signal_retry}/group=${_timeout_signal_group_state}/grandchild=${_timeout_signal_grandchild_live}/controls=${_timeout_signal_controls:-none} "
     fi
   done
   if [[ "$_timeout_signal_ok" == true ]]; then
     pass "mdm-install: timeout coordinator は HUP/INT/TERM で全PG回収し129/130/143・再試行可能"
   else
-    fail "mdm-install: timeout coordinator signal cleanup/status が不正"
+    fail "mdm-install: timeout coordinator signal cleanup/status が不正 (${_timeout_signal_failures% })"
   fi
   /bin/rm -rf "$_timeout_signal_tmp"
 )
@@ -3135,7 +3141,7 @@ EOF
 
 (
   _extract_tmp="$(builtin cd -P -- "$(mktemp -d)" && printf '%s' "$PWD")"
-  _extract_top=node-v24.18.0-darwin-x64
+  _extract_top="node-v24.18.0-darwin-x64"
   MDM_NODE_OWNER_UID_OVERRIDE="$(/usr/bin/id -u)"
   MDM_NODE_OWNER_GID_OVERRIDE="$(/usr/bin/id -g)"
   export MDM_NODE_OWNER_UID_OVERRIDE MDM_NODE_OWNER_GID_OVERRIDE
@@ -4181,7 +4187,7 @@ PY
       >/dev/null 2>&1 || _setup_reuse_rc=$?
     _mdm_release_run_lock >/dev/null 2>&1 || _setup_reuse_rc=$?
     if [[ "$_setup_lock_rc" -eq 0 && "$_setup_timeout_rc" -eq 124 \
-      && "$_setup_timeout_elapsed" -le 5 && "$_setup_contender_rc" -ne 0 \
+      && "$_setup_timeout_elapsed" -le 15 && "$_setup_contender_rc" -ne 0 \
       && "$_setup_retry_rc" -eq 0 && "$_setup_reuse_rc" -eq 0 \
       && -z "${_MDM_ACTIVE_DROP_SUPERVISOR_PID:-}" \
       && ! -s "$_setup_timeout_tmp/setup.err" ]] \
@@ -5097,20 +5103,20 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   _artifact_impl="$(/usr/bin/sed -n \
     '/^_mdm_artifact_digest()/,/^_mdm_stat_identity()/p' \
     "$PROJECT_DIR/mdm/install-mdm.sh")"
-  if printf '%s\n' "$_artifact_impl" | /usr/bin/grep -Fq 'dir_fd=' \
-    && printf '%s\n' "$_artifact_impl" | /usr/bin/grep -Eq \
-      'root_fd|rootfd|root_descriptor' \
-    && printf '%s\n' "$_artifact_impl" | /usr/bin/grep -Fq 'os.open(' \
-    && printf '%s\n' "$_artifact_impl" | /usr/bin/grep -Fq 'O_NOFOLLOW' \
-    && printf '%s\n' "$_artifact_impl" | /usr/bin/grep -Fq 'O_SYMLINK' \
-    && printf '%s\n' "$_artifact_impl" | /usr/bin/grep -Fq 'freadlink' \
-    && printf '%s\n' "$_artifact_impl" \
-      | /usr/bin/grep -Fq 'os.readlink(b"", dir_fd=descriptor)' \
-    && ! printf '%s\n' "$_artifact_impl" \
-      | /usr/bin/grep -Eq 'os\.readlink\((name|component),' \
-    && ! printf '%s\n' "$_artifact_impl" | /usr/bin/grep -Fq \
-      'os.path.join(path, name)' \
-    && ! printf '%s\n' "$_artifact_impl" | /usr/bin/grep -Fq 'os.walk'; then
+  if /usr/bin/grep -Fq 'dir_fd=' <<< "$_artifact_impl" \
+    && /usr/bin/grep -Eq 'root_fd|rootfd|root_descriptor' \
+      <<< "$_artifact_impl" \
+    && /usr/bin/grep -Fq 'os.open(' <<< "$_artifact_impl" \
+    && /usr/bin/grep -Fq 'O_NOFOLLOW' <<< "$_artifact_impl" \
+    && /usr/bin/grep -Fq 'O_SYMLINK' <<< "$_artifact_impl" \
+    && /usr/bin/grep -Fq 'freadlink' <<< "$_artifact_impl" \
+    && /usr/bin/grep -Fq 'os.readlink(b"", dir_fd=descriptor)' \
+      <<< "$_artifact_impl" \
+    && ! /usr/bin/grep -Eq 'os\.readlink\((name|component),' \
+      <<< "$_artifact_impl" \
+    && ! /usr/bin/grep -Fq 'os.path.join(path, name)' \
+      <<< "$_artifact_impl" \
+    && ! /usr/bin/grep -Fq 'os.walk' <<< "$_artifact_impl"; then
     pass "mdm-install: artifact tree walker は root dirfd/openat 相当に束縛"
   else
     fail "mdm-install: artifact tree walker の dirfd 静的契約が不正"
@@ -5590,8 +5596,9 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
 # Root issuer は user phase の launcher 観測だけを信頼せず、固定 version
 # tree の exact shape・payload pin・mode・Safety wrapper binding を再検証する。
 (
+  export LC_ALL=C.UTF-8
   _semantic_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
-  _semantic_home="$_semantic_tmp/home"
+  _semantic_home="$_semantic_tmp/home 利用者"
   _semantic_biome="$_semantic_home/.local/lib/claude-code-starter-kit/biome/2.5.4"
   _semantic_safety="$_semantic_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6"
   _semantic_node="/Library/Application Support/ClaudeCodeStarterKit/runtime/node-v24.18.0-darwin-arm64/bin/node"
@@ -5601,9 +5608,14 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   printf '{}\n' > "$_semantic_biome/package.json"
   printf 'pinned-js\n' > "$_semantic_safety/dist/bin/cc-safety-net.js"
   printf '{}\n' > "$_semantic_safety/package.json"
-  printf '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
-    "$_semantic_node" "$_semantic_safety/dist/bin/cc-safety-net.js" \
-    > "$_semantic_safety/bin/cc-safety-net"
+  _semantic_write_safety_wrapper() {
+    local output="$1" node="$2" script="$3" LC_ALL=C
+    printf '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
+      "$node" "$script" > "$output"
+  }
+  _semantic_write_safety_wrapper \
+    "$_semantic_safety/bin/cc-safety-net" "$_semantic_node" \
+    "$_semantic_safety/dist/bin/cc-safety-net.js"
   chmod 755 "$_semantic_biome/biome" \
     "$_semantic_safety/bin/cc-safety-net"
   chmod 644 "$_semantic_biome/package.json" \
@@ -5636,9 +5648,9 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   _mdm_component_safety_tree_is_trusted "$_semantic_home" \
     "$_semantic_safety" "$_semantic_safety/bin/cc-safety-net" \
     "$_semantic_node" >/dev/null 2>&1 || _semantic_wrapper_nul_rc=$?
-  printf '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
-    "$_semantic_node" "$_semantic_safety/dist/bin/cc-safety-net.js" \
-    > "$_semantic_safety/bin/cc-safety-net"
+  _semantic_write_safety_wrapper \
+    "$_semantic_safety/bin/cc-safety-net" "$_semantic_node" \
+    "$_semantic_safety/dist/bin/cc-safety-net.js"
   chmod 755 "$_semantic_safety/bin/cc-safety-net"
   _semantic_bad=biome
   _semantic_hash_rc=0

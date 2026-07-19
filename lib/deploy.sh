@@ -499,13 +499,18 @@ _mdm_atomic_replace_managed_file() {
 # file without ever following the old leaf or a swapped parent path.
 _mdm_atomic_replace_authoritative_root_file() {
   local src_file="$1" dest_file="$2" expected_mode="${3:-600}"
+  local system
   [[ "$CLAUDE_DIR" == /* && ! "$CLAUDE_DIR" =~ [[:cntrl:]] \
     && "$dest_file" == "$CLAUDE_DIR/"* \
     && ! "$dest_file" =~ [[:cntrl:]] ]] || return 1
   [[ "${dest_file%/*}" == "$CLAUDE_DIR" ]] || return 1
   _mdm_distribution_relpath_is_safe "${dest_file#"$CLAUDE_DIR"/}" || return 1
   case "$expected_mode" in 600|700) ;; *) return 1 ;; esac
-  [[ -x /usr/bin/python3 && ! -L /usr/bin/python3 ]] || return 1
+  system="$(/usr/bin/uname -s 2>/dev/null)" || return 1
+  # Keep the production Darwin interpreter path non-symlinked while allowing
+  # Ubuntu CI's root-managed /usr/bin/python3 symlink to exercise this helper.
+  [[ -x /usr/bin/python3 \
+    && ( "$system" != Darwin || ! -L /usr/bin/python3 ) ]] || return 1
 
   /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
     /usr/bin/python3 -c '
@@ -1583,12 +1588,14 @@ _wce_mdm_trusted_bundle_dirs() {
 }
 
 _wce_validate_mdm_bundle_tree() { # <bundle> <arch>
-  local bundle="$1" arch="$2" uid gid
+  local bundle="$1" arch="$2" uid gid system
   uid="$(_wce_mdm_expected_owner_uid)" || return 1
   gid="$(_wce_mdm_expected_owner_gid)" || return 1
+  system="$(/usr/bin/uname -s 2>/dev/null)" || return 1
   [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ \
     && ( "$arch" == arm64 || "$arch" == x64 ) \
-    && -x /usr/bin/python3 && ! -L /usr/bin/python3 ]] || return 1
+    && -x /usr/bin/python3 \
+    && ( "$system" != Darwin || ! -L /usr/bin/python3 ) ]] || return 1
   /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
     /usr/bin/python3 -I -B - "$bundle" "$uid" "$gid" "$arch" \
       "$_WCE_MDM_PACKAGE_SHA256" "$_WCE_MDM_LOCK_SHA256" <<'PY'

@@ -444,6 +444,51 @@ _mdm_test_supervisor_lifetime() { # <tmp> <fd|legacy|mkdir>
   _mdm_release_run_lock || return 1
   _mdm_test_disarm_background_cleanup
 }
+_mdm_test_corrupt_worker_record_preserved() { # <tmp>
+  local _tmp="$1" _holder _control _worker _before_size _after_size _result
+  _mdm_test_configure_lock_backend "$_tmp" mkdir || return 1
+  _mdm_test_write_drop_wrappers "$_tmp" || return 1
+  /bin/mkdir -p "$_tmp/home-alice" || return 1
+  /bin/chmod 700 "$_tmp/home-alice" || return 1
+  export MDM_LAUNCHCTL_OVERRIDE="$_tmp/launchctl"
+  export MDM_SUDO_OVERRIDE="$_tmp/sudo"
+  _MDM_TEST_BG_TMP="$_tmp"
+  /bin/bash -c '
+    MDM_SOURCE_ONLY=1 source "$1/mdm/install-mdm.sh"
+    _mdm_acquire_run_lock alice "$2/home-alice" || exit 81
+    printf "%s\n" "$_MDM_RUN_LOCK_CONTROL_DIR" > "$2/corrupt-control"
+    : > "$2/corrupt-coordinator.ready"
+    _exec_rc=0
+    _mdm_exec_as_user 501 alice "$2/home-alice" "$2/drop-worker" "$2" \
+      || _exec_rc=$?
+    _release_rc=0
+    _mdm_release_run_lock || _release_rc=$?
+    printf "%s:%s\n" "$_exec_rc" "$_release_rc" > "$2/corrupt-result"
+  ' mdm-lock-corrupt-worker "$PROJECT_DIR" "$_tmp" \
+    2>"$_tmp/corrupt.stderr" &
+  _holder=$!
+  _MDM_TEST_BG_HOLDER="$_holder"
+  _mdm_test_arm_background_cleanup
+  _mdm_test_wait_for_file "$_tmp/corrupt-coordinator.ready" "$_holder" \
+    || return 1
+  _mdm_test_wait_for_file "$_tmp/drop-worker.ready" "$_holder" || return 1
+  _control="$(/bin/cat "$_tmp/corrupt-control")" || return 1
+  _worker="$_control/worker"
+  [[ -f "$_worker" && ! -L "$_worker" ]] || return 1
+  _before_size="$(/usr/bin/wc -c < "$_worker" | /usr/bin/tr -d '[:space:]')" \
+    || return 1
+  printf '\000foreign-tail' >> "$_worker" || return 1
+  _after_size="$(/usr/bin/wc -c < "$_worker" | /usr/bin/tr -d '[:space:]')" \
+    || return 1
+  : > "$_tmp/drop-worker.release"
+  _mdm_test_wait_child_bounded "$_holder" || return 1
+  _result="$(/bin/cat "$_tmp/corrupt-result")" || return 1
+  [[ "$_result" =~ ^0:[1-9][0-9]*$ \
+    && "$_before_size" =~ ^[0-9]+$ && "$_after_size" =~ ^[0-9]+$ \
+    && "$_after_size" -gt "$_before_size" \
+    && -f "$_worker" && ! -L "$_worker" ]] || return 1
+  _mdm_test_disarm_background_cleanup
+}
 _mdm_test_term_cleanup_order() { # <tmp> <fd|legacy|mkdir>
   local _tmp="$1" _backend="$2" _holder _worker _grandchild _info
   local _coord_rc=0 _attempt=0 _acquired=0
@@ -534,6 +579,50 @@ _mdm_test_write_record() { # <path> <field...>
   local _path="$1"; shift
   (IFS=$'\t'; printf '%s\n' "$*") > "$_path" || return 1
   /bin/chmod 600 "$_path"
+}
+_mdm_test_record_exact_bytes() { # <tmp>
+  local _tmp="$1" _control _reap _control_id _reap_id _start _record _rc
+  _mdm_test_configure_lock_backend "$_tmp" mkdir || return 1
+  _control="$_tmp/support/remediation-global.mkdir-lock"
+  _reap="$_control/.reap"
+  /bin/mkdir "$_control" "$_reap" || return 1
+  /bin/chmod 700 "$_control" "$_reap" || return 1
+  _control_id="$(_mdm_persistent_dir_identity "$_control")" || return 1
+  _reap_id="$(_mdm_persistent_dir_identity "$_reap")" || return 1
+  _start="$(_mdm_process_start_identity "$$")" || return 1
+
+  _record="$_control/owner"
+  _mdm_test_write_record "$_record" "$$" "$_start" "$_control_id" \
+    || return 1
+  _mdm_lock_record_state "$_record" "$_control_id" || return 1
+  printf 'unterminated-extra' >> "$_record" || return 1
+  _rc=0; _mdm_lock_record_state "$_record" "$_control_id" || _rc=$?
+  [[ "$_rc" -eq 2 && -z "$_MDM_LOCK_RECORD_PID$_MDM_LOCK_RECORD_START$_MDM_LOCK_RECORD_DIR" ]] \
+    || return 1
+  _mdm_test_write_record "$_record" "$$" "$_start" "$_control_id" \
+    || return 1
+  printf '\000' >> "$_record" || return 1
+  _rc=0; _mdm_lock_record_state "$_record" "$_control_id" || _rc=$?
+  [[ "$_rc" -eq 2 && -z "$_MDM_LOCK_RECORD_PID$_MDM_LOCK_RECORD_START$_MDM_LOCK_RECORD_DIR" ]] \
+    || return 1
+
+  _record="$_reap/owner"
+  _mdm_test_write_record "$_record" \
+    "$$" "$_start" "$_control_id" "$_reap_id" || return 1
+  _mdm_reap_record_state "$_record" "$_control_id" "$_reap_id" || return 1
+  printf 'unterminated-extra' >> "$_record" || return 1
+  _rc=0
+  _mdm_reap_record_state "$_record" "$_control_id" "$_reap_id" || _rc=$?
+  [[ "$_rc" -eq 2 \
+    && -z "$_MDM_REAP_RECORD_PID$_MDM_REAP_RECORD_START$_MDM_REAP_RECORD_CONTROL$_MDM_REAP_RECORD_DIR" ]] \
+    || return 1
+  _mdm_test_write_record "$_record" \
+    "$$" "$_start" "$_control_id" "$_reap_id" || return 1
+  printf '\000' >> "$_record" || return 1
+  _rc=0
+  _mdm_reap_record_state "$_record" "$_control_id" "$_reap_id" || _rc=$?
+  [[ "$_rc" -eq 2 \
+    && -z "$_MDM_REAP_RECORD_PID$_MDM_REAP_RECORD_START$_MDM_REAP_RECORD_CONTROL$_MDM_REAP_RECORD_DIR" ]]
 }
 _mdm_test_mkdir_reap_recovery() { # <tmp>
   local _tmp="$1" _control _reap _control_id _reap_id _start _rc=0
@@ -785,6 +874,8 @@ else
 fi
 _mdm_test_case "mdm-lock: mkdir host-global contention・再取得" _mdm_test_global_contention_cycle mkdir
 _mdm_test_case "mdm-lock: mkdir coordinator SIGKILL lifetime" _mdm_test_supervisor_lifetime mkdir
+_mdm_test_case "mdm-lock: supervisor preserves a replaced worker record" \
+  _mdm_test_corrupt_worker_record_preserved
 _mdm_test_case "mdm-lock: mkdir TERM は descendants 後に再取得" _mdm_test_term_cleanup_order mkdir
 _mdm_test_case "mdm-lock: missing owner recovery・特殊 path fail-closed" \
   _mdm_test_mkdir_bad_initialization
@@ -794,6 +885,8 @@ _mdm_test_case "mdm-lock: bound owner-init/worker residue recovery" \
   _mdm_test_mkdir_temp_residue
 _mdm_test_case "mdm-lock: reap claim/worker publish ordering" \
   _mdm_test_mkdir_reap_worker_ordering
+_mdm_test_case "mdm-lock: owner/reap records require exact bytes" \
+  _mdm_test_record_exact_bytes
 _mdm_test_case "mdm-lock: PID start identity・record integrity" \
   _mdm_test_mkdir_pid_start_reuse
 _mdm_test_case "mdm-lock: delayed initializer/successor ABA prevention" \

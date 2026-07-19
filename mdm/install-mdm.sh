@@ -3657,7 +3657,7 @@ _mdm_exec_as_user() {
   _MDM_DROP_SUPERVISOR_STARTING=1
   /bin/sh -c '
     _home=$1; _control=$2; _dir_identity=$3; _deadline=$4; shift 4
-    _worker=""; _tmp=""; _child=""; _pgid=""; _rc=0; _pending=0
+    _worker=""; _worker_record=""; _tmp=""; _child=""; _pgid=""; _rc=0; _pending=0
     _deadline_watchdog=""
     _dir_id() {
       if [ "$(/usr/bin/uname -s 2>/dev/null)" = Darwin ]; then
@@ -3665,6 +3665,18 @@ _mdm_exec_as_user() {
       else
         /usr/bin/stat -c "%d:%i:%F" "$1" 2>/dev/null
       fi
+    }
+    _record_exact() {
+      _record=$1; _expected_record=$2; _actual_record=""
+      [ -f "$_record" ] && [ ! -L "$_record" ] || return 1
+      _record_size=$(/usr/bin/wc -c < "$_record" \
+        | /usr/bin/tr -d "[:space:]") || return 1
+      _expected_size=$(printf "%s\n" "$_expected_record" \
+        | LC_ALL=C /usr/bin/wc -c \
+        | /usr/bin/tr -d "[:space:]") || return 1
+      [ "$_record_size" = "$_expected_size" ] || return 1
+      IFS= read -r _actual_record < "$_record" || return 1
+      [ "$_actual_record" = "$_expected_record" ]
     }
     _group_live() {
       _group_listing=""
@@ -3697,10 +3709,9 @@ _mdm_exec_as_user() {
         && [ -f "$_tmp" ] && [ ! -L "$_tmp" ]; then
         /bin/rm -f "$_tmp"
       fi
-      if [ -f "$_worker" ] && [ ! -L "$_worker" ]; then
-        IFS="$(printf "\t")" read -r _pid _start _record_dir < "$_worker" || return 0
-        [ "$_pid" = "$$" ] && [ "$_record_dir" = "$_dir_identity" ] \
-          && /bin/rm -f "$_worker"
+      if [ -n "$_worker_record" ] \
+        && _record_exact "$_worker" "$_worker_record"; then
+        /bin/rm -f "$_worker"
       fi
     }
     _stop_deadline_watchdog() {
@@ -3796,8 +3807,10 @@ _mdm_exec_as_user() {
       _start=$(TZ=UTC0 LC_ALL=C /bin/ps -p "$$" -o lstart= 2>/dev/null \
         | /usr/bin/awk "{\$1=\$1; print}") || exit 1
       [ -n "$_start" ] && [ ! -e "$_worker" ] && [ ! -L "$_worker" ] || exit 1
+      _worker_record=$(printf "%s\t%s\t%s" "$$" "$_start" "$_dir_identity") \
+        || exit 1
       umask 077
-      (set -C; printf "%s\t%s\t%s\n" "$$" "$_start" "$_dir_identity" > "$_tmp") \
+      (set -C; printf "%s\n" "$_worker_record" > "$_tmp") \
         2>/dev/null || exit 1
       /bin/chmod 600 "$_tmp" || exit 1
       [ "$(_dir_id "$_control")" = "$_dir_identity" ] || exit 1
@@ -3805,10 +3818,7 @@ _mdm_exec_as_user() {
       /bin/mv "$_tmp" "$_worker" || exit 1
       [ "$(_dir_id "$_control")" = "$_dir_identity" ] || exit 1
       [ ! -e "$_control/.reap" ] && [ ! -L "$_control/.reap" ] || exit 1
-      IFS="$(printf "\t")" read -r _pid _record_start _record_dir _extra \
-        < "$_worker" || exit 1
-      [ "$_pid" = "$$" ] && [ "$_record_start" = "$_start" ] \
-        && [ "$_record_dir" = "$_dir_identity" ] && [ -z "$_extra" ] || exit 1
+      _record_exact "$_worker" "$_worker_record" || exit 1
       [ "$(_dir_id "$_control")" = "$_dir_identity" ] || exit 1
       [ ! -e "$_control/.reap" ] && [ ! -L "$_control/.reap" ] || exit 1
     fi
@@ -5188,9 +5198,21 @@ _mdm_process_start_identity() { # <pid>
 _MDM_LOCK_RECORD_PID=""
 _MDM_LOCK_RECORD_START=""
 _MDM_LOCK_RECORD_DIR=""
+_mdm_record_line_matches_identity() { # <inode:type:size> <line>
+  local _identity="$1" _line="$2" _size _line_size
+  _size="${_identity##*:}"
+  [[ "$_size" =~ ^[0-9]+$ ]] || return 1
+  _line_size="$(
+    printf '%s\n' "$_line" \
+      | LC_ALL=C /usr/bin/wc -c \
+      | /usr/bin/tr -d '[:space:]'
+  )" || return 1
+  [[ "$_line_size" =~ ^[0-9]+$ && "$_size" == "$_line_size" ]]
+}
+
 _mdm_lock_record_state() { # <record-path> <expected-dir-identity>
   local _path="$1" _expected_dir="$2" _before _opened _after _meta _rest _mode
-  local _line="" _extra="" _pid _start _dir _tail _current_start
+  local _line="" _pid _start _dir _tail _current_start
   _MDM_LOCK_RECORD_PID=""; _MDM_LOCK_RECORD_START=""; _MDM_LOCK_RECORD_DIR=""
   [[ -e "$_path" || -L "$_path" ]] || return 3
   [[ -f "$_path" && ! -L "$_path" ]] || return 2
@@ -5199,7 +5221,8 @@ _mdm_lock_record_state() { # <record-path> <expected-dir-identity>
   _opened="$(_mdm_stat_fd_identity 15)" || { exec 15<&-; return 2; }
   [[ "$_before" == "$_opened" ]] || { exec 15<&-; return 2; }
   IFS= read -r _line <&15 || { exec 15<&-; return 2; }
-  if IFS= read -r _extra <&15; then exec 15<&-; return 2; fi
+  _mdm_record_line_matches_identity "$_opened" "$_line" \
+    || { exec 15<&-; return 2; }
   exec 15<&-
   _after="$(_mdm_stat_identity "$_path")" || return 2
   [[ "$_after" == "$_before" ]] || return 2
@@ -5231,7 +5254,7 @@ _MDM_REAP_RECORD_CONTROL=""
 _MDM_REAP_RECORD_DIR=""
 _mdm_reap_record_state() { # <record> <control-identity> <reap-identity>
   local _path="$1" _expected_control="$2" _expected_reap="$3"
-  local _before _opened _after _meta _rest _mode _line="" _extra=""
+  local _before _opened _after _meta _rest _mode _line=""
   local _pid _start _control _reap _tail _current_start
   _MDM_REAP_RECORD_PID=""; _MDM_REAP_RECORD_START=""
   _MDM_REAP_RECORD_CONTROL=""; _MDM_REAP_RECORD_DIR=""
@@ -5242,7 +5265,8 @@ _mdm_reap_record_state() { # <record> <control-identity> <reap-identity>
   _opened="$(_mdm_stat_fd_identity 15)" || { exec 15<&-; return 2; }
   [[ "$_opened" == "$_before" ]] || { exec 15<&-; return 2; }
   IFS= read -r _line <&15 || { exec 15<&-; return 2; }
-  if IFS= read -r _extra <&15; then exec 15<&-; return 2; fi
+  _mdm_record_line_matches_identity "$_opened" "$_line" \
+    || { exec 15<&-; return 2; }
   exec 15<&-
   _after="$(_mdm_stat_identity "$_path")" || return 2
   [[ "$_after" == "$_before" ]] || return 2
@@ -11471,7 +11495,7 @@ _mdm_component_biome_tree_is_trusted() { # <tree> <canonical-command>
 }
 
 _mdm_component_safety_wrapper_is_bound() { # <home> <wrapper> <private-node>
-  local _home="$1" _wrapper="$2" _node="$3" _script _expected
+  local _home="$1" _wrapper="$2" _node="$3" _script _expected LC_ALL=C
   _script="$_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/dist/bin/cc-safety-net.js"
   [[ "$_wrapper" \
     == "$_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin/cc-safety-net" \

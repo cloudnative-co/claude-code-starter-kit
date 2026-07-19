@@ -708,16 +708,45 @@ _prereq_semver_is_valid() {
   [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
 }
 
-_prereq_cli_version_matches() {
-  local output="$1" expected="$2" first_line
-  first_line="${output%%$'\n'*}"
-  first_line="${first_line%$'\r'}"
-  case "$first_line" in
-    "$expected"|"Version: $expected"|"biome $expected"|"cc-safety-net $expected")
-      return 0
-      ;;
-    *) return 1 ;;
-  esac
+_prereq_system_python_is_trusted() {
+  local system
+  system="$(/usr/bin/uname -s 2>/dev/null)" || return 1
+  # Production MDM runs only on Darwin, where the Apple-signed system Python
+  # must remain a regular SIP-protected file. Ubuntu CI packages the same
+  # fixed system path as a root-managed symlink, so permit that test host shape
+  # without weakening the Darwin trust requirement.
+  [[ -x /usr/bin/python3 \
+    && ( "$system" != Darwin || ! -L /usr/bin/python3 ) ]]
+}
+
+_prereq_cli_output_matches() { # <expected> <allow-labels> <command> [args...]
+  local expected="$1" allow_labels="$2"
+  local -a status
+  shift 2
+  [[ "$#" -gt 0 \
+    && ( "$allow_labels" == true || "$allow_labels" == false ) ]] || return 1
+  _prereq_system_python_is_trusted || return 1
+  if "$@" 2>/dev/null | \
+    /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+      /usr/bin/python3 -I -B -c '
+import sys
+
+expected, allow_labels = sys.argv[1:]
+values = [expected]
+if allow_labels == "true":
+    values.extend((f"Version: {expected}", f"biome {expected}",
+                   f"cc-safety-net {expected}"))
+candidates = tuple(value.encode("utf-8", "strict") + b"\n"
+                   for value in values)
+actual = sys.stdin.buffer.read(max(map(len, candidates)) + 1)
+raise SystemExit(0 if actual in candidates else 1)
+' "$expected" "$allow_labels"; then
+    status=("${PIPESTATUS[@]}")
+  else
+    status=("${PIPESTATUS[@]}")
+  fi
+  [[ "${#status[@]}" -eq 2 \
+    && "${status[0]}" -eq 0 && "${status[1]}" -eq 0 ]]
 }
 
 # MDM-managed hook runtimes are pinned artifacts, not package-manager state.
@@ -836,7 +865,7 @@ _prereq_path_acl_safe() {
 
 _prereq_exact_text_file() { # <regular-file> <expected-without-final-LF>
   local path="$1" expected="$2"
-  [[ -x /usr/bin/python3 && ! -L /usr/bin/python3 ]] || return 1
+  _prereq_system_python_is_trusted || return 1
   /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
     /usr/bin/python3 -I -B - "$path" "$expected" <<'PY'
 import os
@@ -1111,8 +1140,8 @@ _mdm_resolve_private_node_toolchain() {
   KIT_MDM_NPM_PATH=""
   export KIT_MDM_NODE_RUNTIME_ROOT KIT_MDM_NODE_PATH KIT_MDM_NPM_PATH
 
-  local arch root node npm npm_target npm_json dir output metadata version
-  local process_arch content content_after
+  local arch root node npm npm_target npm_json dir
+  local content content_after
   arch="$(_mdm_current_darwin_arch)" || return 1
   _mdm_select_node_runtime_artifact "$arch" || return 1
   root="/Library/Application Support/ClaudeCodeStarterKit/runtime/node-v${_MDM_NODE_VERSION}-darwin-$arch"
@@ -1155,26 +1184,26 @@ _mdm_resolve_private_node_toolchain() {
   _mdm_private_node_provenance_valid "$root" "$arch" || return 1
   content="$(_mdm_private_node_content_sha256 "$root" "$node")" || return 1
   [[ "$content" == "$_MDM_SELECTED_NODE_CONTENT_SHA256" ]] || return 1
-  output="$(/usr/bin/env -i HOME="$HOME" \
+  _prereq_cli_output_matches "v$_MDM_NODE_VERSION" false \
+    /usr/bin/env -i HOME="$HOME" \
     PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" LC_ALL=C \
-    "$node" --version 2>/dev/null)" || return 1
-  [[ "$output" == "v$_MDM_NODE_VERSION" ]] || return 1
-  process_arch="$(/usr/bin/env -i HOME="$HOME" \
+    "$node" --version || return 1
+  _prereq_cli_output_matches "$arch" false \
+    /usr/bin/env -i HOME="$HOME" \
     PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" LC_ALL=C \
-    "$node" -p process.arch 2>/dev/null)" || return 1
-  [[ "$process_arch" == "$arch" ]] || return 1
-  metadata="$(/usr/bin/env -i HOME="$HOME" \
+    "$node" -p process.arch || return 1
+  _prereq_cli_output_matches "$_MDM_NODE_NPM_VERSION" false \
+    /usr/bin/env -i HOME="$HOME" \
     PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" LC_ALL=C \
     "$node" -e '
     const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     if (p.name !== "npm" || typeof p.version !== "string") process.exit(1);
-    process.stdout.write(p.version);
-  ' "$npm_json" 2>/dev/null)" || return 1
-  [[ "$metadata" == "$_MDM_NODE_NPM_VERSION" ]] || return 1
-  version="$(/usr/bin/env -i HOME="$HOME" \
+    process.stdout.write(p.version + "\n");
+  ' "$npm_json" || return 1
+  _prereq_cli_output_matches "$_MDM_NODE_NPM_VERSION" true \
+    /usr/bin/env -i HOME="$HOME" \
     PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" LC_ALL=C \
-    "$npm" --version 2>/dev/null)" || return 1
-  _prereq_cli_version_matches "$version" "$_MDM_NODE_NPM_VERSION" || return 1
+    "$npm" --version || return 1
   content_after="$(_mdm_private_node_content_sha256 "$root" "$node")" \
     || return 1
   [[ "$content_after" == "$content" ]] || return 1
@@ -1919,7 +1948,7 @@ _mdm_install_component_link() {
 }
 
 _mdm_validate_biome_tree_at() {
-  local root="$1" arch="$2" output
+  local root="$1" arch="$2"
   _mdm_select_biome_artifact "$arch" || return 1
   _prereq_canonical_real_dir "$root" || return 1
   _prereq_dir_has_exact_entries "$root" biome package.json || return 1
@@ -1933,14 +1962,14 @@ _mdm_validate_biome_tree_at() {
     == "$_MDM_SELECTED_BINARY_SHA256" ]] || return 1
   [[ "$(_prereq_sha256_file "$root/package.json")" \
     == "$_MDM_SELECTED_PACKAGE_SHA256" ]] || return 1
-  output="$(/usr/bin/env -i HOME="$HOME" \
+  _prereq_cli_output_matches "$_MDM_BIOME_VERSION" true \
+    /usr/bin/env -i HOME="$HOME" \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$root/biome" --version 2>/dev/null)" || return 1
-  _prereq_cli_version_matches "$output" "$_MDM_BIOME_VERSION"
+    "$root/biome" --version
 }
 
 _mdm_expected_safety_wrapper() {
-  local node="$1" script="$2"
+  local node="$1" script="$2" LC_ALL=C
   printf '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
     "$node" "$script"
 }
@@ -1948,7 +1977,7 @@ _mdm_expected_safety_wrapper() {
 _mdm_validate_safety_tree_at() {
   local root="$1" node="$2" execute_wrapper="${3:-true}"
   local wrapper="$root/bin/cc-safety-net" js="$root/dist/bin/cc-safety-net.js"
-  local expected_wrapper output
+  local expected_wrapper
   _prereq_canonical_real_dir "$root" || return 1
   _prereq_dir_has_exact_entries "$root" bin dist package.json || return 1
   _prereq_canonical_real_dir "$root/bin" || return 1
@@ -1975,10 +2004,10 @@ _mdm_validate_safety_tree_at() {
     || return 1
   _prereq_exact_text_file "$wrapper" "$expected_wrapper" || return 1
   [[ "$execute_wrapper" == true ]] || return 0
-  output="$(/usr/bin/env -i HOME="$HOME" \
+  _prereq_cli_output_matches "$_MDM_CC_SAFETY_NET_VERSION" true \
+    /usr/bin/env -i HOME="$HOME" \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$wrapper" --version 2>/dev/null)" || return 1
-  _prereq_cli_version_matches "$output" "$_MDM_CC_SAFETY_NET_VERSION"
+    "$wrapper" --version
 }
 
 check_mdm_biome_baseline() {

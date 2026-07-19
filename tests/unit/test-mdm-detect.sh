@@ -1185,10 +1185,36 @@ else
 fi
 
 _mdm_detect_private_node="$(_mdm_node_runtime_root)/bin/node"
-printf '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
+_mdm_test_write_safety_wrapper() { # <output> <node> <script>
+  local _output="$1" _node="$2" _script="$3" LC_ALL=C
+  printf '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
+    "$_node" "$_script" > "$_output"
+}
+_mdm_detect_unicode_home="$_mdm_detect_tmp/Users/利用者 home"
+_mdm_detect_unicode_root="$_mdm_detect_unicode_home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6"
+/bin/mkdir -p "$_mdm_detect_unicode_root/bin" \
+  "$_mdm_detect_unicode_root/dist/bin"
+: > "$_mdm_detect_unicode_root/dist/bin/cc-safety-net.js"
+_mdm_test_write_safety_wrapper \
+  "$_mdm_detect_unicode_root/bin/cc-safety-net" \
   "$_mdm_detect_private_node" \
-  "$_mdm_detect_safety_root/dist/bin/cc-safety-net.js" \
-  > "$_mdm_detect_safety_root/bin/cc-safety-net"
+  "$_mdm_detect_unicode_root/dist/bin/cc-safety-net.js"
+/bin/chmod 755 "$_mdm_detect_unicode_root/bin/cc-safety-net"
+if (
+  LC_ALL=C.UTF-8
+  export LC_ALL
+  _mdm_safety_wrapper_is_bound "$_mdm_detect_unicode_home" \
+    "$_mdm_detect_unicode_root/bin/cc-safety-net" \
+    "$_mdm_detect_private_node"
+); then
+  pass "mdm-detect: Unicode home の Safety wrapper を C locale で束縛"
+else
+  fail "mdm-detect: Safety wrapper binding が caller locale に依存"
+fi
+_mdm_test_write_safety_wrapper \
+  "$_mdm_detect_safety_root/bin/cc-safety-net" \
+  "$_mdm_detect_private_node" \
+  "$_mdm_detect_safety_root/dist/bin/cc-safety-net.js"
 chmod 755 "$_mdm_detect_safety_root/bin/cc-safety-net"
 _mdm_detect_safety_bound=0
 _mdm_safety_wrapper_is_bound "$_mdm_detect_home" \
@@ -1203,10 +1229,10 @@ if [[ "$_mdm_detect_safety_bound" -eq 0 ]] \
 else
   fail "mdm-detect: Safety wrapperのprivate Node bindingが不正"
 fi
-printf '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
+_mdm_test_write_safety_wrapper \
+  "$_mdm_detect_safety_root/bin/cc-safety-net" \
   "$_mdm_detect_private_node" \
-  "$_mdm_detect_safety_root/dist/bin/cc-safety-net.js" \
-  > "$_mdm_detect_safety_root/bin/cc-safety-net"
+  "$_mdm_detect_safety_root/dist/bin/cc-safety-net.js"
 printf '\0hidden-suffix\n' >> "$_mdm_detect_safety_root/bin/cc-safety-net"
 if _mdm_safety_wrapper_is_bound "$_mdm_detect_home" \
     "$_mdm_detect_safety_root/bin/cc-safety-net" \
@@ -1215,10 +1241,10 @@ if _mdm_safety_wrapper_is_bound "$_mdm_detect_home" \
 else
   pass "mdm-detect: Safety wrapper を descriptor-bound exact bytes で検証"
 fi
-printf '#!/bin/bash\nunset NODE_OPTIONS NODE_PATH\nexec %q %q "$@"\n' \
+_mdm_test_write_safety_wrapper \
+  "$_mdm_detect_safety_root/bin/cc-safety-net" \
   "$_mdm_detect_private_node" \
-  "$_mdm_detect_safety_root/dist/bin/cc-safety-net.js" \
-  > "$_mdm_detect_safety_root/bin/cc-safety-net"
+  "$_mdm_detect_safety_root/dist/bin/cc-safety-net.js"
 
 chmod 0611 "$_mdm_detect_home/.local/bin"
 if _mdm_component_command_path "$_mdm_detect_home" cc-safety-net \

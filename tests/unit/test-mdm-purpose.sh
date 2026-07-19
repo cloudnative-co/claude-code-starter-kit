@@ -367,11 +367,28 @@ _purpose_full_detect_tmp="$_purpose_tmp/full-detect-tmp"
 _purpose_full_renderer="$_purpose_tmp/trusted-render-expected.py"
 _purpose_full_reference="$_purpose_tmp/full-policy-reference"
 _purpose_standard_reference="$_purpose_tmp/standard-policy-reference"
+_purpose_full_tool_bin="$_purpose_tmp/full-tool-bin"
 mkdir -p "$_purpose_full_home" "$_purpose_full_auth" \
-  "$_purpose_full_receipts" "$_purpose_full_detect_tmp"
+  "$_purpose_full_receipts" "$_purpose_full_detect_tmp" \
+  "$_purpose_full_tool_bin"
 chmod 700 "$_purpose_full_home" "$_purpose_full_auth" \
-  "$_purpose_full_trust" "$_purpose_full_detect_tmp"
+  "$_purpose_full_trust" "$_purpose_full_detect_tmp" \
+  "$_purpose_full_tool_bin"
 chmod 755 "$_purpose_full_receipts"
+
+# The real setup path must remain in prerequisite fail mode, but hosted CI
+# images are not required to preinstall tmux. Supply only that OS prerequisite
+# through the target-user execution adapter so the test remains offline and
+# still exercises the production prerequisite, setup, and postcondition flow.
+cat > "$_purpose_full_tool_bin/tmux" <<'TMUX'
+#!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = "-V" ]; then
+  printf '%s\n' 'tmux purpose-fixture'
+  exit 0
+fi
+exit 64
+TMUX
+chmod 500 "$_purpose_full_tool_bin/tmux"
 
 /usr/bin/git clone --quiet --no-local "$PROJECT_DIR" "$_purpose_full_repo"
 /usr/bin/git -C "$PROJECT_DIR" diff --binary HEAD -- . \
@@ -634,7 +651,7 @@ _purpose_full_install() {
     PURPOSE_RENDERER="$_purpose_full_renderer" PURPOSE_SHA="$_purpose_full_sha" \
     PURPOSE_USER="$_purpose_user" PURPOSE_UID="$_purpose_uid" \
     PURPOSE_GENERATED_UID="$_purpose_generated_uid" \
-    PURPOSE_PYTHON="$_purpose_python" \
+    PURPOSE_PYTHON="$_purpose_python" PURPOSE_TOOL_BIN="$_purpose_full_tool_bin" \
     PURPOSE_FAIL_AFTER_DEPLOY="${PURPOSE_FAIL_AFTER_DEPLOY:-false}" \
     "$BASH" --noprofile --norc -c '
       set -euo pipefail
@@ -644,9 +661,18 @@ _purpose_full_install() {
       # through the test adapter; all other inventory checks stay live.
       _MDM_PASSTHROUGH_KEYS="$_MDM_PASSTHROUGH_KEYS MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK"
       _mdm_exec_as_user() {
-        local uid="$1" user="$2" home="$3"
+        local uid="$1" user="$2" home="$3" item path_count=0
         shift 3
         mdm_build_drop_argv "$uid" "$user" "$home" "$@" || return 1
+        for item in "${!MDM_DROP_ARGV[@]}"; do
+          case "${MDM_DROP_ARGV[$item]}" in
+            PATH=*)
+              path_count=$((path_count + 1))
+              MDM_DROP_ARGV[$item]="PATH=$PURPOSE_TOOL_BIN:${MDM_DROP_ARGV[$item]#PATH=}"
+              ;;
+          esac
+        done
+        [[ "$path_count" -eq 1 ]] || return 1
         (builtin cd -P "$home" && "${MDM_DROP_ARGV[@]}")
       }
       export MDM_KIT_REPO_URL_OVERRIDE="$PURPOSE_REPO"
@@ -778,6 +804,8 @@ if [[ "$_purpose_full_rc" -eq 0 && "$_purpose_full_detect_rc" -eq 0 \
   && "$_purpose_full_policy" == "$_purpose_full_reference_policy" \
   && "$_purpose_full_reference_editor" == vscode \
   && "$_purpose_full_component_rc" -eq 0 ]] \
+  && /usr/bin/grep -q 'tmux purpose-fixture' \
+    "$_purpose_tmp/full-install.out" \
   && [[ "$(/usr/bin/git -C "$_purpose_full_home/.claude-starter-kit" rev-parse HEAD)" \
     == "$_purpose_full_sha" ]]; then
   pass "mdm-purpose: 実zero-touch配備からreceipt検知までend-to-endで収束"
