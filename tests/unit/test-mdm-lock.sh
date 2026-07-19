@@ -892,3 +892,5 @@ _mdm_test_case "mdm-lock: PID start identity・record integrity" \
   _mdm_test_mkdir_pid_start_reuse
 _mdm_test_case "mdm-lock: delayed initializer/successor ABA prevention" \
   _mdm_test_mkdir_successor_aba
+
+mdm_test_reached_end

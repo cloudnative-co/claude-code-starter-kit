@@ -13,6 +13,93 @@ detect_os
 # shellcheck source=lib/prerequisites.sh
 source "$PROJECT_DIR/lib/prerequisites.sh"
 
+# Large inline Python helpers must travel as one `-c` argv value. Feeding the
+# source through stdin can block before Python starts when the shell's pipe
+# buffer is smaller than the source. Keep the mutation tests bound to that
+# production transport while still compiling the exact extracted source.
+_prereq_test_extract_inline_python() { # <function-name>
+  declare -f "$1" | /usr/bin/awk '
+    BEGIN { quote = sprintf("%c", 39) }
+    !capture && index($0, "/usr/bin/python3 -I -B -c ") \
+      && substr($0, length($0), 1) == quote {
+        capture = 1
+        begin_count++
+        next
+      }
+    capture && substr($0, 1, 1) == quote {
+      capture = 0
+      end_count++
+      exit
+    }
+    capture { print }
+    END {
+      if (begin_count != 1 || end_count != 1) exit 96
+    }
+  '
+}
+
+_prereq_python_transport_ok=true
+for _prereq_python_function in \
+  _prereq_exact_text_file \
+  _mdm_atomic_replace_component_leaf \
+  _mdm_rollback_preserved_component_leaf \
+  _mdm_finalize_preserved_component_leaf; do
+  _prereq_python_definition="$(declare -f "$_prereq_python_function")"
+  _prereq_python_source="$(
+    _prereq_test_extract_inline_python "$_prereq_python_function"
+  )" || _prereq_python_transport_ok=false
+  if [[ "${#_prereq_python_source}" -le 512 \
+    || "$_prereq_python_source" == *"'"* \
+    || "$_prereq_python_definition" == *'<<'* ]] \
+    || ! /usr/bin/python3 -I -B -c \
+      'import ast, sys; ast.parse(sys.argv[1])' \
+      "$_prereq_python_source"; then
+    _prereq_python_transport_ok=false
+  fi
+done
+if [[ "$_prereq_python_transport_ok" == true ]]; then
+  pass "prerequisites: large inline Python uses syntax-safe argv transport"
+else
+  fail "prerequisites: inline Python transport can block or break quoting"
+fi
+unset _prereq_python_definition _prereq_python_function
+unset _prereq_python_source _prereq_python_transport_ok
+
+# The zsh nvm block keeps its historical leading blank line and exact bytes,
+# and a second call remains idempotent without a heredoc-backed writer.
+_nvm_zshrc_saved_home="$HOME"
+_nvm_zshrc_saved_shell_set=0
+[[ -n "${SHELL+x}" ]] && _nvm_zshrc_saved_shell_set=1
+_nvm_zshrc_saved_shell="${SHELL:-}"
+_nvm_zshrc_tmp="$(mktemp -d)"
+export HOME="$_nvm_zshrc_tmp" SHELL=/bin/zsh
+_nvm_zshrc_expected='
+# nvm - Node Version Manager (added by claude-code-starter-kit)
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"'
+_nvm_zshrc_ok=false
+if _ensure_nvm_in_zshrc >/dev/null \
+  && _prereq_exact_text_file "$HOME/.zshrc" "$_nvm_zshrc_expected" \
+  && _ensure_nvm_in_zshrc >/dev/null \
+  && _prereq_exact_text_file "$HOME/.zshrc" "$_nvm_zshrc_expected"; then
+  _nvm_zshrc_ok=true
+fi
+export HOME="$_nvm_zshrc_saved_home"
+if [[ "$_nvm_zshrc_saved_shell_set" -eq 1 ]]; then
+  export SHELL="$_nvm_zshrc_saved_shell"
+else
+  unset SHELL
+fi
+/bin/rm -rf "$_nvm_zshrc_tmp"
+if [[ "$_nvm_zshrc_ok" == true ]]; then
+  pass "prerequisites: zsh nvm initialization keeps exact idempotent bytes"
+else
+  fail "prerequisites: zsh nvm initialization changed its output contract"
+fi
+unset _nvm_zshrc_expected _nvm_zshrc_ok _nvm_zshrc_saved_home
+unset _nvm_zshrc_saved_shell _nvm_zshrc_saved_shell_set _nvm_zshrc_tmp
+
 # MDM-owned CLI versions are an exact stdout protocol, not a first-line hint.
 # Pipe raw bytes to the trusted comparator so NUL, CRLF, extra lines, and a
 # failing producer cannot be hidden by command substitution.
@@ -837,10 +924,9 @@ _mdm_atomic_link_python="$_mdm_atomic_link_parent/race-helper.py"
 /bin/ln -s /tmp/replacement-node-modules "$_mdm_atomic_link_candidate"
 printf 'preserve\n' > "$_mdm_atomic_link_race_dir/keep.txt"
 _mdm_atomic_link_race_inode="$(_mdm_test_inode "$_mdm_atomic_link_race_dir")"
-declare -f _mdm_atomic_replace_component_leaf | /usr/bin/awk '
-  /<<.*PY/ { capture = 1; next }
-  capture && /^PY$/ { capture = 0; exit }
-  capture {
+_prereq_test_extract_inline_python \
+  _mdm_atomic_replace_component_leaf | /usr/bin/awk '
+  {
     if ($0 == "    operation = \"create\" if destination_before is None else \"swap\"") {
       print "    if replacement_kind == \"link\":"
       print "        rename_atomic(destination_name, \".race-prior\", \"create\")"
@@ -885,10 +971,9 @@ _mdm_atomic_post_python="$_mdm_atomic_post_parent/post-publish-helper.py"
 printf 'original\n' > "$_mdm_atomic_post_destination/keep.txt"
 /bin/ln -s /tmp/replacement-node-modules "$_mdm_atomic_post_candidate"
 _mdm_atomic_post_inode="$(_mdm_test_inode "$_mdm_atomic_post_destination")"
-declare -f _mdm_atomic_replace_component_leaf | /usr/bin/awk '
-  /<<.*PY/ { capture = 1; next }
-  capture && /^PY$/ { capture = 0; exit }
-  capture {
+_prereq_test_extract_inline_python \
+  _mdm_atomic_replace_component_leaf | /usr/bin/awk '
+  {
     print
     if ($0 == "    published = True") {
       print "    raise OSError(errno.EIO, \"injected post-publication failure\")"
@@ -930,10 +1015,9 @@ _mdm_atomic_replace_component_leaf \
   "$_mdm_atomic_inverse_candidate" "$_mdm_atomic_inverse_destination" \
   link-preserve-dir >/dev/null 2>&1
 _mdm_atomic_inverse_token="$_MDM_COMPONENT_PRESERVE_TOKEN"
-declare -f _mdm_rollback_preserved_component_leaf | /usr/bin/awk '
-  /<<.*PY/ { capture = 1; next }
-  capture && /^PY$/ { capture = 0; exit }
-  capture {
+_prereq_test_extract_inline_python \
+  _mdm_rollback_preserved_component_leaf | /usr/bin/awk '
+  {
     print
     if ($0 == "        rename_atomic(preserved_name, destination_name, \"swap\")") {
       print "        raise OSError(errno.EIO, \"injected inverse durability failure\")"
@@ -1054,10 +1138,9 @@ _mdm_atomic_foreign_python="$_mdm_atomic_foreign_parent/foreign-helper.py"
 /bin/mkdir -p "$_mdm_atomic_foreign_parent"
 /bin/ln -s /tmp/original-tool "$_mdm_atomic_foreign_destination"
 /bin/ln -s /tmp/our-candidate "$_mdm_atomic_foreign_candidate"
-declare -f _mdm_atomic_replace_component_leaf | /usr/bin/awk '
-  /<<.*PY/ { capture = 1; next }
-  capture && /^PY$/ { capture = 0; exit }
-  capture {
+_prereq_test_extract_inline_python \
+  _mdm_atomic_replace_component_leaf | /usr/bin/awk '
+  {
     print
     if ($0 == "    candidate_before = at(candidate_name)") {
       print "    os.rename(candidate_name, \".captured-candidate\", src_dir_fd=parent, dst_dir_fd=parent)"
@@ -1132,11 +1215,11 @@ _mdm_download_pinned_artifact() {
   printf '%s\n' "$url" >> "$_tmpdir/downloads.log"
   /bin/cp "$source" "$destination"
 }
-cat > "$_tmpdir/fake/npm" <<EOF
-#!/bin/bash
-: > "$_tmpdir/npm-called"
-exit 99
-EOF
+printf '%s\n' \
+  '#!/bin/bash' \
+  ": > \"$_tmpdir/npm-called\"" \
+  'exit 99' \
+  > "$_tmpdir/fake/npm"
 chmod +x "$_tmpdir/fake/npm"
 export PATH="$_tmpdir/fake:/usr/bin:/bin"
 

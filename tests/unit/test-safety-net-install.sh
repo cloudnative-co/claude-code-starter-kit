@@ -43,6 +43,18 @@ else
   fail "safety-net: external wrapper wiring or tracking is incomplete"
 fi
 
+_sn_snapshot_impl="$(awk '
+  /^_ccsk_safety_snapshot_cli\(\)/ { capture = 1 }
+  capture { print }
+  capture && /^}/ { exit }
+' "$_sn_wrapper")"
+if [[ "$_sn_snapshot_impl" == *"/usr/bin/python3 -I -B -c '"* \
+  && "$_sn_snapshot_impl" != *"<<"* ]]; then
+  pass "safety-net: private snapshot avoids delimiter stdin transport"
+else
+  fail "safety-net: private snapshot reintroduced delimiter stdin transport"
+fi
+
 # ── wrapper pins managed Node/JS and keeps a non-recursive normal fallback ─
 
 _sn_wrapper_tmp="$(mktemp -d)"

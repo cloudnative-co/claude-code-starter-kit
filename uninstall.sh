@@ -120,7 +120,7 @@ _remove_tracked_file() {
   [[ -d "$CLAUDE_DIR" && ! -L "$CLAUDE_DIR" ]] || return 1
   root_physical="$(cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P)" || return 1
 
-  IFS='/' read -r -a components <<< "$relative"
+  IFS='/' read -r -a components < <(printf '%s\n' "$relative")
   [[ "${#components[@]}" -gt 0 ]] || return 1
   leaf="${components[${#components[@]} - 1]}"
   [[ -n "$leaf" ]] || return 1
@@ -824,7 +824,7 @@ fi
 # suffix).
 _claude_plugin_list_has() {
   local _list="$1" _name="$2"
-  awk -v name="$_name" '
+  printf '%s\n' "$_list" | awk -v name="$_name" '
     {
       line = $0
       sub(/^[[:space:]]+/, "", line)
@@ -838,7 +838,7 @@ _claude_plugin_list_has() {
       if (candidate == name) { found = 1 }
     }
     END { exit found ? 0 : 1 }
-  ' <<< "$_list"
+  '
 }
 
 if command -v claude &>/dev/null; then

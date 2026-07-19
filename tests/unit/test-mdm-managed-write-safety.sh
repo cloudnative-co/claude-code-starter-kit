@@ -390,3 +390,5 @@ load_strings en
   fi
   rm -rf "$_tmp"
 )
+
+mdm_test_reached_end

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MDM_TEST_BASH_MIN=4
 # tests/unit/test-mdm-purpose.sh - PR 150 purpose-level acceptance coverage.
+# MDM_TEST_TIMEOUT_SECONDS=1800
 
 if ! declare -F pass >/dev/null 2>&1 \
   || ! declare -F fail >/dev/null 2>&1 \
@@ -15,7 +15,12 @@ fi
 # shellcheck source=mdm/install-mdm.sh
 MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
 
-_purpose_tmp="$(mktemp -d)"
+if [[ -z "${MDM_TEST_TMP_ROOT:-}" || ! -d "$MDM_TEST_TMP_ROOT" \
+  || -L "$MDM_TEST_TMP_ROOT" ]]; then
+  printf 'test-mdm-purpose.sh requires the runner-owned MDM_TEST_TMP_ROOT\n' >&2
+  exit 2
+fi
+_purpose_tmp="$(mktemp -d "$MDM_TEST_TMP_ROOT/mdm-purpose.XXXXXX")"
 _purpose_tmp="$(builtin cd -P "$_purpose_tmp" && printf '%s' "$PWD")"
 _purpose_repo="$_purpose_tmp/repo"
 _purpose_home="$_purpose_tmp/home"
@@ -75,6 +80,8 @@ _purpose_sha_c="$(_purpose_commit C)"
 _purpose_python_cmd="$(command -v python3)"
 _purpose_python="$("$_purpose_python_cmd" -c \
   'import os, sys; print(os.path.realpath(sys.executable))')"
+MDM_SYSTEM_PYTHON_OVERRIDE="$_purpose_python"
+export MDM_SYSTEM_PYTHON_OVERRIDE
 
 # Keep the production checkout, fixed-SHA, clean-env, and setup argv flow.
 # Only OS/root-only facilities are replaced by deterministic local adapters.
@@ -91,6 +98,8 @@ _mdm_prepare_expected_state() {
   printf '%s|%s|%s|%s\n' "$PROFILE" "$LANGUAGE" \
     "$ENABLE_STATUSLINE" "$KIT_MDM_INSTALL_CLAUDE_CLI" > "$_input"
   MDM_RCPT_POLICY_SHA256="$(_mdm_sha256_file "$_input")" || return 1
+  [[ "${KIT_MDM_EXPECTED_POLICY_SHA256:-}" == "$MDM_RCPT_POLICY_SHA256" ]] \
+    || return "$MDM_EXIT_CONFIG"
   KIT_MDM_POLICY_SHA256="$MDM_RCPT_POLICY_SHA256"
   export KIT_MDM_POLICY_SHA256
 }
@@ -109,6 +118,7 @@ _mdm_load_expected_required_components() {
 _mdm_cli_present_for_home() { return 0; }
 
 _purpose_run() { # <sha> <profile> <language> <statusline> <cli-required>
+  local _policy_input="$_purpose_tmp/fixture-policy"
   export MDM_AUTH_TMPDIR_OVERRIDE="$_purpose_auth"
   export MDM_AUTH_OWNER_UID_OVERRIDE="$_purpose_uid"
   export MDM_AUTH_PRIVACY_UID_OVERRIDE=99999
@@ -120,6 +130,10 @@ _purpose_run() { # <sha> <profile> <language> <statusline> <cli-required>
   export ENABLE_STATUSLINE="$4"
   export KIT_MDM_INSTALL_CLAUDE_CLI="$5"
   export KIT_MDM_DRY_RUN=false
+  printf '%s|%s|%s|%s\n' "$PROFILE" "$LANGUAGE" \
+    "$ENABLE_STATUSLINE" "$KIT_MDM_INSTALL_CLAUDE_CLI" > "$_policy_input"
+  KIT_MDM_EXPECTED_POLICY_SHA256="$(_mdm_sha256_file "$_policy_input")"
+  export KIT_MDM_EXPECTED_POLICY_SHA256
   unset KIT_MDM_INSTALL_DIR
   _mdm_run_user_phase 0 "$_purpose_user" "$_purpose_home" "$_purpose_uid"
 }
@@ -425,6 +439,7 @@ _purpose_full_reference_policy="$("$(command -v jq)" -r \
   '.policy_sha256 // empty' "$_purpose_full_reference/manifest.json")"
 _purpose_full_reference_editor="$("$(command -v jq)" -r \
   '.editor_choice // empty' "$_purpose_full_reference/policy.json")"
+_purpose_full_expected_policy="$_purpose_full_reference_policy"
 
 "$_purpose_python" -I -B "$_purpose_full_renderer" \
   --checkout "$_purpose_full_repo" --output "$_purpose_standard_reference" \
@@ -477,7 +492,7 @@ _purpose_composite_run() { # <name> <manifest-dir> <profile> <mode> <dry-run> <w
       _mdm_capture_prior_inventory() { return 0; }
       _mdm_prepare_expected_state() {
         _MDM_EXPECTED_OUTPUT="$PURPOSE_MANIFEST"
-        KIT_MDM_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        KIT_MDM_POLICY_SHA256="$KIT_MDM_EXPECTED_POLICY_SHA256"
         MDM_RCPT_POLICY_SHA256="$KIT_MDM_POLICY_SHA256"
         export KIT_MDM_POLICY_SHA256
       }
@@ -579,6 +594,8 @@ _purpose_composite_run() { # <name> <manifest-dir> <profile> <mode> <dry-run> <w
       export _MDM_TEST_MODE=1 MDM_EUID_OVERRIDE=0
       export PROFILE="$PURPOSE_PROFILE" LANGUAGE=en EDITOR_CHOICE=vscode
       export KIT_MDM_GIT_REF="$PURPOSE_SHA"
+      export KIT_MDM_EXPECTED_POLICY_SHA256="$(_mdm_json_get \
+        "$PURPOSE_MANIFEST/manifest.json" policy_sha256)"
       export KIT_MDM_INSTALL_CLAUDE_CLI=false KIT_MDM_INSTALL_HOMEBREW=false
       export KIT_MDM_PREREQ_MODE="$PURPOSE_MODE" KIT_MDM_DRY_RUN="$PURPOSE_DRY"
       _MDM_TARGET_GENERATED_UID=11111111-2222-3333-4444-555555555555
@@ -649,6 +666,7 @@ _purpose_full_install() {
     PURPOSE_HOME="$_purpose_full_home" PURPOSE_AUTH="$_purpose_full_auth" \
     PURPOSE_RECEIPTS="$_purpose_full_receipts" \
     PURPOSE_RENDERER="$_purpose_full_renderer" PURPOSE_SHA="$_purpose_full_sha" \
+    PURPOSE_POLICY="$_purpose_full_expected_policy" \
     PURPOSE_USER="$_purpose_user" PURPOSE_UID="$_purpose_uid" \
     PURPOSE_GENERATED_UID="$_purpose_generated_uid" \
     PURPOSE_PYTHON="$_purpose_python" PURPOSE_TOOL_BIN="$_purpose_full_tool_bin" \
@@ -695,6 +713,7 @@ _purpose_full_install() {
       export MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK=1
       export PROFILE=minimal LANGUAGE=en EDITOR_CHOICE=vscode
       export KIT_MDM_GIT_REF="$PURPOSE_SHA"
+      export KIT_MDM_EXPECTED_POLICY_SHA256="$PURPOSE_POLICY"
       export KIT_MDM_INSTALL_CLAUDE_CLI=false KIT_MDM_DRY_RUN=false
       export KIT_MDM_PREREQ_MODE=fail KIT_MDM_INSTALL_HOMEBREW=false
       export ENABLE_AUTO_UPDATE=false ENABLE_WEB_CONTENT_UPDATE=false
@@ -815,6 +834,144 @@ else
   fail "mdm-purpose: 実zero-touch配備の目的契約が不成立 (install=$_purpose_full_rc detect=$_purpose_full_detect_rc component=$_purpose_full_component_rc)"
 fi
 
+# Prove idempotence through the same production setup path, not through the
+# smaller fixture above.  Transaction paths and timestamps are intentionally
+# regenerated, so compare the stable state projection and also prove that the
+# sole retained backup is the exact pre-run live generation.
+_purpose_idem_live="$_purpose_full_home/.claude"
+_purpose_idem_checkout="$_purpose_full_home/.claude-starter-kit"
+_purpose_idem_manifest="$_purpose_idem_live/.starter-kit-manifest.json"
+_purpose_idem_history="$_purpose_full_receipts/managed-history-$_purpose_generated_uid.json"
+_purpose_idem_receipt_before="$_purpose_tmp/idempotent-receipt-before.json"
+_purpose_idem_receipt_after="$_purpose_tmp/idempotent-receipt-after.json"
+_purpose_idem_manifest_before="$_purpose_tmp/idempotent-manifest-before.json"
+_purpose_idem_manifest_after="$_purpose_tmp/idempotent-manifest-after.json"
+_purpose_idem_history_before="$_purpose_tmp/idempotent-history-before.json"
+_purpose_idem_ready=true
+"$(command -v jq)" -S \
+  'del(.timestamp, .log_path, .manifest_sha256, .component_manifest_sha256)' \
+  "$_purpose_full_receipt" > "$_purpose_idem_receipt_before" \
+  || _purpose_idem_ready=false
+"$(command -v jq)" -S 'del(.timestamp)' "$_purpose_idem_manifest" \
+  > "$_purpose_idem_manifest_before" || _purpose_idem_ready=false
+/bin/cp -p "$_purpose_idem_history" "$_purpose_idem_history_before" \
+  || _purpose_idem_ready=false
+_purpose_idem_live_id="$(_mdm_persistent_dir_identity \
+  "$_purpose_idem_live" 2>/dev/null || true)"
+_purpose_idem_live_digest="$(_mdm_artifact_digest tree \
+  "$_purpose_idem_live" "$_purpose_uid" 2>/dev/null || true)"
+_purpose_idem_worktree_digest="$(_mdm_worktree_content_digest \
+  "$_purpose_idem_checkout" retained 2>/dev/null || true)"
+_purpose_idem_deployment="$(_mdm_json_get "$_purpose_full_receipt" \
+  deployment_sha256 2>/dev/null || true)"
+_purpose_idem_claude_sha="$(_mdm_sha256_file \
+  "$_purpose_idem_live/CLAUDE.md" 2>/dev/null || true)"
+_purpose_idem_claude_mode="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_idem_live/CLAUDE.md" \
+    2>/dev/null || true)" 2>/dev/null || true)"
+if [[ ! "$_purpose_idem_live_id" =~ ^[^:]+:[^:]+:.+ \
+  || ! "$_purpose_idem_live_digest" =~ ^[0-9a-f]{64}$ \
+  || ! "$_purpose_idem_worktree_digest" =~ ^[0-9a-f]{64}$ \
+  || ! "$_purpose_idem_deployment" =~ ^[0-9a-f]{64}$ \
+  || ! "$_purpose_idem_claude_sha" =~ ^[0-9a-f]{64}$ \
+  || ! "$_purpose_idem_claude_mode" =~ ^0[0-7]{3}$ ]]; then
+  _purpose_idem_ready=false
+fi
+
+_purpose_idem_install_rc=125
+if [[ "$_purpose_idem_ready" == true ]]; then
+  _purpose_idem_install_rc=0
+  _purpose_full_install > "$_purpose_tmp/full-idempotent.out" 2>&1 \
+    || _purpose_idem_install_rc=$?
+fi
+_purpose_idem_policy="$(_mdm_json_get "$_purpose_full_receipt" \
+  policy_sha256 2>/dev/null || true)"
+_purpose_idem_detect_rc=0
+_purpose_full_detect "$_purpose_idem_policy" \
+  > "$_purpose_tmp/full-idempotent-detect.out" 2>&1 \
+  || _purpose_idem_detect_rc=$?
+_purpose_idem_component_rc=0
+_purpose_full_component_contract "$_purpose_idem_policy" \
+  || _purpose_idem_component_rc=$?
+"$(command -v jq)" -S \
+  'del(.timestamp, .log_path, .manifest_sha256, .component_manifest_sha256)' \
+  "$_purpose_full_receipt" > "$_purpose_idem_receipt_after" \
+  || _purpose_idem_ready=false
+"$(command -v jq)" -S 'del(.timestamp)' "$_purpose_idem_manifest" \
+  > "$_purpose_idem_manifest_after" || _purpose_idem_ready=false
+
+_purpose_idem_backup=""
+_purpose_idem_backup_count=0
+while IFS= read -r _purpose_idem_candidate; do
+  [[ -n "$_purpose_idem_candidate" ]] || continue
+  _purpose_idem_backup_count=$((_purpose_idem_backup_count + 1))
+  _purpose_idem_backup="$_purpose_idem_candidate"
+done < <(/usr/bin/find "$_purpose_full_home" -maxdepth 1 -type d \
+  -name '.claude.mdm-backup.*' -print)
+_purpose_idem_marker=""
+if [[ -f "$_purpose_idem_live/.starter-kit-last-backup" \
+  && ! -L "$_purpose_idem_live/.starter-kit-last-backup" ]]; then
+  IFS= read -r _purpose_idem_marker \
+    < "$_purpose_idem_live/.starter-kit-last-backup" || true
+fi
+_purpose_idem_backup_id="$(_mdm_persistent_dir_identity \
+  "$_purpose_idem_backup" 2>/dev/null || true)"
+_purpose_idem_backup_digest="$(_mdm_artifact_digest tree \
+  "$_purpose_idem_backup" "$_purpose_uid" 2>/dev/null || true)"
+_purpose_idem_head="$(/usr/bin/git -C "$_purpose_idem_checkout" \
+  rev-parse HEAD 2>/dev/null || true)"
+_purpose_idem_status=dirty
+_mdm_persistent_worktree_clean "$_purpose_idem_checkout" \
+  && _purpose_idem_status=clean
+_purpose_idem_residue=false
+if /usr/bin/find "$_purpose_full_home" -maxdepth 1 \
+    \( -name '.claude.mdm-failed.*' \
+      -o -name '.claude-starter-kit.mdm-stage.*' \
+      -o -name '.claude-starter-kit.mdm-failed.*' \) \
+    -print -quit | /usr/bin/grep -q . \
+  || /usr/bin/find "$_purpose_full_auth" -maxdepth 1 \
+    -name 'claude-kit-mdm-parent-modes.*' -print -quit \
+    | /usr/bin/grep -q . \
+  || [[ -e "$_purpose_idem_live/.claude-starter-kit-mdm-transaction" \
+    || -L "$_purpose_idem_live/.claude-starter-kit-mdm-transaction" ]]; then
+  _purpose_idem_residue=true
+fi
+
+if [[ "$_purpose_idem_ready" == true \
+  && "$_purpose_idem_install_rc" -eq 0 \
+  && "$_purpose_idem_detect_rc" -eq 0 \
+  && "$_purpose_idem_component_rc" -eq 0 \
+  && "$_purpose_idem_policy" == "$_purpose_full_policy" \
+  && "$_purpose_idem_head" == "$_purpose_full_sha" \
+  && "$_purpose_idem_status" == clean \
+  && "$(_mdm_worktree_content_digest "$_purpose_idem_checkout" retained \
+    2>/dev/null || true)" == "$_purpose_idem_worktree_digest" \
+  && "$(_mdm_json_get "$_purpose_full_receipt" deployment_sha256 \
+    2>/dev/null || true)" == "$_purpose_idem_deployment" \
+  && "$(_mdm_sha256_file "$_purpose_idem_live/CLAUDE.md" \
+    2>/dev/null || true)" == "$_purpose_idem_claude_sha" \
+  && "$(_mdm_mode_normalize \
+    "$(_mdm_stat_mode "$_purpose_idem_live/CLAUDE.md" \
+      2>/dev/null || true)" 2>/dev/null || true)" \
+    == "$_purpose_idem_claude_mode" ]] \
+  && /usr/bin/cmp -s "$_purpose_idem_receipt_before" \
+    "$_purpose_idem_receipt_after" \
+  && /usr/bin/cmp -s "$_purpose_idem_manifest_before" \
+    "$_purpose_idem_manifest_after" \
+  && /usr/bin/cmp -s "$_purpose_idem_history_before" \
+    "$_purpose_idem_history" \
+  && [[ "$_purpose_idem_backup_count" -eq 1 \
+  && "$_purpose_idem_marker" == "$_purpose_idem_backup" \
+  && "$_purpose_idem_backup_id" == "$_purpose_idem_live_id" \
+  && "$_purpose_idem_backup_digest" == "$_purpose_idem_live_digest" \
+  && "$_purpose_idem_residue" == false ]]; then
+  pass "mdm-purpose: 実setup同一入力再実行はsemantic driftなく収束し最新1世代backupを保持"
+else
+  tail -30 "$_purpose_tmp/full-idempotent.out" >&2 || true
+  tail -20 "$_purpose_tmp/full-idempotent-detect.out" >&2 || true
+  fail "mdm-purpose: 実setup同一入力再実行の冪等契約が不成立 (prepared=$_purpose_idem_ready install=$_purpose_idem_install_rc detect=$_purpose_idem_detect_rc component=$_purpose_idem_component_rc backups=$_purpose_idem_backup_count residue=$_purpose_idem_residue)"
+fi
+
 _purpose_full_tampered="$_purpose_full_home/.claude-starter-kit/README.md"
 chmod u+w "$_purpose_full_tampered"
 printf '\n# purpose-level managed component tamper\n' >> "$_purpose_full_tampered"
@@ -849,6 +1006,133 @@ else
   fail "mdm-purpose: component改変後の再収束に失敗 (detect=$_purpose_full_tamper_detect_rc remediate=$_purpose_full_remediate_rc recheck=$_purpose_full_recheck_rc component=$_purpose_full_remediated_component_rc)"
 fi
 
+# Managed-file parent metadata is part of the deployed-state contract even
+# when every managed byte and file mode is unchanged.  Exercise the same real
+# fixed-SHA install/detect chain while retaining user-owned rule content.
+_purpose_parent_live="$_purpose_full_home/.claude/rules"
+_purpose_parent_snapshot="$_purpose_full_home/.claude/.starter-kit-snapshot/rules"
+_purpose_parent_live_file="$_purpose_parent_live/agents.md"
+_purpose_parent_snapshot_file="$_purpose_parent_snapshot/agents.md"
+_purpose_parent_user_file="$_purpose_parent_live/user-purpose-parent-mode.md"
+_purpose_parent_user_dir="$_purpose_parent_live/user-purpose-parent-mode"
+_purpose_parent_user_nested="$_purpose_parent_user_dir/notes.md"
+printf 'purpose user rule\n' > "$_purpose_parent_user_file"
+mkdir "$_purpose_parent_user_dir"
+printf 'purpose nested user rule\n' > "$_purpose_parent_user_nested"
+chmod 600 "$_purpose_parent_user_file" "$_purpose_parent_user_nested"
+chmod 700 "$_purpose_parent_user_dir"
+
+_purpose_parent_live_copy="$_purpose_tmp/parent-live-managed.before"
+_purpose_parent_snapshot_copy="$_purpose_tmp/parent-snapshot-managed.before"
+_purpose_parent_user_copy="$_purpose_tmp/parent-user.before"
+_purpose_parent_user_nested_copy="$_purpose_tmp/parent-user-nested.before"
+/bin/cp -p "$_purpose_parent_live_file" "$_purpose_parent_live_copy"
+/bin/cp -p "$_purpose_parent_snapshot_file" "$_purpose_parent_snapshot_copy"
+/bin/cp -p "$_purpose_parent_user_file" "$_purpose_parent_user_copy"
+/bin/cp -p "$_purpose_parent_user_nested" \
+  "$_purpose_parent_user_nested_copy"
+_purpose_parent_live_mode="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_live")")"
+_purpose_parent_snapshot_mode="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_snapshot")")"
+_purpose_parent_live_file_mode="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_live_file")")"
+_purpose_parent_snapshot_file_mode="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_snapshot_file")")"
+_purpose_parent_user_mode="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_user_file")")"
+_purpose_parent_user_dir_mode="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_user_dir")")"
+_purpose_parent_user_nested_mode="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_user_nested")")"
+_purpose_parent_fixture_ok=false
+if [[ -d "$_purpose_parent_live" && ! -L "$_purpose_parent_live" \
+  && -d "$_purpose_parent_snapshot" && ! -L "$_purpose_parent_snapshot" \
+  && "$(_mdm_stat_uid "$_purpose_parent_live")" == "$_purpose_uid" \
+  && "$(_mdm_stat_uid "$_purpose_parent_snapshot")" == "$_purpose_uid" ]] \
+  && ! _mdm_has_extended_acl "$_purpose_parent_live" \
+  && ! _mdm_has_extended_acl "$_purpose_parent_snapshot"; then
+  _purpose_parent_fixture_ok=true
+fi
+
+# The production root-private mutator also covers 000. Purpose tests run as the
+# target UID without privilege, so use owner-readable 0500 for the real flow.
+chmod 0500 "$_purpose_parent_live"
+chmod 0777 "$_purpose_parent_snapshot"
+_purpose_parent_drift_detect_rc=0
+_purpose_full_detect "$_purpose_full_reference_policy" \
+  > "$_purpose_tmp/full-detect-parent-drift.out" 2>&1 \
+  || _purpose_parent_drift_detect_rc=$?
+_purpose_parent_remediate_rc=0
+_purpose_full_install > "$_purpose_tmp/full-remediate-parent-drift.out" 2>&1 \
+  || _purpose_parent_remediate_rc=$?
+_purpose_parent_recheck_rc=0
+_purpose_full_detect "$_purpose_full_reference_policy" \
+  > "$_purpose_tmp/full-detect-parent-remediated.out" 2>&1 \
+  || _purpose_parent_recheck_rc=$?
+_purpose_parent_component_rc=0
+_purpose_full_component_contract "$_purpose_full_reference_policy" \
+  || _purpose_parent_component_rc=$?
+_purpose_parent_live_mode_after="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_live" 2>/dev/null || true)" \
+  2>/dev/null || true)"
+_purpose_parent_snapshot_mode_after="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_parent_snapshot" 2>/dev/null || true)" \
+  2>/dev/null || true)"
+
+# Restore traversal only after observing the remediation postcondition so a
+# failed implementation does not strand the remaining transaction fixture.
+[[ "$_purpose_parent_live_mode_after" == "$_purpose_parent_live_mode" ]] \
+  || chmod "$_purpose_parent_live_mode" "$_purpose_parent_live" 2>/dev/null || true
+[[ "$_purpose_parent_snapshot_mode_after" == "$_purpose_parent_snapshot_mode" ]] \
+  || chmod "$_purpose_parent_snapshot_mode" "$_purpose_parent_snapshot" \
+    2>/dev/null || true
+
+_purpose_parent_preserved=false
+if /usr/bin/cmp -s "$_purpose_parent_live_copy" \
+    "$_purpose_parent_live_file" \
+  && /usr/bin/cmp -s "$_purpose_parent_snapshot_copy" \
+    "$_purpose_parent_snapshot_file" \
+  && /usr/bin/cmp -s "$_purpose_parent_user_copy" \
+    "$_purpose_parent_user_file" \
+  && /usr/bin/cmp -s "$_purpose_parent_user_nested_copy" \
+    "$_purpose_parent_user_nested" \
+  && [[ -d "$_purpose_parent_user_dir" && ! -L "$_purpose_parent_user_dir" \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_purpose_parent_live_file")")" \
+      == "$_purpose_parent_live_file_mode" \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_purpose_parent_snapshot_file")")" \
+      == "$_purpose_parent_snapshot_file_mode" \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_purpose_parent_user_file")")" \
+      == "$_purpose_parent_user_mode" \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_purpose_parent_user_dir")")" \
+      == "$_purpose_parent_user_dir_mode" \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_purpose_parent_user_nested")")" \
+      == "$_purpose_parent_user_nested_mode" ]]; then
+  _purpose_parent_preserved=true
+fi
+if [[ "$_purpose_parent_fixture_ok" == true \
+  && "$_purpose_parent_drift_detect_rc" -eq 1 \
+  && "$_purpose_parent_remediate_rc" -eq 0 \
+  && "$_purpose_parent_recheck_rc" -eq 0 \
+  && "$_purpose_parent_component_rc" -eq 0 \
+  && "$_purpose_parent_live_mode_after" == "$_purpose_parent_live_mode" \
+  && "$_purpose_parent_snapshot_mode_after" \
+    == "$_purpose_parent_snapshot_mode" \
+  && "$_purpose_parent_preserved" == true ]]; then
+  pass "mdm-purpose: managed parent mode driftを同一SHAで修復しuser state保持"
+else
+  tail -20 "$_purpose_tmp/full-detect-parent-drift.out" >&2 || true
+  tail -30 "$_purpose_tmp/full-remediate-parent-drift.out" >&2 || true
+  tail -20 "$_purpose_tmp/full-detect-parent-remediated.out" >&2 || true
+  fail "mdm-purpose: managed parent mode remediation契約が不成立 (fixture=$_purpose_parent_fixture_ok detect=$_purpose_parent_drift_detect_rc remediate=$_purpose_parent_remediate_rc recheck=$_purpose_parent_recheck_rc component=$_purpose_parent_component_rc preserved=$_purpose_parent_preserved live-mode=$_purpose_parent_live_mode_after snapshot-mode=$_purpose_parent_snapshot_mode_after)"
+  _purpose_full_install > "$_purpose_tmp/full-parent-recovery.out" 2>&1 || true
+fi
+
 # A second fixed-SHA generation fails only after setup, component attestation,
 # and root history persistence.  The outer transaction must restore generation
 # A across user/root artifacts, preserve rejected B candidates, and converge on
@@ -857,6 +1141,8 @@ _purpose_txn_claude="$_purpose_full_home/.claude"
 _purpose_txn_persistent="$_purpose_full_home/.claude-starter-kit"
 _purpose_txn_history="$_purpose_full_receipts/managed-history-$_purpose_generated_uid.json"
 _purpose_txn_component="$_purpose_full_receipts/components-$_purpose_generated_uid.json"
+_purpose_txn_parent_live="$_purpose_txn_claude/rules"
+_purpose_txn_parent_snapshot="$_purpose_txn_claude/.starter-kit-snapshot/rules"
 _purpose_txn_old_claude_id="$(_mdm_persistent_dir_identity \
   "$_purpose_txn_claude")"
 _purpose_txn_old_claude_digest="$(_mdm_artifact_digest tree \
@@ -867,6 +1153,12 @@ _purpose_txn_old_persistent_digest="$(_mdm_artifact_digest tree \
   "$_purpose_txn_persistent" "$_purpose_uid")"
 _purpose_txn_old_head="$(/usr/bin/git -C "$_purpose_txn_persistent" \
   rev-parse HEAD)"
+chmod 0500 "$_purpose_txn_parent_live"
+chmod 0777 "$_purpose_txn_parent_snapshot"
+_purpose_txn_parent_live_original="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_txn_parent_live")")"
+_purpose_txn_parent_snapshot_original="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_txn_parent_snapshot")")"
 _purpose_txn_history_before="$_purpose_tmp/transaction-history-before"
 _purpose_txn_component_before="$_purpose_tmp/transaction-component-before"
 /bin/cp -p "$_purpose_txn_history" "$_purpose_txn_history_before"
@@ -887,6 +1179,17 @@ GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   /usr/bin/git -C "$_purpose_full_repo" commit --quiet \
     -m 'fixture transaction generation B'
 _purpose_full_sha="$(/usr/bin/git -C "$_purpose_full_repo" rev-parse HEAD)"
+_purpose_txn_reference="$_purpose_tmp/transaction-policy-reference"
+"$_purpose_python" -I -B "$_purpose_full_renderer" \
+  --checkout "$_purpose_full_repo" --output "$_purpose_txn_reference" \
+  --profile minimal --language en --editor vscode \
+  --logical-home "$_purpose_full_home" --claude-cli-required false \
+  --override ENABLE_AUTO_UPDATE=false \
+  --override ENABLE_WEB_CONTENT_UPDATE=false \
+  --override ENABLE_STATUSLINE=false \
+  --override ENABLE_CODEX_PLUGIN=false >/dev/null 2>&1
+_purpose_full_expected_policy="$("$(command -v jq)" -r \
+  '.policy_sha256 // empty' "$_purpose_txn_reference/manifest.json")"
 
 _purpose_txn_fail_rc=0
 PURPOSE_FAIL_AFTER_DEPLOY=true \
@@ -919,11 +1222,29 @@ _purpose_txn_failed_persistent_head="$(/usr/bin/git -C \
   "$_purpose_txn_failed_persistent" rev-parse HEAD 2>/dev/null || true)"
 _purpose_txn_receipt_result="$("$(command -v jq)" -r \
   '.result // empty' "$_purpose_full_receipt" 2>/dev/null || true)"
+_purpose_txn_parent_live_after_failure="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_txn_parent_live" 2>/dev/null || true)" \
+  2>/dev/null || true)"
+_purpose_txn_parent_snapshot_after_failure="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_txn_parent_snapshot" 2>/dev/null || true)" \
+  2>/dev/null || true)"
+_purpose_txn_parent_journal_after_failure=false
+if /usr/bin/find "$_purpose_full_auth" -maxdepth 1 \
+  -name 'claude-kit-mdm-parent-modes.*' -print -quit \
+  | /usr/bin/grep -q .; then
+  _purpose_txn_parent_journal_after_failure=true
+fi
+chmod 0700 "$_purpose_txn_parent_live" "$_purpose_txn_parent_snapshot"
+_purpose_txn_claude_digest_after_failure="$(_mdm_artifact_digest tree \
+  "$_purpose_txn_claude" "$_purpose_uid")"
+chmod "$_purpose_txn_parent_live_original" "$_purpose_txn_parent_live"
+chmod "$_purpose_txn_parent_snapshot_original" \
+  "$_purpose_txn_parent_snapshot"
 if [[ "$_purpose_txn_fail_rc" -eq "$MDM_EXIT_SETUP" \
   && "$_purpose_txn_failure_detect_rc" -eq 1 \
   && "$(_mdm_persistent_dir_identity "$_purpose_txn_claude")" \
     == "$_purpose_txn_old_claude_id" \
-  && "$(_mdm_artifact_digest tree "$_purpose_txn_claude" "$_purpose_uid")" \
+  && "$_purpose_txn_claude_digest_after_failure" \
     == "$_purpose_txn_old_claude_digest" \
   && "$(_mdm_persistent_dir_identity "$_purpose_txn_persistent")" \
     == "$_purpose_txn_old_persistent_id" \
@@ -934,6 +1255,11 @@ if [[ "$_purpose_txn_fail_rc" -eq "$MDM_EXIT_SETUP" \
   && "$_purpose_txn_marker_restored" == true \
   && "$_purpose_txn_history_restored" == true \
   && "$_purpose_txn_component_restored" == true \
+  && "$_purpose_txn_parent_live_after_failure" \
+    == "$_purpose_txn_parent_live_original" \
+  && "$_purpose_txn_parent_snapshot_after_failure" \
+    == "$_purpose_txn_parent_snapshot_original" \
+  && "$_purpose_txn_parent_journal_after_failure" == false \
   && -d "$_purpose_txn_failed_claude" \
   && -d "$_purpose_txn_failed_persistent" \
   && "$_purpose_txn_failed_persistent_head" == "$_purpose_full_sha" \
@@ -961,10 +1287,25 @@ _purpose_txn_retry_persistent_head="$(/usr/bin/git -C \
   "$_purpose_txn_persistent" rev-parse HEAD 2>/dev/null || true)"
 _purpose_txn_retry_receipt_result="$("$(command -v jq)" -r \
   '.result // empty' "$_purpose_full_receipt" 2>/dev/null || true)"
+_purpose_txn_parent_live_after_retry="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_txn_parent_live" 2>/dev/null || true)" \
+  2>/dev/null || true)"
+_purpose_txn_parent_snapshot_after_retry="$(_mdm_mode_normalize \
+  "$(_mdm_stat_mode "$_purpose_txn_parent_snapshot" 2>/dev/null || true)" \
+  2>/dev/null || true)"
+_purpose_txn_parent_journal_after_retry=false
+if /usr/bin/find "$_purpose_full_auth" -maxdepth 1 \
+  -name 'claude-kit-mdm-parent-modes.*' -print -quit \
+  | /usr/bin/grep -q .; then
+  _purpose_txn_parent_journal_after_retry=true
+fi
 if [[ "$_purpose_txn_retry_rc" -eq 0 \
   && "$_purpose_txn_retry_detect_rc" -eq 0 \
   && "$_purpose_txn_retry_component_rc" -eq 0 \
   && "$_purpose_txn_retry_persistent_head" == "$_purpose_full_sha" \
+  && "$_purpose_txn_parent_live_after_retry" == 0700 \
+  && "$_purpose_txn_parent_snapshot_after_retry" == 0700 \
+  && "$_purpose_txn_parent_journal_after_retry" == false \
   && -d "$_purpose_txn_failed_claude" \
   && -d "$_purpose_txn_failed_persistent" \
   && "$_purpose_txn_retry_receipt_result" == success ]]; then
@@ -977,3 +1318,5 @@ fi
 
 _mdm_cleanup_transient_checkouts >/dev/null 2>&1 || true
 rm -rf "$_purpose_tmp"
+
+mdm_test_reached_end

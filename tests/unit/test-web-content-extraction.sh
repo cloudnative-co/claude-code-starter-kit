@@ -358,11 +358,11 @@ if command -v node >/dev/null 2>&1; then
   cp "$WCE_DIR/scripts/update-deps.mjs" "$_wce_mdm_skill/scripts/update-deps.mjs"
   printf '{"version":"2","mdm_managed":true}\n' \
     > "$_wce_mdm_home/.claude/.starter-kit-manifest.json"
-  cat > "$_wce_mdm_bin/npm" <<EOF
-#!/bin/sh
-: > "$_wce_tmp/mdm-npm-called"
-exit 99
-EOF
+  printf '%s\n' \
+    '#!/bin/sh' \
+    ": > \"$_wce_tmp/mdm-npm-called\"" \
+    'exit 99' \
+    > "$_wce_mdm_bin/npm"
   chmod +x "$_wce_mdm_bin/npm"
   _wce_node="$(command -v node)"
   _wce_mdm_rc=0
@@ -1018,9 +1018,9 @@ fi
 # --- 11. MDM activates a root-owned runtime without running user npm ---
 _wce_activation_impl="$(declare -f _wce_activate_mdm_runtime)"
 if /usr/bin/grep -Fq '"$candidate" "$link" link-preserve-dir' \
-    <<< "$_wce_activation_impl" \
+    < <(printf '%s\n' "$_wce_activation_impl") \
   && /usr/bin/grep -Fq '_mdm_finalize_preserved_component_leaf' \
-    <<< "$_wce_activation_impl"; then
+    < <(printf '%s\n' "$_wce_activation_impl"); then
   pass "web-content-extraction: MDM activation preserves only real directories"
 else
   fail "web-content-extraction: MDM activation lost its directory-only preservation contract"
@@ -1094,11 +1094,11 @@ _wce_mdm_results="$_wce_tmp/mdm-runtime-results"
   }
 
   _wce_reset_mdm_bundle
-  cat > "$_wce_bin/npm" <<EOF
-#!/bin/bash
-: > "$_wce_tmp/mdm-npm-called"
-exit 99
-EOF
+  printf '%s\n' \
+    '#!/bin/bash' \
+    ": > \"$_wce_tmp/mdm-npm-called\"" \
+    'exit 99' \
+    > "$_wce_bin/npm"
   chmod +x "$_wce_bin/npm"
   export PATH="$_wce_bin:/usr/bin:/bin"
   export KIT_MDM_WCE_RUNTIME_BUNDLE="$_wce_bundle"

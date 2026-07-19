@@ -676,9 +676,7 @@ _merge_object_3way() {
           '$obj | .[$k] = $v')" || return 1
         ;;
     esac
-  done <<EOF
-$all_keys
-EOF
+  done < <(printf '%s\n' "$all_keys")
 
   # Write updated merged JSON back to the caller's variable
   local new_merged
@@ -838,9 +836,7 @@ merge_settings_3way() {
           '.[$k] = $v')" || return 1
         ;;
     esac
-  done <<EOF
-$all_keys
-EOF
+  done < <(printf '%s\n' "$all_keys")
 
   # Write output
   local tmp_out
@@ -939,9 +935,7 @@ _merge_settings_bootstrap() {
     if [[ "$_RK_CLASS" == "merge-object" ]]; then
       _merge_progress_detail "  [merge-object] $key"
     fi
-  done <<EOF
-$all_keys
-EOF
+  done < <(printf '%s\n' "$all_keys")
 
   local tmp_out
   tmp_out="$(mktemp)" || return 1

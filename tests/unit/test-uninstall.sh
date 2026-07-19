@@ -29,6 +29,35 @@ _ut_extract_fn() {
 _ut_tmp="$(mktemp -d)"
 _ut_extract_fn "$PROJECT_DIR/uninstall.sh" "_detect_language" > "$_ut_tmp/detect_language.sh"
 
+# The standalone uninstaller must retain the exact self-contained parser used
+# during setup. Exercise its streaming input with the matching entry after
+# 4 KiB, which would block in Bash 5.3 when implemented as a here-string on a
+# 512-byte pipe.
+_ut_extract_fn "$PROJECT_DIR/uninstall.sh" "_claude_plugin_list_has" \
+  > "$_ut_tmp/uninstall-plugin-list-has.sh"
+_ut_extract_fn "$PROJECT_DIR/lib/codex-setup.sh" "_claude_plugin_list_has" \
+  > "$_ut_tmp/setup-plugin-list-has.sh"
+_ut_long_plugin_list="Installed plugins:"$'\n'
+_ut_long_plugin_index=0
+while [[ "$_ut_long_plugin_index" -lt 512 ]]; do
+  _ut_long_plugin_list="${_ut_long_plugin_list}  filler-${_ut_long_plugin_index}@marketplace"$'\n'
+  _ut_long_plugin_index=$((_ut_long_plugin_index + 1))
+done
+_ut_long_plugin_list="${_ut_long_plugin_list}  ❯ codex@openai-codex"$'\n'
+# shellcheck source=/dev/null
+source "$_ut_tmp/uninstall-plugin-list-has.sh"
+if cmp -s "$_ut_tmp/uninstall-plugin-list-has.sh" \
+    "$_ut_tmp/setup-plugin-list-has.sh" \
+  && [[ "${#_ut_long_plugin_list}" -gt 4096 ]] \
+  && _claude_plugin_list_has "$_ut_long_plugin_list" "codex" \
+  && ! _claude_plugin_list_has "$_ut_long_plugin_list" "codex-tools"; then
+  pass "uninstall: self-contained plugin parser matches setup and streams lists larger than 4 KiB"
+else
+  fail "uninstall: self-contained plugin parser drifted, blocked, or misparsed a large list"
+fi
+unset -f _claude_plugin_list_has
+unset _ut_long_plugin_list _ut_long_plugin_index
+
 _ut_home="$_ut_tmp/home"
 mkdir -p "$_ut_home"
 

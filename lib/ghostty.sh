@@ -25,6 +25,21 @@ _ghostty_mdm_mode() {
   esac
 }
 
+_ghostty_validate_outer_transaction_carrier() {
+  case "${KIT_MDM_OUTER_TRANSACTION:-}" in
+    '') [[ -z "${KIT_MDM_OUTER_TRANSACTION_BACKUP:-}" ]] ;;
+    true)
+      _ghostty_mdm_managed || return 1
+      if [[ -n "${KIT_MDM_OUTER_TRANSACTION_BACKUP:-}" ]]; then
+        [[ "$KIT_MDM_OUTER_TRANSACTION_BACKUP" \
+          == "$HOME"/.claude.mdm-backup.* \
+          && -d "$KIT_MDM_OUTER_TRANSACTION_BACKUP" \
+          && ! -L "$KIT_MDM_OUTER_TRANSACTION_BACKUP" ]]
+      fi ;;
+    *) return 1 ;;
+  esac
+}
+
 _ghostty_app_path() {
   printf '%s' /Applications/Ghostty.app
 }
@@ -158,8 +173,14 @@ deploy_ghostty_config() {
   config_dir="$(_ghostty_config_dir)"
   config_file="$config_dir/config"
 
+  # The root-owned MDM transaction journals this exact config leaf before it
+  # invokes setup.sh.  Do not create an independent timestamp backup inside
+  # that transaction; abort/commit is owned by the outer journal instead.
+  _ghostty_validate_outer_transaction_carrier || return 1
   mkdir -p "$config_dir"
-  _backup_ghostty_config
+  if [[ "${KIT_MDM_OUTER_TRANSACTION:-}" != true ]]; then
+    _backup_ghostty_config
+  fi
 
   cp -a "$template_file" "$config_file"
 

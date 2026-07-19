@@ -128,6 +128,40 @@
 }
 
 {
+  test_name="setup-refactor: MDM native CLI Python helpers pass source via argv"
+  if (
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/setup.sh"
+    for _python_helper in \
+      _mdm_snapshot_native_cli \
+      _mdm_native_cli_matches_snapshot \
+      _mdm_native_claude_cli_present \
+      _mdm_prepare_native_claude_cli_reinstall; do
+      _python_helper_body="$(declare -f "$_python_helper")" || exit 1
+      [[ "$_python_helper_body" == *' -I -B -c '* ]] || exit 1
+      _python_helper_tail="${_python_helper_body#* -I -B -c }"
+      [[ "$_python_helper_tail" != *' -I -B -c '* \
+        && "$_python_helper_body" != *'<<'* ]] || exit 1
+      case "$_python_helper" in
+        _mdm_snapshot_native_cli|_mdm_native_cli_matches_snapshot)
+          [[ "$_python_helper_body" \
+            == *"' \"\$_target\" \"\$_snapshot\""* ]] || exit 1
+          ;;
+        *)
+          [[ "$_python_helper_body" \
+            == *"' \"\$_link\" \"\$_versions\""* ]] || exit 1
+          ;;
+      esac
+    done
+    ! grep -qF -- '<<' "$PROJECT_DIR/setup.sh"
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
   test_name="codex-setup: repeated MSYS PATH and MCP cleanup blocks are helperized"
   if grep -q '^_ensure_msys_npm_path()' "$PROJECT_DIR/lib/codex-setup.sh" \
     && grep -q '^_cleanup_legacy_mcp_with_report()' "$PROJECT_DIR/lib/codex-setup.sh" \
@@ -789,12 +823,11 @@
 
 _ISP_DIR="$(mktemp -d)"
 mkdir -p "$_ISP_DIR/bin"
-cat > "$_ISP_DIR/bin/claude" <<'FAKE_CLAUDE'
-#!/bin/bash
+printf '%s\n' '#!/bin/bash
 # Fake claude CLI: logs every invocation; `plugin list` output is controllable.
-printf '%s\n' "$*" >> "${FAKE_CLAUDE_LOG:?}"
+printf "%s\n" "$*" >> "${FAKE_CLAUDE_LOG:?}"
 if [[ "${1:-}" == "plugin" && "${2:-}" == "list" ]]; then
-  printf '%s\n' "${FAKE_CLAUDE_PLUGIN_LIST:-}"
+  printf "%s\n" "${FAKE_CLAUDE_PLUGIN_LIST:-}"
   exit 0
 fi
 if [[ "${1:-}" == "plugin" && "${2:-}" == "marketplace" && "${3:-}" == "add" ]]; then
@@ -805,7 +838,7 @@ if [[ "${1:-}" == "plugin" && "${2:-}" == "marketplace" && "${3:-}" == "add" ]];
   exit 0
 fi
 exit 0
-FAKE_CLAUDE
+' > "$_ISP_DIR/bin/claude"
 chmod +x "$_ISP_DIR/bin/claude"
 
 # _isp_run_case <selected_plugins> <plugin_list_output> <marketplace_rc> <with_claude>

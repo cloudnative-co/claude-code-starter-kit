@@ -23,6 +23,43 @@ ENABLE_CODEX_PLUGIN="false"
 source "$PROJECT_DIR/lib/deploy.sh"
 
 {
+  test_name="deploy-refactor: deploy avoids delimiter stdin transports"
+  _wce_validator_source="$(declare -f _wce_validate_mdm_bundle_tree)"
+  _wce_validator_quote_count="$(
+    printf '%s' "$_wce_validator_source" \
+      | tr -cd "'" \
+      | wc -c \
+      | tr -d '[:space:]'
+  )"
+  if [[ "$_wce_validator_source" == *"/usr/bin/python3 -I -B -c '"* \
+    && "$_wce_validator_source" \
+      == *"' \"\$bundle\" \"\$uid\" \"\$gid\" \"\$arch\""* \
+    && "$_wce_validator_source" \
+      == *"\"\$_WCE_MDM_PACKAGE_SHA256\" \"\$_WCE_MDM_LOCK_SHA256\""* \
+    && "$_wce_validator_source" != *"/usr/bin/python3 -I -B - \"\$bundle\""* \
+    && "$_wce_validator_source" != *"<<'PY'"* \
+    && "$_wce_validator_quote_count" == "2" ]] \
+    && ! grep -Fq '<<' "$PROJECT_DIR/lib/deploy.sh"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  unset _wce_validator_source _wce_validator_quote_count
+}
+
+{
+  test_name="deploy-refactor: version comparison preserves numeric triples"
+  if _version_ge 2.1.0 2.0.99 \
+    && ! _version_ge 2.0.99 2.1.0 \
+    && _version_ge 1.2 1.2.0 \
+    && _version_ge 1.2.3.4 1.2.3.9; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
   test_name="deploy-refactor: build_claude_md delegates to build_claude_md_to_file"
   if grep -q 'build_claude_md_to_file "$out"' "$PROJECT_DIR/lib/deploy.sh" \
     && [[ "$(grep -c 'cp -a "$base" "$out"' "$PROJECT_DIR/lib/deploy.sh")" == "1" ]]; then

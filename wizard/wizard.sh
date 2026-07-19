@@ -259,7 +259,7 @@ _normalize_codex_state() {
   # Scrub stale Codex entries from SELECTED_PLUGINS (field-by-field)
   if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
     local _cleaned="" _field
-    IFS=',' read -r -a _sp_arr <<< "$SELECTED_PLUGINS"
+    IFS=',' read -r -a _sp_arr < <(printf '%s\n' "$SELECTED_PLUGINS")
     for _field in "${_sp_arr[@]}"; do
       case "$_field" in
         codex@*|codex) continue ;;

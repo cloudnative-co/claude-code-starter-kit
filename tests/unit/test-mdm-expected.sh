@@ -759,3 +759,5 @@ rm -rf "$_expected_tmp"
 
 _test_mdm_expected_main
 unset -f _test_mdm_expected_main
+
+mdm_test_reached_end

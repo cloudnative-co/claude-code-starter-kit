@@ -8,6 +8,11 @@
 # token: every directly executed invocation crosses this boundary.  Callers
 # that explicitly wrap the script must use the clean invocation documented in
 # docs/mdm/README.md.
+_MDM_LAUNCHER_SOURCE_CONTEXT=0
+[[ "${BASH_SOURCE[0]:-}" != "${0:-}" ]] \
+  && _MDM_LAUNCHER_SOURCE_CONTEXT=1
+readonly _MDM_LAUNCHER_SOURCE_CONTEXT
+
 _mdm_launcher_mode_safe() {
   local _mode="$1"
   [[ "$_mode" =~ ^[0-7]+$ ]] || return 1
@@ -45,6 +50,33 @@ _mdm_launcher_acl_safe() {
   [[ "$_perms" != *+* && "$_listing" != *$'\n'* ]]
 }
 
+_mdm_launcher_tmp_base_trusted() { # <fixed-temporary-base>
+  local _base="$1" _physical _path _owner _mode
+  case "$_base" in /private/tmp|/tmp) ;; *) return 1 ;; esac
+  [[ -d "$_base" && ! -L "$_base" ]] || return 1
+  _physical="$(builtin cd -P -- "$_base" 2>/dev/null && printf '%s' "$PWD")" \
+    || return 1
+  [[ "$_physical" == "$_base" ]] || return 1
+
+  _path="$_physical"
+  while :; do
+    [[ -d "$_path" && ! -L "$_path" ]] || return 1
+    _owner="$(_mdm_launcher_stat_uid "$_path" || true)"
+    _mode="$(_mdm_launcher_stat_mode "$_path" || true)"
+    [[ "$_owner" == 0 ]] || return 1
+    if [[ "$_path" == "$_physical" ]]; then
+      [[ "$_mode" == 1777 ]] || return 1
+    else
+      _mdm_launcher_mode_safe "$_mode" || return 1
+    fi
+    _mdm_launcher_acl_safe "$_path" || return 1
+    [[ "$_path" == / ]] && break
+    _path="${_path%/*}"
+    [[ -n "$_path" ]] || _path=/
+  done
+  return 0
+}
+
 _mdm_launcher_path_trusted() {
   local _script="$1" _dir _base _canonical _path _owner _mode
   [[ -f "$_script" && ! -L "$_script" ]] || return 1
@@ -78,7 +110,8 @@ _mdm_launcher_path_trusted() {
 }
 
 _mdm_launcher_snapshot() { # <source> <output-variable>
-  local _source="$1" _output="$2" _before _opened _tmp_base _old_umask
+  local _source="$1" _output="$2" _before _opened _tmp_base _allocation_base
+  local _old_umask
   local _mdm_launcher_inflight=""
   [[ "$_output" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
   printf -v "$_output" '%s' ""
@@ -101,9 +134,20 @@ _mdm_launcher_snapshot() { # <source> <output-variable>
     _tmp_base=/tmp
   fi
   [[ "$_before" == "$_opened" ]] || { exec 9<&-; return 1; }
+  _mdm_launcher_tmp_base_trusted "$_tmp_base" \
+    || { exec 9<&-; return 1; }
+  _allocation_base="$_tmp_base"
+  if [[ "$_MDM_LAUNCHER_SOURCE_CONTEXT" == 1 \
+    && "${_MDM_TEST_MODE:-0}" == 1 \
+    && "${MDM_TEST_TMP_ROOT:-}" == /* && -d "$MDM_TEST_TMP_ROOT" \
+    && ! -L "$MDM_TEST_TMP_ROOT" \
+    && "$(cd -P "$MDM_TEST_TMP_ROOT" && /bin/pwd -P)" \
+      == "$MDM_TEST_TMP_ROOT" ]]; then
+    _allocation_base="$MDM_TEST_TMP_ROOT"
+  fi
   _old_umask="$(umask)"; umask 077
   _mdm_launcher_inflight="$(
-    /usr/bin/mktemp "$_tmp_base/claude-kit-mdm-launcher.XXXXXX"
+    /usr/bin/mktemp "$_allocation_base/claude-kit-mdm-launcher.XXXXXX"
   )" \
     || { umask "$_old_umask"; exec 9<&-; return 1; }
   umask "$_old_umask"
@@ -455,8 +499,14 @@ if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
 fi
 set -euo pipefail
 _MDM_TEST_MODE="${MDM_SOURCE_ONLY:-0}"
+# Preserve whether this file was sourced explicitly for tests.  Individual
+# production-path tests temporarily set _MDM_TEST_MODE=0 so they can exercise
+# the real validation/copy/seal path without making the test runner's
+# containment root available to a directly executed MDM process.
+_MDM_SOURCE_TEST_ACTIVE="${MDM_SOURCE_ONLY:-0}"
 _MDM_EXPECTED_RENDERER="${_MDM_EXPECTED_RENDERER:-}"
 _MDM_EXPECTED_RENDERER_SNAPSHOT="${_MDM_EXPECTED_RENDERER_SNAPSHOT:-0}"
+_MDM_EXPECTED_RENDERER_OWNER_UID="${_MDM_EXPECTED_RENDERER_OWNER_UID:-}"
 # MDM agent の umask（000 のことがある）を継承しない（契約: dir 755 /
 # file 644。レシート/ログが group/other 書込可で生成されると detect の
 # compliant 偽装に直結する。R2-High）。setup.sh は自身で umask 077 を設定する。
@@ -513,9 +563,40 @@ _mdm_config_path() {
 # 無視する。macOS は sticky・root 管理領域 /private/tmp（/tmp はその
 # symlink）、非 macOS の source-only test は /tmp を使う。非 root は
 # 従来どおり TMPDIR を尊重する。
+_mdm_test_runner_tmp_base() {
+  local _base="${MDM_TEST_TMP_ROOT:-}" _physical
+  [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && "$_base" == /* && -d "$_base" && ! -L "$_base" ]] || return 1
+  _physical="$(builtin cd -P -- "$_base" 2>/dev/null \
+    && printf '%s' "$PWD")" || return 1
+  [[ "$_physical" == "$_base" ]] || return 1
+  printf '%s' "$_base"
+}
+
+_mdm_managed_tmp_path_matches() { # <path> <basename-prefix>
+  local _path="$1" _prefix="$2" _base="" _parent _physical _name
+  [[ -n "$_path" && "$_prefix" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  _parent="${_path%/*}"
+  _name="${_path##*/}"
+  case "$_name" in "$_prefix".*) : ;; *) return 1 ;; esac
+  case "$_parent" in /private/tmp|/tmp) return 0 ;; esac
+  _base="$(_mdm_test_runner_tmp_base 2>/dev/null)" || return 1
+  case "$_path" in "$_base"/*) : ;; *) return 1 ;; esac
+  [[ -d "$_parent" && ! -L "$_parent" ]] || return 1
+  _physical="$(builtin cd -P -- "$_parent" 2>/dev/null \
+    && printf '%s' "$PWD")" || return 1
+  [[ "$_physical" == "$_parent" ]] || return 1
+  case "$_parent" in "$_base"|"$_base"/*) return 0 ;; *) return 1 ;; esac
+}
+
 _mdm_safe_tmpdir() {
-  local _euid
+  local _euid _test_base
   _euid="${MDM_EUID_OVERRIDE:-$(id -u)}"
+  if [[ "$_euid" -eq 0 ]] \
+    && _test_base="$(_mdm_test_runner_tmp_base)"; then
+    printf '%s' "$_test_base"
+    return 0
+  fi
   if [[ "$_euid" -eq 0 ]]; then
     if _mdm_is_darwin; then
       printf '%s' "/private/tmp"
@@ -974,10 +1055,14 @@ _mdm_sha256_file() {
 # path, complete metadata, ACL absence, xattrs, link target, and file bytes are
 # covered. Unsafe ownership, writable entries, hard links, and escaping or
 # dangling links fail closed. Two complete captures must agree.
-_mdm_artifact_digest() { # <file|tree> <absolute-path> [owner-uid-csv] [group-gid-csv]
+_mdm_artifact_digest() { # <file|tree> <absolute-path> [owner-uid-csv] [group-gid-csv] [contract]
   local _kind="$1" _path="$2" _owner_csv="${3:-}" _group_csv="${4:-}"
-  local _python _canonical
+  local _contract="${5:-artifact}" _python _canonical
   case "$_kind" in file|tree) : ;; *) return 1 ;; esac
+  case "$_contract" in
+    artifact|copy-semantics|artifact-copy-semantics) : ;;
+    *) return 1 ;;
+  esac
   [[ "$_path" == /* && ! "$_path" =~ [[:cntrl:]] ]] || return 1
   [[ -z "$_owner_csv" || "$_owner_csv" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
   [[ -z "$_group_csv" || "$_group_csv" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
@@ -989,9 +1074,11 @@ _mdm_artifact_digest() { # <file|tree> <absolute-path> [owner-uid-csv] [group-gi
   _mdm_run_with_timeout "$(_mdm_timeout_seconds \
     "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
     /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_kind" "$_path" "$_owner_csv" "$_group_csv" <<'PY'
+    "$_python" -I -B -S - "$_kind" "$_path" "$_owner_csv" \
+    "$_group_csv" "$_contract" <<'PY'
 import base64
 import collections
+import _ctypes
 import ctypes
 import errno
 import hashlib
@@ -1000,7 +1087,7 @@ import os
 import stat
 import sys
 
-kind, root, owner_csv, group_csv = sys.argv[1:]
+kind, root, owner_csv, group_csv, contract = sys.argv[1:]
 allowed_owners = ({int(value) for value in owner_csv.split(",")}
                   if owner_csv else None)
 allowed_groups = ({int(value) for value in group_csv.split(",")}
@@ -1024,8 +1111,12 @@ O_SYMLINK = 0x00200000
 XATTR_SHOWCOMPRESSION = 0x0020
 DARWIN = sys.platform == "darwin"
 
-if kind not in ("file", "tree"):
+if kind not in ("file", "tree") or contract not in (
+        "artifact", "copy-semantics", "artifact-copy-semantics"):
     raise SystemExit(1)
+ARTIFACT_CONTRACT = contract in ("artifact", "artifact-copy-semantics")
+COPY_SEMANTICS = contract in ("copy-semantics", "artifact-copy-semantics")
+COMBINED_CONTRACT = contract == "artifact-copy-semantics"
 
 if DARWIN:
     libc = ctypes.CDLL(None, use_errno=True)
@@ -1033,6 +1124,10 @@ if DARWIN:
     libc.acl_get_fd_np.restype = ctypes.c_void_p
     libc.acl_free.argtypes = [ctypes.c_void_p]
     libc.acl_free.restype = ctypes.c_int
+    libc.acl_to_text.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_ssize_t)
+    ]
+    libc.acl_to_text.restype = ctypes.c_void_p
     libc.flistxattr.argtypes = [
         ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int
     ]
@@ -1124,6 +1219,40 @@ def no_extended_acl(descriptor):
     if result != 0:
         raise OSError(error or errno.EIO, "acl_free")
     raise ValueError("extended ACL is not allowed")
+
+
+def copy_acl(descriptor):
+    # Linux exposes POSIX ACLs as system.posix_acl_* xattrs, which are already
+    # captured byte-for-byte below.  On Darwin, serialize the fd-bound ACL so
+    # copy equivalence covers ACL presence, order, entries, and permissions.
+    if not DARWIN:
+        return "posix-xattr"
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED)
+    if not acl:
+        error = ctypes.get_errno()
+        if error == errno.ENOENT:
+            return ""
+        raise OSError(error or errno.EIO, "acl_get_fd_np")
+    text_pointer = None
+    try:
+        length = ctypes.c_ssize_t()
+        ctypes.set_errno(0)
+        text_pointer = libc.acl_to_text(acl, ctypes.byref(length))
+        if not text_pointer or length.value < 0 or length.value > 1024 * 1024:
+            error = ctypes.get_errno()
+            raise OSError(error or errno.EIO, "acl_to_text")
+        value = ctypes.string_at(text_pointer, length.value)
+        return base64.b64encode(value).decode("ascii")
+    finally:
+        if text_pointer:
+            ctypes.set_errno(0)
+            if libc.acl_free(text_pointer) != 0:
+                raise OSError(ctypes.get_errno() or errno.EIO,
+                              "acl_free text")
+        ctypes.set_errno(0)
+        if libc.acl_free(acl) != 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
 
 
 def list_xattr_names(descriptor, is_link=False):
@@ -1228,7 +1357,9 @@ def fd_readlink(descriptor):
 
 
 def capture():
-    records = []
+    artifact_records = [] if ARTIFACT_CONTRACT else None
+    copy_records = [] if COPY_SEMANTICS else None
+    entry_count = 0
     total = 0
     path_total = 0
     xattr_count = 0
@@ -1274,8 +1405,11 @@ def capture():
         def metadata(descriptor, before):
             nonlocal xattr_count, xattr_total
             is_link = stat.S_ISLNK(before.st_mode)
-            if not (is_link and not DARWIN):
+            acl = None
+            if ARTIFACT_CONTRACT and not (is_link and not DARWIN):
                 no_extended_acl(descriptor)
+            if COPY_SEMANTICS:
+                acl = copy_acl(descriptor)
             names = list_xattr_names(descriptor, is_link)
             values = []
             for name in names:
@@ -1290,7 +1424,7 @@ def capture():
                 raise ValueError("xattr names changed")
             if identity(os.fstat(descriptor)) != identity(before):
                 raise ValueError("artifact metadata changed")
-            return values
+            return values, acl
 
         def validate_symlink(parent_parts, target):
             if target.startswith(b"/") or len(target) > MAX_SYMLINK_TARGET:
@@ -1372,9 +1506,10 @@ def capture():
                         pass
 
         def visit(descriptor, parent, name, before, relative_parts, depth):
-            nonlocal total, path_total
-            if depth > MAX_DEPTH or len(records) >= MAX_ENTRIES:
+            nonlocal total, path_total, entry_count
+            if depth > MAX_DEPTH or entry_count >= MAX_ENTRIES:
                 raise ValueError("artifact tree too large")
+            entry_count += 1
             if before.st_dev != root_dev:
                 raise ValueError("artifact crosses filesystem")
             if allowed_owners is not None and before.st_uid not in allowed_owners:
@@ -1387,15 +1522,25 @@ def capture():
             path_total += len(relative_bytes)
             if path_total > MAX_PATH_TOTAL:
                 raise ValueError("artifact paths too large")
-            base = {"path": os.fsdecode(relative_bytes),
-                    "mode": format(stat.S_IMODE(before.st_mode), "04o"),
-                    "uid": before.st_uid, "gid": before.st_gid,
-                    "nlink": before.st_nlink,
-                    "size": before.st_size,
-                    "flags": getattr(before, "st_flags", 0),
-                    "xattrs": metadata(descriptor, before)}
+            xattrs, acl = metadata(descriptor, before)
+            common = {"path": os.fsdecode(relative_bytes),
+                      "mode": format(stat.S_IMODE(before.st_mode), "04o"),
+                      "uid": before.st_uid, "gid": before.st_gid,
+                      "nlink": before.st_nlink,
+                      "flags": getattr(before, "st_flags", 0),
+                      "xattrs": xattrs}
+            artifact_base = (dict(common, size=before.st_size)
+                             if ARTIFACT_CONTRACT else None)
+            copy_base = None
+            if COPY_SEMANTICS:
+                copy_base = dict(common, acl=acl)
+                if not stat.S_ISDIR(before.st_mode):
+                    copy_base["size"] = before.st_size
             if stat.S_ISDIR(before.st_mode):
-                records.append(dict(base, kind="dir"))
+                if artifact_records is not None:
+                    artifact_records.append(dict(artifact_base, kind="dir"))
+                if copy_records is not None:
+                    copy_records.append(dict(copy_base, kind="dir"))
                 names = sorted(os.listdir(descriptor), key=os.fsencode)
                 for child_name in names:
                     child_bytes = os.fsencode(child_name)
@@ -1432,15 +1577,26 @@ def capture():
                 total += size
                 if total > MAX_TOTAL:
                     raise ValueError("artifact aggregate too large")
-                records.append(dict(base, kind="file", size=size,
-                                    sha256=digest.hexdigest()))
+                if artifact_records is not None:
+                    artifact_records.append(dict(
+                        artifact_base, kind="file", size=size,
+                        sha256=digest.hexdigest()))
+                if copy_records is not None:
+                    copy_records.append(dict(
+                        copy_base, kind="file", size=size,
+                        sha256=digest.hexdigest()))
             elif stat.S_ISLNK(before.st_mode):
                 if before.st_nlink != 1:
                     raise ValueError("hard-linked artifact symlink")
                 target = fd_readlink(descriptor)
                 validate_symlink(relative_parts[:-1], target)
-                records.append(dict(base, kind="symlink",
-                                    target=base64.b64encode(target).decode("ascii")))
+                encoded_target = base64.b64encode(target).decode("ascii")
+                if artifact_records is not None:
+                    artifact_records.append(dict(
+                        artifact_base, kind="symlink", target=encoded_target))
+                if copy_records is not None:
+                    copy_records.append(dict(
+                        copy_base, kind="symlink", target=encoded_target))
             else:
                 raise ValueError("unsupported artifact entry")
             if identity(os.fstat(descriptor)) != identity(before):
@@ -1452,8 +1608,16 @@ def capture():
         visit(root_fd, None, None, root_before, [], 0)
         for parent, name, descriptor, before, strong in reversed(bindings):
             assert_bound(parent, name, descriptor, before, strong)
-        return (json.dumps(records, ensure_ascii=True, sort_keys=True,
-                           separators=(",", ":")) + "\n").encode("ascii")
+        captures = []
+        if artifact_records is not None:
+            captures.append((json.dumps(
+                artifact_records, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":")) + "\n").encode("ascii"))
+        if copy_records is not None:
+            captures.append((json.dumps(
+                copy_records, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":")) + "\n").encode("ascii"))
+        return tuple(captures)
     finally:
         for descriptor in reversed(held):
             try:
@@ -1467,11 +1631,33 @@ try:
     second = capture()
     if first != second:
         raise ValueError("artifact changed during capture")
-    print(hashlib.sha256(first).hexdigest())
+    digests = [hashlib.sha256(value).hexdigest() for value in first]
+    if COMBINED_CONTRACT:
+        print(":".join(digests))
+    else:
+        print(digests[0])
 except (OSError, UnicodeError, ValueError, MemoryError, OverflowError,
         RuntimeError, ctypes.ArgumentError):
     sys.exit(1)
 PY
+}
+
+# Compare the observable semantics of two directory copies.  This retains the
+# fd/no-follow walker, bounded reads, metadata capture, and double-capture race
+# checks used by the authoritative artifact digest.  Directory inode, times,
+# and st_size are deliberately omitted because a faithful copy necessarily has
+# a new inode and may have a filesystem-dependent directory allocation size.
+_mdm_copy_semantics_digest() { # <absolute-tree> [owner-uid-csv] [group-gid-csv]
+  _mdm_artifact_digest tree "$1" "${2:-}" "${3:-}" copy-semantics
+}
+
+# Emit `<artifact-sha256>:<copy-semantics-sha256>` from the same two complete
+# captures.  The transaction needs both contracts for the live tree; sharing
+# the walker avoids two redundant full scans without weakening either digest.
+_mdm_artifact_copy_semantics_digests() {
+  # <absolute-tree> [owner-uid-csv] [group-gid-csv]
+  _mdm_artifact_digest tree "$1" "${2:-}" "${3:-}" \
+    artifact-copy-semantics
 }
 
 # Hash only Git worktree semantics so root-owned authoritative content can be
@@ -1490,7 +1676,7 @@ _mdm_worktree_content_digest() { # <absolute-tree> <authority|retained>
   _mdm_run_with_timeout "$(_mdm_timeout_seconds \
     "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
     /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_path" "$_role" <<'PY'
+    "$_python" -I -B -S - "$_path" "$_role" <<'PY'
 import base64
 import collections
 import ctypes
@@ -2040,9 +2226,9 @@ _mdm_snapshot_bound_to() { # <source> <snapshot> <label> [target-uid]
     [[ "$_links" == 1 ]] || return 1
   fi
   _mdm_has_extended_acl "$_source" && return 1
-  if [[ "$_label" == managed || "$_label" == cli ]] \
-    || [[ "$_label" == head && -n "$_expected_uid" ]]; then
-    [[ "$_expected_uid" =~ ^[0-9]+$ && "$_uid" == "$_expected_uid" ]] || return 1
+  if [[ "$_label" == managed || "$_label" == cli || "$_label" == head ]]; then
+    [[ "$_expected_uid" =~ ^[0-9]+$ && "$_uid" == "$_expected_uid" ]] \
+      || return 1
   fi
   case "$_label" in
     manifest|receipt|history) _limit=4194304 ;;
@@ -2161,7 +2347,7 @@ _mdm_generated_receipt_is_exact() { # <temp> <destination> <result> <exit>
   local _file="$1" _destination="$2" _result="$3" _exit="$4" _python
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_file" "$_destination" "$_result" "$_exit" \
+    "$_python" -I -B -S - "$_file" "$_destination" "$_result" "$_exit" \
       "$MDM_RCPT_KIT_VERSION" "$MDM_RCPT_GIT_REF" \
       "$MDM_RCPT_RESOLVED_SHA" "$MDM_RCPT_INSTALL_DIR" \
       "$MDM_RCPT_REQUIRED_COMPONENTS" "$MDM_RCPT_PROFILE" \
@@ -2650,29 +2836,51 @@ _mdm_user_uid() {
   printf '%s' "$_uid"
 }
 
-# MDM artifact 名へ安全に埋め込める macOS short name の対応範囲。
-# 大文字・数字先頭・dot/@ 区切りを許可し、path-like な区切りは拒否する。
-_mdm_username_is_safe() {
+# Directory Services へ問い合わせる requested name/alias は、パス区切りや
+# shell metacharacter を含まない safe ASCII に限る。Apple ID 系の長い
+# RecordName alias を受けられるよう、short name の 32 byte 制約は課さない。
+_mdm_requested_username_is_safe() {
+  local _user="$1"
+  [[ ${#_user} -ge 1 && ${#_user} -le 255 ]] || return 1
+  [[ "$_user" =~ ^[A-Za-z0-9_][A-Za-z0-9_.@+-]*$ ]] || return 1
+  [[ "$_user" != . && "$_user" != .. ]]
+}
+
+# MDM artifact 名へ埋め込む canonical macOS short name は、従来どおり
+# 32 byte 以下の厳しい grammar に限る。
+_mdm_canonical_username_is_safe() {
   local _user="$1"
   [[ ${#_user} -ge 1 && ${#_user} -le 32 ]] || return 1
   [[ "$_user" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*([.@][A-Za-z0-9_-]+)*$ ]]
+}
+
+_mdm_username_not_reserved() {
+  local _user="$1" _lower
+  _lower="$(printf '%s' "$_user" | /usr/bin/tr '[:upper:]' '[:lower:]')" \
+    || return 1
+  case "$_lower" in
+    ''|root|_mbsetupuser|_unresolved|loginwindow|daemon|nobody) return 1 ;;
+  esac
+  return 0
+}
+
+_mdm_requested_username_is_allowed() {
+  _mdm_requested_username_is_safe "$1" && _mdm_username_not_reserved "$1"
+}
+
+_mdm_canonical_username_is_allowed() {
+  _mdm_canonical_username_is_safe "$1" && _mdm_username_not_reserved "$1"
 }
 
 # Resolve only the short name here.  Production identity is subsequently read
 # as one UniqueID+GeneratedUID record from each dscl domain; doing a separate
 # UID lookup here would mix account generations across multiple reads.
 _mdm_resolve_target_username() { # <user-output-var>
-  local _target_out_var="$1" _candidate="${KIT_MDM_TARGET_USER:-}" _lower
+  local _target_out_var="$1" _candidate="${KIT_MDM_TARGET_USER:-}"
   [[ "$_target_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return "$MDM_EXIT_USER"
   [[ -z "$_candidate" ]] && _candidate="$(_mdm_console_user)"
-  _lower="$(printf '%s' "$_candidate" | /usr/bin/tr '[:upper:]' '[:lower:]')" || return "$MDM_EXIT_USER"
-  case "$_lower" in
-    ''|root|_mbsetupuser|_unresolved|loginwindow|daemon|nobody)
-      mdm_log R2 "対象ユーザーを解決できない（'$_candidate' は無効）"
-      return "$MDM_EXIT_USER" ;;
-  esac
-  if ! _mdm_username_is_safe "$_candidate"; then
-    mdm_log R2 "対象ユーザー名の文字種が不正: '$_candidate'"
+  if ! _mdm_requested_username_is_allowed "$_candidate"; then
+    mdm_log R2 "対象ユーザー名が不正または予約済み: '$_candidate'"
     return "$MDM_EXIT_USER"
   fi
   printf -v "$_target_out_var" '%s' "$_candidate"
@@ -2919,6 +3127,97 @@ _mdm_bind_target_identity_tuple() { # <user> [expected-uid]
   _search_guid="$(_mdm_normalize_generated_uid "$_search_guid")" || return 1
   [[ "$_local_guid" == "$_search_guid" ]] || return 1
   printf '%s\t%s' "$_local_uid" "$_local_guid"
+}
+
+# Parse exactly one dscacheutil user record.  Only name/uid are authoritative;
+# the remaining standard Directory Services fields are syntactically checked
+# and ignored.  In particular, a numeric username can never be mistaken for a
+# UID because lookup is performed with the explicit `-a uid` predicate.
+_mdm_parse_dscacheutil_user_for_uid() { # <expected-uid>
+  local _expected_uid="$1"
+  [[ "$_expected_uid" =~ ^(0|[1-9][0-9]*)$ \
+    && ${#_expected_uid} -le 10 ]] || return 1
+  LC_ALL=C /usr/bin/awk -v expected="$_expected_uid" '
+    BEGIN {
+      active = 0; records = 0; name_seen = 0; uid_seen = 0; bad = 0
+    }
+    function finish_record() {
+      if (!active) return
+      records++
+      active = 0
+    }
+    $0 == "" { finish_record(); next }
+    {
+      active = 1
+      if ($0 ~ /[[:cntrl:]]/) { bad = 1; next }
+      if ($0 ~ /^name:/) {
+        if ($0 !~ /^name: [^[:space:]][^[:cntrl:]]*$/ || name_seen) {
+          bad = 1; next
+        }
+        name = substr($0, length("name: ") + 1)
+        name_seen++
+        next
+      }
+      if ($0 ~ /^uid:/) {
+        if ($0 !~ /^uid: (0|[1-9][0-9]*)$/ || uid_seen) {
+          bad = 1; next
+        }
+        uid = substr($0, length("uid: ") + 1)
+        uid_seen++
+        next
+      }
+      # Other normal fields are data only, but still require a field name and
+      # the exact dscacheutil colon delimiter shape.
+      if ($0 !~ /^[A-Za-z][A-Za-z0-9_-]*:($| [^[:cntrl:]]*)$/) bad = 1
+    }
+    END {
+      finish_record()
+      if (!bad && records == 1 && name_seen == 1 && uid_seen == 1 \
+          && uid == expected && length(uid) <= 10) {
+        print name
+        exit 0
+      }
+      exit 1
+    }
+  '
+}
+
+_mdm_read_search_user_for_uid() { # <uid>
+  /usr/bin/dscacheutil -q user -a uid "$1" 2>/dev/null
+}
+
+# Resolve the search-policy canonical short name from the already-bound UID.
+# The requested spelling is never lowercased into an account name: macOS
+# Directory Services remains authoritative for case and aliases.
+_mdm_search_policy_username_for_uid() { # <uid>
+  local _uid="$1" _record
+  [[ "$_uid" =~ ^[0-9]+$ && "$_uid" -ge 501 && ${#_uid} -le 10 \
+    && ! ( ${#_uid} -gt 1 && "${_uid:0:1}" == 0 ) ]] || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_CANONICAL_USER_OVERRIDE:-}" ]]; then
+    printf '%s' "$MDM_CANONICAL_USER_OVERRIDE"
+    return 0
+  fi
+  _record="$(_mdm_read_search_user_for_uid "$_uid")" || return 1
+  printf '%s\n' "$_record" | _mdm_parse_dscacheutil_user_for_uid "$_uid"
+}
+
+_mdm_bind_canonical_target_username() { # <output-var> <requested-user> <uid> <generated-uid>
+  local _out_var="$1" _requested="$2" _uid="$3" _generated_uid="$4"
+  local _canonical _tuple _requested_home _canonical_home
+  [[ "$_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _mdm_requested_username_is_allowed "$_requested" || return 1
+  _canonical="$(_mdm_search_policy_username_for_uid "$_uid")" || return 1
+  _mdm_canonical_username_is_allowed "$_canonical" || return 1
+  _tuple="$(_mdm_bind_target_identity_tuple "$_canonical" "$_uid")" || return 1
+  [[ "$_tuple" == "$_uid"$'\t'"$_generated_uid" ]] || return 1
+  if [[ "$_requested" != "$_canonical" ]]; then
+    _requested_home="$(mdm_validate_user_home "$_requested" "$_uid")" || return 1
+    _canonical_home="$(mdm_validate_user_home "$_canonical" "$_uid")" || return 1
+    [[ "$_requested_home" == "$_canonical_home" ]] || return 1
+  fi
+  printf -v "$_out_var" '%s' "$_canonical"
+  return 0
 }
 
 _mdm_parse_dscl_shell() {
@@ -3247,10 +3546,9 @@ mdm_build_drop_argv() {
     MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="GIT_CONFIG_VALUE_0=$_MDM_GIT_SAFE_DIRECTORY"
   fi
   if [[ -n "${_MDM_PRIOR_INVENTORY:-}" ]]; then
-    case "$_MDM_PRIOR_INVENTORY" in
-      /private/tmp/claude-kit-mdm-prior.*|/tmp/claude-kit-mdm-prior.*) ;;
-      *) MDM_DROP_ARGV=(); return 1 ;;
-    esac
+    _mdm_managed_tmp_path_matches \
+      "$_MDM_PRIOR_INVENTORY" claude-kit-mdm-prior \
+      || { MDM_DROP_ARGV=(); return 1; }
     _mdm_component_trusted "$_MDM_PRIOR_INVENTORY" \
       || { MDM_DROP_ARGV=(); return 1; }
     MDM_DROP_ARGV[${#MDM_DROP_ARGV[@]}]="KIT_MDM_PRIOR_MANAGED_INVENTORY=$_MDM_PRIOR_INVENTORY"
@@ -3417,7 +3715,7 @@ _mdm_root_value() {
     ENABLE_*|INSTALL_*|COMMIT_ATTRIBUTION|KIT_MDM_INSTALL_HOMEBREW|KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE|KIT_MDM_INSTALL_CLAUDE_CLI|KIT_MDM_DRY_RUN)
       _mdm_root_bool "$_value" ;;
     KIT_MDM_TARGET_USER)
-      _mdm_username_is_safe "$_value" || return 1
+      _mdm_requested_username_is_safe "$_value" || return 1
       printf '%s' "$_value" ;;
     KIT_MDM_GIT_REF) _mdm_root_gitref_syntax "$_value" ;;
     KIT_MDM_EXPECTED_POLICY_SHA256)
@@ -3435,6 +3733,12 @@ _mdm_root_value() {
       case "$_value" in vscode|cursor|zed|neovim|none) printf '%s' "$_value" ;; *) return 1 ;; esac ;;
     *) return 1 ;;
   esac
+}
+
+# Every production execution, including a non-mutating preview, must be bound
+# to the desired-policy digest distributed by the MDM control plane.
+_mdm_expected_policy_input_valid() {
+  [[ "${KIT_MDM_EXPECTED_POLICY_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]
 }
 
 _mdm_root_config_apply() {
@@ -3554,7 +3858,11 @@ _mdm_finish() {
       trap '' HUP INT TERM
       if _mdm_receipt_publish_prepared \
         && [[ "${_MDM_RECEIPT_PUBLISHED:-0}" == 1 ]]; then
-        _mdm_transaction_commit || true
+        if ! _mdm_transaction_commit; then
+          case "${_MDM_TRANSACTION_STATE:-idle}" in
+            committing|commit_cleanup) _mdm_transaction_commit || true ;;
+          esac
+        fi
       else
         _mdm_receipt_discard_prepared || true
         _success_failure_reason=receipt
@@ -4040,10 +4348,13 @@ _mdm_cleanup_prereq_artifacts() {
 
 # CLT の存在確認（テスト時は MDM_CLT_PRESENT_OVERRIDE でモック可能）。
 _mdm_clt_present() {
-  if [[ -n "${MDM_CLT_PRESENT_OVERRIDE:-}" ]]; then
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_CLT_PRESENT_OVERRIDE:-}" ]]; then
     [[ "$MDM_CLT_PRESENT_OVERRIDE" == "1" ]]; return
   fi
-  [[ -d /Library/Developer/CommandLineTools/usr/bin ]] || xcode-select -p >/dev/null 2>&1
+  [[ -d /Library/Developer/CommandLineTools/usr/bin \
+    && -d /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework \
+    && -L /Library/Developer/CommandLineTools/usr/bin/python3 ]]
 }
 
 _mdm_check_dryrun_prerequisites() {
@@ -4532,16 +4843,43 @@ _mdm_canonical_any() {
 }
 
 _MDM_AUTH_ENTRY_LIST=""
+_MDM_AUTH_ENTRY_LIST_OWNER_UID=""
+_mdm_runtime_artifact_uid() {
+  /usr/bin/id -u
+}
+
 _mdm_auth_entry_list() { # <tree> <output-var>
-  local _tree="$1" _output_var="$2" _base _output _old_umask
+  local _tree="$1" _output_var="$2" _base _output _old_umask _runtime_uid
+  local _identity
   _base="$(_mdm_auth_tmp_base)"
+  _runtime_uid="$(_mdm_runtime_artifact_uid)" || return 1
+  [[ "$_runtime_uid" =~ ^[0-9]+$ ]] || return 1
   _old_umask="$(umask)"; umask 077
   _output="$(/usr/bin/mktemp "$_base/claude-kit-mdm-list.XXXXXX" 2>/dev/null)" \
     || { umask "$_old_umask"; return 1; }
   umask "$_old_umask"
   _MDM_AUTH_ENTRY_LIST="$_output"
+  _MDM_AUTH_ENTRY_LIST_OWNER_UID="$_runtime_uid"
+  _identity="$(_mdm_stat_identity "$_output" || true)"
+  if [[ ! -f "$_output" || -L "$_output" \
+    || "$(_mdm_stat_uid "$_output" || true)" != "$_runtime_uid" ]]; then
+    /bin/rm -f "$_output"
+    _MDM_AUTH_ENTRY_LIST=""
+    _MDM_AUTH_ENTRY_LIST_OWNER_UID=""
+    return 1
+  fi
+  case "$_identity" in
+    *:Regular\ File:*|*:regular\ file:*) : ;;
+    *)
+      /bin/rm -f "$_output"
+      _MDM_AUTH_ENTRY_LIST=""
+      _MDM_AUTH_ENTRY_LIST_OWNER_UID=""
+      return 1 ;;
+  esac
   /usr/bin/find "$_tree" -xdev -print0 > "$_output" || {
-    /bin/rm -f "$_output"; _MDM_AUTH_ENTRY_LIST=""
+    /bin/rm -f "$_output"
+    _MDM_AUTH_ENTRY_LIST=""
+    _MDM_AUTH_ENTRY_LIST_OWNER_UID=""
     return 1
   }
   printf -v "$_output_var" '%s' "$_output"
@@ -4575,7 +4913,9 @@ _mdm_normalize_auth_tree() {
       return 1
     fi
   done < "$_list"
-  /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""
+  /bin/rm -f "$_list"
+  _MDM_AUTH_ENTRY_LIST=""
+  _MDM_AUTH_ENTRY_LIST_OWNER_UID=""
   /bin/chmod "$_mode_exec" "$_tree/setup.sh"
 }
 
@@ -4600,7 +4940,9 @@ _mdm_auth_tree_trusted() {
       _rc=1; break
     fi
   done < "$_list"
-  /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""
+  /bin/rm -f "$_list"
+  _MDM_AUTH_ENTRY_LIST=""
+  _MDM_AUTH_ENTRY_LIST_OWNER_UID=""
   [[ "$_rc" -eq 0 && -f "$_tree/setup.sh" && ! -L "$_tree/setup.sh" ]] \
     && _mdm_mode_owner_executable "$(_mdm_stat_mode "$_tree/setup.sh")"
 }
@@ -4612,61 +4954,925 @@ _mdm_auth_tree_private_for_uid() { # <tree> <target-uid>
   _mdm_auth_tree_trusted "$_tree"
 }
 
-_mdm_system_python() {
-  local _python=/usr/bin/python3 _details
+_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework
+_MDM_SYSTEM_PYTHON_SOURCE_LINK=/Library/Developer/CommandLineTools/usr/bin/python3
+_MDM_SYSTEM_PYTHON_TARGET_PATH=""
+_MDM_SYSTEM_PYTHON_TARGET_FRAMEWORK_IDENTITY=""
+_MDM_SYSTEM_PYTHON_TARGET_IDENTITY=""
+_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE=""
+_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY=""
+_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK=""
+_MDM_SYSTEM_PYTHON_PRIVATE_PATH=""
+_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK_IDENTITY=""
+_MDM_SYSTEM_PYTHON_PRIVATE_TARGET_IDENTITY=""
+_MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL=""
+_MDM_SYSTEM_PYTHON_WORKSPACE_PENDING_SIGNAL=""
+_MDM_FAILURE_ROLLBACK_ACTIVE=0
+_MDM_FAILURE_ROLLBACK_FRESH_PRIVATE=0
+_MDM_FAILURE_ROLLBACK_SOURCE_PATH=""
+_MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY=""
+_MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY=""
+_MDM_SYSTEM_PYTHON_REBOUND_PENDING_SIGNAL=""
+
+_mdm_system_python_codesign_requirement() {
+  printf '%s' '=identifier "com.apple.python3" and anchor apple'
+}
+
+_mdm_system_python_codesign() {
+  /usr/bin/codesign "$@"
+}
+
+_mdm_system_python_runtime_uid() {
+  /usr/bin/id -u
+}
+
+_mdm_system_python_copy_tool() { # <source-framework> <new-destination>
+  /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    /usr/bin/ditto --noclone --rsrc --extattr --qtn --acl \
+      --nopersistRootless -X "$1" "$2"
+}
+
+_mdm_system_python_dir_trusted() { # <canonical-directory>
+  local _dir="$1" _physical _uid _mode
+  [[ -d "$_dir" && ! -L "$_dir" ]] || return 1
+  _physical="$(builtin cd -P -- "$_dir" 2>/dev/null && printf '%s' "$PWD")" \
+    || return 1
+  [[ "$_physical" == "$_dir" ]] || return 1
+  _uid="$(_mdm_stat_uid "$_dir")" || return 1
+  [[ "$_uid" == "$(_mdm_auth_expected_uid)" ]] || return 1
+  _mode="$(_mdm_launcher_stat_mode "$_dir")" || return 1
+  _mdm_mode_is_safe "$_mode" || return 1
+  ! _mdm_has_extended_acl "$_dir"
+}
+
+_mdm_system_python_dir_chain_trusted() { # </Library descendant directory>
+  local _dir="$1" _rest _current=/Library _segment
+  case "$_dir" in /Library|/Library/*) : ;; *) return 1 ;; esac
+  _mdm_system_python_dir_trusted "$_current" || return 1
+  _rest="${_dir#/Library}"
+  while [[ -n "$_rest" ]]; do
+    _rest="${_rest#/}"
+    [[ -n "$_rest" ]] || break
+    _segment="${_rest%%/*}"
+    [[ -n "$_segment" && "$_segment" != . && "$_segment" != .. ]] || return 1
+    _rest="${_rest#"$_segment"}"
+    _current="$_current/$_segment"
+    _mdm_system_python_dir_trusted "$_current" || return 1
+  done
+}
+
+_mdm_system_python_framework_tree_properties() { # <framework-root> <expected-uid> <expected-gid> [require-single-links]
+  local _root="$1" _expected_uid="$2" _expected_gid="$3"
+  local _require_single_links="${4:-false}"
+  local _unsafe _entry _canonical _relative _rest _flags _flag
+  local _depth _count=0 _path_bytes=0 _complete=0 LC_ALL=C
+  [[ "$_root" == /* && -d "$_root" && ! -L "$_root" ]] || return 1
+  [[ "$(builtin cd -P -- "$_root" 2>/dev/null && printf '%s' "$PWD")" \
+    == "$_root" ]] || return 1
+  [[ "$_expected_uid" =~ ^[0-9]+$ && "$_expected_gid" =~ ^[0-9]+$ ]] \
+    || return 1
+  [[ "$_require_single_links" == true \
+    || "$_require_single_links" == false ]] || return 1
+  if _mdm_is_darwin; then
+    _unsafe="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev \
+      \( ! -uid "$_expected_uid" -o ! -gid "$_expected_gid" \
+        -o -perm -0020 -o -perm -0002 -o -acl \
+        -o -flags +uchg -o -flags +uappnd \
+        -o -flags +schg -o -flags +sappnd \
+        -o ! \( -type d -o -type f -o -type l \) \) \
+      -print -quit 2>/dev/null)" \
+      || return 1
+  else
+    _unsafe="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev \
+      \( ! -uid "$_expected_uid" -o ! -gid "$_expected_gid" \
+        -o -perm -0020 -o -perm -0002 \
+        -o ! \( -type d -o -type f -o -type l \) \) \
+      -print -quit 2>/dev/null)" \
+      || return 1
+    ! _mdm_has_extended_acl "$_root" || return 1
+  fi
+  [[ -z "$_unsafe" ]] || return 1
+  if _mdm_is_darwin; then
+    _flags="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev \
+      -exec /usr/bin/stat -f '%Sf' '{}' + 2>/dev/null)" || return 1
+    while IFS= read -r _flag; do
+      case "$_flag" in -|compressed) : ;; *) return 1 ;; esac
+    done <<< "$_flags"
+  fi
+  if [[ "$_require_single_links" == true ]]; then
+    _unsafe="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev \
+      ! -type d ! -links 1 -print -quit 2>/dev/null)" || return 1
+    [[ -z "$_unsafe" ]] || return 1
+  fi
+  while IFS= read -r -d '' _entry; do
+    if [[ -z "$_entry" ]]; then _complete=1; break; fi
+    _count=$((_count + 1))
+    _relative="${_entry#"$_root"}"
+    _path_bytes=$((_path_bytes + ${#_relative}))
+    [[ "$_count" -le 10000 && "$_path_bytes" -le 4194304 \
+      && "$_entry" != *$'\n'* && ! "$_entry" =~ [[:cntrl:]] ]] || return 1
+    case "$_entry" in "$_root"|"$_root"/*) : ;; *) return 1 ;; esac
+    _rest="${_relative#/}"; _depth=0
+    while [[ "$_rest" == */* ]]; do
+      _depth=$((_depth + 1)); [[ "$_depth" -lt 32 ]] || return 1
+      _rest="${_rest#*/}"
+    done
+    if [[ -L "$_entry" ]]; then
+      _canonical="$(_mdm_canonical_any "$_entry")" || return 1
+      case "$_canonical" in "$_root"|"$_root"/*) : ;; *) return 1 ;; esac
+    fi
+  done < <(
+    if LC_ALL=C /usr/bin/find -P "$_root" -xdev -print0; then
+      printf '\0'
+    fi
+  )
+  [[ "$_complete" -eq 1 && "$_count" -gt 0 ]]
+}
+
+_mdm_system_python_framework_full_spec() { # <framework-root>
+  local _root="$1" _keys _stderr _rc=0
+  _keys=type,uid,gid,mode,nlink,size,link,sha256digest,acldigest,xattrsdigest,flags
+  _mdm_is_darwin && [[ -x /usr/sbin/mtree ]] || return 1
+  exec 8>&1
+  _stderr="$(LC_ALL=C /usr/sbin/mtree -c -n -P -x -p "$_root" \
+    -k "$_keys" 2>&1 >&8)" || _rc=$?
+  exec 8>&-
+  [[ "$_rc" -eq 0 && -z "$_stderr" ]]
+}
+
+_mdm_system_python_framework_full_seal() { # <framework-root>
+  local _root="$1" _seal_value _spec _base _old_umask _rc=0
+  [[ -d "$_root" && ! -L "$_root" ]] || return 1
+  _base="$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE"
+  [[ -n "$_base" && -d "$_base" && ! -L "$_base" ]] || return 1
+  _old_umask="$(umask)"; umask 077
+  _spec="$(/usr/bin/mktemp "$_base/.mtree-full.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  [[ -f "$_spec" && ! -L "$_spec" ]] || _rc=1
+  _old_umask="$(umask)"; umask 077
+  _mdm_system_python_framework_full_spec "$_root" > "$_spec" || _rc=1
+  umask "$_old_umask"
+  if [[ "$_rc" -eq 0 ]]; then
+    _seal_value="$(_mdm_sha256_file "$_spec")" || _rc=1
+    [[ "$_seal_value" =~ ^[0-9a-f]{64}$ ]] || _rc=1
+  fi
+  /bin/rm -f "$_spec" || _rc=1
+  [[ ! -e "$_spec" ]] || _rc=1
+  [[ "$_rc" -eq 0 ]] || return 1
+  printf '%s' "$_seal_value"
+}
+
+_mdm_system_python_link_trusted() { # <fixed-link> <identity-output-var>
+  local _candidate_link="$1" _out_var="$2" _observed_identity
+  local _observed_metadata _uid _rest _links
+  [[ "$_out_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && -L "$_candidate_link" ]] \
+    || return 1
+  _uid="$(_mdm_stat_uid "$_candidate_link")" || return 1
+  [[ "$_uid" == "$(_mdm_auth_expected_uid)" ]] || return 1
+  _observed_identity="$(_mdm_stat_identity "$_candidate_link")" || return 1
+  case "$_observed_identity" in *:Symbolic\ Link:*|*:symbolic\ link:*) : ;; *) return 1 ;; esac
+  _observed_metadata="$(_mdm_stat_managed_metadata "$_candidate_link")" || return 1
+  [[ "$_observed_metadata" =~ ^[0-9]+:[0-9]+:[0-7]+$ ]] || return 1
+  _rest="${_observed_metadata#*:}"; _links="${_rest%%:*}"
+  [[ "${_observed_metadata%%:*}" == "$(_mdm_auth_expected_uid)" \
+    && "$_links" =~ ^[1-9][0-9]*$ ]] || return 1
+  _mdm_has_extended_acl "$_candidate_link" && return 1
+  printf -v "$_out_var" '%s' "$_observed_identity"
+}
+
+_mdm_system_python_resolve_fixed_link() { # <resolved-out> <chain-identity-out>
+  local _resolved_out="$1" _chain_out="$2"
+  local _candidate_path="$_MDM_SYSTEM_PYTHON_SOURCE_LINK" _target _parent _base
+  local _physical _hop_identity _chain_record="" _hops=0 _relative _version _expected
+  [[ "$_resolved_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_chain_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_resolved_out" != "$_chain_out" ]] || return 1
+  while [[ -L "$_candidate_path" ]]; do
+    _hops=$((_hops + 1)); [[ "$_hops" -le 8 ]] || return 1
+    _mdm_system_python_dir_chain_trusted \
+      "$(/usr/bin/dirname "$_candidate_path")" || return 1
+    _mdm_system_python_link_trusted "$_candidate_path" _hop_identity || return 1
+    _mdm_readlink_exact "$_candidate_path" _target || return 1
+    [[ "$_target" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+    _chain_record="${_chain_record}${_candidate_path}"$'\t'"${_hop_identity}"$'\t'"${_target}"$'\n'
+    if [[ "$_target" == /* ]]; then
+      _candidate_path="$_target"
+    else
+      _candidate_path="$(/usr/bin/dirname "$_candidate_path")/$_target"
+    fi
+    _parent="$(/usr/bin/dirname "$_candidate_path")"
+    _base="$(/usr/bin/basename "$_candidate_path")"
+    _physical="$(builtin cd -P -- "$_parent" 2>/dev/null && printf '%s' "$PWD")" \
+      || return 1
+    _candidate_path="$_physical/$_base"
+  done
+  [[ "$_hops" -ge 1 ]] || return 1
+  case "$_candidate_path" in
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK"/Versions/*/bin/python*) : ;;
+    *) return 1 ;;
+  esac
+  _relative="${_candidate_path#"$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK"/Versions/}"
+  _version="${_relative%%/*}"
+  [[ "$_version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+  _expected="$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/$_version/bin/python$_version"
+  [[ "$_candidate_path" == "$_expected" ]] || return 1
+  printf -v "$_resolved_out" '%s' "$_candidate_path"
+  printf -v "$_chain_out" '%s' "$_chain_record"
+}
+
+_mdm_system_python_target_trusted() { # <target> <identity-out> <metadata-out>
+  local _candidate="$1" _identity_out="$2" _metadata_out="$3"
+  local _canonical _observed_identity _observed_metadata _uid _rest _links _mode
+  [[ "$_identity_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_metadata_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_identity_out" != "$_metadata_out" ]] || return 1
+  case "$_candidate" in "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK"/*) : ;; *) return 1 ;; esac
+  _canonical="$(_mdm_canonical_any "$_candidate")" || return 1
+  [[ "$_canonical" == "$_candidate" && -f "$_candidate" && ! -L "$_candidate" \
+    && -x "$_candidate" ]] || return 1
+  _mdm_system_python_dir_chain_trusted "$(/usr/bin/dirname "$_candidate")" \
+    || return 1
+  _observed_identity="$(_mdm_stat_identity "$_candidate")" || return 1
+  case "$_observed_identity" in *:Regular\ File:*|*:regular\ file:*) : ;; *) return 1 ;; esac
+  _observed_metadata="$(_mdm_stat_managed_metadata "$_candidate")" || return 1
+  [[ "$_observed_metadata" =~ ^[0-9]+:[0-9]+:[0-7]+$ ]] || return 1
+  _uid="${_observed_metadata%%:*}"; _rest="${_observed_metadata#*:}"
+  _links="${_rest%%:*}"; _mode="${_rest#*:}"
+  [[ "$_uid" == "$(_mdm_auth_expected_uid)" \
+    && "$_links" =~ ^[1-9][0-9]*$ ]] || return 1
+  _mdm_mode_is_safe "$_mode" && _mdm_mode_owner_executable "$_mode" || return 1
+  _mdm_has_extended_acl "$_candidate" && return 1
+  printf -v "$_identity_out" '%s' "$_observed_identity"
+  printf -v "$_metadata_out" '%s' "$_observed_metadata"
+}
+
+_mdm_system_python_resource_envelope_v2() { # <signed-framework> [scratch-directory]
+  local _framework="$1" _base _stdout _stderr _old_umask _rc=0
+  _base="${2:-$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE}"
+  [[ -d "$_framework" && ! -L "$_framework" \
+    && -n "$_base" && -d "$_base" && ! -L "$_base" ]] || return 1
+  _old_umask="$(umask)"; umask 077
+  _stdout="$(/usr/bin/mktemp "$_base/.codesign-out.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  _stderr="$(/usr/bin/mktemp "$_base/.codesign-err.XXXXXX")" \
+    || { umask "$_old_umask"; /bin/rm -f "$_stdout"; return 1; }
+  umask "$_old_umask"
+  [[ -f "$_stdout" && ! -L "$_stdout" \
+    && -f "$_stderr" && ! -L "$_stderr" ]] || _rc=1
+  if [[ "$_rc" -eq 0 ]]; then
+    LC_ALL=C _mdm_system_python_codesign -dvv -- "$_framework" \
+      > "$_stdout" 2> "$_stderr" || _rc=1
+  fi
+  if [[ "$_rc" -eq 0 ]]; then
+    [[ ! -s "$_stdout" && -s "$_stderr" ]] || _rc=1
+    LC_ALL=C /usr/bin/awk '
+      /^Sealed Resources version=2([[:space:]]|$)/ { count++ }
+      END { exit count == 1 ? 0 : 1 }
+    ' "$_stderr" || _rc=1
+  fi
+  /bin/rm -f "$_stdout" "$_stderr" || _rc=1
+  [[ ! -e "$_stdout" && ! -e "$_stderr" ]] || _rc=1
+  [[ "$_rc" -eq 0 ]]
+}
+
+_mdm_validate_system_python() { # <path-out> <framework-id-out> <target-id-out> [scratch-directory]
+  local _path_out="$1" _framework_out="$2" _target_out="$3"
+  local _scratch="${4:-$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE}"
+  local _requirement _resolved_target _resolution _framework_identity _uid _gid
+  local _resolved_after _resolution_after _framework_after
+  local _target_identity _target_metadata _target_after _metadata_after
+  [[ "$_path_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_framework_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_target_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _mdm_system_python_dir_chain_trusted \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" || return 1
+  _uid="$(_mdm_auth_expected_uid)" || return 1
+  _gid="$(_mdm_stat_gid "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK")" || return 1
+  _mdm_system_python_framework_tree_properties \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" "$_uid" "$_gid" || return 1
+  _mdm_system_python_dir_chain_trusted \
+    "$(/usr/bin/dirname "$_MDM_SYSTEM_PYTHON_SOURCE_LINK")" || return 1
+  _framework_identity="$(_mdm_system_python_dir_identity \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK")" \
+    || return 1
+  _mdm_system_python_resolve_fixed_link _resolved_target _resolution \
+    || return 1
+  _mdm_system_python_target_trusted \
+    "$_resolved_target" _target_identity _target_metadata \
+    || return 1
+  _requirement="$(_mdm_system_python_codesign_requirement)" || return 1
+  _mdm_system_python_codesign --verify --deep --strict -R "$_requirement" \
+    -- "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" >/dev/null 2>&1 || return 1
+  _mdm_system_python_resource_envelope_v2 \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" "$_scratch" || return 1
+  _mdm_system_python_dir_chain_trusted \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" || return 1
+  _framework_after="$(_mdm_system_python_dir_identity \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK")" || return 1
+  _mdm_system_python_resolve_fixed_link _resolved_after _resolution_after \
+    || return 1
+  _mdm_system_python_target_trusted \
+    "$_resolved_after" _target_after _metadata_after || return 1
+  [[ "$_framework_after" == "$_framework_identity" \
+    && "$_resolved_after" == "$_resolved_target" \
+    && "$_resolution_after" == "$_resolution" \
+    && "$_target_after" == "$_target_identity" \
+    && "$_metadata_after" == "$_target_metadata" ]] || return 1
+  printf -v "$_path_out" '%s' "$_resolved_target"
+  printf -v "$_framework_out" '%s' "$_framework_identity"
+  printf -v "$_target_out" '%s' "$_target_identity"
+}
+
+_mdm_system_python_raw_dir_identity() {
+  if _mdm_is_darwin; then
+    /usr/bin/stat -f '%d:%i:%HT' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%d:%i:%F' "$1" 2>/dev/null
+  fi
+}
+
+_mdm_system_python_dir_identity() {
+  _mdm_system_python_raw_dir_identity "$1"
+}
+
+_mdm_system_python_source_test_workspace_base() {
+  local _base="${MDM_SYSTEM_PYTHON_TMP_BASE_OVERRIDE:-}"
+  local _runner_root="${MDM_TEST_TMP_ROOT:-}" _physical
+  [[ "${_MDM_SOURCE_TEST_ACTIVE:-0}" == 1 \
+    && "$_base" == "$_runner_root" \
+    && "$_runner_root" == /* && -d "$_runner_root" \
+    && ! -L "$_runner_root" ]] || return 1
+  _physical="$(builtin cd -P -- "$_runner_root" 2>/dev/null \
+    && printf '%s' "$PWD")" || return 1
+  [[ "$_physical" == "$_runner_root" ]] || return 1
+  printf '%s' "$_runner_root"
+}
+
+_mdm_system_python_workspace_base() {
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_SYSTEM_PYTHON_TMP_BASE_OVERRIDE:-}" ]]; then
+    printf '%s' "$MDM_SYSTEM_PYTHON_TMP_BASE_OVERRIDE"
+  elif _mdm_system_python_source_test_workspace_base >/dev/null; then
+    _mdm_system_python_source_test_workspace_base
+  else
+    printf '%s' /private/tmp
+  fi
+}
+
+_mdm_system_python_workspace_trusted() { # <workspace>
+  local _workspace="$1" _base _physical _mode _uid
+  _base="$(_mdm_system_python_workspace_base)" || return 1
+  case "$_workspace" in "$_base"/claude-kit-mdm-python.*) : ;; *) return 1 ;; esac
+  [[ -d "$_workspace" && ! -L "$_workspace" ]] || return 1
+  _physical="$(builtin cd -P -- "$_workspace" 2>/dev/null && printf '%s' "$PWD")" \
+    || return 1
+  [[ "$_physical" == "$_workspace" ]] || return 1
+  _uid="$(_mdm_stat_uid "$_workspace")" || return 1
+  [[ "$_uid" == "$(_mdm_system_python_runtime_uid)" ]] || return 1
+  _mode="$(_mdm_mode_normalize "$(_mdm_launcher_stat_mode "$_workspace")")" \
+    || return 1
+  [[ "$_mode" == 0700 ]] || return 1
+  ! _mdm_has_extended_acl "$_workspace"
+}
+
+_mdm_system_python_clear_workspace_flags() { # <workspace>
+  local _workspace="$1"
+  _mdm_is_darwin || return 0
+  /usr/bin/find -P "$_workspace" -xdev -exec /usr/bin/chflags -h \
+    nouchg,nouappnd,noschg,nosappnd '{}' + 2>/dev/null
+}
+
+_mdm_system_python_cleanup_unbound_workspace() { # <new-workspace>
+  local _workspace="$1" _base _physical _uid _mode _before _after
+  _base="$(_mdm_system_python_workspace_base)" || return 1
+  case "$_workspace" in "$_base"/claude-kit-mdm-python.*) : ;; *) return 1 ;; esac
+  [[ -d "$_workspace" && ! -L "$_workspace" ]] || return 1
+  _physical="$(builtin cd -P -- "$_workspace" 2>/dev/null && printf '%s' "$PWD")" \
+    || return 1
+  [[ "$_physical" == "$_workspace" ]] || return 1
+  _uid="$(_mdm_stat_uid "$_workspace")" || return 1
+  [[ "$_uid" == "$(_mdm_system_python_runtime_uid)" ]] || return 1
+  _mode="$(_mdm_mode_normalize "$(_mdm_launcher_stat_mode "$_workspace")")" \
+    || return 1
+  [[ "$_mode" == 0700 ]] || return 1
+  ! _mdm_has_extended_acl "$_workspace" || return 1
+  _before="$(_mdm_system_python_raw_dir_identity "$_workspace")" || return 1
+  case "$_before" in *:Directory|*:directory) : ;; *) return 1 ;; esac
+  _mdm_system_python_clear_workspace_flags "$_workspace" || return 1
+  /usr/bin/find -P "$_workspace" -xdev -type d \
+    -exec /bin/chmod 0700 '{}' + 2>/dev/null || return 1
+  _after="$(_mdm_system_python_raw_dir_identity "$_workspace")" || return 1
+  [[ "$_after" == "$_before" ]] || return 1
+  /bin/rm -rf "$_workspace" || return 1
+  [[ ! -e "$_workspace" && ! -L "$_workspace" ]]
+}
+
+_mdm_system_python_handle_pending_signal() {
+  case "$_MDM_SYSTEM_PYTHON_WORKSPACE_PENDING_SIGNAL" in
+    "") return 0 ;;
+    HUP) _mdm_cleanup_transient_checkouts HUP; exit 129 ;;
+    INT) _mdm_cleanup_transient_checkouts INT; exit 130 ;;
+    TERM) _mdm_cleanup_transient_checkouts TERM; exit 143 ;;
+    *) return 1 ;;
+  esac
+}
+
+_mdm_system_python_create_workspace() {
+  local _base _base_physical _workspace="" _old_umask _identity="" _rc=0
+  _base="$(_mdm_system_python_workspace_base)" || return 1
+  [[ -d "$_base" && ! -L "$_base" ]] || return 1
+  _base_physical="$(builtin cd -P -- "$_base" 2>/dev/null && printf '%s' "$PWD")" \
+    || return 1
+  [[ "$_base_physical" == "$_base" ]] || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" != 1 ]]; then
+    # A source-only test may allocate the otherwise-real production copy under
+    # the runner root, but the production trust precondition is still checked.
+    [[ -d /private/tmp && ! -L /private/tmp \
+      && "$(_mdm_stat_uid /private/tmp)" == 0 \
+      && "$(_mdm_launcher_stat_mode /private/tmp)" == 1777 ]] || return 1
+    _mdm_launcher_acl_safe /private/tmp || return 1
+    if ! _mdm_system_python_source_test_workspace_base >/dev/null; then
+      [[ "$_base" == /private/tmp ]] || return 1
+    fi
+  fi
+  _MDM_SYSTEM_PYTHON_WORKSPACE_PENDING_SIGNAL=""
+  trap '_mdm_cleanup_transient_checkouts' EXIT
+  trap '_MDM_SYSTEM_PYTHON_WORKSPACE_PENDING_SIGNAL=HUP' HUP
+  trap '_MDM_SYSTEM_PYTHON_WORKSPACE_PENDING_SIGNAL=INT' INT
+  trap '_MDM_SYSTEM_PYTHON_WORKSPACE_PENDING_SIGNAL=TERM' TERM
+  _old_umask="$(umask)"; umask 077
+  _workspace="$(/usr/bin/mktemp -d "$_base/claude-kit-mdm-python.XXXXXX")" \
+    || _rc=1
+  umask "$_old_umask"
+  if [[ "$_rc" -eq 0 ]]; then
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE="$_workspace"
+    _identity="$(_mdm_system_python_dir_identity "$_workspace")" || _rc=1
+  fi
+  if [[ "$_rc" -eq 0 ]]; then
+    case "$_identity" in *:Directory|*:directory) : ;; *) _rc=1 ;; esac
+  fi
+  if [[ "$_rc" -eq 0 ]]; then
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY="$_identity"
+    /bin/chmod 0700 "$_workspace" || _rc=1
+    _mdm_system_python_workspace_trusted "$_workspace" || _rc=1
+  fi
+  if [[ "$_rc" -ne 0 && -n "$_workspace" ]]; then
+    if [[ -n "$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY" ]]; then
+      _mdm_cleanup_system_python_workspace || _rc=1
+    else
+      if _mdm_system_python_cleanup_unbound_workspace "$_workspace"; then
+        _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE=""
+      else
+        _rc=1
+      fi
+    fi
+  fi
+  _mdm_arm_transient_cleanup
+  _mdm_system_python_handle_pending_signal || return 1
+  [[ "$_rc" -eq 0 ]]
+}
+
+_mdm_system_python_copy_framework() { # <source> <nonexistent-destination>
+  local _source="$1" _destination="$2"
+  [[ -d "$_source" && ! -L "$_source" \
+    && ! -e "$_destination" && ! -L "$_destination" ]] || return 1
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
+    _mdm_system_python_copy_tool "$_source" "$_destination"
+}
+
+_mdm_system_python_private_target_trusted() { # <framework> <source-target> <path-out> <identity-out> <metadata-out>
+  local _framework="$1" _source_target="$2" _path_out="$3"
+  local _identity_out="$4" _metadata_out="$5" _relative _version _expected
+  local _candidate _canonical _identity _metadata _uid _rest _links _mode
+  [[ "$_path_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_identity_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_metadata_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  case "$_source_target" in
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK"/Versions/*/bin/python*) : ;;
+    *) return 1 ;;
+  esac
+  _relative="${_source_target#"$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK"/Versions/}"
+  _version="${_relative%%/*}"
+  [[ "$_version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+  _expected="$_version/bin/python$_version"
+  [[ "$_relative" == "$_expected" ]] || return 1
+  _candidate="$_framework/Versions/$_expected"
+  _canonical="$(_mdm_canonical_any "$_candidate")" || return 1
+  [[ "$_canonical" == "$_candidate" && -f "$_candidate" \
+    && ! -L "$_candidate" && -x "$_candidate" ]] || return 1
+  _identity="$(_mdm_stat_identity "$_candidate")" || return 1
+  case "$_identity" in *:Regular\ File:*|*:regular\ file:*) : ;; *) return 1 ;; esac
+  _metadata="$(_mdm_stat_managed_metadata "$_candidate")" || return 1
+  [[ "$_metadata" =~ ^[0-9]+:[0-9]+:[0-7]+$ ]] || return 1
+  _uid="${_metadata%%:*}"; _rest="${_metadata#*:}"
+  _links="${_rest%%:*}"; _mode="${_rest#*:}"
+  [[ "$_uid" == "$(_mdm_system_python_runtime_uid)" \
+    && "$_links" == 1 ]] || return 1
+  _mdm_mode_is_safe "$_mode" && _mdm_mode_owner_executable "$_mode" || return 1
+  _mdm_has_extended_acl "$_candidate" && return 1
+  printf -v "$_path_out" '%s' "$_candidate"
+  printf -v "$_identity_out" '%s' "$_identity"
+  printf -v "$_metadata_out" '%s' "$_metadata"
+}
+
+_mdm_validate_private_system_python() { # <framework> <source-target> <source-framework-id> <source-target-id> <path-out> <framework-id-out> <target-id-out>
+  local _framework="$1" _source_target="$2"
+  local _source_framework_identity="$3" _source_target_identity="$4"
+  local _path_out="$5" _framework_out="$6" _target_out="$7" _requirement
+  local _path_before _path_after
+  local _framework_before _framework_after _target_before _target_after
+  local _meta_before _meta_after _uid _gid
+  [[ "$_path_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_framework_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_target_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  _uid="$(_mdm_system_python_runtime_uid)" || return 1
+  _gid="$(_mdm_stat_gid "$_framework")" || return 1
+  [[ "$(_mdm_stat_uid "$_framework")" == "$_uid" ]] || return 1
+  _mdm_system_python_framework_tree_properties \
+    "$_framework" "$_uid" "$_gid" true || return 1
+  _framework_before="$(_mdm_system_python_dir_identity "$_framework")" || return 1
+  _mdm_system_python_private_target_trusted "$_framework" "$_source_target" \
+    _path_before _target_before _meta_before || return 1
+  [[ "$_framework_before" != "$_source_framework_identity" \
+    && "$_target_before" != "$_source_target_identity" ]] || return 1
+  _requirement="$(_mdm_system_python_codesign_requirement)" || return 1
+  _mdm_system_python_codesign --verify --deep --strict -R "$_requirement" \
+    -- "$_framework" >/dev/null 2>&1 || return 1
+  _mdm_system_python_resource_envelope_v2 "$_framework" || return 1
+  _framework_after="$(_mdm_system_python_dir_identity "$_framework")" || return 1
+  _mdm_system_python_private_target_trusted "$_framework" "$_source_target" \
+    _path_after _target_after _meta_after || return 1
+  [[ "$_path_after" == "$_path_before" \
+    && "$_framework_after" == "$_framework_before" \
+    && "$_target_after" == "$_target_before" \
+    && "$_meta_after" == "$_meta_before" ]] || return 1
+  printf -v "$_path_out" '%s' "$_path_before"
+  printf -v "$_framework_out" '%s' "$_framework_before"
+  printf -v "$_target_out" '%s' "$_target_before"
+}
+
+_mdm_system_python_private_self_test() { # <private-python> <private-framework>
+  local _python="$1" _framework="$2"
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
+    /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S - "$_framework" <<'PY'
+import _ctypes
+import ctypes
+import json
+import os
+import sys
+
+root = os.path.realpath(sys.argv[1])
+
+
+def contained(value):
+    path = os.path.realpath(value)
+    return path == root or path.startswith(root + os.sep)
+
+
+values = (sys.executable, sys.prefix, json.__file__, ctypes.__file__,
+          _ctypes.__file__)
+if (not sys.flags.isolated or not sys.flags.dont_write_bytecode
+        or not sys.flags.no_site or any(not value or not contained(value)
+                                        for value in values)):
+    raise SystemExit(1)
+ctypes.CDLL(None)
+PY
+}
+
+_mdm_system_python_private_identity_matches() {
+  [[ -n "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+    && -n "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK" \
+    && -n "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK_IDENTITY" \
+    && -n "$_MDM_SYSTEM_PYTHON_PRIVATE_TARGET_IDENTITY" ]] || return 1
+  _mdm_system_python_workspace_trusted \
+    "$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE" || return 1
+  [[ "$(_mdm_system_python_dir_identity \
+      "$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE")" \
+      == "$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY" \
+    && "$(_mdm_system_python_dir_identity \
+      "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK")" \
+      == "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK_IDENTITY" ]] || return 1
+  case "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" in
+    "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK"/Versions/*/bin/python*) : ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+    && ! -L "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+    && -x "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+    && "$(_mdm_stat_identity "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH")" \
+      == "$_MDM_SYSTEM_PYTHON_PRIVATE_TARGET_IDENTITY" ]]
+}
+
+_mdm_system_python_cache_baseline() {
+  local _captured_seal _uid _gid
   if [[ "${_MDM_TEST_MODE:-0}" == 1 ]]; then
-    _python="${MDM_SYSTEM_PYTHON_OVERRIDE:-/usr/bin/python3}"
-    [[ "$_python" == /* && -x "$_python" && ! -L "$_python" ]] || return 1
-    printf '%s' "$_python"
+    [[ -n "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+      && "$(_mdm_source_test_system_python)" \
+        == "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" ]] || return 1
+    _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL=test-only
     return 0
   fi
-  [[ -x "$_python" && ! -L "$_python" ]] || return 1
-  /usr/bin/codesign --verify --strict "$_python" >/dev/null 2>&1 || return 1
-  _details="$(/usr/bin/codesign -dv --verbose=4 "$_python" 2>&1)" || return 1
-  printf '%s\n' "$_details" | /usr/bin/grep -q '^Platform identifier=' || return 1
-  printf '%s\n' "$_details" | /usr/bin/grep -qx 'Authority=Software Signing' || return 1
-  printf '%s\n' "$_details" | /usr/bin/grep -qx 'Authority=Apple Root CA' || return 1
+  [[ -z "$_MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL" ]] || return 1
+  _mdm_system_python_private_identity_matches || return 1
+  _uid="$(_mdm_system_python_runtime_uid)" || return 1
+  _gid="$(_mdm_stat_gid "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK")" || return 1
+  [[ "$(_mdm_stat_uid "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK")" \
+    == "$_uid" ]] || return 1
+  _mdm_system_python_framework_tree_properties \
+    "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK" "$_uid" "$_gid" true || return 1
+  _captured_seal="$(_mdm_system_python_framework_full_seal \
+    "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK")" || return 1
+  [[ "$_captured_seal" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL="$_captured_seal"
+}
+
+# The subshell body prevents a staged tuple from becoming runtime authority.
+_mdm_system_python_staged_baseline() ( # <framework> <path> <framework-id> <target-id>
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK="$1"
+  _MDM_SYSTEM_PYTHON_PRIVATE_PATH="$2"
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK_IDENTITY="$3"
+  _MDM_SYSTEM_PYTHON_PRIVATE_TARGET_IDENTITY="$4"
+  _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL=""
+  _mdm_system_python_cache_baseline || return 1
+  printf '%s' "$_MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL"
+)
+
+_mdm_system_python_cache_rebound() {
+  local _captured_seal
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 ]]; then
+    [[ "$_MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL" == test-only \
+      && -n "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+      && "$(_mdm_source_test_system_python)" \
+        == "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" ]]
+    return
+  fi
+  [[ "$_MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL" =~ ^[0-9a-f]{64}$ ]] \
+    || return 1
+  _mdm_system_python_private_identity_matches || return 1
+  _captured_seal="$(_mdm_system_python_framework_full_seal \
+    "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK")" || return 1
+  [[ "$_captured_seal" == "$_MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL" ]]
+}
+
+_mdm_system_python_cache_rebound_for_commit() {
+  local _rc=0 _pending
+  # A signal may arrive while the three pending traps are being installed.
+  # Publish the already-bound, per-call-revalidated source fallback first, so
+  # an older cleanup trap can never execute the private copy whose final seal
+  # has not yet been revalidated.  A successful seal check returns authority
+  # to the private copy only after normal cleanup traps are armed again.
+  _MDM_FAILURE_ROLLBACK_ACTIVE=1
+  _MDM_SYSTEM_PYTHON_REBOUND_PENDING_SIGNAL=""
+  trap '_MDM_SYSTEM_PYTHON_REBOUND_PENDING_SIGNAL=HUP' HUP
+  trap '_MDM_SYSTEM_PYTHON_REBOUND_PENDING_SIGNAL=INT' INT
+  trap '_MDM_SYSTEM_PYTHON_REBOUND_PENDING_SIGNAL=TERM' TERM
+  _mdm_system_python_cache_rebound || _rc=$?
+  _mdm_arm_transient_signal_cleanup
+  _pending="$_MDM_SYSTEM_PYTHON_REBOUND_PENDING_SIGNAL"
+  _MDM_SYSTEM_PYTHON_REBOUND_PENDING_SIGNAL=""
+  case "$_pending" in
+    "") : ;;
+    HUP) _mdm_cleanup_transient_checkouts HUP; exit 129 ;;
+    INT) _mdm_cleanup_transient_checkouts INT; exit 130 ;;
+    TERM) _mdm_cleanup_transient_checkouts TERM; exit 143 ;;
+    *) return 1 ;;
+  esac
+  if [[ "$_rc" -eq 0 ]]; then
+    _MDM_FAILURE_ROLLBACK_ACTIVE=0
+  fi
+  [[ "$_rc" -eq 0 ]]
+}
+
+_mdm_failure_rollback_source_bind() { # <path> <framework-id> <target-id>
+  local _path="$1" _framework_identity="$2" _target_identity="$3"
+  case "$_path" in
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK"/Versions/*/bin/python*) : ;;
+    *) return 1 ;;
+  esac
+  [[ -n "$_framework_identity" && -n "$_target_identity" ]] || return 1
+  if [[ -n "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH" \
+    || -n "$_MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY" \
+    || -n "$_MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY" ]]; then
+    [[ "$_path" == "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH" \
+      && "$_framework_identity" \
+        == "$_MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY" \
+      && "$_target_identity" \
+        == "$_MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY" ]]
+    return
+  fi
+  _MDM_FAILURE_ROLLBACK_SOURCE_PATH="$_path"
+  _MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY="$_framework_identity"
+  _MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY="$_target_identity"
+}
+
+_mdm_failure_rollback_source_python() {
+  local _base _path _framework_identity _target_identity
+  [[ "${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}" == 1 ]] || return 1
+  case "${_MDM_TRANSACTION_STATE:-idle}" in
+    active|partial|aborted) : ;;
+    *) return 1 ;;
+  esac
+  [[ -n "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH" \
+    && -n "$_MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY" \
+    && -n "$_MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY" ]] || return 1
+  _base="$(_mdm_auth_tmp_base)" || return 1
+  _mdm_auth_base_trusted "$_base" || return 1
+  _mdm_validate_system_python _path _framework_identity _target_identity \
+    "$_base" || return 1
+  [[ "$_path" == "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH" \
+    && "$_framework_identity" \
+      == "$_MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY" \
+    && "$_target_identity" \
+      == "$_MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY" ]] || return 1
+  printf '%s' "$_path"
+}
+
+_mdm_clear_failure_rollback_runtime() {
+  _MDM_FAILURE_ROLLBACK_ACTIVE=0
+  _MDM_FAILURE_ROLLBACK_FRESH_PRIVATE=0
+  _MDM_FAILURE_ROLLBACK_SOURCE_PATH=""
+  _MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY=""
+  _MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY=""
+}
+
+_mdm_system_python_recover_after_rebound_failure() {
+  _MDM_FAILURE_ROLLBACK_FRESH_PRIVATE=0
+  [[ "${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}" == 1 ]] || return 1
+  _mdm_failure_rollback_source_python >/dev/null || return 1
+  if ! _mdm_cleanup_system_python_workspace; then
+    _mdm_clear_system_python_runtime_state
+    return 1
+  fi
+  if ! _mdm_initialize_system_python; then
+    _mdm_clear_system_python_runtime_state
+    return 1
+  fi
+  if ! _mdm_system_python_cache_rebound; then
+    _mdm_clear_system_python_runtime_state
+    return 1
+  fi
+  _MDM_FAILURE_ROLLBACK_FRESH_PRIVATE=1
+}
+
+_mdm_source_test_system_python() {
+  local _python="${MDM_SYSTEM_PYTHON_OVERRIDE:-}"
+  [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && "$_python" == /* && -f "$_python" && ! -L "$_python" \
+    && -x "$_python" ]] || return 1
   printf '%s' "$_python"
 }
 
-_mdm_expected_tree_trusted() { # <rendered-output>
+_mdm_initialize_system_python() {
+  local _source_path _source_framework_identity _source_target_identity
+  local _private_path _private_framework_identity _private_target_identity
+  local _destination _private_full_seal
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 ]]; then
+    _source_path="$(_mdm_source_test_system_python)" || return 1
+    _private_full_seal="$(_mdm_system_python_staged_baseline \
+      "" "$_source_path" "" "")" || return 1
+    [[ "$_private_full_seal" == test-only ]] || return 1
+    _MDM_SYSTEM_PYTHON_TARGET_PATH="$_source_path"
+    _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL="$_private_full_seal"
+    _MDM_SYSTEM_PYTHON_PRIVATE_PATH="$_source_path"
+    return 0
+  fi
+  [[ -z "$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE" \
+    && -z "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" ]] || return 1
+  _mdm_system_python_create_workspace || return 1
+  _mdm_validate_system_python _source_path _source_framework_identity \
+    _source_target_identity || return 1
+  _destination="$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE/Python3.framework"
+  _mdm_system_python_copy_framework \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" "$_destination" || return 1
+  _mdm_validate_private_system_python "$_destination" "$_source_path" \
+    "$_source_framework_identity" "$_source_target_identity" \
+    _private_path _private_framework_identity \
+    _private_target_identity || return 1
+  _mdm_system_python_private_self_test \
+    "$_private_path" "$_destination" || return 1
+  _private_full_seal="$(_mdm_system_python_staged_baseline \
+    "$_destination" "$_private_path" "$_private_framework_identity" \
+    "$_private_target_identity")" || return 1
+  [[ "$_private_full_seal" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _mdm_failure_rollback_source_bind "$_source_path" \
+    "$_source_framework_identity" "$_source_target_identity" || return 1
+  _MDM_SYSTEM_PYTHON_TARGET_FRAMEWORK_IDENTITY="$_source_framework_identity"
+  _MDM_SYSTEM_PYTHON_TARGET_IDENTITY="$_source_target_identity"
+  _MDM_SYSTEM_PYTHON_TARGET_PATH="$_source_path"
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK_IDENTITY="$_private_framework_identity"
+  _MDM_SYSTEM_PYTHON_PRIVATE_TARGET_IDENTITY="$_private_target_identity"
+  _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL="$_private_full_seal"
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK="$_destination"
+  _MDM_SYSTEM_PYTHON_PRIVATE_PATH="$_private_path"
+}
+
+_mdm_system_python() {
+  if [[ "${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}" == 1 ]]; then
+    if [[ "${_MDM_FAILURE_ROLLBACK_FRESH_PRIVATE:-0}" != 1 ]]; then
+      _mdm_failure_rollback_source_python
+      return
+    fi
+    _mdm_system_python_cache_rebound || return 1
+  fi
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 ]]; then
+    if [[ -n "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" ]]; then
+      printf '%s' "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH"
+    else
+      _mdm_source_test_system_python
+    fi
+    return
+  fi
+  [[ -n "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+    && -n "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK" ]] || return 1
+  case "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" in
+    "$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK"/Versions/*/bin/python*) : ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH"
+}
+
+_mdm_target_system_python() {
+  local _target_identity _target_metadata
+  if [[ "${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}" == 1 ]]; then
+    _mdm_failure_rollback_source_python
+    return
+  fi
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 ]]; then
+    _mdm_source_test_system_python
+    return
+  fi
+  [[ -n "$_MDM_SYSTEM_PYTHON_TARGET_PATH" \
+    && -n "$_MDM_SYSTEM_PYTHON_TARGET_FRAMEWORK_IDENTITY" \
+    && -n "$_MDM_SYSTEM_PYTHON_TARGET_IDENTITY" ]] || return 1
+  case "$_MDM_SYSTEM_PYTHON_TARGET_PATH" in
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK"/Versions/*/bin/python*) : ;;
+    *) return 1 ;;
+  esac
+  _mdm_system_python_dir_chain_trusted \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" || return 1
+  [[ "$(_mdm_system_python_dir_identity \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK")" \
+      == "$_MDM_SYSTEM_PYTHON_TARGET_FRAMEWORK_IDENTITY" ]] || return 1
+  _mdm_system_python_target_trusted "$_MDM_SYSTEM_PYTHON_TARGET_PATH" \
+    _target_identity _target_metadata || return 1
+  [[ "$_target_identity" == "$_MDM_SYSTEM_PYTHON_TARGET_IDENTITY" ]] \
+    || return 1
+  printf '%s' "$_MDM_SYSTEM_PYTHON_TARGET_PATH"
+}
+
+_mdm_expected_tree_trusted() { # <rendered-output> [expected-owner-uid]
   local _root="$1" _physical _list="" _entry _uid _mode _identity _size
   local _metadata _metadata_rest _links
-  local _count=0 _aggregate=0 _expected
+  local _count=0 _aggregate=0 _expected="${2:-}" _rc=0
   [[ -d "$_root" && ! -L "$_root" ]] || return 1
   _physical="$(builtin cd -P -- "$_root" 2>/dev/null && printf '%s' "$PWD")" || return 1
   [[ "$_physical" == "$_root" ]] || return 1
-  _expected="$(_mdm_auth_expected_uid)"
+  [[ -n "$_expected" ]] || _expected="$(_mdm_auth_expected_uid)"
+  [[ "$_expected" =~ ^[0-9]+$ ]] || return 1
   _mdm_auth_entry_list "$_root" _list || return 1
-  while IFS= read -r -d '' _entry; do
-    _count=$((_count + 1)); [[ "$_count" -le 2000 ]] || { /bin/rm -f "$_list"; return 1; }
-    [[ ! -L "$_entry" ]] || { /bin/rm -f "$_list"; return 1; }
-    _uid="$(_mdm_stat_uid "$_entry" || true)"
-    [[ "$_uid" == "$_expected" ]] || { /bin/rm -f "$_list"; return 1; }
-    _mdm_has_extended_acl "$_entry" && { /bin/rm -f "$_list"; return 1; }
-    _mode="$(_mdm_launcher_stat_mode "$_entry" || true)"
-    _mdm_mode_is_safe "$_mode" || { /bin/rm -f "$_list"; return 1; }
-    if [[ -f "$_entry" ]]; then
-      _identity="$(_mdm_stat_identity "$_entry")" || { /bin/rm -f "$_list"; return 1; }
-      case "$_identity" in *:Regular\ File:*|*:regular\ file:*) : ;; *) /bin/rm -f "$_list"; return 1 ;; esac
-      _metadata="$(_mdm_stat_managed_metadata "$_entry")" \
-        || { /bin/rm -f "$_list"; return 1; }
-      [[ "$_metadata" =~ ^[0-9]+:[0-9]+:[0-7]+$ ]] \
-        || { /bin/rm -f "$_list"; return 1; }
-      _metadata_rest="${_metadata#*:}"
-      _links="${_metadata_rest%%:*}"
-      [[ "$_links" == 1 ]] || { /bin/rm -f "$_list"; return 1; }
-      _size="${_identity##*:}"
-      [[ "$_size" =~ ^[0-9]+$ && "$_size" -le 67108864 ]] \
-        || { /bin/rm -f "$_list"; return 1; }
-      _aggregate=$((_aggregate + 10#$_size))
-      (( _aggregate <= 536870912 )) || { /bin/rm -f "$_list"; return 1; }
-    elif [[ ! -d "$_entry" ]]; then
-      /bin/rm -f "$_list"; return 1
-    fi
-  done < "$_list"
-  /bin/rm -f "$_list"; _MDM_AUTH_ENTRY_LIST=""
-  [[ "$_count" -gt 3 && -d "$_root/tree" && ! -L "$_root/tree" \
+  if [[ "${_MDM_AUTH_ENTRY_LIST_OWNER_UID:-}" != "$_expected" ]]; then
+    _rc=1
+  else
+    while IFS= read -r -d '' _entry; do
+      _count=$((_count + 1))
+      if [[ "$_count" -gt 2000 || -L "$_entry" ]]; then _rc=1; break; fi
+      _uid="$(_mdm_stat_uid "$_entry" || true)"
+      if [[ "$_uid" != "$_expected" ]] || _mdm_has_extended_acl "$_entry"; then
+        _rc=1; break
+      fi
+      _mode="$(_mdm_launcher_stat_mode "$_entry" || true)"
+      _mdm_mode_is_safe "$_mode" || { _rc=1; break; }
+      if [[ -f "$_entry" ]]; then
+        _identity="$(_mdm_stat_identity "$_entry" || true)"
+        case "$_identity" in
+          *:Regular\ File:*|*:regular\ file:*) : ;;
+          *) _rc=1; break ;;
+        esac
+        _metadata="$(_mdm_stat_managed_metadata "$_entry" || true)"
+        if [[ ! "$_metadata" =~ ^[0-9]+:[0-9]+:[0-7]+$ ]]; then
+          _rc=1; break
+        fi
+        _metadata_rest="${_metadata#*:}"
+        _links="${_metadata_rest%%:*}"
+        _size="${_identity##*:}"
+        if [[ "$_links" != 1 || ! "$_size" =~ ^[0-9]+$ \
+          || "$_size" -gt 67108864 ]]; then
+          _rc=1; break
+        fi
+        _aggregate=$((_aggregate + 10#$_size))
+        (( _aggregate <= 536870912 )) || { _rc=1; break; }
+      elif [[ ! -d "$_entry" ]]; then
+        _rc=1; break
+      fi
+    done < "$_list"
+  fi
+  _mdm_cleanup_auth_entry_list || return 1
+  [[ "$_rc" -eq 0 && "$_count" -gt 3 \
+    && -d "$_root/tree" && ! -L "$_root/tree" \
     && -f "$_root/modes.tsv" && ! -L "$_root/modes.tsv" \
     && -f "$_root/policy.json" && ! -L "$_root/policy.json" \
     && -f "$_root/manifest.json" && ! -L "$_root/manifest.json" ]]
@@ -4674,10 +5880,15 @@ _mdm_expected_tree_trusted() { # <rendered-output>
 
 _mdm_expected_json_contract_valid() { # <rendered> <profile> <language> <home>
   local _root="$1" _profile="$2" _language="$3" _home="$4" _python
+  local _runtime_uid _runtime_home
   _python="$(_mdm_system_python)" || return 1
-  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_root/manifest.json" "$_root/policy.json" \
-    "$_profile" "$_language" "$_home" <<'PY'
+  _runtime_uid="$(_mdm_runtime_artifact_uid)" || return 1
+  _runtime_home="$_home"
+  [[ "$_runtime_uid" == 0 ]] && _runtime_home=/var/root
+  # Pass the bounded validator as argv. Bash 5.3 can retain a write end and
+  # deadlock both direct and producer-pipeline forms of a large heredoc.
+  /usr/bin/env -i HOME="$_runtime_home" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S -c '
 import hashlib
 import json
 import re
@@ -4806,7 +6017,8 @@ try:
         raise ValueError("invalid generated policy identity")
 except (OSError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
-PY
+' "$_root/manifest.json" "$_root/policy.json" \
+    "$_profile" "$_language" "$_home"
 }
 
 _mdm_prior_relative_is_safe() {
@@ -4959,10 +6171,101 @@ _mdm_persist_managed_history() { # <user> <home> <target-uid> <generated-uid>
   /bin/rm -f "$_raw"
 }
 
-_mdm_prepare_expected_state() { # <logical-home>
-  local _home="$1" _base _workspace _output _renderer _python _old_umask
+_mdm_runtime_artifact_file_trusted() { # <regular-file> <owner-uid>
+  local _path="$1" _expected_uid="$2" _identity _metadata _rest _links _mode
+  [[ "$_expected_uid" =~ ^[0-9]+$ && -f "$_path" && ! -L "$_path" ]] \
+    || return 1
+  _identity="$(_mdm_stat_identity "$_path")" || return 1
+  case "$_identity" in
+    *:Regular\ File:*|*:regular\ file:*) : ;;
+    *) return 1 ;;
+  esac
+  _metadata="$(_mdm_stat_managed_metadata "$_path")" || return 1
+  [[ "$_metadata" =~ ^[0-9]+:[0-9]+:[0-7]+$ ]] || return 1
+  _rest="${_metadata#*:}"
+  _links="${_rest%%:*}"
+  _mode="$(_mdm_mode_normalize "${_rest#*:}")" || return 1
+  [[ "${_metadata%%:*}" == "$_expected_uid" && "$_links" == 1 ]] \
+    || return 1
+  _mdm_mode_is_safe "$_mode" && ! _mdm_has_extended_acl "$_path"
+}
+
+_mdm_snapshot_checkout_renderer() { # <clean-fixed-sha-checkout> [expected-full-sha]
+  local _checkout="$1" _expected_sha="${2:-}" _source _snapshot="" _runtime_uid
+  local _head_before _head_after _status _source_hash _snapshot_hash _identity _size
+  local _mdm_clean_renderer_snapshot=""
+  [[ -d "$_checkout" && ! -L "$_checkout" ]] || return 1
+  [[ -z "$_expected_sha" || "$_expected_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  _source="$_checkout/mdm/render-expected.py"
+  [[ -f "$_source" && ! -L "$_source" ]] || return 1
+  _runtime_uid="$(_mdm_runtime_artifact_uid)" || return 1
+  [[ "$(_mdm_stat_uid "$_source" || true)" == "$_runtime_uid" ]] || return 1
+  _identity="$(_mdm_stat_identity "$_source")" || return 1
+  case "$_identity" in
+    *:Regular\ File:*|*:regular\ file:*) : ;;
+    *) return 1 ;;
+  esac
+  _size="${_identity##*:}"
+  [[ "$_size" =~ ^[0-9]+$ && "$_size" -le 4194304 ]] || return 1
+  _head_before="$(_mdm_git -C "$_checkout" rev-parse --verify HEAD 2>/dev/null)" \
+    || return 1
+  [[ "$_head_before" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ -z "$_expected_sha" || "$_head_before" == "$_expected_sha" ]] || return 1
+  _status="$(_mdm_git -C "$_checkout" status --porcelain \
+    --untracked-files=all 2>/dev/null)" || return 1
+  [[ -z "$_status" ]] || return 1
+  _mdm_launcher_snapshot "$_source" _mdm_clean_renderer_snapshot || return 1
+  _snapshot="$_mdm_clean_renderer_snapshot"
+  _MDM_EXPECTED_RENDERER="$_snapshot"
+  _MDM_EXPECTED_RENDERER_SNAPSHOT=1
+  _MDM_EXPECTED_RENDERER_OWNER_UID="$_runtime_uid"
+  _mdm_clean_renderer_snapshot=""
+  _mdm_arm_transient_cleanup
+  _mdm_runtime_artifact_file_trusted "$_snapshot" "$_runtime_uid" || return 1
+  _source_hash="$(_mdm_sha256_file "$_source")" || return 1
+  _snapshot_hash="$(_mdm_sha256_file "$_snapshot")" || return 1
+  [[ "$_source_hash" == "$_snapshot_hash" ]] || return 1
+  _head_after="$(_mdm_git -C "$_checkout" rev-parse --verify HEAD 2>/dev/null)" \
+    || return 1
+  _status="$(_mdm_git -C "$_checkout" status --porcelain \
+    --untracked-files=all 2>/dev/null)" || return 1
+  [[ "$_head_after" == "$_head_before" && -z "$_status" \
+    && ( -z "$_expected_sha" || "$_head_after" == "$_expected_sha" ) ]]
+}
+
+_mdm_cleanup_expected_inflight() {
+  local _path="${_mdm_expected_inflight:-}" _base _uid _runtime_uid
+  [[ -n "$_path" ]] || return 0
+  _base="$(_mdm_auth_tmp_base)" || return 1
+  case "$_path" in "$_base"/claude-kit-mdm-expected.*) : ;; *) return 1 ;; esac
+  [[ -d "$_path" && ! -L "$_path" ]] || return 1
+  _runtime_uid="$(_mdm_runtime_artifact_uid)" || return 1
+  _uid="$(_mdm_stat_uid "$_path" || true)"
+  [[ "$_uid" == "$_runtime_uid" ]] || return 1
+  /bin/rmdir "$_path" 2>/dev/null || return 1
+  _mdm_expected_inflight=""
+}
+
+_mdm_prepare_expected_state() { # <logical-home> [clean-fixed-sha-checkout] [expected-full-sha]
+  local _home="$1" _checkout="${2:-${_MDM_AUTH_CHECKOUT:-}}"
+  local _expected_sha="${3:-}"
+  local _base _workspace _output _renderer _python _old_umask _runtime_uid
+  local _runtime_home
+  local _mdm_expected_inflight=""
   local _key _value _normalized _cli_required _policy _policy_hash _declared_policy
   local _args=() _override_keys
+  _mdm_expected_policy_input_valid || {
+    mdm_log U1b "expected policy SHA-256 が未指定または不正"
+    return "$MDM_EXIT_CONFIG"
+  }
+  [[ -n "$_checkout" && -d "$_checkout" && ! -L "$_checkout" ]] || return 1
+  [[ -z "$_expected_sha" || "$_expected_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  if [[ -z "${_MDM_EXPECTED_RENDERER:-}" ]]; then
+    _mdm_snapshot_checkout_renderer "$_checkout" "$_expected_sha" || {
+      mdm_log U1b "checkout rendererのFD snapshotに失敗"
+      return 1
+    }
+  fi
   _renderer="${_MDM_EXPECTED_RENDERER:-}"
   [[ -n "$_renderer" && -f "$_renderer" && ! -L "$_renderer" ]] || {
     mdm_log U1b "信頼済み期待状態rendererがない"
@@ -4972,19 +6275,36 @@ _mdm_prepare_expected_state() { # <logical-home>
     [[ "${_MDM_EXPECTED_RENDERER_SNAPSHOT:-0}" == 1 ]] || return 1
     case "$_renderer" in /private/tmp/claude-kit-mdm-launcher.*) : ;; *) return 1 ;; esac
   fi
+  _runtime_uid="$(_mdm_runtime_artifact_uid)" || return 1
+  [[ -n "${_MDM_EXPECTED_RENDERER_OWNER_UID:-}" ]] \
+    || _MDM_EXPECTED_RENDERER_OWNER_UID="$_runtime_uid"
+  [[ "$_MDM_EXPECTED_RENDERER_OWNER_UID" == "$_runtime_uid" ]] || return 1
+  _mdm_runtime_artifact_file_trusted "$_renderer" "$_runtime_uid" || return 1
   _python="$(_mdm_system_python)" || { mdm_log U1b "Apple署名済みsystem Pythonを確認できない"; return 1; }
   _base="$(_mdm_auth_tmp_base)"
   _old_umask="$(umask)"; umask 077
   _workspace="$(/usr/bin/mktemp -d "$_base/claude-kit-mdm-expected.XXXXXX" 2>/dev/null)" \
     || { umask "$_old_umask"; return 1; }
   umask "$_old_umask"
-  /bin/chmod 700 "$_workspace" || return 1
+  _mdm_expected_inflight="$_workspace"
+  /bin/chmod 700 "$_workspace" \
+    || { _mdm_cleanup_expected_inflight || true; return 1; }
+  [[ "$(_mdm_stat_uid "$_workspace" || true)" == "$_runtime_uid" \
+    && "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_workspace")")" == 0700 \
+    && ! -L "$_workspace" ]] \
+    || { _mdm_cleanup_expected_inflight || true; return 1; }
+  if _mdm_has_extended_acl "$_workspace"; then
+    _mdm_cleanup_expected_inflight || true
+    return 1
+  fi
   _MDM_EXPECTED_DIR="$_workspace"
   _MDM_EXPECTED_OUTPUT="$_workspace/rendered"
+  _MDM_EXPECTED_OWNER_UID="$_runtime_uid"
+  _mdm_expected_inflight=""
   _mdm_arm_transient_cleanup
   _output="$_MDM_EXPECTED_OUTPUT"
   _args=(
-    --checkout "$_MDM_AUTH_CHECKOUT"
+    --checkout "$_checkout"
     --output "$_output"
     --profile "${PROFILE:-standard}"
     --language "${LANGUAGE:-en}"
@@ -5016,13 +6336,15 @@ _mdm_prepare_expected_state() { # <logical-home>
     done < "$_MDM_PRIOR_INVENTORY"
   fi
   mdm_log U1b "信頼済みrendererで期待状態を生成"
+  _runtime_home="$_home"
+  [[ "$_runtime_uid" == 0 ]] && _runtime_home=/var/root
   _mdm_run_with_timeout "$(_mdm_timeout_seconds \
     "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
-    /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-      "$_python" -I -B "$_renderer" "${_args[@]}" >/dev/null 2>&1 || return 1
+    /usr/bin/env -i HOME="$_runtime_home" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+      "$_python" -I -B -S "$_renderer" "${_args[@]}" >/dev/null 2>&1 || return 1
   _mdm_run_with_timeout "$(_mdm_timeout_seconds \
     "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
-    _mdm_expected_tree_trusted "$_output" || return 1
+    _mdm_expected_tree_trusted "$_output" "$_runtime_uid" || return 1
   _mdm_run_with_timeout "$(_mdm_timeout_seconds \
     "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" \
     _mdm_expected_json_contract_valid \
@@ -5117,10 +6439,11 @@ _mdm_persistent_worktree_clean() { # <repo>
   [[ -z "$_status" ]]
 }
 
-_mdm_detached_head_matches() { # <repo> <full-sha> [expected-uid]
+_mdm_detached_head_matches() { # <repo> <full-sha> <expected-uid>
   local _repo="$1" _sha="$2" _expected_uid="${3:-}"
   local _git_dir _git_identity _head _before _size _value _snapshot _old_umask
-  [[ "$_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$_sha" =~ ^[0-9a-f]{40}$ && "$_expected_uid" =~ ^[0-9]+$ ]] \
+    || return 1
   _git_dir="$_repo/.git"
   _git_identity="$(_mdm_persistent_dir_identity "$_git_dir")" || return 1
   _mdm_managed_dir_matches_identity "$_git_dir" "$_expected_uid" \
@@ -5130,7 +6453,6 @@ _mdm_detached_head_matches() { # <repo> <full-sha> [expected-uid]
   _before="$(_mdm_stat_identity "$_head")" || return 1
   case "$_before" in *:Regular\ File:*|*:regular\ file:*) : ;; *) return 1 ;; esac
   _size="${_before##*:}"; [[ "$_size" == 41 ]] || return 1
-  [[ -z "$_expected_uid" || "$_expected_uid" =~ ^[0-9]+$ ]] || return 1
   _old_umask="$(umask)"; umask 077
   _snapshot="$(/usr/bin/mktemp "$(_mdm_safe_tmpdir)/claude-kit-mdm-head.XXXXXX")" \
     || { umask "$_old_umask"; return 1; }
@@ -5179,8 +6501,23 @@ _MDM_TRANSACTION_HISTORY_SNAPSHOT=""
 _MDM_TRANSACTION_COMPONENT_PATH=""
 _MDM_TRANSACTION_COMPONENT_STATE="untouched"
 _MDM_TRANSACTION_COMPONENT_SNAPSHOT=""
+_MDM_PARENT_MODE_STATE="idle"
+_MDM_PARENT_MODE_JOURNAL=""
+_MDM_PARENT_MODE_JOURNAL_IDENTITY=""
+_MDM_PARENT_MODE_CHECK=""
+_MDM_EXTERNAL_TRANSACTION_STATE="idle"
+_MDM_EXTERNAL_TRANSACTION_JOURNAL=""
+_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY=""
+_MDM_EXTERNAL_INVENTORY_TMP=""
+_MDM_EXTERNAL_INVENTORY_TMP_IDENTITY=""
+_MDM_EXTERNAL_COMMIT_CARRIER=""
+_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY=""
+_MDM_EXTERNAL_COMMIT_ANCESTOR=""
+_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY=""
+MDM_EXTERNAL_TRANSACTION_PATHS=()
 _MDM_EXPECTED_DIR=""
 _MDM_EXPECTED_OUTPUT=""
+_MDM_EXPECTED_OWNER_UID=""
 _MDM_PRIOR_INVENTORY=""
 _MDM_EXPECTED_KIT_COMPONENT_SHA256=""
 _MDM_RUN_LOCK_FILE=""
@@ -6060,14 +7397,16 @@ _mdm_release_run_lock() {
 }
 _mdm_cleanup_auth_entry_list() {
   local _path="${_MDM_AUTH_ENTRY_LIST:-}" _base _uid
-  [[ -n "$_path" ]] || return 0
+  [[ -n "$_path" ]] || { _MDM_AUTH_ENTRY_LIST_OWNER_UID=""; return 0; }
   _base="$(_mdm_auth_tmp_base)"
   case "$_path" in "$_base"/claude-kit-mdm-list.*) : ;; *) return 1 ;; esac
   [[ -f "$_path" && ! -L "$_path" ]] || return 1
   _uid="$(_mdm_stat_uid "$_path" || true)"
-  [[ "$_uid" == "$(_mdm_auth_expected_uid)" ]] || return 1
+  [[ -n "${_MDM_AUTH_ENTRY_LIST_OWNER_UID:-}" \
+    && "$_uid" == "$_MDM_AUTH_ENTRY_LIST_OWNER_UID" ]] || return 1
   /bin/rm -f "$_path" || return 1
   _MDM_AUTH_ENTRY_LIST=""
+  _MDM_AUTH_ENTRY_LIST_OWNER_UID=""
 }
 
 _mdm_cleanup_auth_checkout() {
@@ -6086,11 +7425,12 @@ _mdm_cleanup_auth_checkout() {
 _mdm_cleanup_dryrun_checkout() {
   local _path="${_MDM_DRYRUN_CHECKOUT:-}"
   [[ -n "$_path" ]] || return 0
-  case "$_path" in
-    /private/tmp/claude-kit-mdm-dryrun.*|/tmp/claude-kit-mdm-dryrun.*) ;;
-    *) mdm_log R4 "dry-run 一時パスの形式が不正。削除しない: $_path"; return 1 ;;
-  esac
-  _mdm_run_maybe_as_user /bin/rm -rf "$_path" 2>/dev/null || true
+  _mdm_managed_tmp_path_matches "$_path" claude-kit-mdm-dryrun || {
+    mdm_log R4 "dry-run 一時パスの形式が不正。削除しない: $_path"
+    return 1
+  }
+  _mdm_run_maybe_as_user /bin/rm -rf "$_path" 2>/dev/null || return 1
+  [[ ! -e "$_path" && ! -L "$_path" ]] || return 1
   _MDM_DRYRUN_CHECKOUT=""
 }
 
@@ -6125,26 +7465,25 @@ _mdm_cleanup_persistent_stage() {
 }
 
 _mdm_cleanup_expected_dir() {
-  local _path="${_MDM_EXPECTED_DIR:-}" _base _uid
-  [[ -n "$_path" ]] || return 0
+  local _path="${_MDM_EXPECTED_DIR:-}" _base _uid _expected_uid
+  [[ -n "$_path" ]] || { _MDM_EXPECTED_OWNER_UID=""; return 0; }
   _base="$(_mdm_auth_tmp_base)"
   case "$_path" in "$_base"/claude-kit-mdm-expected.*) : ;; *) return 1 ;; esac
   [[ -d "$_path" && ! -L "$_path" ]] || return 1
   _uid="$(_mdm_stat_uid "$_path" || true)"
-  [[ "$_uid" == "$(_mdm_auth_expected_uid)" ]] || return 1
+  _expected_uid="${_MDM_EXPECTED_OWNER_UID:-}"
+  [[ "$_expected_uid" =~ ^[0-9]+$ && "$_uid" == "$_expected_uid" ]] || return 1
   /usr/bin/find "$_path" -xdev -type d -exec /bin/chmod 700 '{}' + 2>/dev/null || true
   /bin/rm -rf "$_path" 2>/dev/null || return 1
   _MDM_EXPECTED_DIR=""
   _MDM_EXPECTED_OUTPUT=""
+  _MDM_EXPECTED_OWNER_UID=""
 }
 
 _mdm_cleanup_prior_inventory() {
   local _path="${_MDM_PRIOR_INVENTORY:-}" _uid
   [[ -n "$_path" ]] || return 0
-  case "$_path" in
-    /private/tmp/claude-kit-mdm-prior.*|/tmp/claude-kit-mdm-prior.*) ;;
-    *) return 1 ;;
-  esac
+  _mdm_managed_tmp_path_matches "$_path" claude-kit-mdm-prior || return 1
   [[ -f "$_path" && ! -L "$_path" ]] || return 1
   _uid="$(_mdm_stat_uid "$_path" || true)"
   [[ "$_uid" == "$(_mdm_auth_expected_uid)" ]] || return 1
@@ -6153,18 +7492,59 @@ _mdm_cleanup_prior_inventory() {
 }
 
 _mdm_cleanup_renderer_snapshot() {
-  local _path="${_MDM_EXPECTED_RENDERER:-}" _uid
-  [[ "${_MDM_EXPECTED_RENDERER_SNAPSHOT:-0}" == 1 && -n "$_path" ]] || return 0
-  case "$_path" in
-    /private/tmp/claude-kit-mdm-launcher.*|/tmp/claude-kit-mdm-launcher.*) ;;
-    *) return 1 ;;
-  esac
+  local _path="${_MDM_EXPECTED_RENDERER:-}" _uid _expected_uid
+  [[ "${_MDM_EXPECTED_RENDERER_SNAPSHOT:-0}" == 1 && -n "$_path" ]] \
+    || { _MDM_EXPECTED_RENDERER_OWNER_UID=""; return 0; }
+  _mdm_managed_tmp_path_matches "$_path" claude-kit-mdm-launcher || return 1
   [[ -f "$_path" && ! -L "$_path" ]] || return 1
   _uid="$(_mdm_stat_uid "$_path" || true)"
-  [[ "$_uid" == "$(_mdm_auth_expected_uid)" ]] || return 1
+  _expected_uid="${_MDM_EXPECTED_RENDERER_OWNER_UID:-}"
+  [[ -n "$_expected_uid" ]] || _expected_uid="$(_mdm_runtime_artifact_uid)"
+  [[ "$_expected_uid" =~ ^[0-9]+$ && "$_uid" == "$_expected_uid" ]] || return 1
   /bin/rm -f "$_path" || return 1
   _MDM_EXPECTED_RENDERER=""
   _MDM_EXPECTED_RENDERER_SNAPSHOT=0
+  _MDM_EXPECTED_RENDERER_OWNER_UID=""
+}
+
+_mdm_clear_system_python_runtime_state() {
+  _MDM_SYSTEM_PYTHON_TARGET_PATH=""
+  _MDM_SYSTEM_PYTHON_TARGET_FRAMEWORK_IDENTITY=""
+  _MDM_SYSTEM_PYTHON_TARGET_IDENTITY=""
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK=""
+  _MDM_SYSTEM_PYTHON_PRIVATE_PATH=""
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK_IDENTITY=""
+  _MDM_SYSTEM_PYTHON_PRIVATE_TARGET_IDENTITY=""
+  _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL=""
+}
+
+_mdm_cleanup_system_python_workspace() {
+  local _workspace="${_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE:-}"
+  local _expected="${_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY:-}"
+  local _base _actual _uid
+  [[ -n "$_workspace" ]] || {
+    _mdm_clear_system_python_runtime_state
+    return 0
+  }
+  _base="$(_mdm_system_python_workspace_base)" || return 1
+  case "$_workspace" in
+    "$_base"/claude-kit-mdm-python.*) : ;;
+    *) return 1 ;;
+  esac
+  [[ -n "$_expected" && -d "$_workspace" && ! -L "$_workspace" ]] || return 1
+  _actual="$(_mdm_system_python_dir_identity "$_workspace")" || return 1
+  [[ "$_actual" == "$_expected" ]] || return 1
+  _uid="$(_mdm_stat_uid "$_workspace")" || return 1
+  [[ "$_uid" == "$(_mdm_system_python_runtime_uid)" ]] || return 1
+  _mdm_system_python_clear_workspace_flags "$_workspace" || return 1
+  /bin/chmod 0700 "$_workspace" || return 1
+  /usr/bin/find -P "$_workspace" -xdev -type d \
+    -exec /bin/chmod 0700 '{}' + 2>/dev/null || return 1
+  /bin/rm -rf "$_workspace" || return 1
+  [[ ! -e "$_workspace" && ! -L "$_workspace" ]] || return 1
+  _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE=""
+  _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY=""
+  _mdm_clear_system_python_runtime_state
 }
 
 _mdm_stop_active_drop_supervisor() { # [HUP|INT|TERM]
@@ -6260,21 +7640,32 @@ _mdm_cleanup_transient_checkouts() {
   # INT/TERM handler retains responsibility for the final 130/143 exit.
   trap - EXIT
   trap '' HUP INT TERM
+  _mdm_launcher_cleanup_snapshots || true
+  _mdm_cleanup_expected_inflight || true
   _mdm_stop_active_timeout_supervisor "$_timeout_signal" || true
   _mdm_stop_active_drop_supervisor "$_timeout_signal" || true
   _mdm_stop_active_bound_snapshot "$_timeout_signal" || true
   _mdm_receipt_discard_prepared || true
-  _mdm_transaction_abort || true
+  case "${_MDM_TRANSACTION_STATE:-idle}" in
+    committing|commit_cleanup) _mdm_transaction_commit || true ;;
+    *) _mdm_transaction_abort || true ;;
+  esac
+  _mdm_external_inventory_discard || true
+  _mdm_managed_parent_check_discard || true
   _mdm_cleanup_prereq_artifacts || true
   _mdm_cleanup_auth_entry_list || true
   _mdm_cleanup_dryrun_checkout || true
-  if [[ "${_MDM_TRANSACTION_STATE:-idle}" != partial ]]; then
+  if [[ "${_MDM_TRANSACTION_STATE:-idle}" != partial \
+    && "${_MDM_TRANSACTION_STATE:-idle}" != committing \
+    && "${_MDM_TRANSACTION_STATE:-idle}" != commit_cleanup ]]; then
     _mdm_cleanup_persistent_stage || true
   fi
   _mdm_cleanup_auth_checkout || true
   _mdm_cleanup_expected_dir || true
   _mdm_cleanup_prior_inventory || true
   _mdm_cleanup_renderer_snapshot || true
+  _mdm_cleanup_system_python_workspace || true
+  _mdm_clear_failure_rollback_runtime
   _mdm_release_run_lock || true
 }
 
@@ -6349,6 +7740,7 @@ _mdm_validate_semantic_config() { # <euid> <home> <target-uid> <dry-run>
   local _euid="$1" _home="$2" _target_uid="$3" _dry_run="$4"
   local _ref="${KIT_MDM_GIT_REF:-main}" _install_dir="$_home/.claude-starter-kit"
   _mdm_root_ref_allowed "$_ref" "$_dry_run" || return "$MDM_EXIT_CONFIG"
+  _mdm_expected_policy_input_valid || return "$MDM_EXIT_CONFIG"
   _mdm_log_dir_for "$_euid" "$_home" >/dev/null || return "$MDM_EXIT_CONFIG"
   [[ "$_dry_run" == true ]] && return 0
   if [[ -n "${KIT_MDM_INSTALL_DIR:-}" && "$KIT_MDM_INSTALL_DIR" != "$_install_dir" ]]; then
@@ -6454,12 +7846,12 @@ _mdm_atomic_user_dir_operation() {
     swap) [[ "$_destination_identity" != absent ]] || return 1 ;;
     *) return 1 ;;
   esac
-  _python="$(_mdm_system_python)" || return 1
+  _python="$(_mdm_target_system_python)" || return 1
   # The user-owned parent is opened once with O_NOFOLLOW.  Both preflight and
   # postcondition use fstatat-style dir_fd lookups around a single atomic
   # rename operation, so a pathname replacement cannot inherit stale delete
   # authority from an earlier shell check.
-  if _mdm_run_maybe_as_user "$_python" -I -B -c '
+  if _mdm_run_maybe_as_user "$_python" -I -B -S -c '
 import ctypes
 import os
 import stat
@@ -6923,27 +8315,2779 @@ _mdm_transaction_restore_root_file() {
 }
 
 _mdm_transaction_cleanup_root_snapshots() {
-  local _snapshot
+  local _snapshot _prefix
   for _snapshot in "${_MDM_TRANSACTION_HISTORY_SNAPSHOT:-}" \
     "${_MDM_TRANSACTION_COMPONENT_SNAPSHOT:-}"; do
     [[ -n "$_snapshot" ]] || continue
-    case "$_snapshot" in
-      /private/tmp/claude-kit-mdm-history.*|/tmp/claude-kit-mdm-history.*|\
-      /private/tmp/claude-kit-mdm-manifest.*|/tmp/claude-kit-mdm-manifest.*)
-        if [[ -e "$_snapshot" || -L "$_snapshot" ]]; then
-          [[ -f "$_snapshot" && ! -L "$_snapshot" ]] \
-            && /bin/rm -f "$_snapshot" || return 1
-        fi ;;
+    case "${_snapshot##*/}" in
+      claude-kit-mdm-history.*) _prefix=claude-kit-mdm-history ;;
+      claude-kit-mdm-manifest.*) _prefix=claude-kit-mdm-manifest ;;
       *) return 1 ;;
     esac
+    _mdm_managed_tmp_path_matches "$_snapshot" "$_prefix" || return 1
+    if [[ -e "$_snapshot" || -L "$_snapshot" ]]; then
+      [[ -f "$_snapshot" && ! -L "$_snapshot" ]] \
+        && /bin/rm -f "$_snapshot" || return 1
+    fi
   done
   _MDM_TRANSACTION_HISTORY_SNAPSHOT=""
   _MDM_TRANSACTION_COMPONENT_SNAPSHOT=""
 }
 
+_mdm_managed_parent_identity() { # <directory>
+  if _mdm_is_darwin; then
+    /usr/bin/stat -f '%d:%i' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%d:%i' "$1" 2>/dev/null
+  fi
+}
+
+_mdm_managed_parent_mode_needs_private() { # <mode>
+  local _mode _owner _group _other
+  _mode="$(_mdm_mode_normalize "$1")" || return 2
+  _owner="${_mode:1:1}"
+  _group="${_mode:2:1}"
+  _other="${_mode:3:1}"
+  [[ "$_owner" != 7 ]] && return 0
+  case "$_group$_other" in
+    *[2367]*) return 0 ;;
+  esac
+  return 1
+}
+
+# Emit one immutable plan for the live/snapshot parents selected by the
+# authoritative expected manifest. The home itself and unrelated user paths
+# are deliberately outside the inventory. Existing directories are bound by
+# dev+inode; a final postcondition additionally requires every managed-file
+# parent and both managed roots to exist.
+_mdm_managed_parent_inventory() { # <home> <target-uid> <preflight|final>
+  local _home="$1" _uid="$2" _phase="$3" _manifest _python
+  [[ "$_home" == /* && "$_home" != / && ! "$_home" =~ [[:cntrl:]] \
+    && "$_uid" =~ ^[0-9]+$ ]] || return 1
+  case "$_phase" in preflight|final) : ;; *) return 1 ;; esac
+  _manifest="${_MDM_EXPECTED_OUTPUT:-}/manifest.json"
+  [[ -f "$_manifest" && ! -L "$_manifest" ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_SETUP_SECONDS")" \
+    /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S - "$_manifest" "$_home" "$_uid" "$_phase" <<'PY'
+import json
+import os
+import stat
+import sys
+
+manifest_path, home, uid_raw, phase = sys.argv[1:]
+uid = int(uid_raw)
+if phase not in ("preflight", "final"):
+    raise SystemExit(1)
+require_managed = phase == "final"
+
+def invalid_text(value):
+    return (not isinstance(value, str) or not value
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159
+                   or 0xD800 <= ord(char) <= 0xDFFF for char in value))
+
+def relative(value):
+    if invalid_text(value) or value.startswith("/") or "\\" in value:
+        raise ValueError("invalid relative path")
+    parts = value.split("/")
+    if (len(parts) > 64 or any(part in ("", ".", "..") for part in parts)
+            or len(value.encode("utf-8", "strict")) > 1024):
+        raise ValueError("invalid relative path")
+    return parts
+
+with open(manifest_path, "r", encoding="utf-8", errors="strict") as handle:
+    manifest = json.load(handle)
+files = manifest.get("files")
+absent = manifest.get("absent_files")
+if (not isinstance(files, list) or not 1 <= len(files) <= 1000
+        or not isinstance(absent, list) or len(absent) > 1000
+        or len(set(files)) != len(files) or len(set(absent)) != len(absent)):
+    raise SystemExit(1)
+file_parts = [relative(value) for value in files]
+absent_parts = [relative(value) for value in absent]
+
+claude = home + "/.claude"
+snapshot = claude + "/.starter-kit-snapshot"
+records = {}
+
+def capture(path):
+    before = os.lstat(path)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+        raise ValueError("managed parent is not a real directory")
+    if before.st_uid != uid or os.path.realpath(path) != path:
+        raise ValueError("managed parent identity is unsafe")
+    mode = stat.S_IMODE(before.st_mode)
+    identity = (before.st_dev, before.st_ino)
+    previous = records.get(path)
+    value = (identity, mode)
+    if previous is not None and previous != value:
+        raise ValueError("managed parent changed")
+    records[path] = value
+
+def root_exists(root):
+    try:
+        capture(root)
+        return True
+    except FileNotFoundError:
+        if require_managed:
+            raise ValueError("managed root is missing")
+        return False
+
+def walk(root, parts, required):
+    try:
+        capture(root)
+    except FileNotFoundError:
+        if required:
+            raise ValueError("managed root is missing")
+        return
+    current = root
+    for part in parts[:-1]:
+        current += "/" + part
+        try:
+            capture(current)
+        except FileNotFoundError:
+            if required:
+                raise ValueError("managed file parent is missing")
+            return
+
+for root in (claude, snapshot):
+    present = root_exists(root)
+    if not present:
+        continue
+    for parts in file_parts:
+        walk(root, parts, require_managed)
+    for parts in absent_parts:
+        walk(root, parts, False)
+
+ordered = sorted(records, key=lambda path: (path.count("/"), os.fsencode(path)))
+if len(ordered) > 65536:
+    raise SystemExit(1)
+sys.stdout.write("v1\t{}\t{}\n".format(uid, home))
+for path in ordered:
+    identity, mode = records[path]
+    change = int(((mode >> 6) & 0o7) != 0o7 or bool(mode & 0o22))
+    sys.stdout.write("{}\t{}:{}\t{:04o}\t{}\n".format(
+        path, identity[0], identity[1], mode, change))
+sys.stdout.write("end\t{}\n".format(len(ordered)))
+PY
+}
+
+_mdm_managed_parent_record_valid() {
+  # <path> <dev:inode> <original-mode> <change-flag> <home> <uid>
+  # <original|applied>
+  local _path="$1" _identity="$2" _original="$3" _change="$4"
+  local _home="$5" _uid="$6" _phase="$7" _canonical _mode _expected
+  [[ "$_identity" =~ ^[0-9]+:[0-9]+$ \
+    && "$_original" =~ ^[0-7]{4}$ \
+    && ( "$_change" == 0 || "$_change" == 1 ) ]] || return 1
+  case "$_path" in "$_home/.claude"|"$_home/.claude"/*) : ;; *) return 1 ;; esac
+  [[ "$_path" != "$_home" && -d "$_path" && ! -L "$_path" ]] || return 1
+  _canonical="$(_mdm_canonical_dir "$_path" 2>/dev/null || true)"
+  [[ "$_canonical" == "$_path" \
+    && "$(_mdm_stat_uid "$_path" 2>/dev/null || true)" == "$_uid" \
+    && "$(_mdm_managed_parent_identity "$_path" 2>/dev/null || true)" \
+      == "$_identity" ]] || return 1
+  _mdm_user_dir_acl_safe "$_path" || return 1
+  _mode="$(_mdm_mode_normalize \
+    "$(_mdm_launcher_stat_mode "$_path" 2>/dev/null || true)")" || return 1
+  case "$_phase" in
+    original) _expected="$_original" ;;
+    applied)
+      if [[ "$_change" == 1 ]]; then _expected=0700; else _expected="$_original"; fi ;;
+    *) return 1 ;;
+  esac
+  [[ "$_mode" == "$_expected" ]] || return 1
+  [[ "$(_mdm_managed_parent_identity "$_path" 2>/dev/null || true)" \
+      == "$_identity" \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_launcher_stat_mode "$_path" 2>/dev/null || true)" \
+      2>/dev/null || true)" == "$_expected" ]] || return 1
+  _mdm_user_dir_acl_safe "$_path" || return 1
+  [[ "$(_mdm_managed_parent_identity "$_path" 2>/dev/null || true)" \
+    == "$_identity" ]]
+}
+
+_mdm_managed_parent_plan_bytes_valid() { # <plan> <home> <uid>
+  local _plan="$1" _home="$2" _uid="$3" _python
+  _python="$(_mdm_system_python)" || return 1
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_SETUP_SECONDS")" \
+    /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S -c '
+import os
+import stat
+import sys
+
+path, home, uid_raw = sys.argv[1:]
+uid = int(uid_raw)
+flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+descriptor = os.open(path, flags)
+try:
+    before = os.fstat(descriptor)
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+            or before.st_size < 1 or before.st_size > 128 * 1024 * 1024):
+        raise ValueError("unsafe plan file")
+    chunks = []
+    remaining = before.st_size
+    while remaining:
+        chunk = os.read(descriptor, min(1024 * 1024, remaining))
+        if not chunk:
+            raise ValueError("short plan read")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    if os.read(descriptor, 1):
+        raise ValueError("plan grew")
+    after = os.fstat(descriptor)
+    current = os.stat(path, follow_symlinks=False)
+    identity = lambda value: (
+        value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+        value.st_uid, value.st_gid, value.st_size,
+        value.st_mtime_ns, value.st_ctime_ns)
+    if identity(after) != identity(before) or identity(current) != identity(before):
+        raise ValueError("plan changed")
+finally:
+    os.close(descriptor)
+data = b"".join(chunks)
+if not data.endswith(b"\n") or b"\x00" in data or b"\r" in data:
+    raise ValueError("non-canonical plan bytes")
+lines = data[:-1].decode("utf-8", "strict").split("\n")
+if len(lines) < 2 or lines[0].split("\t") != ["v1", str(uid), home]:
+    raise ValueError("invalid plan header")
+records = []
+claude = home + "/.claude"
+for line in lines[1:-1]:
+    fields = line.split("\t")
+    if len(fields) != 4:
+        raise ValueError("invalid plan record")
+    record_path, record_identity, mode, change = fields
+    identity_parts = record_identity.split(":")
+    if (record_path != claude and not record_path.startswith(claude + "/")):
+        raise ValueError("plan path escaped")
+    if (any(ord(char) < 32 or 127 <= ord(char) <= 159
+            or 0xD800 <= ord(char) <= 0xDFFF for char in record_path)
+            or len(identity_parts) != 2
+            or any(not value.isascii() or not value.isdigit()
+                   for value in identity_parts)
+            or len(mode) != 4 or any(value not in "01234567" for value in mode)
+            or change not in ("0", "1")):
+        raise ValueError("invalid plan field")
+    records.append(record_path)
+if (len(records) > 65536 or len(set(records)) != len(records)
+        or records != sorted(records,
+                             key=lambda value: (value.count("/"),
+                                                os.fsencode(value)))):
+    raise ValueError("invalid plan ordering")
+record_set = set(records)
+snapshot = claude + "/.starter-kit-snapshot"
+for record_path in records:
+    if record_path.endswith("/"):
+        raise ValueError("plan path has a trailing slash")
+    parent = record_path.rsplit("/", 1)[0]
+    if record_path != claude and parent not in record_set:
+        raise ValueError("plan ancestor is missing")
+    if record_path == claude:
+        suffix = ""
+    elif record_path == snapshot:
+        suffix = ""
+    elif record_path.startswith(snapshot + "/"):
+        suffix = record_path[len(snapshot) + 1:]
+    else:
+        suffix = record_path[len(claude) + 1:]
+    if suffix:
+        parts = suffix.split("/")
+        if (len(parts) > 64 or any(part in ("", ".", "..")
+                                   for part in parts)
+                or "\\" in suffix
+                or len(suffix.encode("utf-8", "strict")) > 1024):
+            raise ValueError("invalid plan relative path")
+end = lines[-1].split("\t")
+if end != ["end", str(len(records))]:
+    raise ValueError("invalid plan terminator")
+' "$_plan" "$_home" "$_uid" >/dev/null 2>&1
+}
+
+_mdm_managed_parent_plan_valid_inner() { # <plan> <home> <uid> <original|applied>
+  local _plan="$1" _home="$2" _uid="$3" _phase="$4"
+  local _line _tag _field2 _field3 _field4 _extra _count=0 _ended=0
+  local _header_seen=0 _previous="" _printable _mode_rc
+  case "$_phase" in original|applied) : ;; *) return 1 ;; esac
+  [[ -f "$_plan" && ! -L "$_plan" ]] || return 1
+  _mdm_managed_parent_plan_bytes_valid "$_plan" "$_home" "$_uid" || return 1
+  while IFS= read -r _line || [[ -n "$_line" ]]; do
+    [[ -n "$_line" ]] || return 1
+    _printable="${_line//$'\t'/}"
+    [[ ! "$_printable" =~ [[:cntrl:]] ]] || return 1
+    _tag=""; _field2=""; _field3=""; _field4=""; _extra=""
+    IFS=$'\t' read -r _tag _field2 _field3 _field4 _extra <<< "$_line"
+    if [[ "$_header_seen" -eq 0 ]]; then
+      [[ "$_tag" == v1 && "$_field2" == "$_uid" \
+        && "$_field3" == "$_home" && -z "$_field4$_extra" ]] || return 1
+      _header_seen=1
+      continue
+    fi
+    [[ "$_ended" -eq 0 ]] || return 1
+    if [[ "$_tag" == end ]]; then
+      [[ "$_field2" =~ ^[0-9]+$ && "$_field2" -eq "$_count" \
+        && -z "$_field3$_field4$_extra" ]] || return 1
+      _ended=1
+      continue
+    fi
+    [[ -z "$_extra" && "$_tag" != "$_previous" ]] || return 1
+    _mdm_managed_parent_record_valid "$_tag" "$_field2" "$_field3" \
+      "$_field4" "$_home" "$_uid" "$_phase" || return 1
+    if [[ "$_phase" == original ]]; then
+      _mode_rc=0
+      _mdm_managed_parent_mode_needs_private "$_field3" || _mode_rc=$?
+      case "$_mode_rc" in
+        0) [[ "$_field4" == 1 ]] || return 1 ;;
+        1) [[ "$_field4" == 0 ]] || return 1 ;;
+        *) return 1 ;;
+      esac
+    elif [[ "$_field4" == 1 ]]; then
+      [[ "$(_mdm_mode_normalize \
+        "$(_mdm_launcher_stat_mode "$_tag" 2>/dev/null || true)")" == 0700 ]] \
+        || return 1
+    fi
+    _previous="$_tag"
+    _count=$((_count + 1)); [[ "$_count" -le 65536 ]] || return 1
+  done < "$_plan"
+  [[ "$_header_seen" -eq 1 && "$_ended" -eq 1 ]]
+}
+
+_mdm_managed_parent_plan_valid() { # <plan> <home> <uid> <original|applied>
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_SETUP_SECONDS")" \
+    _mdm_managed_parent_plan_valid_inner "$@"
+}
+
+_mdm_managed_parent_journal_trusted() {
+  local _path="${_MDM_PARENT_MODE_JOURNAL:-}" _base _meta _rest _mode
+  [[ -n "$_path" && -n "${_MDM_PARENT_MODE_JOURNAL_IDENTITY:-}" ]] || return 1
+  _base="$(_mdm_auth_tmp_base)"
+  case "$_path" in "$_base"/claude-kit-mdm-parent-modes.*) : ;; *) return 1 ;; esac
+  [[ -f "$_path" && ! -L "$_path" \
+    && "$(_mdm_canonical_file "$_path" 2>/dev/null || true)" == "$_path" \
+    && "$(_mdm_stat_identity "$_path" 2>/dev/null || true)" \
+      == "$_MDM_PARENT_MODE_JOURNAL_IDENTITY" ]] || return 1
+  _meta="$(_mdm_stat_managed_metadata "$_path")" || return 1
+  [[ "$_meta" =~ ^[0-9]+:1:[0-7]+$ ]] || return 1
+  _rest="${_meta#*:}"; _rest="${_rest#*:}"
+  _mode="$(_mdm_mode_normalize "$_rest")" || return 1
+  [[ "${_meta%%:*}" == "$(_mdm_auth_expected_uid)" && "$_mode" == 0600 ]] \
+    || return 1
+  ! _mdm_has_extended_acl "$_path"
+}
+
+_mdm_managed_parent_journal_discard() {
+  local _path="${_MDM_PARENT_MODE_JOURNAL:-}" _base _uid
+  [[ -n "$_path" ]] || { _MDM_PARENT_MODE_STATE=idle; return 0; }
+  _base="$(_mdm_auth_tmp_base)"
+  case "$_path" in "$_base"/claude-kit-mdm-parent-modes.*) : ;; *) return 1 ;; esac
+  if [[ -n "${_MDM_PARENT_MODE_JOURNAL_IDENTITY:-}" ]]; then
+    _mdm_managed_parent_journal_trusted || return 1
+  else
+    [[ -f "$_path" && ! -L "$_path" \
+      && "$(_mdm_canonical_file "$_path" 2>/dev/null || true)" == "$_path" ]] \
+      || return 1
+    _uid="$(_mdm_stat_uid "$_path" 2>/dev/null || true)"
+    [[ "$_uid" == "$(_mdm_auth_expected_uid)" ]] || return 1
+  fi
+  /bin/rm -f "$_path" || return 1
+  _MDM_PARENT_MODE_JOURNAL=""
+  _MDM_PARENT_MODE_JOURNAL_IDENTITY=""
+  _MDM_PARENT_MODE_STATE=idle
+}
+
+_mdm_managed_parent_target_modes() { # <apply|restore> <home> <uid>
+  local _operation="$1" _home="$2" _uid="$3" _python _fault_after=""
+  case "$_operation" in apply|restore) : ;; *) return 1 ;; esac
+  _python="$(_mdm_system_python)" || return 1
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 ]]; then
+    _fault_after="${MDM_PARENT_MODE_FAULT_AFTER_OVERRIDE:-}"
+    [[ -z "$_fault_after" || "$_fault_after" =~ ^[1-9][0-9]*$ ]] || return 1
+  fi
+  _mdm_run_with_timeout "$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_SETUP_SECONDS")" \
+    /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S -c '
+import os
+import stat
+import sys
+
+operation, uid_raw, home, journal_path, journal_uid_raw, fault_raw = sys.argv[1:]
+uid = int(uid_raw)
+journal_uid = int(journal_uid_raw)
+fault_after = int(fault_raw) if fault_raw else None
+if operation not in ("apply", "restore") or not home.startswith("/"):
+    raise SystemExit(1)
+
+file_flags = (os.O_RDONLY | os.O_NOFOLLOW
+              | getattr(os, "O_CLOEXEC", 0))
+journal_fd = os.open(journal_path, file_flags)
+try:
+    journal_before = os.fstat(journal_fd)
+    if (not stat.S_ISREG(journal_before.st_mode)
+            or journal_before.st_uid != journal_uid
+            or journal_before.st_nlink != 1
+            or stat.S_IMODE(journal_before.st_mode) != 0o600
+            or journal_before.st_size < 1
+            or journal_before.st_size > 128 * 1024 * 1024):
+        raise ValueError("unsafe managed-parent journal")
+    chunks = []
+    remaining = journal_before.st_size
+    while remaining:
+        chunk = os.read(journal_fd, min(1024 * 1024, remaining))
+        if not chunk:
+            raise ValueError("short managed-parent journal read")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    if os.read(journal_fd, 1):
+        raise ValueError("managed-parent journal grew")
+    journal_after = os.fstat(journal_fd)
+    journal_path_after = os.stat(journal_path, follow_symlinks=False)
+    journal_identity = lambda value: (
+        value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+        value.st_uid, value.st_gid, value.st_size,
+        value.st_mtime_ns, value.st_ctime_ns)
+    if (journal_identity(journal_after) != journal_identity(journal_before)
+            or journal_identity(journal_path_after)
+                != journal_identity(journal_before)):
+        raise ValueError("managed-parent journal changed")
+    journal_bytes = b"".join(chunks)
+finally:
+    os.close(journal_fd)
+if not journal_bytes.endswith(b"\n") or b"\x00" in journal_bytes:
+    raise SystemExit(1)
+lines = journal_bytes.splitlines()
+if len(lines) < 2:
+    raise SystemExit(1)
+header = lines[0].decode("utf-8", "strict").split("\t")
+if header != ["v1", str(uid), home]:
+    raise SystemExit(1)
+records = []
+ended = False
+for index, raw in enumerate(lines[1:], 1):
+    fields = raw.decode("utf-8", "strict").split("\t")
+    if fields[0] == "end":
+        if (ended or index != len(lines) - 1 or len(fields) != 2
+                or not fields[1].isascii() or not fields[1].isdigit()
+                or int(fields[1]) != len(records)):
+            raise SystemExit(1)
+        ended = True
+        break
+    if len(fields) != 4:
+        raise SystemExit(1)
+    path, identity_raw, mode_raw, change_raw = fields
+    claude = home + "/.claude"
+    identity_parts = identity_raw.split(":")
+    if (len(identity_parts) != 2
+            or any(not value.isascii() or not value.isdigit()
+                   for value in identity_parts)
+            or len(mode_raw) != 4 or any(value not in "01234567"
+                                         for value in mode_raw)
+            or path != claude and not path.startswith(claude + "/")
+            or any(ord(value) < 32 or 127 <= ord(value) <= 159
+                   for value in path)
+            or change_raw not in ("0", "1")):
+        raise SystemExit(1)
+    identity = tuple(int(value) for value in identity_parts)
+    records.append((path, identity, int(mode_raw, 8), change_raw == "1"))
+if not ended or len(records) > 65536:
+    raise SystemExit(1)
+
+if operation == "restore":
+    records.reverse()
+
+directory_flags = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                   | getattr(os, "O_CLOEXEC", 0))
+
+def inode(value):
+    return value.st_dev, value.st_ino
+
+def open_chain(path, expected):
+    parts = path.split("/")[1:]
+    if (not parts or any(not part or part in (".", "..") for part in parts)):
+        raise ValueError("invalid managed-parent path")
+    descriptors = [os.open("/", directory_flags)]
+    bindings = []
+    try:
+        for name in parts:
+            parent_fd = descriptors[-1]
+            child_fd = os.open(name, directory_flags, dir_fd=parent_fd)
+            descriptors.append(child_fd)
+            child = os.fstat(child_fd)
+            linked = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (not stat.S_ISDIR(child.st_mode) or inode(child) != inode(linked)):
+                raise ValueError("managed-parent chain changed")
+            bindings.append((parent_fd, name, child_fd, inode(child)))
+        leaf = os.fstat(descriptors[-1])
+        if leaf.st_uid != uid or inode(leaf) != expected:
+            raise ValueError("managed-parent leaf changed")
+        return descriptors, bindings
+    except BaseException:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
+
+def bindings_valid(bindings):
+    for parent_fd, name, child_fd, expected in reversed(bindings):
+        child = os.fstat(child_fd)
+        linked = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (not stat.S_ISDIR(child.st_mode) or inode(child) != expected
+                or inode(linked) != expected):
+            raise ValueError("managed-parent binding changed")
+
+def close_chain(descriptors):
+    for descriptor in reversed(descriptors):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+def apply_record(record):
+    path, identity, original_mode, _change = record
+    descriptors, bindings = open_chain(path, identity)
+    leaf_fd = descriptors[-1]
+    changed_here = False
+    try:
+        before = os.fstat(leaf_fd)
+        if stat.S_IMODE(before.st_mode) != original_mode:
+            raise ValueError("managed-parent mode changed before apply")
+        os.fchmod(leaf_fd, 0o700)
+        changed_here = True
+        os.fsync(leaf_fd)
+        after = os.fstat(leaf_fd)
+        if inode(after) != identity or stat.S_IMODE(after.st_mode) != 0o700:
+            raise ValueError("managed-parent apply failed")
+        bindings_valid(bindings)
+    except BaseException:
+        if changed_here:
+            try:
+                os.fchmod(leaf_fd, original_mode)
+                os.fsync(leaf_fd)
+            except OSError:
+                pass
+        raise
+    finally:
+        close_chain(descriptors)
+
+def restore_record(record):
+    path, identity, original_mode, _change = record
+    descriptors, bindings = open_chain(path, identity)
+    leaf_fd = descriptors[-1]
+    try:
+        before = os.fstat(leaf_fd)
+        current_mode = stat.S_IMODE(before.st_mode)
+        if current_mode == original_mode:
+            target_mode = original_mode
+            os.fsync(leaf_fd)
+        elif current_mode == 0o700:
+            target_mode = original_mode
+            os.fchmod(leaf_fd, target_mode)
+            os.fsync(leaf_fd)
+        else:
+            raise ValueError("managed-parent mode changed before restore")
+        after = os.fstat(leaf_fd)
+        if (inode(after) != identity
+                or stat.S_IMODE(after.st_mode) != target_mode):
+            raise ValueError("managed-parent restore failed")
+        bindings_valid(bindings)
+    finally:
+        close_chain(descriptors)
+
+changed_records = []
+if operation == "apply":
+    try:
+        for record in records:
+            if not record[3]:
+                continue
+            apply_record(record)
+            changed_records.append(record)
+            if fault_after is not None and len(changed_records) >= fault_after:
+                raise ValueError("source-only managed-parent fault")
+    except BaseException:
+        for record in reversed(changed_records):
+            try:
+                restore_record(record)
+            except (OSError, ValueError):
+                pass
+        raise
+else:
+    failures = 0
+    for record in records:
+        if not record[3]:
+            continue
+        try:
+            restore_record(record)
+        except (OSError, ValueError):
+            failures += 1
+    if failures:
+        raise SystemExit(1)
+' "$_operation" "$_uid" "$_home" "$_MDM_PARENT_MODE_JOURNAL" \
+    "$(_mdm_auth_expected_uid)" "$_fault_after" >/dev/null 2>&1
+}
+
+_mdm_managed_parent_modes_prepare() { # <user> <home> <uid>
+  local _user="$1" _home="$2" _uid="$3" _base _old_umask
+  [[ "${_MDM_PARENT_MODE_STATE:-idle}" == idle \
+    && "${_MDM_TRANSACTION_STATE:-idle}" == active \
+    && "$_user" == "${_MDM_TRANSACTION_USER:-}" \
+    && "$_home" == "${_MDM_TRANSACTION_HOME:-}" \
+    && "$_uid" == "${_MDM_TRANSACTION_UID:-}" ]] || return 1
+  _base="$(_mdm_auth_tmp_base)"
+  _mdm_auth_base_trusted "$_base" || return 1
+  _old_umask="$(umask)"; umask 077
+  _MDM_PARENT_MODE_STATE=planning
+  _MDM_PARENT_MODE_JOURNAL="$(/usr/bin/mktemp \
+    "$_base/claude-kit-mdm-parent-modes.XXXXXX")" \
+    || { umask "$_old_umask"; _MDM_PARENT_MODE_STATE=idle; return 1; }
+  umask "$_old_umask"
+  /bin/chmod 0600 "$_MDM_PARENT_MODE_JOURNAL" \
+    || { _mdm_managed_parent_journal_discard || true; return 1; }
+  if ! _mdm_managed_parent_inventory "$_home" "$_uid" preflight \
+      > "$_MDM_PARENT_MODE_JOURNAL"; then
+    _mdm_managed_parent_journal_discard || true
+    return 1
+  fi
+  /bin/chmod 0600 "$_MDM_PARENT_MODE_JOURNAL" \
+    || { _mdm_managed_parent_journal_discard || true; return 1; }
+  _MDM_PARENT_MODE_JOURNAL_IDENTITY="$(_mdm_stat_identity \
+    "$_MDM_PARENT_MODE_JOURNAL")" \
+    || { _mdm_managed_parent_journal_discard || true; return 1; }
+  _mdm_managed_parent_journal_trusted \
+    && _mdm_managed_parent_plan_valid \
+      "$_MDM_PARENT_MODE_JOURNAL" "$_home" "$_uid" original \
+    || { _mdm_managed_parent_journal_discard || true; return 1; }
+  _MDM_PARENT_MODE_STATE=planned
+  _MDM_PARENT_MODE_STATE=applying
+  if ! _mdm_managed_parent_target_modes apply "$_home" "$_uid"; then
+    return 1
+  fi
+  _mdm_managed_parent_journal_trusted \
+    && _mdm_managed_parent_plan_valid \
+      "$_MDM_PARENT_MODE_JOURNAL" "$_home" "$_uid" applied \
+    || return 1
+  _MDM_PARENT_MODE_STATE=applied
+}
+
+_mdm_managed_parent_modes_restore() {
+  local _state="${_MDM_PARENT_MODE_STATE:-idle}"
+  case "$_state" in
+    idle) return 0 ;;
+    planning|planned) _mdm_managed_parent_journal_discard; return $? ;;
+    applying|applied) : ;;
+    *) return 1 ;;
+  esac
+  _mdm_managed_parent_journal_trusted || return 1
+  _mdm_managed_parent_target_modes restore \
+    "$_MDM_TRANSACTION_HOME" "$_MDM_TRANSACTION_UID" || return 1
+  _mdm_managed_parent_plan_valid "$_MDM_PARENT_MODE_JOURNAL" \
+    "$_MDM_TRANSACTION_HOME" "$_MDM_TRANSACTION_UID" original || return 1
+  _mdm_managed_parent_journal_discard
+}
+
+_mdm_managed_parent_modes_commit() {
+  case "${_MDM_PARENT_MODE_STATE:-idle}" in
+    idle) return 0 ;;
+    applied)
+      _mdm_managed_parent_journal_trusted || return 1
+      _mdm_managed_parent_journal_discard ;;
+    *) return 1 ;;
+  esac
+}
+
+_mdm_managed_parent_check_discard() {
+  local _path="${_MDM_PARENT_MODE_CHECK:-}" _base _uid
+  [[ -n "$_path" ]] || return 0
+  _base="$(_mdm_auth_tmp_base)"
+  _mdm_auth_base_trusted "$_base" || return 1
+  case "$_path" in "$_base"/claude-kit-mdm-parent-check.*) : ;; *) return 1 ;; esac
+  if [[ -e "$_path" || -L "$_path" ]]; then
+    [[ -f "$_path" && ! -L "$_path" \
+      && "$(_mdm_canonical_file "$_path" 2>/dev/null || true)" == "$_path" ]] \
+      || return 1
+    _uid="$(_mdm_stat_uid "$_path" 2>/dev/null || true)"
+    [[ "$_uid" == "$(_mdm_auth_expected_uid)" ]] || return 1
+    /bin/rm -f "$_path" || return 1
+  fi
+  _MDM_PARENT_MODE_CHECK=""
+}
+
+_mdm_managed_parent_modes_final() { # <home> <uid>
+  local _home="$1" _uid="$2" _plan _base _old_umask _rc=1
+  local _identity _meta _rest _mode
+  [[ -z "${_MDM_PARENT_MODE_CHECK:-}" ]] || return 1
+  _base="$(_mdm_auth_tmp_base)"
+  _mdm_auth_base_trusted "$_base" || return 1
+  _old_umask="$(umask)"; umask 077
+  _MDM_PARENT_MODE_CHECK="$(/usr/bin/mktemp \
+    "$_base/claude-kit-mdm-parent-check.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  _plan="$_MDM_PARENT_MODE_CHECK"
+  /bin/chmod 0600 "$_plan" \
+    || { _mdm_managed_parent_check_discard || true; return 1; }
+  if ! _mdm_managed_parent_inventory "$_home" "$_uid" final > "$_plan"; then
+    _mdm_managed_parent_check_discard || true
+    return 1
+  fi
+  /bin/chmod 0600 "$_plan" \
+    || { _mdm_managed_parent_check_discard || true; return 1; }
+  _identity="$(_mdm_stat_identity "$_plan")" \
+    || { _mdm_managed_parent_check_discard || true; return 1; }
+  _meta="$(_mdm_stat_managed_metadata "$_plan")" \
+    || { _mdm_managed_parent_check_discard || true; return 1; }
+  _rest="${_meta#*:}"; _rest="${_rest#*:}"
+  _mode="$(_mdm_mode_normalize "$_rest")" \
+    || { _mdm_managed_parent_check_discard || true; return 1; }
+  if [[ "$(_mdm_canonical_file "$_plan" 2>/dev/null || true)" == "$_plan" \
+    && "${_meta%%:*}" == "$(_mdm_auth_expected_uid)" \
+    && "${_meta#*:}" == 1:* && "$_mode" == 0600 ]] \
+    && ! _mdm_has_extended_acl "$_plan" \
+    && _mdm_managed_parent_plan_valid "$_plan" "$_home" "$_uid" applied \
+    && [[ "$(_mdm_stat_identity "$_plan" 2>/dev/null || true)" == "$_identity" ]]; then
+    _rc=0
+  fi
+  _mdm_managed_parent_check_discard || _rc=1
+  return "$_rc"
+}
+
+# The outer transaction also covers the exact target-user leaves which setup
+# may mutate outside ~/.claude.  Never widen this inventory to a user-owned
+# parent: every record below is one kit-reserved activation/configuration leaf.
+_mdm_external_claude_active_relative() { # <home> <uid>
+  local _home="$1" _uid="$2" _link _versions _target _name _before _after
+  _link="$_home/.local/bin/claude"
+  _versions="$_home/.local/share/claude/versions"
+  [[ "$_uid" =~ ^[0-9]+$ ]] || return 1
+  [[ -L "$_link" ]] || return 2
+  _before="$(_mdm_stat_identity "$_link")" || return 1
+  _mdm_readlink_exact "$_link" _target || return 1
+  _after="$(_mdm_stat_identity "$_link")" || return 1
+  [[ "$_after" == "$_before" && "$_target" == /* \
+    && "${_target%/*}" == "$_versions" ]] || return 1
+  _name="${_target##*/}"
+  [[ "$_name" =~ ^[0-9A-Za-z._+-]+$ && "${#_name}" -le 255 ]] \
+    || return 1
+  [[ "$(_mdm_stat_identity "$_link" 2>/dev/null || true)" == "$_before" ]] \
+    || return 1
+  printf '.local/share/claude/versions/%s' "$_name"
+}
+
+_mdm_external_transaction_paths() { # <home> <uid>
+  local _home="$1" _uid="$2" _component _mode _name _sha _family _target
+  local _target_rc=0 _font_inventory
+  [[ "$_home" == /* && "$_home" != / && ! "$_home" =~ [[:cntrl:]] ]] \
+    || return 1
+  [[ "$_uid" =~ ^[0-9]+$ ]] || return 1
+  _mode="${KIT_MDM_PREREQ_MODE:-auto}"
+  case "$_mode" in auto|fail) : ;; *) return 1 ;; esac
+  for _component in "${MDM_REQUIRED_COMPONENTS[@]}"; do
+    case "$_component:$_mode" in
+      biome:auto)
+        printf '%s\n' '.local/bin/biome' \
+          '.local/lib/claude-code-starter-kit/biome/2.5.4' ;;
+      claude_cli:auto)
+        printf '%s\n' '.local/bin/claude'
+        _target=""
+        _target_rc=0
+        _target="$(_mdm_external_claude_active_relative \
+          "$_home" "$_uid" 2>/dev/null)" || _target_rc=$?
+        case "$_target_rc" in
+          0) [[ -n "$_target" ]] || return 1; printf '%s\n' "$_target" ;;
+          2) [[ -z "$_target" ]] || return 1 ;;
+          *) return 1 ;;
+        esac ;;
+      fonts:auto)
+        _font_inventory="$(_mdm_component_font_expected_inventory)" \
+          || return 1
+        [[ -n "$_font_inventory" ]] || return 1
+        while read -r _name _sha _family; do
+          [[ -n "$_name" ]] || return 1
+          printf 'Library/Fonts/%s\n' "$_name"
+        done <<< "$_font_inventory" ;;
+      ghostty:auto|ghostty:fail)
+        printf '%s\n' \
+          'Library/Application Support/com.mitchellh.ghostty/config' ;;
+      node_runtime:auto|node_runtime:fail)
+        printf '%s\n' '.local/bin/node' ;;
+      safety_net:auto)
+        printf '%s\n' '.local/bin/cc-safety-net' \
+          '.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6' ;;
+    esac
+  done
+}
+
+_mdm_external_transaction_journal_inode_identity() { # <journal>
+  if _mdm_is_darwin; then
+    /usr/bin/stat -f '%d:%i:%HT' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%d:%i:%F' "$1" 2>/dev/null
+  fi
+}
+
+_mdm_external_transaction_journal_metadata_trusted() {
+  local _path="${_MDM_EXTERNAL_TRANSACTION_JOURNAL:-}" _base _meta _rest _mode
+  [[ -n "$_path" && -n "${_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY:-}" ]] \
+    || return 1
+  _base="$(_mdm_auth_tmp_base)" || return 1
+  case "$_path" in
+    "$_base"/claude-kit-mdm-external.*) : ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$_path" && ! -L "$_path" \
+    && "$(_mdm_canonical_file "$_path" 2>/dev/null || true)" == "$_path" \
+    && "$(_mdm_external_transaction_journal_inode_identity \
+      "$_path" 2>/dev/null || true)" \
+      == "$_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY" ]] || return 1
+  _meta="$(_mdm_stat_managed_metadata "$_path")" || return 1
+  [[ "$_meta" =~ ^[0-9]+:1:[0-7]+$ ]] || return 1
+  _rest="${_meta#*:}"; _rest="${_rest#*:}"
+  _mode="$(_mdm_mode_normalize "$_rest")" || return 1
+  [[ "${_meta%%:*}" == "$(_mdm_auth_expected_uid)" && "$_mode" == 0600 ]] \
+    || return 1
+  ! _mdm_has_extended_acl "$_path"
+}
+
+_mdm_external_transaction_journal_discard() {
+  local _path="${_MDM_EXTERNAL_TRANSACTION_JOURNAL:-}"
+  [[ -n "$_path" ]] || return 0
+  _mdm_external_transaction_journal_metadata_trusted || return 1
+  /bin/rm -f "$_path" || return 1
+  _MDM_EXTERNAL_TRANSACTION_JOURNAL=""
+  _MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY=""
+}
+
+_mdm_external_transaction_journal_discard_unsealed() {
+  local _path="${_MDM_EXTERNAL_TRANSACTION_JOURNAL:-}" _base
+  [[ -n "$_path" ]] || return 0
+  _base="$(_mdm_auth_tmp_base)" || return 1
+  _mdm_auth_base_trusted "$_base" || return 1
+  case "$_path" in
+    "$_base"/claude-kit-mdm-external.*) : ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$_path" && ! -L "$_path" \
+    && "$(_mdm_canonical_file "$_path" 2>/dev/null || true)" == "$_path" \
+    && "$(_mdm_stat_uid "$_path" 2>/dev/null || true)" \
+      == "$(_mdm_auth_expected_uid)" ]] || return 1
+  if [[ -n "${_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY:-}" ]]; then
+    [[ "$(_mdm_external_transaction_journal_inode_identity \
+      "$_path" 2>/dev/null || true)" \
+      == "$_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY" ]] || return 1
+  fi
+  /bin/rm -f "$_path" || return 1
+  _MDM_EXTERNAL_TRANSACTION_JOURNAL=""
+  _MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY=""
+}
+
+_mdm_external_transaction_invoke() {
+  # <plan|apply|prepared|verify|abort|commit> <user> <home> <uid>
+  # <journal-or-empty> <relative-path...>
+  local _operation="$1" _user="$2" _home="$3" _uid="$4" _journal="$5"
+  local _python _deadline _carrier=- _carrier_identity=- _apply_signal_after=-
+  local _MDM_EXEC_AS_USER_DEADLINE_SECONDS
+  local _runner=()
+  shift 5
+  case "$_operation" in
+    plan|apply|prepared|verify|abort|abort_planned|commit|commit_retry) : ;;
+    *) return 1 ;;
+  esac
+  [[ -n "$_user" && "$_home" == /* && "$_home" != / \
+    && ! "$_home" =~ [[:cntrl:]] && "$_uid" =~ ^[0-9]+$ \
+    && "$#" -ge 1 && "$#" -le 32 ]] || return 1
+  if [[ "$_operation" == plan ]]; then
+    [[ -z "$_journal" ]] || return 1
+  else
+    [[ -n "$_journal" ]] || return 1
+    _mdm_external_transaction_journal_metadata_trusted || return 1
+  fi
+  if [[ "$_operation" == commit || "$_operation" == commit_retry ]]; then
+    _python="$(_mdm_system_python)" || return 1
+  else
+    _python="$(_mdm_target_system_python)" || return 1
+  fi
+  _deadline="$(_mdm_timeout_seconds "$_MDM_TIMEOUT_SETUP_SECONDS")" \
+    || return 1
+  _MDM_EXEC_AS_USER_DEADLINE_SECONDS="$_deadline"
+  if [[ "$_operation" == apply && "${_MDM_TEST_MODE:-0}" == 1 \
+    && -n "${MDM_EXTERNAL_APPLY_SIGNAL_AFTER_OVERRIDE:-}" ]]; then
+    _apply_signal_after="$MDM_EXTERNAL_APPLY_SIGNAL_AFTER_OVERRIDE"
+    [[ "$_apply_signal_after" =~ ^(HUP|INT|TERM):([1-9][0-9]*)$ \
+      && "${BASH_REMATCH[2]}" -le 32 ]] || return 1
+  fi
+  if [[ "$_operation" == plan ]]; then
+    _mdm_exec_as_user "$_uid" "$_user" "$_home" \
+      "$_python" -I -B -S -c '
+import ctypes
+import errno
+import hashlib
+import os
+import stat
+import sys
+
+operation, home, uid_raw, count_raw, *expected = sys.argv[1:]
+uid = int(uid_raw)
+count = int(count_raw)
+if operation not in ("plan", "apply", "prepared", "verify", "abort", "commit"):
+    raise SystemExit(1)
+if count != len(expected) or not 1 <= count <= 32:
+    raise SystemExit(1)
+
+def safe_relative(value):
+    if (not value or value.startswith("/") or "\\" in value
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159
+                   for char in value)):
+        return False
+    parts = value.split("/")
+    return (len(parts) <= 64 and all(part not in ("", ".", "..")
+                                    for part in parts)
+            and len(value.encode("utf-8", "strict")) <= 1024)
+
+if len(set(expected)) != len(expected) or not all(map(safe_relative, expected)):
+    raise SystemExit(1)
+
+DIR_FLAGS = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+FILE_FLAGS = (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+              | getattr(os, "O_CLOEXEC", 0))
+DARWIN = sys.platform == "darwin"
+LINK_FLAGS = (os.O_RDONLY | os.O_NONBLOCK | 0x00200000
+              | getattr(os, "O_CLOEXEC", 0))
+libc = ctypes.CDLL(None, use_errno=True)
+if DARWIN:
+    libc.renameatx_np.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                                  ctypes.c_int, ctypes.c_char_p,
+                                  ctypes.c_uint]
+    libc.renameatx_np.restype = ctypes.c_int
+    libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    libc.acl_get_fd_np.restype = ctypes.c_void_p
+    libc.acl_get_entry.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                   ctypes.POINTER(ctypes.c_void_p)]
+    libc.acl_get_entry.restype = ctypes.c_int
+    libc.acl_get_tag_type.argtypes = [ctypes.c_void_p,
+                                      ctypes.POINTER(ctypes.c_int)]
+    libc.acl_get_tag_type.restype = ctypes.c_int
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    libc.acl_free.restype = ctypes.c_int
+    libc.flistxattr.argtypes = [ctypes.c_int, ctypes.c_void_p,
+                                ctypes.c_size_t, ctypes.c_int]
+    libc.flistxattr.restype = ctypes.c_ssize_t
+    libc.fgetxattr.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                               ctypes.c_void_p, ctypes.c_size_t,
+                               ctypes.c_uint32, ctypes.c_int]
+    libc.fgetxattr.restype = ctypes.c_ssize_t
+elif sys.platform.startswith("linux"):
+    libc.renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                               ctypes.c_int, ctypes.c_char_p,
+                               ctypes.c_uint]
+    libc.renameat2.restype = ctypes.c_int
+else:
+    raise SystemExit(1)
+
+def kind(value):
+    if stat.S_ISREG(value.st_mode):
+        return "f"
+    if stat.S_ISDIR(value.st_mode):
+        return "d"
+    if stat.S_ISLNK(value.st_mode):
+        return "l"
+    raise ValueError("unsupported external leaf")
+
+def identity(value):
+    links = 0 if stat.S_ISDIR(value.st_mode) else value.st_nlink
+    return "{}:{}:{}:{}:{}:{}".format(
+        value.st_dev, value.st_ino, kind(value), value.st_uid,
+        value.st_gid, links)
+
+def stable(value):
+    return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode),
+            stat.S_IMODE(value.st_mode), value.st_uid, value.st_gid,
+            value.st_nlink, value.st_size, value.st_mtime_ns,
+            getattr(value, "st_flags", 0), getattr(value, "st_gen", 0))
+
+def put(digest, value):
+    raw = value if isinstance(value, bytes) else str(value).encode("utf-8")
+    digest.update(len(raw).to_bytes(8, "big"))
+    digest.update(raw)
+
+def no_acl(descriptor):
+    if DARWIN:
+        ctypes.set_errno(0)
+        acl = libc.acl_get_fd_np(descriptor, 0x00000100)
+        if acl:
+            libc.acl_free(acl)
+            raise ValueError("extended ACL")
+        if ctypes.get_errno() != errno.ENOENT:
+            raise OSError(ctypes.get_errno() or errno.EIO, "acl_get_fd_np")
+    else:
+        names = os.listxattr(descriptor)
+        if ("system.posix_acl_access" in names
+                or "system.posix_acl_default" in names):
+            raise ValueError("extended ACL")
+
+def safe_parent_acl(descriptor):
+    if not DARWIN:
+        no_acl(descriptor)
+        return
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(descriptor, 0x00000100)
+    if not acl:
+        error = ctypes.get_errno()
+        if error == errno.ENOENT:
+            return
+        raise OSError(error or errno.EIO, "acl_get_fd_np")
+    try:
+        entry = ctypes.c_void_p()
+        selector = 0
+        seen = False
+        while True:
+            ctypes.set_errno(0)
+            result = libc.acl_get_entry(acl, selector, ctypes.byref(entry))
+            if result != 0:
+                error = ctypes.get_errno()
+                if result == -1 and error == errno.EINVAL and seen:
+                    break
+                raise OSError(error or errno.EIO, "acl_get_entry")
+            tag = ctypes.c_int()
+            ctypes.set_errno(0)
+            if libc.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
+                error = ctypes.get_errno()
+                raise OSError(error or errno.EIO, "acl_get_tag_type")
+            if tag.value != 2:
+                raise ValueError("granting external parent ACL")
+            seen = True
+            selector = -1
+        if not seen:
+            raise ValueError("empty external parent ACL")
+    finally:
+        if libc.acl_free(acl) != 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
+
+def metadata(descriptor, digest):
+    no_acl(descriptor)
+    if DARWIN:
+        needed = libc.flistxattr(descriptor, None, 0, 0x0020)
+        if needed < 0 or needed > 64 * 1024:
+            raise OSError(ctypes.get_errno() or errno.EIO, "flistxattr")
+        if needed:
+            buffer = ctypes.create_string_buffer(needed)
+            actual = libc.flistxattr(descriptor, buffer, needed, 0x0020)
+            if actual != needed:
+                raise OSError(ctypes.get_errno() or errno.EIO, "flistxattr")
+            raw = bytes(buffer[:actual])
+            if not raw.endswith(b"\0"):
+                raise ValueError("invalid xattr list")
+            names = sorted(raw[:-1].split(b"\0"))
+        else:
+            names = []
+    else:
+        names = sorted((os.fsencode(value) for value in os.listxattr(descriptor)))
+    if len(names) > 256:
+        raise ValueError("too many xattrs")
+    for name in names:
+        if not name or len(name) > 1024:
+            raise ValueError("invalid xattr name")
+        if DARWIN:
+            needed = libc.fgetxattr(descriptor, name, None, 0, 0, 0x0020)
+            if needed < 0 or needed > 16 * 1024 * 1024:
+                raise OSError(ctypes.get_errno() or errno.EIO, "fgetxattr")
+            buffer = ctypes.create_string_buffer(max(needed, 1))
+            actual = libc.fgetxattr(
+                descriptor, name, buffer, needed, 0, 0x0020)
+            if actual != needed:
+                raise OSError(ctypes.get_errno() or errno.EIO, "fgetxattr")
+            value = bytes(buffer[:actual])
+        else:
+            value = os.getxattr(descriptor, os.fsdecode(name))
+        if len(value) > 16 * 1024 * 1024:
+            raise ValueError("oversized xattr")
+        put(digest, name)
+        put(digest, value)
+
+def safe_owned(value, regular_link=True):
+    entry_kind = kind(value)
+    if value.st_uid != uid:
+        raise ValueError("foreign external leaf")
+    if regular_link and entry_kind in ("f", "l") and value.st_nlink != 1:
+        raise ValueError("hard-linked external leaf")
+    return entry_kind
+
+def digest_entry(parent_fd, name, relative, digest, counters, root_dev):
+    before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    entry_kind = safe_owned(before)
+    if before.st_dev != root_dev:
+        raise ValueError("external tree crosses a mount")
+    counters[0] += 1
+    if counters[0] > 100000:
+        raise ValueError("external tree too large")
+    put(digest, relative)
+    put(digest, entry_kind)
+    put(digest, stat.S_IMODE(before.st_mode))
+    put(digest, before.st_uid)
+    put(digest, before.st_gid)
+    put(digest, before.st_nlink)
+    put(digest, before.st_size)
+    put(digest, before.st_mtime_ns)
+    put(digest, getattr(before, "st_flags", 0))
+    put(digest, getattr(before, "st_gen", 0))
+    if entry_kind == "l":
+        first = os.readlink(name, dir_fd=parent_fd)
+        second = os.readlink(name, dir_fd=parent_fd)
+        if first != second or stable(os.stat(
+                name, dir_fd=parent_fd, follow_symlinks=False)) != stable(before):
+            raise ValueError("external symlink changed")
+        put(digest, os.fsencode(first))
+        if DARWIN:
+            descriptor = os.open(name, LINK_FLAGS, dir_fd=parent_fd)
+            try:
+                if stable(os.fstat(descriptor)) != stable(before):
+                    raise ValueError("external symlink binding changed")
+                metadata(descriptor, digest)
+                if (stable(os.fstat(descriptor)) != stable(before)
+                        or stable(os.stat(
+                            name, dir_fd=parent_fd,
+                            follow_symlinks=False)) != stable(before)):
+                    raise ValueError("external symlink metadata changed")
+            finally:
+                os.close(descriptor)
+        return
+    flags = DIR_FLAGS if entry_kind == "d" else FILE_FLAGS
+    descriptor = os.open(name, flags, dir_fd=parent_fd)
+    try:
+        if stable(os.fstat(descriptor)) != stable(before):
+            raise ValueError("external entry binding changed")
+        metadata(descriptor, digest)
+        if entry_kind == "f":
+            if before.st_size > 512 * 1024 * 1024:
+                raise ValueError("external file too large")
+            remaining = before.st_size
+            while remaining:
+                block = os.read(descriptor, min(1024 * 1024, remaining))
+                if not block:
+                    raise ValueError("short external file")
+                digest.update(block)
+                remaining -= len(block)
+            if os.read(descriptor, 1):
+                raise ValueError("external file grew")
+        else:
+            names = sorted(os.listdir(descriptor), key=os.fsencode)
+            for child in names:
+                if child in ("", ".", "..") or "/" in child:
+                    raise ValueError("unsafe external child")
+                digest_entry(descriptor, child, relative + "/" + child,
+                             digest, counters, root_dev)
+            if sorted(os.listdir(descriptor), key=os.fsencode) != names:
+                raise ValueError("external directory changed")
+        if (stable(os.fstat(descriptor)) != stable(before)
+                or stable(os.stat(name, dir_fd=parent_fd,
+                                  follow_symlinks=False)) != stable(before)):
+            raise ValueError("external entry changed")
+    finally:
+        os.close(descriptor)
+
+def fingerprint(parent_fd, name):
+    before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    safe_owned(before)
+    first = hashlib.sha256()
+    digest_entry(parent_fd, name, ".", first, [0], before.st_dev)
+    middle = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    second = hashlib.sha256()
+    digest_entry(parent_fd, name, ".", second, [0], before.st_dev)
+    after = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if (stable(before) != stable(middle) or stable(middle) != stable(after)
+            or first.digest() != second.digest()):
+        raise ValueError("external leaf changed during digest")
+    return identity(after), first.hexdigest()
+
+def safe_parent(value):
+    if (not stat.S_ISDIR(value.st_mode) or value.st_uid != uid
+            or stat.S_IMODE(value.st_mode) & 0o022
+            or stat.S_IMODE(value.st_mode) & 0o700 != 0o700):
+        raise ValueError("unsafe external parent")
+
+home_fd = os.open(home, DIR_FLAGS)
+home_value = os.fstat(home_fd)
+safe_parent(home_value)
+safe_parent_acl(home_fd)
+if os.path.realpath(home) != home:
+    raise SystemExit(1)
+home_identity = identity(home_value)
+
+def parent_for(relative):
+    parts = relative.split("/")
+    current = os.dup(home_fd)
+    anchor_relative = "."
+    anchor_identity = home_identity
+    try:
+        for index, part in enumerate(parts[:-1]):
+            try:
+                before = os.stat(part, dir_fd=current,
+                                 follow_symlinks=False)
+            except FileNotFoundError:
+                os.close(current)
+                return None, parts[-1], anchor_relative, anchor_identity
+            safe_parent(before)
+            child = os.open(part, DIR_FLAGS, dir_fd=current)
+            opened = os.fstat(child)
+            linked = os.stat(part, dir_fd=current, follow_symlinks=False)
+            if stable(opened) != stable(before) or stable(linked) != stable(before):
+                os.close(child)
+                raise ValueError("external parent changed")
+            safe_parent_acl(child)
+            os.close(current)
+            current = child
+            anchor_relative = "/".join(parts[:index + 1])
+            anchor_identity = identity(opened)
+        return current, parts[-1], anchor_relative, anchor_identity
+    except BaseException:
+        try:
+            os.close(current)
+        except OSError:
+            pass
+        raise
+
+def backup_name(name, token):
+    prefix = ".{}.claude-kit-mdm-{}.".format(name, token)
+    return prefix + os.urandom(16).hex()
+
+records = []
+try:
+    for relative in expected:
+        parent, name, anchor_relative, anchor_identity = parent_for(relative)
+        if parent is None:
+            records.append((relative, "absent", "-", "-", "-",
+                            anchor_relative, anchor_identity))
+            continue
+        try:
+            try:
+                os.stat(name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                records.append((relative, "absent", "-", "-", "-",
+                                anchor_relative, anchor_identity))
+                continue
+            if os.fstat(parent).st_dev != home_value.st_dev:
+                raise ValueError("external leaf parent crosses a mount")
+            old_identity, old_digest = fingerprint(parent, name)
+            backup = ""
+            for _attempt in range(100):
+                candidate = backup_name(name, "old")
+                try:
+                    os.stat(candidate, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    backup = candidate
+                    break
+            if not backup:
+                raise ValueError("cannot allocate external backup name")
+            records.append((relative, "present", backup, old_identity,
+                            old_digest, anchor_relative, anchor_identity))
+        finally:
+            os.close(parent)
+    claude_link = ".local/bin/claude"
+    dynamic_targets = [
+        value for value in expected
+        if (value.startswith(".local/share/claude/versions/")
+            and value.count("/") == 4)
+    ]
+    if claude_link in expected:
+        if len(dynamic_targets) > 1:
+            raise ValueError("multiple Claude CLI dynamic targets")
+        parent, name, _anchor_relative, _anchor_identity = parent_for(
+            claude_link)
+        try:
+            if parent is None:
+                if dynamic_targets:
+                    raise ValueError("Claude CLI target without launcher")
+            else:
+                try:
+                    launcher = os.stat(
+                        name, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    launcher = None
+                if launcher is None or not stat.S_ISLNK(launcher.st_mode):
+                    if dynamic_targets:
+                        raise ValueError("Claude CLI target without symlink")
+                else:
+                    before = fingerprint(parent, name)
+                    first = os.readlink(name, dir_fd=parent)
+                    second = os.readlink(name, dir_fd=parent)
+                    after = fingerprint(parent, name)
+                    version = os.path.basename(first)
+                    versions = home + "/.local/share/claude/versions"
+                    if (first != second or before != after
+                            or not os.path.isabs(first)
+                            or os.path.normpath(first) != first
+                            or os.path.dirname(first) != versions
+                            or not version
+                            or len(version) > 255
+                            or any(char not in
+                                   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz._+-"
+                                   for char in version)):
+                        raise ValueError("unsafe Claude CLI launcher target")
+                    actual = ".local/share/claude/versions/" + version
+                    if dynamic_targets != [actual]:
+                        raise ValueError("Claude CLI target inventory drift")
+        finally:
+            if parent is not None:
+                os.close(parent)
+finally:
+    os.close(home_fd)
+
+output = ["v1\t{}\t{}\t{}".format(uid, home, len(records))]
+output.extend("\t".join(record) for record in records)
+output.append("end\t{}".format(len(records)))
+sys.stdout.write("\n".join(output) + "\n")
+' plan "$_home" "$_uid" "$#" "$@"
+  else
+    if [[ "$_operation" == commit || "$_operation" == commit_retry ]]; then
+      _mdm_external_commit_carrier_trusted || return 1
+      _carrier="$_MDM_EXTERNAL_COMMIT_CARRIER"
+      _carrier_identity="$_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY"
+      _runner=(_mdm_run_with_timeout "$_deadline" \
+        /usr/bin/env -i HOME=/var/root \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C)
+    else
+      _runner=(_mdm_exec_as_user "$_uid" "$_user" "$_home")
+    fi
+    "${_runner[@]}" "$_python" -I -B -S -c '
+import ctypes
+import errno
+import hashlib
+import os
+import stat
+import sys
+
+operation, home, uid_raw, count_raw, carrier, carrier_id, signal_after, *expected = sys.argv[1:]
+uid = int(uid_raw)
+count = int(count_raw)
+if operation not in ("apply", "prepared", "verify", "abort",
+                     "abort_planned", "commit", "commit_retry"):
+    raise SystemExit(1)
+if count != len(expected) or not 1 <= count <= 32:
+    raise SystemExit(1)
+if operation in ("commit", "commit_retry"):
+    if (not os.path.isabs(carrier) or not carrier_id
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159
+                   for char in carrier)):
+        raise SystemExit(1)
+elif (carrier, carrier_id) != ("-", "-"):
+    raise SystemExit(1)
+if operation != "apply" and signal_after != "-":
+    raise SystemExit(1)
+signal_name = None
+signal_after_count = None
+if signal_after != "-":
+    pieces = signal_after.split(":")
+    if (len(pieces) != 2 or pieces[0] not in ("HUP", "INT", "TERM")
+            or not pieces[1].isascii() or not pieces[1].isdigit()
+            or not 1 <= int(pieces[1]) <= 32):
+        raise SystemExit(1)
+    signal_name = pieces[0]
+    signal_after_count = int(pieces[1])
+
+def safe_relative(value):
+    if (not value or value.startswith("/") or "\\" in value
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159
+                   for char in value)):
+        return False
+    parts = value.split("/")
+    return (len(parts) <= 64 and all(part not in ("", ".", "..")
+                                    for part in parts)
+            and len(value.encode("utf-8", "strict")) <= 1024)
+
+if len(set(expected)) != len(expected) or not all(map(safe_relative, expected)):
+    raise SystemExit(1)
+
+DIR_FLAGS = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+FILE_FLAGS = (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+              | getattr(os, "O_CLOEXEC", 0))
+DARWIN = sys.platform == "darwin"
+LINK_FLAGS = (os.O_RDONLY | os.O_NONBLOCK | 0x00200000
+              | getattr(os, "O_CLOEXEC", 0))
+libc = ctypes.CDLL(None, use_errno=True)
+if DARWIN:
+    libc.renameatx_np.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                                  ctypes.c_int, ctypes.c_char_p,
+                                  ctypes.c_uint]
+    libc.renameatx_np.restype = ctypes.c_int
+    libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    libc.acl_get_fd_np.restype = ctypes.c_void_p
+    libc.acl_get_entry.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                   ctypes.POINTER(ctypes.c_void_p)]
+    libc.acl_get_entry.restype = ctypes.c_int
+    libc.acl_get_tag_type.argtypes = [ctypes.c_void_p,
+                                      ctypes.POINTER(ctypes.c_int)]
+    libc.acl_get_tag_type.restype = ctypes.c_int
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    libc.acl_free.restype = ctypes.c_int
+    libc.flistxattr.argtypes = [ctypes.c_int, ctypes.c_void_p,
+                                ctypes.c_size_t, ctypes.c_int]
+    libc.flistxattr.restype = ctypes.c_ssize_t
+    libc.fgetxattr.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                               ctypes.c_void_p, ctypes.c_size_t,
+                               ctypes.c_uint32, ctypes.c_int]
+    libc.fgetxattr.restype = ctypes.c_ssize_t
+elif sys.platform.startswith("linux"):
+    libc.renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                               ctypes.c_int, ctypes.c_char_p,
+                               ctypes.c_uint]
+    libc.renameat2.restype = ctypes.c_int
+else:
+    raise SystemExit(1)
+
+def kind(value):
+    if stat.S_ISREG(value.st_mode):
+        return "f"
+    if stat.S_ISDIR(value.st_mode):
+        return "d"
+    if stat.S_ISLNK(value.st_mode):
+        return "l"
+    raise ValueError("unsupported external leaf")
+
+def identity(value):
+    links = 0 if stat.S_ISDIR(value.st_mode) else value.st_nlink
+    return "{}:{}:{}:{}:{}:{}".format(
+        value.st_dev, value.st_ino, kind(value), value.st_uid,
+        value.st_gid, links)
+
+def stable(value):
+    return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode),
+            stat.S_IMODE(value.st_mode), value.st_uid, value.st_gid,
+            value.st_nlink, value.st_size, value.st_mtime_ns,
+            getattr(value, "st_flags", 0), getattr(value, "st_gen", 0))
+
+def put(digest, value):
+    raw = value if isinstance(value, bytes) else str(value).encode("utf-8")
+    digest.update(len(raw).to_bytes(8, "big"))
+    digest.update(raw)
+
+def no_acl(descriptor):
+    if DARWIN:
+        ctypes.set_errno(0)
+        acl = libc.acl_get_fd_np(descriptor, 0x00000100)
+        if acl:
+            libc.acl_free(acl)
+            raise ValueError("extended ACL")
+        if ctypes.get_errno() != errno.ENOENT:
+            raise OSError(ctypes.get_errno() or errno.EIO, "acl_get_fd_np")
+    else:
+        names = os.listxattr(descriptor)
+        if ("system.posix_acl_access" in names
+                or "system.posix_acl_default" in names):
+            raise ValueError("extended ACL")
+
+def safe_parent_acl(descriptor):
+    if not DARWIN:
+        no_acl(descriptor)
+        return
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(descriptor, 0x00000100)
+    if not acl:
+        error = ctypes.get_errno()
+        if error == errno.ENOENT:
+            return
+        raise OSError(error or errno.EIO, "acl_get_fd_np")
+    try:
+        entry = ctypes.c_void_p()
+        selector = 0
+        seen = False
+        while True:
+            ctypes.set_errno(0)
+            result = libc.acl_get_entry(acl, selector, ctypes.byref(entry))
+            if result != 0:
+                error = ctypes.get_errno()
+                if result == -1 and error == errno.EINVAL and seen:
+                    break
+                raise OSError(error or errno.EIO, "acl_get_entry")
+            tag = ctypes.c_int()
+            ctypes.set_errno(0)
+            if libc.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
+                error = ctypes.get_errno()
+                raise OSError(error or errno.EIO, "acl_get_tag_type")
+            if tag.value != 2:
+                raise ValueError("granting external parent ACL")
+            seen = True
+            selector = -1
+        if not seen:
+            raise ValueError("empty external parent ACL")
+    finally:
+        if libc.acl_free(acl) != 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
+
+def metadata(descriptor, digest):
+    no_acl(descriptor)
+    if DARWIN:
+        needed = libc.flistxattr(descriptor, None, 0, 0x0020)
+        if needed < 0 or needed > 64 * 1024:
+            raise OSError(ctypes.get_errno() or errno.EIO, "flistxattr")
+        if needed:
+            buffer = ctypes.create_string_buffer(needed)
+            actual = libc.flistxattr(descriptor, buffer, needed, 0x0020)
+            if actual != needed:
+                raise OSError(ctypes.get_errno() or errno.EIO, "flistxattr")
+            raw = bytes(buffer[:actual])
+            if not raw.endswith(b"\0"):
+                raise ValueError("invalid xattr list")
+            names = sorted(raw[:-1].split(b"\0"))
+        else:
+            names = []
+    else:
+        names = sorted((os.fsencode(value) for value in os.listxattr(descriptor)))
+    if len(names) > 256:
+        raise ValueError("too many xattrs")
+    for name in names:
+        if not name or len(name) > 1024:
+            raise ValueError("invalid xattr name")
+        if DARWIN:
+            needed = libc.fgetxattr(descriptor, name, None, 0, 0, 0x0020)
+            if needed < 0 or needed > 16 * 1024 * 1024:
+                raise OSError(ctypes.get_errno() or errno.EIO, "fgetxattr")
+            buffer = ctypes.create_string_buffer(max(needed, 1))
+            actual = libc.fgetxattr(
+                descriptor, name, buffer, needed, 0, 0x0020)
+            if actual != needed:
+                raise OSError(ctypes.get_errno() or errno.EIO, "fgetxattr")
+            value = bytes(buffer[:actual])
+        else:
+            value = os.getxattr(descriptor, os.fsdecode(name))
+        if len(value) > 16 * 1024 * 1024:
+            raise ValueError("oversized xattr")
+        put(digest, name)
+        put(digest, value)
+
+def safe_owned(value):
+    entry_kind = kind(value)
+    if value.st_uid != uid:
+        raise ValueError("foreign external leaf")
+    if entry_kind in ("f", "l") and value.st_nlink != 1:
+        raise ValueError("hard-linked external leaf")
+    return entry_kind
+
+def digest_entry(parent_fd, name, relative, digest, counters, root_dev):
+    before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    entry_kind = safe_owned(before)
+    if before.st_dev != root_dev:
+        raise ValueError("external tree crosses a mount")
+    counters[0] += 1
+    if counters[0] > 100000:
+        raise ValueError("external tree too large")
+    for value in (relative, entry_kind, stat.S_IMODE(before.st_mode),
+                  before.st_uid, before.st_gid, before.st_nlink,
+                  before.st_size, before.st_mtime_ns,
+                  getattr(before, "st_flags", 0),
+                  getattr(before, "st_gen", 0)):
+        put(digest, value)
+    if entry_kind == "l":
+        first = os.readlink(name, dir_fd=parent_fd)
+        second = os.readlink(name, dir_fd=parent_fd)
+        if first != second or stable(os.stat(
+                name, dir_fd=parent_fd, follow_symlinks=False)) != stable(before):
+            raise ValueError("external symlink changed")
+        put(digest, os.fsencode(first))
+        if DARWIN:
+            descriptor = os.open(name, LINK_FLAGS, dir_fd=parent_fd)
+            try:
+                if stable(os.fstat(descriptor)) != stable(before):
+                    raise ValueError("external symlink binding changed")
+                metadata(descriptor, digest)
+                if (stable(os.fstat(descriptor)) != stable(before)
+                        or stable(os.stat(
+                            name, dir_fd=parent_fd,
+                            follow_symlinks=False)) != stable(before)):
+                    raise ValueError("external symlink metadata changed")
+            finally:
+                os.close(descriptor)
+        return
+    descriptor = os.open(name, DIR_FLAGS if entry_kind == "d" else FILE_FLAGS,
+                         dir_fd=parent_fd)
+    try:
+        if stable(os.fstat(descriptor)) != stable(before):
+            raise ValueError("external entry binding changed")
+        metadata(descriptor, digest)
+        if entry_kind == "f":
+            if before.st_size > 512 * 1024 * 1024:
+                raise ValueError("external file too large")
+            remaining = before.st_size
+            while remaining:
+                block = os.read(descriptor, min(1024 * 1024, remaining))
+                if not block:
+                    raise ValueError("short external file")
+                digest.update(block)
+                remaining -= len(block)
+            if os.read(descriptor, 1):
+                raise ValueError("external file grew")
+        else:
+            names = sorted(os.listdir(descriptor), key=os.fsencode)
+            for child in names:
+                if child in ("", ".", "..") or "/" in child:
+                    raise ValueError("unsafe external child")
+                digest_entry(descriptor, child, relative + "/" + child,
+                             digest, counters, root_dev)
+            if sorted(os.listdir(descriptor), key=os.fsencode) != names:
+                raise ValueError("external directory changed")
+        if (stable(os.fstat(descriptor)) != stable(before)
+                or stable(os.stat(name, dir_fd=parent_fd,
+                                  follow_symlinks=False)) != stable(before)):
+            raise ValueError("external entry changed")
+    finally:
+        os.close(descriptor)
+
+def fingerprint(parent_fd, name):
+    before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    safe_owned(before)
+    first = hashlib.sha256()
+    digest_entry(parent_fd, name, ".", first, [0], before.st_dev)
+    middle = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    second = hashlib.sha256()
+    digest_entry(parent_fd, name, ".", second, [0], before.st_dev)
+    after = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if (stable(before) != stable(middle) or stable(middle) != stable(after)
+            or first.digest() != second.digest()):
+        raise ValueError("external leaf changed during digest")
+    return identity(after), first.hexdigest()
+
+def safe_parent(value):
+    if (not stat.S_ISDIR(value.st_mode) or value.st_uid != uid
+            or stat.S_IMODE(value.st_mode) & 0o022
+            or stat.S_IMODE(value.st_mode) & 0o700 != 0o700):
+        raise ValueError("unsafe external parent")
+
+home_fd = os.open(home, DIR_FLAGS)
+home_value = os.fstat(home_fd)
+safe_parent(home_value)
+safe_parent_acl(home_fd)
+if os.path.realpath(home) != home:
+    raise SystemExit(1)
+home_identity = identity(home_value)
+
+carrier_fd = None
+if operation in ("commit", "commit_retry"):
+    pieces = carrier_id.split(":")
+    if (len(pieces) != 2
+            or any(not value.isascii() or not value.isdigit()
+                   for value in pieces)
+            or os.path.normpath(carrier) != carrier
+            or os.path.realpath(carrier) != carrier):
+        raise SystemExit(1)
+    before = os.stat(carrier, follow_symlinks=False)
+    carrier_fd = os.open(carrier, DIR_FLAGS)
+    opened = os.fstat(carrier_fd)
+    linked = os.stat(carrier, follow_symlinks=False)
+    if (stable(before) != stable(opened) or stable(linked) != stable(opened)
+            or not stat.S_ISDIR(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o700
+            or (opened.st_dev, opened.st_ino)
+                != (int(pieces[0]), int(pieces[1]))
+            or opened.st_dev != home_value.st_dev):
+        raise SystemExit(1)
+    no_acl(carrier_fd)
+
+def parent_for(relative):
+    parts = relative.split("/")
+    current = os.dup(home_fd)
+    anchors = {".": home_identity}
+    try:
+        for index, part in enumerate(parts[:-1]):
+            try:
+                before = os.stat(part, dir_fd=current,
+                                 follow_symlinks=False)
+            except FileNotFoundError:
+                os.close(current)
+                return None, parts[-1], anchors
+            safe_parent(before)
+            child = os.open(part, DIR_FLAGS, dir_fd=current)
+            opened = os.fstat(child)
+            linked = os.stat(part, dir_fd=current, follow_symlinks=False)
+            if stable(opened) != stable(before) or stable(linked) != stable(before):
+                os.close(child)
+                raise ValueError("external parent changed")
+            safe_parent_acl(child)
+            os.close(current)
+            current = child
+            anchors["/".join(parts[:index + 1])] = identity(opened)
+        return current, parts[-1], anchors
+    except BaseException:
+        try:
+            os.close(current)
+        except OSError:
+            pass
+        raise
+
+raw = sys.stdin.buffer.read(4 * 1024 * 1024 + 1)
+if len(raw) > 4 * 1024 * 1024 or not raw.endswith(b"\n") or b"\x00" in raw:
+    raise SystemExit(1)
+lines = raw[:-1].decode("utf-8", "strict").split("\n")
+header = lines[0].split("\t")
+if header != ["v1", str(uid), home, str(count)]:
+    raise SystemExit(1)
+if lines[-1].split("\t") != ["end", str(count)] or len(lines) != count + 2:
+    raise SystemExit(1)
+records = []
+for index, line in enumerate(lines[1:-1]):
+    fields = line.split("\t")
+    if len(fields) != 7 or fields[0] != expected[index]:
+        raise SystemExit(1)
+    relative, state, backup, old_identity, old_digest, anchor, anchor_id = fields
+    parent_parts = relative.split("/")[:-1]
+    valid_anchors = ["."] + ["/".join(parent_parts[:offset])
+                              for offset in range(1, len(parent_parts) + 1)]
+    if anchor not in valid_anchors:
+        raise SystemExit(1)
+    identity_parts = anchor_id.split(":")
+    if (len(identity_parts) != 6 or identity_parts[2] != "d"
+            or any(not value.isascii() or not value.isdigit()
+                   for value in identity_parts[:2] + identity_parts[3:])):
+        raise SystemExit(1)
+    if state == "absent":
+        if (backup, old_identity, old_digest) != ("-", "-", "-"):
+            raise SystemExit(1)
+    elif state == "present":
+        name = relative.rsplit("/", 1)[-1]
+        prefix = ".{}.claude-kit-mdm-old.".format(name)
+        suffix = backup[len(prefix):] if backup.startswith(prefix) else ""
+        old_parts = old_identity.split(":")
+        if (len(suffix) != 32 or any(char not in "0123456789abcdef"
+                                     for char in suffix)
+                or len(old_parts) != 6 or old_parts[2] not in ("f", "d", "l")
+                or any(not value.isascii() or not value.isdigit()
+                       for value in old_parts[:2] + old_parts[3:])
+                or len(old_digest) != 64
+                or any(char not in "0123456789abcdef" for char in old_digest)):
+            raise SystemExit(1)
+    else:
+        raise SystemExit(1)
+    records.append(fields)
+
+def locate(record):
+    relative, _state, _backup, _old_identity, _old_digest, anchor, anchor_id = record
+    parent, name, anchors = parent_for(relative)
+    if anchors.get(anchor) != anchor_id:
+        if parent is not None:
+            os.close(parent)
+        raise ValueError("external parent identity changed")
+    return parent, name
+
+def missing(parent, name):
+    if parent is None:
+        return True
+    try:
+        os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    return False
+
+def move_no_replace(parent, source, destination):
+    move_no_replace_between(parent, source, parent, destination)
+    os.fsync(parent)
+
+def move_no_replace_between(source_parent, source, destination_parent,
+                            destination):
+    ctypes.set_errno(0)
+    if DARWIN:
+        result = libc.renameatx_np(
+            source_parent, os.fsencode(source), destination_parent,
+            os.fsencode(destination), 4)
+    else:
+        result = libc.renameat2(
+            source_parent, os.fsencode(source), destination_parent,
+            os.fsencode(destination), 1)
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+def backup_matches(parent, backup, expected_identity, expected_digest):
+    try:
+        actual_identity, actual_digest = fingerprint(parent, backup)
+    except FileNotFoundError:
+        return False
+    return actual_identity == expected_identity and actual_digest == expected_digest
+
+def marker_trusted(name):
+    try:
+        before = os.stat(name, dir_fd=carrier_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+            or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_dev != os.fstat(carrier_fd).st_dev
+            or before.st_size != 3):
+        raise ValueError("unsafe external cleanup marker")
+    descriptor = os.open(name, FILE_FLAGS, dir_fd=carrier_fd)
+    try:
+        opened = os.fstat(descriptor)
+        linked = os.stat(name, dir_fd=carrier_fd, follow_symlinks=False)
+        no_acl(descriptor)
+        if (stable(opened) != stable(before) or stable(linked) != stable(before)
+                or os.read(descriptor, 4) != b"v1\n"
+                or os.read(descriptor, 1)):
+            raise ValueError("external cleanup marker changed")
+    finally:
+        os.close(descriptor)
+    return True
+
+def create_marker(name):
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+    descriptor = None
+    created = None
+    try:
+        descriptor = os.open(name, flags, 0o600, dir_fd=carrier_fd)
+        opened = os.fstat(descriptor)
+        created = (opened.st_dev, opened.st_ino)
+        os.fchmod(descriptor, 0o600)
+        if os.write(descriptor, b"v1\n") != 3:
+            raise ValueError("short external cleanup marker write")
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.fsync(carrier_fd)
+        if not marker_trusted(name):
+            raise ValueError("external cleanup marker publication failed")
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        if created is not None:
+            try:
+                linked = os.stat(
+                    name, dir_fd=carrier_fd, follow_symlinks=False)
+                if ((linked.st_dev, linked.st_ino) == created
+                        and stat.S_ISREG(linked.st_mode)
+                        and linked.st_uid == os.geteuid()
+                        and linked.st_nlink == 1):
+                    os.unlink(name, dir_fd=carrier_fd)
+                    os.fsync(carrier_fd)
+            except (FileNotFoundError, OSError):
+                pass
+        raise
+
+def cleanup_binding(value):
+    return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode),
+            stat.S_IMODE(value.st_mode), value.st_uid, value.st_gid,
+            getattr(value, "st_flags", 0), getattr(value, "st_gen", 0))
+
+def purge_verified(parent, name, root_dev, counter):
+    before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    entry_kind = safe_owned(before)
+    if before.st_dev != root_dev:
+        raise ValueError("external cleanup crosses a mount")
+    counter[0] += 1
+    if counter[0] > 100000:
+        raise ValueError("external cleanup tree too large")
+    if entry_kind == "d":
+        descriptor = os.open(name, DIR_FLAGS, dir_fd=parent)
+        try:
+            opened = os.fstat(descriptor)
+            linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (cleanup_binding(opened) != cleanup_binding(before)
+                    or cleanup_binding(linked) != cleanup_binding(before)):
+                raise ValueError("external cleanup directory rebound")
+            while True:
+                names = sorted(os.listdir(descriptor), key=os.fsencode)
+                if not names:
+                    break
+                for child in names:
+                    if child in ("", ".", "..") or "/" in child:
+                        raise ValueError("unsafe external cleanup child")
+                    purge_verified(descriptor, child, root_dev, counter)
+            linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (os.listdir(descriptor)
+                    or cleanup_binding(os.fstat(descriptor))
+                        != cleanup_binding(before)
+                    or cleanup_binding(linked) != cleanup_binding(before)):
+                raise ValueError("external cleanup directory changed")
+        finally:
+            os.close(descriptor)
+        os.rmdir(name, dir_fd=parent)
+    else:
+        descriptor = None
+        try:
+            if entry_kind == "f":
+                descriptor = os.open(name, FILE_FLAGS, dir_fd=parent)
+            elif DARWIN:
+                descriptor = os.open(name, LINK_FLAGS, dir_fd=parent)
+            linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (stable(linked) != stable(before)
+                    or (descriptor is not None
+                        and stable(os.fstat(descriptor)) != stable(before))):
+                raise ValueError("external cleanup leaf rebound")
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        os.unlink(name, dir_fd=parent)
+    os.fsync(parent)
+
+def remove_bound(parent, name, expected_identity, expected_digest, index):
+    if carrier_fd is None:
+        raise ValueError("external cleanup carrier unavailable")
+    suffix = name.rsplit(".", 1)[-1]
+    if (len(suffix) != 32
+            or any(char not in "0123456789abcdef" for char in suffix)):
+        raise ValueError("unsafe external cleanup backup name")
+    slot = "r{:02d}-{}".format(index, suffix)
+    marker = ".{}.verified".format(slot)
+    source_missing = missing(parent, name)
+    slot_missing = missing(carrier_fd, slot)
+    verified = marker_trusted(marker)
+    if not source_missing and not slot_missing:
+        raise ValueError("external cleanup source and slot both exist")
+    if not source_missing:
+        if verified:
+            raise ValueError("external cleanup marker conflicts with source")
+        if os.fstat(parent).st_dev != os.fstat(carrier_fd).st_dev:
+            raise ValueError("external cleanup carrier device mismatch")
+        if fingerprint(parent, name) != (expected_identity, expected_digest):
+            raise ValueError("external cleanup identity changed")
+        move_no_replace_between(parent, name, carrier_fd, slot)
+        os.fsync(parent)
+        os.fsync(carrier_fd)
+        source_missing = True
+        slot_missing = False
+    if not slot_missing and not verified:
+        if fingerprint(carrier_fd, slot) != (expected_identity, expected_digest):
+            raise ValueError("external cleanup slot changed")
+        create_marker(marker)
+        verified = True
+    if not slot_missing:
+        if not verified:
+            raise ValueError("unverified external cleanup slot")
+        purge_verified(carrier_fd, slot, os.fstat(carrier_fd).st_dev, [0])
+        slot_missing = True
+    if verified:
+        if not missing(carrier_fd, slot):
+            raise ValueError("external cleanup slot remains")
+        if not marker_trusted(marker):
+            raise ValueError("external cleanup marker disappeared")
+        os.unlink(marker, dir_fd=carrier_fd)
+        os.fsync(carrier_fd)
+    elif operation != "commit_retry":
+        raise ValueError("external cleanup source disappeared")
+
+def failed_name(record, name):
+    token = hashlib.sha256(
+        "\0".join(record).encode("utf-8", "strict")
+    ).hexdigest()[:32]
+    return ".{}.claude-kit-mdm-failed.{}".format(name, token)
+
+if carrier_fd is not None:
+    allowed_carrier_entries = set()
+    for record_index, record in enumerate(records):
+        if record[1] != "present":
+            continue
+        suffix = record[2].rsplit(".", 1)[-1]
+        slot = "r{:02d}-{}".format(record_index, suffix)
+        allowed_carrier_entries.add(slot)
+        allowed_carrier_entries.add(".{}.verified".format(slot))
+    if any(name not in allowed_carrier_entries
+           for name in os.listdir(carrier_fd)):
+        raise SystemExit(1)
+
+failures = 0
+moves = 0
+try:
+    indexed_records = list(enumerate(records))
+    ordered_records = (reversed(indexed_records)
+                       if operation in ("abort", "abort_planned")
+                       else indexed_records)
+    for record_index, record in ordered_records:
+        relative, state, backup, old_identity, old_digest, _anchor, _anchor_id = record
+        parent = None
+        name = ""
+        try:
+            parent, name = locate(record)
+            if operation == "apply":
+                if state == "absent":
+                    if not missing(parent, name):
+                        raise ValueError("absent external leaf appeared")
+                    continue
+                if parent is None or missing(parent, name) or not missing(parent, backup):
+                    raise ValueError("external plan layout changed")
+                if fingerprint(parent, name) != (old_identity, old_digest):
+                    raise ValueError("external old leaf changed")
+                move_no_replace(parent, name, backup)
+                if (not missing(parent, name)
+                        or not backup_matches(parent, backup,
+                                              old_identity, old_digest)):
+                    raise ValueError("external preserve postcondition")
+                moves += 1
+                if signal_after_count is not None and moves == signal_after_count:
+                    signum = {"HUP": 1, "INT": 2, "TERM": 15}[signal_name]
+                    os.kill(os.getppid(), signum)
+                    raise SystemExit(128 + signum)
+            elif operation == "prepared":
+                if state == "absent":
+                    if not missing(parent, name):
+                        raise ValueError("prepared absent leaf appeared")
+                elif (parent is None or not missing(parent, name)
+                      or not backup_matches(parent, backup,
+                                            old_identity, old_digest)):
+                    raise ValueError("prepared external backup changed")
+            elif operation == "verify":
+                current_absent = parent is None or missing(parent, name)
+                optional_old_cli_target = (
+                    relative.startswith(
+                        ".local/share/claude/versions/")
+                    and relative.count("/") == 4)
+                if current_absent and not optional_old_cli_target:
+                    raise ValueError("managed external leaf is absent")
+                if not current_absent:
+                    fingerprint(parent, name)
+                if state == "present" and not backup_matches(
+                        parent, backup, old_identity, old_digest):
+                    raise ValueError("external backup changed before commit")
+            elif operation in ("abort", "abort_planned"):
+                if operation == "abort_planned":
+                    if state == "absent":
+                        if not missing(parent, name):
+                            raise ValueError(
+                                "concurrent leaf appeared before apply")
+                        continue
+                    if parent is None:
+                        raise ValueError("external parent disappeared")
+                    if backup_matches(parent, backup,
+                                      old_identity, old_digest):
+                        if not missing(parent, name):
+                            raise ValueError(
+                                "concurrent leaf blocks planned rollback")
+                        move_no_replace(parent, backup, name)
+                        if fingerprint(parent, name) != (
+                                old_identity, old_digest):
+                            raise ValueError("planned old restore failed")
+                        continue
+                    if (not missing(parent, name)
+                            and fingerprint(parent, name)
+                                == (old_identity, old_digest)):
+                        continue
+                    raise ValueError("planned external layout is unknown")
+                if state == "present":
+                    if parent is None:
+                        raise ValueError("external parent disappeared")
+                    backup_present = backup_matches(
+                        parent, backup, old_identity, old_digest)
+                    if not backup_present:
+                        if (not missing(parent, name)
+                                and fingerprint(parent, name)
+                                    == (old_identity, old_digest)):
+                            continue
+                        raise ValueError("external old backup unavailable")
+                    failed = failed_name(record, name)
+                    failed_identity = failed_digest = None
+                    if not missing(parent, name):
+                        if not missing(parent, failed):
+                            raise ValueError(
+                                "external failed quarantine is occupied")
+                        failed_identity, failed_digest = fingerprint(parent, name)
+                        move_no_replace(parent, name, failed)
+                        if (not missing(parent, name)
+                                or fingerprint(parent, failed)
+                                    != (failed_identity, failed_digest)):
+                            raise ValueError("cannot quarantine current external leaf")
+                    try:
+                        move_no_replace(parent, backup, name)
+                    except BaseException:
+                        raise
+                    if fingerprint(parent, name) != (old_identity, old_digest):
+                        raise ValueError("external old leaf restore failed")
+                else:
+                    if parent is None or missing(parent, name):
+                        continue
+                    failed = failed_name(record, name)
+                    if not missing(parent, failed):
+                        raise ValueError("external failed quarantine is occupied")
+                    failed_identity, failed_digest = fingerprint(parent, name)
+                    move_no_replace(parent, name, failed)
+                    if not missing(parent, name):
+                        raise ValueError("external absent restore failed")
+            elif operation in ("commit", "commit_retry"):
+                if state == "present":
+                    remove_bound(parent, backup, old_identity, old_digest,
+                                 record_index)
+        except (OSError, ValueError):
+            failures += 1
+            if operation not in ("abort", "abort_planned", "commit",
+                                 "commit_retry"):
+                raise
+        finally:
+            if parent is not None:
+                os.close(parent)
+finally:
+    if carrier_fd is not None:
+        os.close(carrier_fd)
+    os.close(home_fd)
+if failures:
+    raise SystemExit(1)
+' "$_operation" "$_home" "$_uid" "$#" "$_carrier" \
+      "$_carrier_identity" "$_apply_signal_after" "$@" < "$_journal"
+  fi
+}
+
+_mdm_external_transaction_journal_seal() {
+  local _path="${_MDM_EXTERNAL_TRANSACTION_JOURNAL:-}" _python _owner
+  [[ -n "$_path" ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  _owner="$(_mdm_auth_expected_uid)" || return 1
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S -c '
+import os
+import stat
+import sys
+
+path, owner_raw = sys.argv[1:]
+owner = int(owner_raw)
+flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+descriptor = os.open(path, flags)
+try:
+    before = os.fstat(descriptor)
+    linked = os.stat(path, follow_symlinks=False)
+    identity = lambda value: (
+        value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+        value.st_uid, value.st_gid, value.st_size,
+        value.st_mtime_ns, value.st_ctime_ns)
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+            or before.st_uid != owner
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_size < 1 or before.st_size > 4 * 1024 * 1024
+            or identity(linked) != identity(before)):
+        raise ValueError("unsafe external transaction journal")
+    remaining = before.st_size
+    while remaining:
+        block = os.read(descriptor, min(1024 * 1024, remaining))
+        if not block:
+            raise ValueError("short external transaction journal")
+        remaining -= len(block)
+    if os.read(descriptor, 1):
+        raise ValueError("external transaction journal grew")
+    if (identity(os.fstat(descriptor)) != identity(before)
+            or identity(os.stat(path, follow_symlinks=False)) != identity(before)):
+        raise ValueError("external transaction journal changed")
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+' "$_path" "$_owner" >/dev/null 2>&1
+}
+
+_mdm_external_commit_carrier_control() {
+  # <select|create|verify|verify_empty|discard> <home> <carrier> <carrier-id>
+  # <ancestor> <ancestor-id>.  Production selects the deepest proper home
+  # ancestor whose complete chain is root-owned, ACL-free, immutable-free and
+  # not group/world-writable.  The carrier therefore shares the home device,
+  # but its pathname cannot be renamed by the target user.
+  local _operation="$1" _home="$2" _carrier="$3" _carrier_id="$4"
+  local _ancestor="$5" _ancestor_id="$6" _python _deadline
+  local _owner _override="-" _test_mode="${_MDM_TEST_MODE:-0}"
+  case "$_operation" in
+    select|create|verify|verify_empty|discard) : ;;
+    *) return 1 ;;
+  esac
+  [[ "$_home" == /* && "$_home" != / && ! "$_home" =~ [[:cntrl:]] ]] \
+    || return 1
+  _owner="$(_mdm_auth_expected_uid)" || return 1
+  [[ "$_owner" =~ ^[0-9]+$ ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  _deadline="$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" || return 1
+  if [[ "$_test_mode" == 1 \
+    && -n "${MDM_EXTERNAL_CARRIER_ANCESTOR_OVERRIDE:-}" ]]; then
+    _override="$MDM_EXTERNAL_CARRIER_ANCESTOR_OVERRIDE"
+  fi
+  _mdm_run_with_timeout "$_deadline" /usr/bin/env -i HOME=/var/root \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S -c '
+import ctypes
+import errno
+import hashlib
+import os
+import stat
+import sys
+
+(operation, home, carrier, carrier_id, ancestor, ancestor_id,
+ owner_raw, test_mode, override, journal_id) = sys.argv[1:]
+owner = int(owner_raw)
+if operation not in ("select", "create", "verify", "verify_empty", "discard"):
+    raise SystemExit(1)
+if (owner != os.geteuid() or not os.path.isabs(home) or home == "/"
+        or os.path.normpath(home) != home or os.path.realpath(home) != home
+        or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in home)
+        or not journal_id):
+    raise SystemExit(1)
+
+DIR_FLAGS = (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+DARWIN = sys.platform == "darwin"
+libc = ctypes.CDLL(None, use_errno=True)
+if DARWIN:
+    libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    libc.acl_get_fd_np.restype = ctypes.c_void_p
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    libc.acl_free.restype = ctypes.c_int
+
+def identity(value):
+    return "{}:{}".format(value.st_dev, value.st_ino)
+
+def stable(value):
+    return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode),
+            stat.S_IMODE(value.st_mode), value.st_uid, value.st_gid,
+            value.st_nlink, getattr(value, "st_flags", 0),
+            getattr(value, "st_gen", 0))
+
+def no_acl(descriptor):
+    if DARWIN:
+        ctypes.set_errno(0)
+        acl = libc.acl_get_fd_np(descriptor, 0x00000100)
+        if acl:
+            libc.acl_free(acl)
+            raise ValueError("extended ACL")
+        if ctypes.get_errno() != errno.ENOENT:
+            raise OSError(ctypes.get_errno() or errno.EIO, "acl_get_fd_np")
+    else:
+        names = os.listxattr(descriptor)
+        if ("system.posix_acl_access" in names
+                or "system.posix_acl_default" in names):
+            raise ValueError("extended ACL")
+
+def safe_control(value, descriptor, exact_mode=None):
+    if (not stat.S_ISDIR(value.st_mode) or value.st_uid != owner
+            or stat.S_IMODE(value.st_mode) & 0o022
+            or getattr(value, "st_flags", 0) & 0x00060006):
+        return False
+    if exact_mode is not None and stat.S_IMODE(value.st_mode) != exact_mode:
+        return False
+    try:
+        no_acl(descriptor)
+    except (OSError, ValueError):
+        return False
+    return True
+
+def open_bound(path):
+    if (not os.path.isabs(path) or os.path.normpath(path) != path
+            or os.path.realpath(path) != path):
+        raise ValueError("non-canonical control path")
+    current = os.open("/", DIR_FLAGS)
+    try:
+        for part in [value for value in path.split("/") if value]:
+            before = os.stat(part, dir_fd=current, follow_symlinks=False)
+            child = os.open(part, DIR_FLAGS, dir_fd=current)
+            opened = os.fstat(child)
+            linked = os.stat(part, dir_fd=current, follow_symlinks=False)
+            if stable(before) != stable(opened) or stable(linked) != stable(opened):
+                os.close(child)
+                raise ValueError("control path changed")
+            os.close(current)
+            current = child
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+home_fd = open_bound(home)
+home_value = os.fstat(home_fd)
+if not stat.S_ISDIR(home_value.st_mode):
+    raise SystemExit(1)
+home_dev = home_value.st_dev
+os.close(home_fd)
+
+selected = None
+if test_mode == "1" and override != "-":
+    if (not os.path.isabs(override) or override == home
+            or not home.startswith(override.rstrip("/") + "/")):
+        raise SystemExit(1)
+    descriptor = open_bound(override)
+    try:
+        value = os.fstat(descriptor)
+        if value.st_dev != home_dev or not safe_control(value, descriptor):
+            raise ValueError("unsafe test carrier ancestor")
+        selected = override
+    finally:
+        os.close(descriptor)
+elif override != "-" or test_mode not in ("0", "1"):
+    raise SystemExit(1)
+else:
+    parts = [value for value in home.split("/") if value]
+    current = os.open("/", DIR_FLAGS)
+    chain_safe = True
+    try:
+        root_value = os.fstat(current)
+        chain_safe = safe_control(root_value, current)
+        if chain_safe and root_value.st_dev == home_dev:
+            selected = "/"
+        for index, part in enumerate(parts):
+            before = os.stat(part, dir_fd=current, follow_symlinks=False)
+            child = os.open(part, DIR_FLAGS, dir_fd=current)
+            opened = os.fstat(child)
+            linked = os.stat(part, dir_fd=current, follow_symlinks=False)
+            if stable(before) != stable(opened) or stable(linked) != stable(opened):
+                os.close(child)
+                raise ValueError("home ancestor changed")
+            os.close(current)
+            current = child
+            chain_safe = chain_safe and safe_control(opened, current)
+            if index < len(parts) - 1 and chain_safe and opened.st_dev == home_dev:
+                selected = "/" + "/".join(parts[:index + 1])
+        if stable(os.fstat(current))[:2] != stable(home_value)[:2]:
+            raise ValueError("home changed")
+    finally:
+        os.close(current)
+if selected is None:
+    raise SystemExit(1)
+
+ancestor_fd = open_bound(selected)
+try:
+    ancestor_value = os.fstat(ancestor_fd)
+    if (ancestor_value.st_dev != home_dev
+            or not safe_control(ancestor_value, ancestor_fd)):
+        raise ValueError("unsafe carrier ancestor")
+    actual_ancestor_id = identity(ancestor_value)
+    if operation == "select":
+        sys.stdout.write("{}\t{}\n".format(selected, actual_ancestor_id))
+        os.fsync(ancestor_fd)
+        raise SystemExit(0)
+    prefix = ".claude-kit-mdm-external-carrier."
+    if (not carrier.startswith(selected.rstrip("/") + "/" + prefix)
+            and not (selected == "/" and carrier.startswith("/" + prefix))):
+        raise ValueError("carrier is outside selected ancestor")
+    name = carrier.rsplit("/", 1)[-1]
+    token = name[len(prefix):] if name.startswith(prefix) else ""
+    if (len(token) != 32
+            or any(char not in "0123456789abcdef" for char in token)
+            or ancestor != selected or ancestor_id != actual_ancestor_id):
+        raise ValueError("carrier authority changed")
+    actual_carrier = (selected.rstrip("/") + "/" + name
+                      if selected != "/" else "/" + name)
+    if carrier != actual_carrier:
+        raise ValueError("non-canonical carrier")
+    try:
+        before = os.stat(name, dir_fd=ancestor_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        if operation == "create":
+            os.mkdir(name, 0o700, dir_fd=ancestor_fd)
+            os.fsync(ancestor_fd)
+            before = os.stat(name, dir_fd=ancestor_fd, follow_symlinks=False)
+        elif operation == "discard":
+            raise SystemExit(0)
+        else:
+            raise
+    else:
+        if operation == "create":
+            raise SystemExit(73)
+    descriptor = os.open(name, DIR_FLAGS, dir_fd=ancestor_fd)
+    try:
+        if operation == "create":
+            created_binding = (before.st_dev, before.st_ino,
+                               stat.S_IFMT(before.st_mode), before.st_uid)
+            os.fchmod(descriptor, 0o700)
+            refreshed = os.stat(name, dir_fd=ancestor_fd,
+                                follow_symlinks=False)
+            if ((refreshed.st_dev, refreshed.st_ino,
+                 stat.S_IFMT(refreshed.st_mode), refreshed.st_uid)
+                    != created_binding):
+                raise ValueError("external cleanup carrier changed on chmod")
+            before = refreshed
+        opened = os.fstat(descriptor)
+        linked = os.stat(name, dir_fd=ancestor_fd, follow_symlinks=False)
+        actual_carrier_id = identity(opened)
+        exact_mode = (None if operation == "discard"
+                      and carrier_id in ("", "-") else 0o700)
+        if (stable(before) != stable(opened) or stable(linked) != stable(opened)
+                or opened.st_dev != home_dev
+                or not safe_control(opened, descriptor, exact_mode)):
+            raise ValueError("unsafe external cleanup carrier")
+        if ((operation in ("verify", "verify_empty")
+             and carrier_id != actual_carrier_id)
+                or (operation == "discard"
+                    and carrier_id not in (actual_carrier_id, "-", ""))):
+            raise ValueError("external cleanup carrier rebound")
+        if operation in ("verify_empty", "discard"):
+            if os.listdir(descriptor) or os.listdir(descriptor):
+                raise ValueError("external cleanup carrier is not empty")
+            if (stable(os.fstat(descriptor)) != stable(opened)
+                    or stable(os.stat(name, dir_fd=ancestor_fd,
+                                      follow_symlinks=False)) != stable(opened)):
+                raise ValueError("external cleanup carrier changed")
+        if operation != "discard":
+            sys.stdout.write("{}\t{}\t{}\t{}\n".format(
+                actual_carrier, actual_carrier_id,
+                selected, actual_ancestor_id))
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    if operation == "discard":
+        os.rmdir(name, dir_fd=ancestor_fd)
+        os.fsync(ancestor_fd)
+        try:
+            os.stat(name, dir_fd=ancestor_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("external cleanup carrier remains")
+finally:
+    os.close(ancestor_fd)
+' "$_operation" "$_home" "$_carrier" "$_carrier_id" \
+    "$_ancestor" "$_ancestor_id" "$_owner" "$_test_mode" "$_override" \
+    "${_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY:-}"
+}
+
+_mdm_external_commit_carrier_trusted() {
+  local _actual _expected
+  [[ -n "${_MDM_EXTERNAL_COMMIT_CARRIER:-}" \
+    && -n "${_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY:-}" \
+    && -n "${_MDM_EXTERNAL_COMMIT_ANCESTOR:-}" \
+    && -n "${_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY:-}" ]] || return 1
+  _actual="$(_mdm_external_commit_carrier_control verify \
+    "$_MDM_TRANSACTION_HOME" "$_MDM_EXTERNAL_COMMIT_CARRIER" \
+    "$_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY" \
+    "$_MDM_EXTERNAL_COMMIT_ANCESTOR" \
+    "$_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY")" || return 1
+  _expected="$_MDM_EXTERNAL_COMMIT_CARRIER"$'\t'\
+"$_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY"$'\t'\
+"$_MDM_EXTERNAL_COMMIT_ANCESTOR"$'\t'\
+"$_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY"
+  [[ "$_actual" == "$_expected" ]]
+}
+
+_mdm_external_commit_carrier_empty_trusted() {
+  local _actual _expected
+  _mdm_external_commit_carrier_trusted || return 1
+  _actual="$(_mdm_external_commit_carrier_control verify_empty \
+    "$_MDM_TRANSACTION_HOME" "$_MDM_EXTERNAL_COMMIT_CARRIER" \
+    "$_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY" \
+    "$_MDM_EXTERNAL_COMMIT_ANCESTOR" \
+    "$_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY")" || return 1
+  _expected="$_MDM_EXTERNAL_COMMIT_CARRIER"$'\t'\
+"$_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY"$'\t'\
+"$_MDM_EXTERNAL_COMMIT_ANCESTOR"$'\t'\
+"$_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY"
+  [[ "$_actual" == "$_expected" ]]
+}
+
+_mdm_external_commit_carrier_prepare() {
+  local _actual _carrier _carrier_id _ancestor _ancestor_id _extra
+  local _python _deadline _token _rc=0 _planned_carrier
+  if [[ -n "${_MDM_EXTERNAL_COMMIT_CARRIER:-}" ]]; then
+    _mdm_external_commit_carrier_trusted
+    return
+  fi
+  [[ -z "${_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY:-}" \
+    && -z "${_MDM_EXTERNAL_COMMIT_ANCESTOR:-}" \
+    && -z "${_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY:-}" ]] || return 1
+  _actual="$(_mdm_external_commit_carrier_control select \
+    "$_MDM_TRANSACTION_HOME" - - - -)" || return 1
+  _extra=""
+  IFS=$'\t' read -r _ancestor _ancestor_id _extra <<< "$_actual"
+  [[ -n "$_ancestor" && -n "$_ancestor_id" && -z "$_extra" ]] || return 1
+  _python="$(_mdm_system_python)" || return 1
+  _deadline="$(_mdm_timeout_seconds \
+    "$_MDM_TIMEOUT_LOCAL_VALIDATION_SECONDS")" || return 1
+  _token="$(_mdm_run_with_timeout "$_deadline" /usr/bin/env -i \
+    HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S -c \
+      'import os, sys; sys.stdout.write(os.urandom(16).hex())')" || return 1
+  [[ "$_token" =~ ^[0-9a-f]{32}$ ]] || return 1
+  _MDM_EXTERNAL_COMMIT_ANCESTOR="$_ancestor"
+  _MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY="$_ancestor_id"
+  if [[ "$_ancestor" == / ]]; then
+    _MDM_EXTERNAL_COMMIT_CARRIER="/.claude-kit-mdm-external-carrier.$_token"
+  else
+    _MDM_EXTERNAL_COMMIT_CARRIER="$_ancestor/.claude-kit-mdm-external-carrier.$_token"
+  fi
+  _planned_carrier="$_MDM_EXTERNAL_COMMIT_CARRIER"
+  _actual="$(_mdm_external_commit_carrier_control create \
+    "$_MDM_TRANSACTION_HOME" "$_MDM_EXTERNAL_COMMIT_CARRIER" - \
+    "$_MDM_EXTERNAL_COMMIT_ANCESTOR" \
+    "$_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY")" || _rc=$?
+  if [[ "$_rc" -eq 73 ]]; then
+    _MDM_EXTERNAL_COMMIT_CARRIER=""
+    _MDM_EXTERNAL_COMMIT_ANCESTOR=""
+    _MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY=""
+    return 1
+  fi
+  if [[ "$_rc" -ne 0 ]]; then
+    _mdm_external_commit_carrier_discard || true
+    return 1
+  fi
+  _extra=""
+  IFS=$'\t' read -r _carrier _carrier_id _ancestor _ancestor_id _extra \
+    <<< "$_actual"
+  [[ "$_carrier" == "$_planned_carrier" \
+    && "$_ancestor" == "$_MDM_EXTERNAL_COMMIT_ANCESTOR" \
+    && "$_ancestor_id" == "$_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY" \
+    && -n "$_carrier_id" && -z "$_extra" ]] || {
+    _mdm_external_commit_carrier_discard || true
+    return 1
+  }
+  _MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY="$_carrier_id"
+  _mdm_external_commit_carrier_trusted
+}
+
+_mdm_external_commit_carrier_discard() {
+  [[ -n "${_MDM_EXTERNAL_COMMIT_CARRIER:-}" ]] || return 0
+  _mdm_external_commit_carrier_control discard \
+    "$_MDM_TRANSACTION_HOME" "$_MDM_EXTERNAL_COMMIT_CARRIER" \
+    "$_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY" \
+    "$_MDM_EXTERNAL_COMMIT_ANCESTOR" \
+    "$_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY" >/dev/null || return 1
+  _MDM_EXTERNAL_COMMIT_CARRIER=""
+  _MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY=""
+  _MDM_EXTERNAL_COMMIT_ANCESTOR=""
+  _MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY=""
+}
+
+_mdm_external_inventory_discard() {
+  local _path="${_MDM_EXTERNAL_INVENTORY_TMP:-}" _base
+  [[ -n "$_path" ]] || return 0
+  _base="$(_mdm_auth_tmp_base)" || return 1
+  _mdm_auth_base_trusted "$_base" || return 1
+  case "$_path" in
+    "$_base"/claude-kit-mdm-external-paths.*) : ;;
+    *) return 1 ;;
+  esac
+  [[ -f "$_path" && ! -L "$_path" \
+    && "$(_mdm_stat_uid "$_path" 2>/dev/null || true)" \
+      == "$(_mdm_auth_expected_uid)" ]] || return 1
+  if [[ -n "${_MDM_EXTERNAL_INVENTORY_TMP_IDENTITY:-}" ]]; then
+    [[ "$(_mdm_external_transaction_journal_inode_identity \
+      "$_path" 2>/dev/null || true)" \
+      == "$_MDM_EXTERNAL_INVENTORY_TMP_IDENTITY" ]] || return 1
+  fi
+  /bin/rm -f "$_path" || return 1
+  _MDM_EXTERNAL_INVENTORY_TMP=""
+  _MDM_EXTERNAL_INVENTORY_TMP_IDENTITY=""
+}
+
+_mdm_external_transaction_collect_paths() { # <home> <uid>
+  local _home="$1" _uid="$2" _path _base _old_umask _seen _candidate
+  MDM_EXTERNAL_TRANSACTION_PATHS=()
+  [[ -z "${_MDM_EXTERNAL_INVENTORY_TMP:-}" \
+    && -z "${_MDM_EXTERNAL_INVENTORY_TMP_IDENTITY:-}" ]] || return 1
+  _base="$(_mdm_auth_tmp_base)" || return 1
+  _mdm_auth_base_trusted "$_base" || return 1
+  _old_umask="$(umask)"; umask 077
+  _MDM_EXTERNAL_INVENTORY_TMP="$(/usr/bin/mktemp \
+    "$_base/claude-kit-mdm-external-paths.XXXXXX")" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  _MDM_EXTERNAL_INVENTORY_TMP_IDENTITY="$(
+    _mdm_external_transaction_journal_inode_identity \
+      "$_MDM_EXTERNAL_INVENTORY_TMP"
+  )" || {
+    [[ -f "$_MDM_EXTERNAL_INVENTORY_TMP" \
+      && ! -L "$_MDM_EXTERNAL_INVENTORY_TMP" ]] \
+      && /bin/rm -f "$_MDM_EXTERNAL_INVENTORY_TMP"
+    _MDM_EXTERNAL_INVENTORY_TMP=""
+    return 1
+  }
+  /bin/chmod 0600 "$_MDM_EXTERNAL_INVENTORY_TMP" \
+    || { _mdm_external_inventory_discard || true; return 1; }
+  if ! _mdm_external_transaction_paths "$_home" "$_uid" \
+      > "$_MDM_EXTERNAL_INVENTORY_TMP"; then
+    _mdm_external_inventory_discard || true
+    return 1
+  fi
+  while IFS= read -r _path || [[ -n "$_path" ]]; do
+    if [[ -z "$_path" ]]; then
+      _mdm_external_inventory_discard || true
+      return 1
+    fi
+    [[ "$_path" != /* && ! "$_path" =~ [[:cntrl:]] \
+      && "$_path" != *\\* ]] || {
+        _mdm_external_inventory_discard || true
+        return 1
+      }
+    _seen=false
+    for _candidate in \
+      "${MDM_EXTERNAL_TRANSACTION_PATHS[@]+"${MDM_EXTERNAL_TRANSACTION_PATHS[@]}"}"; do
+      [[ "$_candidate" != "$_path" ]] || _seen=true
+    done
+    if [[ "$_seen" != false \
+      || "${#MDM_EXTERNAL_TRANSACTION_PATHS[@]}" -ge 32 ]]; then
+      _mdm_external_inventory_discard || true
+      return 1
+    fi
+    MDM_EXTERNAL_TRANSACTION_PATHS[${#MDM_EXTERNAL_TRANSACTION_PATHS[@]}]="$_path"
+  done < "$_MDM_EXTERNAL_INVENTORY_TMP"
+  _mdm_external_inventory_discard
+}
+
+_mdm_external_transaction_prepare() { # <user> <home> <uid>
+  local _user="$1" _home="$2" _uid="$3" _base _old_umask _rc=0
+  [[ "${_MDM_TRANSACTION_STATE:-idle}" == active \
+    && "${_MDM_EXTERNAL_TRANSACTION_STATE:-idle}" == idle \
+    && -z "${_MDM_EXTERNAL_TRANSACTION_JOURNAL:-}" \
+    && -z "${_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY:-}" \
+    && "$_user" == "${_MDM_TRANSACTION_USER:-}" \
+    && "$_home" == "${_MDM_TRANSACTION_HOME:-}" \
+    && "$_uid" == "${_MDM_TRANSACTION_UID:-}" ]] || return 1
+  _mdm_external_transaction_collect_paths "$_home" "$_uid" || return 1
+  if [[ "${#MDM_EXTERNAL_TRANSACTION_PATHS[@]}" -eq 0 ]]; then
+    _MDM_EXTERNAL_TRANSACTION_STATE=none
+    return 0
+  fi
+  _base="$(_mdm_auth_tmp_base)" || return 1
+  _mdm_auth_base_trusted "$_base" || return 1
+  _MDM_EXTERNAL_TRANSACTION_STATE=planning
+  _mdm_arm_transient_cleanup
+  _old_umask="$(umask)"; umask 077
+  _MDM_EXTERNAL_TRANSACTION_JOURNAL="$(/usr/bin/mktemp \
+    "$_base/claude-kit-mdm-external.XXXXXX")" \
+    || { umask "$_old_umask"; _MDM_EXTERNAL_TRANSACTION_STATE=idle; return 1; }
+  umask "$_old_umask"
+  _MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY="$(
+    _mdm_external_transaction_journal_inode_identity \
+      "$_MDM_EXTERNAL_TRANSACTION_JOURNAL"
+  )" || {
+    _mdm_external_transaction_journal_discard_unsealed || true
+    _MDM_EXTERNAL_TRANSACTION_STATE=idle
+    return 1
+  }
+  /bin/chmod 0600 "$_MDM_EXTERNAL_TRANSACTION_JOURNAL" || {
+    _mdm_external_transaction_journal_discard_unsealed || true
+    _MDM_EXTERNAL_TRANSACTION_STATE=idle
+    return 1
+  }
+  _mdm_external_transaction_invoke plan "$_user" "$_home" "$_uid" "" \
+    "${MDM_EXTERNAL_TRANSACTION_PATHS[@]}" \
+    > "$_MDM_EXTERNAL_TRANSACTION_JOURNAL" || _rc=$?
+  /bin/chmod 0600 "$_MDM_EXTERNAL_TRANSACTION_JOURNAL" || _rc=1
+  if [[ "$_rc" -ne 0 \
+    || -z "$_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY" ]] \
+    || ! _mdm_external_transaction_journal_seal \
+    || ! _mdm_external_transaction_journal_metadata_trusted; then
+    _mdm_external_transaction_journal_discard_unsealed || true
+    _MDM_EXTERNAL_TRANSACTION_STATE=idle
+    return 1
+  fi
+  _MDM_EXTERNAL_TRANSACTION_STATE=planned
+  if ! _mdm_external_commit_carrier_prepare; then
+    _mdm_external_transaction_abort || true
+    return 1
+  fi
+  # From this point the durable journal authorizes rollback even when the
+  # helper exits immediately after any individual atomic rename.
+  _rc=0
+  _mdm_external_transaction_invoke apply "$_user" "$_home" "$_uid" \
+    "$_MDM_EXTERNAL_TRANSACTION_JOURNAL" \
+    "${MDM_EXTERNAL_TRANSACTION_PATHS[@]}" || _rc=$?
+  if [[ "$_rc" -ne 0 ]]; then
+    _mdm_external_transaction_abort || true
+    return 1
+  fi
+  _MDM_EXTERNAL_TRANSACTION_STATE=prepared
+  if ! _mdm_external_transaction_invoke prepared "$_user" "$_home" "$_uid" \
+      "$_MDM_EXTERNAL_TRANSACTION_JOURNAL" \
+      "${MDM_EXTERNAL_TRANSACTION_PATHS[@]}"; then
+    _mdm_external_transaction_abort || true
+    return 1
+  fi
+}
+
+_mdm_external_transaction_abort() {
+  local _state="${_MDM_EXTERNAL_TRANSACTION_STATE:-idle}" _rc=0 _operation=abort
+  case "$_state" in
+    idle|none|aborted|committed) return 0 ;;
+    planning)
+      _mdm_external_transaction_journal_discard_unsealed || return 1
+      _MDM_EXTERNAL_TRANSACTION_STATE=aborted
+      return 0 ;;
+    planned|prepared|partial) : ;;
+    *) return 1 ;;
+  esac
+  [[ "${#MDM_EXTERNAL_TRANSACTION_PATHS[@]}" -ge 1 ]] || return 1
+  [[ "$_state" != planned ]] || _operation=abort_planned
+  trap '' HUP INT TERM
+  _mdm_external_transaction_invoke "$_operation" "$_MDM_TRANSACTION_USER" \
+    "$_MDM_TRANSACTION_HOME" "$_MDM_TRANSACTION_UID" \
+    "$_MDM_EXTERNAL_TRANSACTION_JOURNAL" \
+    "${MDM_EXTERNAL_TRANSACTION_PATHS[@]}" || _rc=$?
+  if [[ "$_rc" -eq 0 ]]; then
+    _mdm_external_commit_carrier_discard || _rc=1
+  fi
+  if [[ "$_rc" -eq 0 ]]; then
+    _mdm_external_transaction_journal_discard || _rc=1
+  fi
+  if [[ "$_rc" -eq 0 ]]; then
+    _MDM_EXTERNAL_TRANSACTION_STATE=aborted
+    MDM_EXTERNAL_TRANSACTION_PATHS=()
+    return 0
+  fi
+  _MDM_EXTERNAL_TRANSACTION_STATE=partial
+  return 1
+}
+
+_mdm_external_transaction_ready() {
+  case "${_MDM_EXTERNAL_TRANSACTION_STATE:-idle}" in
+    none) return 0 ;;
+    prepared) : ;;
+    *) return 1 ;;
+  esac
+  [[ "${#MDM_EXTERNAL_TRANSACTION_PATHS[@]}" -ge 1 ]] || return 1
+  _mdm_external_transaction_journal_metadata_trusted \
+    && _mdm_external_commit_carrier_empty_trusted \
+    && _mdm_external_transaction_invoke verify "$_MDM_TRANSACTION_USER" \
+      "$_MDM_TRANSACTION_HOME" "$_MDM_TRANSACTION_UID" \
+      "$_MDM_EXTERNAL_TRANSACTION_JOURNAL" \
+      "${MDM_EXTERNAL_TRANSACTION_PATHS[@]}"
+}
+
+_mdm_external_transaction_commit() {
+  local _rc=0 _operation=commit _state
+  _state="${_MDM_EXTERNAL_TRANSACTION_STATE:-idle}"
+  case "$_state" in
+    committed) return 0 ;;
+    none) _MDM_EXTERNAL_TRANSACTION_STATE=committed; return 0 ;;
+    prepared|cleanup|carrier_cleanup|journal_cleanup) : ;;
+    *) return 1 ;;
+  esac
+  [[ "${#MDM_EXTERNAL_TRANSACTION_PATHS[@]}" -ge 1 ]] || return 1
+  trap '' HUP INT TERM
+  if [[ "$_state" == prepared || "$_state" == cleanup ]]; then
+    [[ "$_state" != cleanup ]] || _operation=commit_retry
+    _mdm_external_transaction_invoke "$_operation" "$_MDM_TRANSACTION_USER" \
+      "$_MDM_TRANSACTION_HOME" "$_MDM_TRANSACTION_UID" \
+      "$_MDM_EXTERNAL_TRANSACTION_JOURNAL" \
+      "${MDM_EXTERNAL_TRANSACTION_PATHS[@]}" || _rc=$?
+    if [[ "$_rc" -eq 0 ]]; then
+      _MDM_EXTERNAL_TRANSACTION_STATE=carrier_cleanup
+    else
+      _MDM_EXTERNAL_TRANSACTION_STATE=cleanup
+      return 1
+    fi
+  fi
+  if [[ "${_MDM_EXTERNAL_TRANSACTION_STATE:-}" == carrier_cleanup ]]; then
+    if _mdm_external_commit_carrier_discard; then
+      _MDM_EXTERNAL_TRANSACTION_STATE=journal_cleanup
+    else
+      return 1
+    fi
+  fi
+  if [[ "${_MDM_EXTERNAL_TRANSACTION_STATE:-}" == journal_cleanup ]] \
+    && _mdm_external_transaction_journal_discard; then
+    _MDM_EXTERNAL_TRANSACTION_STATE=committed
+    MDM_EXTERNAL_TRANSACTION_PATHS=()
+    return 0
+  fi
+  return 1
+}
+
 _mdm_transaction_begin() { # <user> <home> <uid> <generated-uid>
   local _user="$1" _home="$2" _uid="$3" _generated="$4" _dir _old_umask
   [[ "${_MDM_TRANSACTION_STATE:-idle}" == idle \
+    && "${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}" == 0 \
+    && "${_MDM_FAILURE_ROLLBACK_FRESH_PRIVATE:-0}" == 0 \
+    && "${_MDM_PARENT_MODE_STATE:-idle}" == idle \
+    && "${_MDM_EXTERNAL_TRANSACTION_STATE:-idle}" == idle \
+    && -z "${_MDM_PARENT_MODE_JOURNAL:-}" \
+    && -z "${_MDM_PARENT_MODE_JOURNAL_IDENTITY:-}" \
+    && -z "${_MDM_EXTERNAL_TRANSACTION_JOURNAL:-}" \
+    && -z "${_MDM_EXTERNAL_TRANSACTION_JOURNAL_IDENTITY:-}" \
+    && -z "${_MDM_EXTERNAL_COMMIT_CARRIER:-}" \
+    && -z "${_MDM_EXTERNAL_COMMIT_CARRIER_IDENTITY:-}" \
+    && -z "${_MDM_EXTERNAL_COMMIT_ANCESTOR:-}" \
+    && -z "${_MDM_EXTERNAL_COMMIT_ANCESTOR_IDENTITY:-}" \
     && "$_uid" =~ ^[0-9]+$ && "$_uid" -ge 501 ]] || return 1
   _generated="$(_mdm_normalize_generated_uid "$_generated")" || return 1
   _dir="$(_mdm_receipt_dir_for "$_home")"
@@ -6986,6 +11130,8 @@ _mdm_transaction_begin() { # <user> <home> <uid> <generated-uid>
 _mdm_transaction_prepare_claude() { # <home> <uid>
   local _home="$1" _uid="$2" _live _backup _parent_identity
   local _candidate_identity _previous_identity="" _previous_digest="" _mode
+  local _copy_source_before _copy_candidate _copy_source_after
+  local _source_before_digests _source_after_digests
   local _marker _live_digest _MDM_EXEC_AS_USER_DEADLINE_SECONDS
   _live="$_home/.claude"
   [[ "${_MDM_TRANSACTION_STATE:-idle}" == active \
@@ -7029,15 +11175,37 @@ _mdm_transaction_prepare_claude() { # <home> <uid>
     _mdm_mode_is_safe "$_mode" || return 1
     _mdm_has_extended_acl "$_live" && return 1
     _previous_identity="$(_mdm_persistent_dir_identity "$_live")" || return 1
-    _previous_digest="$(_mdm_artifact_digest tree "$_live")" || return 1
+    _source_before_digests="$(
+      _mdm_artifact_copy_semantics_digests "$_live"
+    )" \
+      || { _mdm_transaction_abort_claude || true; return 1; }
+    [[ "$_source_before_digests" \
+      =~ ^[0-9a-f]{64}:[0-9a-f]{64}$ ]] \
+      || { _mdm_transaction_abort_claude || true; return 1; }
+    _previous_digest="${_source_before_digests%%:*}"
+    _copy_source_before="${_source_before_digests#*:}"
     _mdm_run_maybe_as_user /bin/cp -a "$_live/." "$_backup/" \
-      || return 1
-    _mdm_run_maybe_as_user /bin/chmod "$_mode" "$_backup" || return 1
+      || { _mdm_transaction_abort_claude || true; return 1; }
+    _mdm_run_maybe_as_user /bin/chmod "$_mode" "$_backup" \
+      || { _mdm_transaction_abort_claude || true; return 1; }
     [[ "$(_mdm_persistent_dir_identity "$_backup")" == "$_candidate_identity" ]] \
-      || return 1
+      || { _mdm_transaction_abort_claude || true; return 1; }
+    _copy_candidate="$(_mdm_copy_semantics_digest "$_backup")" \
+      || { _mdm_transaction_abort_claude || true; return 1; }
+    _source_after_digests="$(
+      _mdm_artifact_copy_semantics_digests "$_live"
+    )" \
+      || { _mdm_transaction_abort_claude || true; return 1; }
+    [[ "$_source_after_digests" \
+      =~ ^[0-9a-f]{64}:[0-9a-f]{64}$ ]] \
+      || { _mdm_transaction_abort_claude || true; return 1; }
+    _live_digest="${_source_after_digests%%:*}"
+    _copy_source_after="${_source_after_digests#*:}"
+    [[ "$_copy_source_before" == "$_copy_candidate" \
+      && "$_copy_source_after" == "$_copy_source_before" ]] \
+      || { _mdm_transaction_abort_claude || true; return 1; }
     _mdm_create_claude_transaction_marker "$_backup" "$_uid" "$_marker" \
       || return 1
-    _live_digest="$(_mdm_artifact_digest tree "$_live")" || return 1
     [[ "$_live_digest" == "$_previous_digest" \
       && "$(_mdm_persistent_dir_identity "$_live")" == "$_previous_identity" ]] \
       || return 1
@@ -7191,10 +11359,12 @@ _mdm_transaction_mark_partial() {
 _mdm_transaction_abort() {
   local _rc=0
   case "${_MDM_TRANSACTION_STATE:-idle}" in
-    idle|aborted|committed) return 0 ;;
+    idle|aborted|committing|commit_cleanup|committed) return 0 ;;
   esac
   trap '' HUP INT TERM
+  _mdm_external_transaction_abort || _rc=1
   _mdm_transaction_abort_claude || _rc=1
+  _mdm_managed_parent_modes_restore || _rc=1
   _mdm_transaction_abort_persistent || _rc=1
   _mdm_transaction_restore_root_file "$_MDM_TRANSACTION_COMPONENT_PATH" \
     "$_MDM_TRANSACTION_COMPONENT_STATE" \
@@ -7226,6 +11396,9 @@ _mdm_transaction_ready_to_commit() {
       == "${_MDM_CLAUDE_PARENT_IDENTITY:-}" \
     && "$(_mdm_stat_uid "$_home" 2>/dev/null || true)" == "$_uid" ]] \
     || return 1
+  [[ "${_MDM_PARENT_MODE_STATE:-idle}" == applied ]] || return 1
+  _mdm_managed_parent_journal_trusted || return 1
+  _mdm_external_transaction_ready || return 1
 
   _state="${_MDM_CLAUDE_TRANSACTION_STATE:-idle}"
   [[ "$(_mdm_persistent_dir_identity "$_live" 2>/dev/null || true)" \
@@ -7283,45 +11456,72 @@ _mdm_transaction_ready_to_commit() {
       && ! -L "${_MDM_TRANSACTION_COMPONENT_SNAPSHOT:-}" ]] || return 1 ;;
     *) return 1 ;;
   esac
+  _mdm_managed_parent_journal_trusted || return 1
+  _mdm_managed_parent_modes_final "$_home" "$_uid"
 }
 
 _mdm_transaction_commit() {
   local _rc=0 _marker _claude_state
-  [[ "${_MDM_TRANSACTION_STATE:-idle}" == active ]] || return 1
+  case "${_MDM_TRANSACTION_STATE:-idle}" in
+    committed) return 0 ;;
+    active|committing|commit_cleanup) : ;;
+    *) return 1 ;;
+  esac
+  _MDM_TRANSACTION_STATE="committing"
   _claude_state="${_MDM_CLAUDE_TRANSACTION_STATE:-idle}"
-  _MDM_TRANSACTION_STATE="committed"
-  _MDM_CLAUDE_TRANSACTION_STATE="committed"
-  if [[ "${_MDM_PERSISTENT_TRANSACTION_STATE:-idle}" == swapped ]]; then
-    _mdm_cleanup_persistent_stage || _rc=1
-  else
-    _MDM_PERSISTENT_STAGE=""
-    _MDM_PERSISTENT_STAGE_IDENTITY=""
-  fi
-  _MDM_PERSISTENT_TRANSACTION_STATE="committed"
+  _mdm_external_transaction_commit || _rc=1
+  case "${_MDM_PERSISTENT_TRANSACTION_STATE:-idle}" in
+    committed) : ;;
+    swapped)
+      if _mdm_cleanup_persistent_stage; then
+        _MDM_PERSISTENT_TRANSACTION_STATE="committed"
+      else
+        _rc=1
+      fi ;;
+    created)
+      _MDM_PERSISTENT_STAGE=""
+      _MDM_PERSISTENT_STAGE_IDENTITY=""
+      _MDM_PERSISTENT_TRANSACTION_STATE="committed" ;;
+    *) _rc=1 ;;
+  esac
+  _mdm_managed_parent_modes_commit || _rc=1
   _marker="$(_mdm_claude_transaction_marker_path \
     "${_MDM_CLAUDE_LIVE:-/nonexistent}")"
-  if [[ -n "${_MDM_CLAUDE_LIVE:-}" ]]; then
-    _mdm_run_maybe_as_user /bin/rm -f "$_marker" 2>/dev/null || _rc=1
-  fi
-  if [[ "$_claude_state" == swapped ]]; then
-    _mdm_transaction_rotate_claude_backups \
-      "$_MDM_TRANSACTION_HOME" "$_MDM_CLAUDE_BACKUP" || _rc=1
-  fi
+  case "$_claude_state" in
+    committed) : ;;
+    swapped|created)
+      if [[ -n "${_MDM_CLAUDE_LIVE:-}" ]] \
+        && ! _mdm_run_maybe_as_user /bin/rm -f "$_marker" 2>/dev/null; then
+        _rc=1
+      elif [[ "$_claude_state" == swapped ]] \
+        && ! _mdm_transaction_rotate_claude_backups \
+          "$_MDM_TRANSACTION_HOME" "$_MDM_CLAUDE_BACKUP"; then
+        _rc=1
+      else
+        _MDM_CLAUDE_TRANSACTION_STATE="committed"
+      fi ;;
+    *) _rc=1 ;;
+  esac
   _mdm_transaction_cleanup_root_snapshots || _rc=1
-  [[ "$_rc" -eq 0 ]] || mdm_log R4 "commit後 cleanup を完了できず回復用pathを保持"
-  return 0
+  if [[ "$_rc" -eq 0 ]]; then
+    _MDM_TRANSACTION_STATE="committed"
+    return 0
+  fi
+  _MDM_TRANSACTION_STATE="commit_cleanup"
+  mdm_log R4 "commit後 cleanup を完了できず回復用pathを保持"
+  return "$_rc"
 }
 
 _mdm_normalize_persistent_worktree() { # <stage> <target-uid>
   local _stage="$1" _target_uid="$2" _python
   [[ "$_stage" == /* && ! "$_stage" =~ [[:cntrl:]] \
     && "$_target_uid" =~ ^[0-9]+$ ]] || return 1
-  _python="$(_mdm_system_python)" || return 1
+  _python="$(_mdm_target_system_python)" || return 1
   # mktemp and Git inherit the wrapper's umask 077.  Preserve Git's executable
   # class while making the retained worktree canonical (directories 0755,
   # regular files 0644/0755).  Run the fd-bound walk as the target user: the
   # user-owned parent is never traversed with root write authority.
-  _mdm_run_maybe_as_user "$_python" -I -B -c '
+  _mdm_run_maybe_as_user "$_python" -I -B -S -c '
 import os
 import stat
 import sys
@@ -7633,6 +11833,10 @@ _mdm_run_root_user_phase() { # <user> <home> <bound-target-uid>
     mdm_log U1b "production remediation の KIT_MDM_GIT_REF は full SHA 必須"
     return "$MDM_EXIT_CONFIG"
   fi
+  if ! _mdm_expected_policy_input_valid; then
+    mdm_log U1b "production execution の expected policy SHA-256 は必須"
+    return "$MDM_EXIT_CONFIG"
+  fi
   _install_dir="$_home/.claude-starter-kit"
   if [[ "$_dry_run" != "true" && -n "${KIT_MDM_INSTALL_DIR:-}" \
     && "$KIT_MDM_INSTALL_DIR" != "$_install_dir" ]]; then
@@ -7668,8 +11872,16 @@ _mdm_run_root_user_phase() { # <user> <home> <bound-target-uid>
   _repo_url="$(_mdm_repo_url)"
   _mdm_capture_prior_inventory \
     "$_user" "$_home" "$_uid" "$_MDM_TARGET_GENERATED_UID" || return 1
-  _mdm_prepare_expected_state "$_home" || return $?
+  _mdm_prepare_expected_state \
+    "$_home" "$_MDM_AUTH_CHECKOUT" "$MDM_RCPT_RESOLVED_SHA" || return $?
   _mdm_load_expected_required_components || return 1
+  if [[ "$_dry_run" != true \
+    && "${_MDM_TRANSACTION_STATE:-idle}" == active ]]; then
+    mdm_log U1b "管理対象 parent directory の mode を transactionally 正規化"
+    _mdm_managed_parent_modes_prepare "$_user" "$_home" "$_uid" || return 1
+    mdm_log U1b "対象ユーザーの外部管理 leaf を transactionally 退避"
+    _mdm_external_transaction_prepare "$_user" "$_home" "$_uid" || return 1
+  fi
   for _component in "${MDM_REQUIRED_COMPONENTS[@]}"; do
     if [[ "$_component" == web_content_runtime ]]; then
       _wce_required=true
@@ -7852,6 +12064,10 @@ _mdm_run_user_phase() {
     mdm_log R2 "通常の MDM remediation は root 実行が必須"
     return "$MDM_EXIT_CONTEXT"
   fi
+  if ! _mdm_expected_policy_input_valid; then
+    mdm_log U1b "production preview の expected policy SHA-256 は必須"
+    return "$MDM_EXIT_CONFIG"
+  fi
   _MDM_GIT_DROP_UID=""
   _MDM_GIT_DROP_USER=""
   _MDM_GIT_DROP_HOME=""
@@ -7859,21 +12075,43 @@ _mdm_run_user_phase() {
 
   # Root returned through the authoritative path above.  The remaining path is
   # the explicitly allowed non-root preview and never writes a receipt.
-  local _uid="$_euid" _setup_rc=0
+  local _uid="$_euid" _setup_rc=0 _dryrun_base="" _dryrun_physical_base=""
 
   local _install_dir="${KIT_MDM_INSTALL_DIR:-}"
   if [[ "$_dry_run" == "true" ]]; then
+    if ! _dryrun_base="$(_mdm_test_runner_tmp_base 2>/dev/null)"; then
+      if [[ "$_euid" -eq 0 ]]; then
+        _dryrun_base=/private/tmp
+      else
+        _dryrun_base=/tmp
+      fi
+    fi
+    _dryrun_physical_base="$(builtin cd -P -- "$_dryrun_base" 2>/dev/null \
+      && printf '%s' "$PWD")" || {
+      mdm_log U1b "dry-run 一時領域を canonical 化できない"
+      return 1
+    }
+    [[ -n "$_dryrun_physical_base" && "$_dryrun_physical_base" != / ]] || return 1
     if [[ "$_euid" -eq 0 ]]; then
       _install_dir="$(_mdm_exec_as_user "$_uid" "$_user" "$_home" \
-        /usr/bin/mktemp -d /private/tmp/claude-kit-mdm-dryrun.XXXXXX 2>/dev/null || true)"
+        /usr/bin/mktemp -d "$_dryrun_base/claude-kit-mdm-dryrun.XXXXXX" \
+        2>/dev/null || true)"
     else
-      _install_dir="$(/usr/bin/mktemp -d /tmp/claude-kit-mdm-dryrun.XXXXXX 2>/dev/null || true)"
+      _install_dir="$(/usr/bin/mktemp -d \
+        "$_dryrun_base/claude-kit-mdm-dryrun.XXXXXX" \
+        2>/dev/null || true)"
     fi
     case "$_install_dir" in
-      /private/tmp/claude-kit-mdm-dryrun.*|/tmp/claude-kit-mdm-dryrun.*) ;;
+      "$_dryrun_base"/claude-kit-mdm-dryrun.*) ;;
       *) mdm_log U1b "dry-run 一時 checkout を作成できない"; return 1 ;;
     esac
     [[ -d "$_install_dir" && ! -L "$_install_dir" ]] || return 1
+    _install_dir="$(builtin cd -P -- "$_install_dir" 2>/dev/null \
+      && printf '%s' "$PWD")" || return 1
+    case "$_install_dir" in
+      "$_dryrun_physical_base"/claude-kit-mdm-dryrun.*) ;;
+      *) mdm_log U1b "dry-run 一時 checkout が canonical でない"; return 1 ;;
+    esac
     _MDM_DRYRUN_CHECKOUT="$_install_dir"
     _mdm_arm_transient_cleanup
   else
@@ -7945,6 +12183,20 @@ _mdm_run_user_phase() {
   fi
   MDM_RCPT_RESOLVED_SHA="$_sha"
   MDM_RCPT_KIT_VERSION="$(_mdm_describe_kit_version _mdm_git "$_install_dir")"
+  # A preview is non-authoritative, but it must still prove that the policy
+  # distributed by MDM matches the renderer in this exact clean commit before
+  # setup.sh is allowed to execute.
+  _mdm_prepare_expected_state "$_home" "$_install_dir" "$_sha" || return $?
+  _mdm_detached_head_matches "$_install_dir" "$_sha" "$_uid" || {
+    mdm_log U1b "policy検証後の checkout HEAD 束縛に失敗"
+    return 1
+  }
+  _status="$(_mdm_git -C "$_install_dir" status --porcelain \
+    --untracked-files=all 2>/dev/null)" || return 1
+  [[ -z "$_status" ]] || {
+    mdm_log U1b "policy検証後に checkout が変更された"
+    return 1
+  }
   _mdm_run_maybe_as_user /bin/chmod +x "$_install_dir/setup.sh" 2>/dev/null || true
 
   # required_components: kit は常時、claude_cli は KIT_MDM_INSTALL_CLAUDE_CLI!=false のとき（既定 true）
@@ -8158,7 +12410,7 @@ _mdm_json_query() { # <file> <valid|get|count|item> [key] [index]
   [[ -f "$_file" && ! -L "$_file" ]] || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_file" "$_operation" "$_key" "$_index" <<'PY'
+    "$_python" -I -B -S - "$_file" "$_operation" "$_key" "$_index" <<'PY'
 import json
 import os
 import stat
@@ -8373,7 +12625,7 @@ _mdm_path_is_absent_with_real_parents() { # <root> <relative>
   _python="${_MDM_ABSENCE_PYTHON:-}"
   [[ -n "$_python" ]] || _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B -c '
+    "$_python" -I -B -S -c '
 import os, stat, sys
 root, relative = sys.argv[1], sys.argv[2]
 parts = relative.split("/")
@@ -8614,7 +12866,7 @@ _mdm_deployment_manifest_schema_valid() { # <strict-json-manifest>
   _mdm_json_valid "$_manifest" || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_manifest" <<'PY'
+    "$_python" -I -B -S - "$_manifest" <<'PY'
 import json
 import re
 import sys
@@ -8726,6 +12978,7 @@ _mdm_validate_manifest_snapshot() { # <snapshot-file> <home> <target-uid>
 _mdm_capture_postcondition() {
   local _home="$1" _target_uid="$2" _manifest
   [[ "$_target_uid" =~ ^[0-9]+$ ]] || return 1
+  _mdm_managed_parent_modes_final "$_home" "$_target_uid" || return 1
   _manifest="$_home/.claude/.starter-kit-manifest.json"
   local _canonical _manifest_copy _manifest_hash _rc=1
   _canonical="$(_mdm_canonical_file "$_manifest")" || return 1
@@ -8806,7 +13059,10 @@ _mdm_revalidate_success_state() { # <user> <home> <uid> <generated-uid>
 }
 
 _mdm_revalidate_target_identity() { # <user> <home> <uid> <generated-uid>
-  local _user="$1" _home="$2" _uid="$3" _generated_uid="$4" _tuple _bound_home
+  local _user="$1" _home="$2" _uid="$3" _generated_uid="$4"
+  local _tuple _bound_home _canonical
+  _canonical="$(_mdm_search_policy_username_for_uid "$_uid")" || return 1
+  [[ "$_canonical" == "$_user" ]] || return 1
   _tuple="$(_mdm_bind_target_identity_tuple "$_user" "$_uid")" || return 1
   [[ "${_tuple%%$'\t'*}" == "$_uid" \
     && "${_tuple#*$'\t'}" == "$_generated_uid" ]] || return 1
@@ -9003,7 +13259,7 @@ _mdm_node_runtime_root_metadata_valid() { # <runtime-tree> <uid> <gid>
   [[ "$_uid" =~ ^[0-9]+$ && "$_gid" =~ ^[0-9]+$ ]] || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_tree" "$_uid" "$_gid" <<'PY'
+    "$_python" -I -B -S - "$_tree" "$_uid" "$_gid" <<'PY'
 import os
 import stat
 import sys
@@ -9048,7 +13304,7 @@ _mdm_node_runtime_content_sha256() { # <runtime-tree>
   local _tree="$1" _python
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_tree" "$_MDM_NODE_PROVENANCE_FILE" <<'PY'
+    "$_python" -I -B -S - "$_tree" "$_MDM_NODE_PROVENANCE_FILE" <<'PY'
 import hashlib
 import json
 import os
@@ -9146,7 +13402,7 @@ _mdm_exact_text_file() { # <regular-file> <expected-without-final-LF>
   local _path="$1" _expected="$2" _python
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_path" "$_expected" <<'PY'
+    "$_python" -I -B -S - "$_path" "$_expected" <<'PY'
 import os
 import stat
 import sys
@@ -9380,7 +13636,7 @@ _mdm_node_runtime_extract_archive() { # <tar.xz> <empty-destination> <top-name>
   _owner="$(_mdm_node_runtime_owner_uid)" || return 1
   _group="$(_mdm_node_runtime_owner_gid)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_archive" "$_destination" "$_top" \
+    "$_python" -I -B -S - "$_archive" "$_destination" "$_top" \
       "$_owner" "$_group" <<'PY'
 import os
 import posixpath
@@ -9569,7 +13825,7 @@ _mdm_node_runtime_write_provenance() { # <tree> <arch> <url> <sha256>
   _group="$(_mdm_node_runtime_owner_gid)" || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_marker" "$_owner" "$_group" <<'PY'
+    "$_python" -I -B -S - "$_marker" "$_owner" "$_group" <<'PY'
 import os
 import sys
 
@@ -9708,7 +13964,7 @@ _mdm_node_runtime_atomic_rename_system() { # test seam around the syscall only
   case "$_operation" in create|swap) : ;; *) return 1 ;; esac
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_source" "$_destination" "$_operation" <<'PY'
+    "$_python" -I -B -S - "$_source" "$_destination" "$_operation" <<'PY'
 import ctypes
 import os
 import sys
@@ -9783,9 +14039,9 @@ _mdm_node_runtime_activation_valid() { # <user> <home> <target-uid>
 
 _mdm_node_runtime_replace_activation() { # <user> <home> <target-uid> <target>
   local _user="$1" _home="$2" _uid="$3" _target="$4" _python
-  _python="$(_mdm_system_python)" || return 1
+  _python="$(_mdm_target_system_python)" || return 1
   _mdm_exec_as_user "$_uid" "$_user" "$_home" \
-    "$_python" -I -B -c '
+    "$_python" -I -B -S -c '
 import errno
 import os
 import secrets
@@ -10097,7 +14353,7 @@ _mdm_wce_runtime_json_contract_valid() { # <package.json> <lock> <pkg-sha> <lock
     && "$(_mdm_sha256_file "$_lock")" == "$_lock_sha" ]] || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_package" "$_lock" <<'PY'
+    "$_python" -I -B -S - "$_package" "$_lock" <<'PY'
 import base64
 import json
 import re
@@ -10204,7 +14460,7 @@ _mdm_wce_runtime_marker_valid() { # <bundle> <arch> <package-sha> <lock-sha>
   [[ "$3" =~ ^[0-9a-f]{64}$ && "$4" =~ ^[0-9a-f]{64}$ ]] || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_marker" "$2" "$3" "$4" \
+    "$_python" -I -B -S - "$_marker" "$2" "$3" "$4" \
       "$_MDM_WCE_NODE_VERSION" "$_MDM_WCE_NPM_VERSION" \
       "$_MDM_WCE_REGISTRY" <<'PY'
 import json
@@ -10261,7 +14517,7 @@ _mdm_wce_runtime_dir_metadata_valid() {
   _mdm_has_extended_acl "$_dir" && return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_dir" "$_owner" "$_group" \
+    "$_python" -I -B -S - "$_dir" "$_owner" "$_group" \
       "$_xattr_policy" <<'PY'
 import ctypes
 import errno
@@ -10357,7 +14613,7 @@ _mdm_wce_runtime_metadata_valid() { # <bundle> <owner-uid> <owner-gid>
   local _bundle="$1" _owner="$2" _group="$3" _python
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_bundle" "$_owner" "$_group" \
+    "$_python" -I -B -S - "$_bundle" "$_owner" "$_group" \
       "$_MDM_WCE_MARKER_FILE" <<'PY'
 import ctypes
 import json
@@ -10578,7 +14834,7 @@ _mdm_wce_runtime_normalize_base_dir() { # <directory> <owner-uid> <owner-gid>
   _mdm_has_extended_acl "$_dir" && return 1
   _python="$(_mdm_system_python)" || return 1
   if ! /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_dir" "$_owner" "$_group" <<'PY'
+    "$_python" -I -B -S - "$_dir" "$_owner" "$_group" <<'PY'
 import os
 import stat
 import sys
@@ -10735,7 +14991,7 @@ _mdm_wce_runtime_copy_sources() { # <stage> <package-sha> <lock-sha>
   _group="$(_mdm_wce_runtime_owner_gid)" || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_stage" "$_owner" "$_group" \
+    "$_python" -I -B -S - "$_stage" "$_owner" "$_group" \
       "$_source_package" package.json "$_source_lock" package-lock.json <<'PY'
 import os
 import stat
@@ -10807,7 +15063,7 @@ _mdm_wce_runtime_write_marker() { # <stage> <arch> <package-sha> <lock-sha>
   _group="$(_mdm_wce_runtime_owner_gid)" || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_marker" "$_owner" "$_group" <<'PY'
+    "$_python" -I -B -S - "$_marker" "$_owner" "$_group" <<'PY'
 import os
 import sys
 
@@ -10831,7 +15087,7 @@ _mdm_wce_runtime_normalize_stage() { # <stage>
   _group="$(_mdm_wce_runtime_owner_gid)" || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_stage" "$_owner" "$_group" <<'PY'
+    "$_python" -I -B -S - "$_stage" "$_owner" "$_group" <<'PY'
 import ctypes
 import errno
 import os
@@ -11181,7 +15437,7 @@ _mdm_component_sort_entries() { # <json-lines-file>
     || { umask "$_old_umask"; return 1; }
   umask "$_old_umask"
   if ! /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_input" > "$_sorted" <<'PY'
+    "$_python" -I -B -S - "$_input" > "$_sorted" <<'PY'
 import json
 import re
 import sys
@@ -11283,7 +15539,16 @@ _mdm_component_target_dir_accessible() { # <dir> <uid> <user> <home>
   _mdm_component_effective_test \
     "$_uid" "$_user" "$_home" -x "$_dir" || return 1
   _after="$(_mdm_persistent_dir_identity "$_dir")" || return 1
-  [[ "$_after" == "$_before" ]]
+  [[ "$_after" == "$_before" \
+    && "$(_mdm_canonical_dir "$_dir" 2>/dev/null || true)" == "$_dir" \
+    && "$(_mdm_stat_uid "$_dir" 2>/dev/null || true)" == "$_uid" ]] \
+    || return 1
+  _mode="$(_mdm_mode_normalize \
+    "$(_mdm_stat_mode "$_dir" 2>/dev/null || true)")" || return 1
+  _mdm_mode_is_safe "$_mode" || return 1
+  _mdm_user_dir_acl_safe "$_dir" || return 1
+  [[ "$(_mdm_persistent_dir_identity "$_dir" 2>/dev/null || true)" \
+    == "$_before" ]]
 }
 
 _mdm_component_ancestors_searchable() { # <path> <uid> <user> <home>
@@ -11457,7 +15722,7 @@ _mdm_component_private_tree_shape_is_exact() { # <biome|safety_net> <tree>
   case "$_component" in biome|safety_net) : ;; *) return 1 ;; esac
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_component" "$_root" <<'PY'
+    "$_python" -I -B -S - "$_component" "$_root" <<'PY'
 import os
 import stat
 import sys
@@ -11651,7 +15916,7 @@ _mdm_component_font_file_is_trusted() { # <font-file>
   _family="${_record#*$'\t'}"
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_path" "$_name" "$_sha" "$_family" <<'PY'
+    "$_python" -I -B -S - "$_path" "$_name" "$_sha" "$_family" <<'PY'
 import hashlib
 import os
 import stat
@@ -11828,7 +16093,7 @@ _mdm_component_generated_manifest_is_exact() {
   [[ "${#_font_names[@]}" -eq 20 ]] || return 1
   _python="$(_mdm_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_manifest" "$_home" "$_user" "$_uid" \
+    "$_python" -I -B -S - "$_manifest" "$_home" "$_user" "$_uid" \
     "$_generated" "$_policy" "$_node_runtime" "$_wce_runtime" \
     "$#" "$@" "${_font_names[@]}" <<'PY'
 import collections
@@ -12258,6 +16523,15 @@ _mdm_handle_log_setup_failure() { # <user> <home> <dry-run>
   return "$MDM_EXIT_CONFIG"
 }
 
+_mdm_main_euid() {
+  if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+    && "${MDM_EUID_OVERRIDE:-}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$MDM_EUID_OVERRIDE"
+  else
+    /usr/bin/id -u
+  fi
+}
+
 # R1..R4 のオーケストレーション。root フェーズは実副作用
 # （brew 導入・降格）を伴うため、単体テストでは各フェーズ関数を個別に
 # 検証し、エントリポイントは clean-launch 契約までを検証する。
@@ -12295,11 +16569,15 @@ mdm_main() {
   # normal runs before target resolution, log creation, checkout mutation, or
   # receipt creation.  Non-root remains useful only as an explicit preview.
   local _euid _dry_run="false"
-  _euid="$(/usr/bin/id -u)"
+  _euid="$(_mdm_main_euid)"
   _dry_run="$(_mdm_root_bool "${KIT_MDM_DRY_RUN:-false}" 2>/dev/null || echo false)"
   if [[ "$_euid" -ne 0 && "$_dry_run" != "true" ]]; then
     mdm_log R2 "通常の MDM remediation は root 実行が必須"
     exit "$MDM_EXIT_CONTEXT"
+  fi
+  if ! _mdm_expected_policy_input_valid; then
+    mdm_log R1 "expected policy SHA-256 が未指定または不正"
+    exit "$MDM_EXIT_CONFIG"
   fi
 
   # R2: ユーザー・home 解決（root の失敗時だけ system receipt を best-effort で試す）
@@ -12312,6 +16590,9 @@ mdm_main() {
       || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
     _target_uid="${_identity_tuple%%$'\t'*}"
     _MDM_TARGET_GENERATED_UID="${_identity_tuple#*$'\t'}"
+    _mdm_bind_canonical_target_username _user "$_user" "$_target_uid" \
+      "$_MDM_TARGET_GENERATED_UID" \
+      || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
     _home="$(mdm_validate_user_home "$_user" "$_target_uid")" \
       || _mdm_fail_or_exit_unresolved "$MDM_EXIT_USER" "$_dry_run"
     _MDM_TARGET_SHELL="$(_mdm_user_shell "$_user")" \
@@ -12366,17 +16647,36 @@ mdm_main() {
     _mdm_check_dryrun_prerequisites || _dry_prereq_rc=$?
     [[ "$_dry_prereq_rc" -eq 0 ]] || exit "$_dry_prereq_rc"
   elif [[ "$_euid" -eq 0 ]]; then
-    local _prereq_rc=0 _brew_usable=false
     _mdm_ensure_clt || _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_PREREQ"
+  fi
+
+  # Bind every Python helper to the fixed CLT framework interpreter before
+  # transaction state or managed content is touched. Full Xcode and the
+  # /usr/bin/python3 xcode-select shim are deliberately not fallbacks.
+  if ! _mdm_initialize_system_python; then
+    mdm_log R3 "Apple署名済みCLT Pythonを信頼済み実体へ束縛できない"
+    if [[ "$_dry_run" == "true" ]]; then
+      exit "$MDM_EXIT_PREREQ"
+    fi
+    _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_PREREQ"
+  fi
+  # Homebrew failure receipts use only the already-private Python runtime.
+  # This ordering prevents a prerequisite failure from reopening the live CLT
+  # interpreter after its source validation phase has completed.
+  if [[ "$_euid" -eq 0 && "$_dry_run" != true ]]; then
+    local _prereq_rc=0 _brew_usable=false
     if _mdm_brew_usable_for_user "$_target_uid" "$_user" "$_home"; then
       _brew_usable=true
     fi
     case "$(mdm_prereq_plan "$_brew_usable")" in
-      fail) mdm_log R3 "前提不足かつ導入無効"; _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_PREREQ" ;;
+      fail)
+        mdm_log R3 "前提不足かつ導入無効"
+        _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_PREREQ" ;;
       bootstrap)
         _mdm_bootstrap_homebrew "$_user" || _prereq_rc=$?
         if [[ "$_prereq_rc" -ne 0 ]] \
-          || ! _mdm_brew_usable_for_user "$_target_uid" "$_user" "$_home"; then
+          || ! _mdm_brew_usable_for_user \
+            "$_target_uid" "$_user" "$_home"; then
           mdm_log R3 "Homebrew が対象ユーザーで利用可能にならない"
           _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_BREW"
         fi ;;
@@ -12397,6 +16697,11 @@ mdm_main() {
   _mdm_run_user_phase "$_euid" "$_user" "$_home" "$_target_uid" || _user_rc=$?
   _final_user_rc="$(_mdm_user_phase_exit_code "$_user_rc" "$_dry_run")"
   if [[ "$_dry_run" == "true" ]]; then
+    if [[ "$_final_user_rc" -eq 0 ]] \
+      && ! _mdm_system_python_cache_rebound; then
+      mdm_log R4 "dry-run終了時にCLT Python identityが変化"
+      _final_user_rc="$MDM_EXIT_PREREQ"
+    fi
     _mdm_cleanup_transient_checkouts
     if [[ "$_final_user_rc" -eq 0 ]]; then
       mdm_log R4 "dry-run 完了（receipt/compliance は不変）"
@@ -12444,6 +16749,22 @@ mdm_main() {
     "$_user" "$_home" "$_target_uid" "$_MDM_TARGET_GENERATED_UID"; then
     mdm_log R4 "成功レシート直前の再検証に失敗"
     _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_SETUP"
+  fi
+
+  if ! _mdm_system_python_cache_rebound_for_commit; then
+    # The guarded check publishes failure-only mode before restoring signal
+    # cleanup, so the failed private copy is unreachable on every exit path.
+    mdm_log R4 "成功レシート直前にCLT Python identityが変化"
+    # A fresh, fully sealed private copy is preferred for root-only rollback.
+    # Target-user rollback always revalidates the initialization-bound fixed
+    # CLT source. If recovery fails or is interrupted, the same source remains
+    # available to restore every transaction namespace and parent mode.
+    if ! _mdm_system_python_recover_after_rebound_failure; then
+      mdm_log R4 "CLT Pythonのfresh private再束縛に失敗"
+    fi
+    _mdm_transaction_abort || _mdm_transaction_mark_partial
+    _mdm_arm_transient_cleanup
+    _mdm_finish "$_user" "$_home" failure "$MDM_EXIT_PREREQ"
   fi
 
   # R4: 成功レシート

@@ -4,6 +4,10 @@
 # install-mdm.sh は main を末尾で条件実行する（BASH_SOURCE ガード）。source して関数だけ得る。
 # shellcheck source=mdm/install-mdm.sh
 MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
+_MDM_TEST_PYTHON_COMMAND="$(command -v python3)"
+MDM_SYSTEM_PYTHON_OVERRIDE="$("$_MDM_TEST_PYTHON_COMMAND" -I -B -c \
+  'import os, sys; print(os.path.realpath(sys.executable))')"
+export MDM_SYSTEM_PYTHON_OVERRIDE
 
 # ── 終了コード定数 ────────────────────────────────────────
 if [[ "$MDM_EXIT_CONFIG" == "50" && "$MDM_EXIT_USER" == "20" ]]; then
@@ -364,7 +368,7 @@ fi
       printf 'AWK_SCRIPT=%q\n' "$_ancestor_awk"
       printf 'MUTATION=%q\n' "$_mutation"
       printf '%s\n' \
-        '/usr/bin/awk -v mutation="$MUTATION" -f "$AWK_SCRIPT" | "$REAL_PYTHON" -I -B - "$4" "$5"'
+        '/usr/bin/awk -v mutation="$MUTATION" -f "$AWK_SCRIPT" | "$REAL_PYTHON" -I -B -S - "$5" "$6"'
     } > "$_wrapper"
     /bin/chmod 0755 "$_wrapper"
   }
@@ -871,6 +875,9 @@ rm -rf "$_tmpd"
         _MDM_CLAUDE_TRANSACTION_STATE=idle
         _MDM_PERSISTENT_TRANSACTION_STATE=idle
         _mdm_transaction_begin jane "$_home" "$_uid" "$_guid" || exit 92
+        # This receipt/outer-transaction fixture intentionally has no managed
+        # leaves outside the Claude and persistent trees.
+        _MDM_EXTERNAL_TRANSACTION_STATE=none
         _mdm_transaction_prepare_claude "$_home" "$_uid" || exit 93
         printf "transaction-candidate\n" \
           > "$_home/.claude/transaction-payload" || exit 93
@@ -919,7 +926,13 @@ rm -rf "$_tmpd"
             _MDM_PERSISTENT_CANDIDATE_DIGEST="$(_mdm_artifact_digest tree "$_install" "$_uid")"
             _MDM_PERSISTENT_PREVIOUS_IDENTITY=""
             _MDM_PERSISTENT_PREVIOUS_DIGEST=""
-            _MDM_PERSISTENT_TRANSACTION_STATE=created ;;
+            _MDM_PERSISTENT_TRANSACTION_STATE=created
+            # Managed-parent behavior has dedicated real journal tests below.
+            # Keep this fixture focused on the post-commit diagnostic boundary
+            # while the rest of _mdm_transaction_ready_to_commit stays real.
+            _MDM_PARENT_MODE_STATE=applied
+            _mdm_managed_parent_journal_trusted() { return 0; }
+            _mdm_managed_parent_modes_final() { return 0; } ;;
           *) exit 95 ;;
         esac
         if [[ "$MDM_FINISH_MODE" == stderr ]]; then
@@ -1001,7 +1014,7 @@ rm -rf "$_tmpd"
   _root_cfg="$_root_cfg_tmp/mdm-config.conf"
   chmod 700 "$_root_cfg_tmp"
   export MDM_CONFIG_SKIP_OWNER_CHECK=1
-  for _root_case in unknown malformed duplicate invalid-editor; do
+  for _root_case in unknown malformed duplicate invalid-editor invalid-policy; do
     case "$_root_case" in
       unknown)
         printf 'UNKNOWN_ROOT_KEY=true\n' > "$_root_cfg"
@@ -1015,6 +1028,9 @@ rm -rf "$_tmpd"
       invalid-editor)
         printf 'EDITOR_CHOICE=arbitrary\n' > "$_root_cfg"
         _root_label="invalid editor enum" ;;
+      invalid-policy)
+        printf 'KIT_MDM_EXPECTED_POLICY_SHA256=ABC123\n' > "$_root_cfg"
+        _root_label="invalid expected policy SHA-256" ;;
     esac
     chmod 600 "$_root_cfg"
     _root_rc=0
@@ -1053,8 +1069,8 @@ rm -rf "$_tmpd"
   _mdm_root_config_apply "$_defaults_tmp/no-config" >/dev/null 2>&1 \
     || fail "mdm-install: 省略設定の root parser が失敗"
   if [[ "$PROFILE" == standard && "$LANGUAGE" == en ]] \
-    && /usr/bin/env | grep -qx 'PROFILE=standard' \
-    && /usr/bin/env | grep -qx 'LANGUAGE=en'; then
+    && [[ "$(/usr/bin/printenv PROFILE)" == standard ]] \
+    && [[ "$(/usr/bin/printenv LANGUAGE)" == en ]]; then
     pass "mdm-install: root parser は省略 PROFILE/LANGUAGE を standard/en で export"
   else
     fail "mdm-install: root parser の省略 PROFILE/LANGUAGE が不正"
@@ -1141,6 +1157,18 @@ rm -rf "$_tmpd"
 
 # ── 対象ユーザー解決（モック）────────────────────────────
 # ── launcher は sticky bit と fd snapshot を platform 正しく扱う ──
+if [[ "$_MDM_LAUNCHER_SOURCE_CONTEXT" == 1 ]] \
+  && /usr/bin/awk '
+    /^_MDM_LAUNCHER_SOURCE_CONTEXT=0$/ { binding = NR }
+    /^_mdm_launcher_snapshot\(\)/ { snapshot = NR }
+    /_MDM_LAUNCHER_SOURCE_CONTEXT" == 1/ { gate = NR }
+    END { exit(binding && gate && snapshot && binding < snapshot && gate > binding ? 0 : 1) }
+  ' "$PROJECT_DIR/mdm/install-mdm.sh"; then
+  pass "mdm-install: test tmp overrideはsource済みlauncherだけに限定"
+else
+  fail "mdm-install: direct launcherがpre-clean test tmpを信頼し得る"
+fi
+
 (
   _launcher_tmp="$(mktemp -d)"
   _launcher_sticky="$_launcher_tmp/sticky"
@@ -1259,12 +1287,69 @@ rm -rf "$_tmpd"
 )
 (
   _launcher_sticky_base=/tmp
-  [[ -d /private/tmp && ! -L /private/tmp ]] && _launcher_sticky_base=/private/tmp
+  _mdm_is_darwin && _launcher_sticky_base=/private/tmp
   _launcher_mode="$(_mdm_launcher_stat_mode "$_launcher_sticky_base")"
-  if [[ "$_launcher_mode" == 1777 ]]; then
-    pass "mdm-install: launcher stat は sticky mode 1777 を保持"
+  if [[ "$_launcher_mode" == 1777 ]] \
+    && _mdm_launcher_tmp_base_trusted "$_launcher_sticky_base"; then
+    pass "mdm-install: launcher は root-owned sticky tmp chain を信頼"
   else
-    fail "mdm-install: launcher stat が sticky bit を欠落 (got $_launcher_mode)"
+    fail "mdm-install: launcher tmp chain 契約が不正 (got $_launcher_mode)"
+  fi
+)
+(
+  _launcher_sticky_base=/tmp
+  _mdm_is_darwin && _launcher_sticky_base=/private/tmp
+  _launcher_unsafe_marker="$(mktemp -d)/mktemp-called"
+  _mdm_launcher_stat_uid() { printf '0'; }
+  _mdm_launcher_stat_mode() {
+    if [[ "$1" == "$_launcher_sticky_base" ]]; then
+      printf '0777'
+    else
+      printf '0755'
+    fi
+  }
+  _mdm_launcher_acl_safe() { return 0; }
+  function /usr/bin/mktemp {
+    : > "$_launcher_unsafe_marker"
+    return 1
+  }
+  _launcher_copy=sentinel
+  if _mdm_launcher_snapshot \
+      "$PROJECT_DIR/mdm/install-mdm.sh" _launcher_copy \
+    || [[ -e "$_launcher_unsafe_marker" ]] \
+    || [[ -n "$_launcher_copy" ]]; then
+    fail "mdm-install: unsafe non-sticky tmp base を使用"
+  else
+    pass "mdm-install: unsafe tmp base を mktemp 前に拒否"
+  fi
+  rm -rf "${_launcher_unsafe_marker%/*}"
+)
+(
+  _launcher_sticky_base=/tmp
+  _mdm_is_darwin && _launcher_sticky_base=/private/tmp
+  _mdm_launcher_stat_uid() { printf '501'; }
+  if _mdm_launcher_tmp_base_trusted "$_launcher_sticky_base"; then
+    fail "mdm-install: non-root tmp base を信頼"
+  else
+    pass "mdm-install: tmp base の root owner を必須化"
+  fi
+)
+(
+  _launcher_sticky_base=/tmp
+  _mdm_is_darwin && _launcher_sticky_base=/private/tmp
+  _mdm_launcher_stat_uid() { printf '0'; }
+  _mdm_launcher_stat_mode() {
+    if [[ "$1" == "$_launcher_sticky_base" ]]; then
+      printf '1777'
+    else
+      printf '0755'
+    fi
+  }
+  _mdm_launcher_acl_safe() { return 1; }
+  if _mdm_launcher_tmp_base_trusted "$_launcher_sticky_base"; then
+    fail "mdm-install: ACL-bearing tmp chain を信頼"
+  else
+    pass "mdm-install: ACL-bearing tmp chain を拒否"
   fi
 )
 (
@@ -1343,8 +1428,7 @@ rm -rf "$_tmpd"
 # The trapped caller must collect the published privileged snapshot.
 (
   _launcher_tmp="$(mktemp -d)"
-  _launcher_signal_base=/tmp
-  _mdm_is_darwin && _launcher_signal_base=/private/tmp
+  _launcher_signal_base="$MDM_TEST_TMP_ROOT"
   _launcher_original_script="$_launcher_tmp/install-mdm.sh"
   _launcher_original_renderer="$_launcher_tmp/render-expected.py"
   printf '#!/bin/bash\nprintf installer\n' > "$_launcher_original_script"
@@ -1859,21 +1943,27 @@ rm -rf "$_tmpd"
   _head_tmp="$(builtin cd -P "$_head_tmp" && printf '%s' "$PWD")"
   mkdir -p "$_head_tmp/.git"
   _head_sha=0123456789abcdef0123456789abcdef01234567
+  _head_uid="$(/usr/bin/id -u)"
   printf '%s\n' "$_head_sha" > "$_head_tmp/.git/HEAD"
   if _mdm_detached_head_matches "$_head_tmp" "$_head_sha"; then
+    fail "mdm-install: detached HEAD の空 expected UID を受理"
+  else
+    pass "mdm-install: detached HEAD は expected UID 束縛を必須化"
+  fi
+  if _mdm_detached_head_matches "$_head_tmp" "$_head_sha" "$_head_uid"; then
     pass "mdm-install: fd-bound detached HEAD の full SHA を許可"
   else
     fail "mdm-install: 正常な detached HEAD を拒否"
   fi
   chmod 777 "$_head_tmp/.git"
-  if _mdm_detached_head_matches "$_head_tmp" "$_head_sha"; then
+  if _mdm_detached_head_matches "$_head_tmp" "$_head_sha" "$_head_uid"; then
     fail "mdm-install: writable .git directory を許可"
   else
     pass "mdm-install: detached HEAD の .git trust metadata を検証"
   fi
   chmod 755 "$_head_tmp/.git"
   printf 'ref: refs/heads/main\n' > "$_head_tmp/.git/HEAD"
-  if _mdm_detached_head_matches "$_head_tmp" "$_head_sha"; then
+  if _mdm_detached_head_matches "$_head_tmp" "$_head_sha" "$_head_uid"; then
     fail "mdm-install: symbolic HEAD を許可"
   else
     pass "mdm-install: symbolic/非41byte HEAD を拒否"
@@ -1881,7 +1971,7 @@ rm -rf "$_tmpd"
   rm -f "$_head_tmp/.git/HEAD"
   printf '%s\n' "$_head_sha" > "$_head_tmp/target"
   ln -s "$_head_tmp/target" "$_head_tmp/.git/HEAD"
-  if _mdm_detached_head_matches "$_head_tmp" "$_head_sha"; then
+  if _mdm_detached_head_matches "$_head_tmp" "$_head_sha" "$_head_uid"; then
     fail "mdm-install: symlink HEAD を許可"
   else
     pass "mdm-install: symlink HEAD を拒否"
@@ -1893,6 +1983,7 @@ rm -rf "$_tmpd"
     return 1
   }
   if _mdm_detached_head_matches "$_head_tmp" "$_head_sha" \
+    "$_head_uid" \
     >/dev/null 2>&1; then
     fail "mdm-install: .git identity 捕捉失敗を束縛スキップとして受理"
   else
@@ -1983,8 +2074,9 @@ if _mdm_is_darwin && [[ -x /usr/bin/python3 ]]; then
     : > "$_absence_spare/target"
     cat > "$_absence_wrapper" <<'WRAPPER'
 #!/bin/bash
-[[ "$#" -eq 6 && "$1" == -I && "$2" == -B && "$3" == -c ]] || exit 64
-exec /usr/bin/python3 -I -B -c '
+[[ "$#" -eq 7 && "$1" == -I && "$2" == -B && "$3" == -S \
+  && "$4" == -c ]] || exit 64
+exec /usr/bin/python3 -I -B -S -c '
 import os
 import sys
 import time
@@ -2015,7 +2107,7 @@ def controlled_open(path, flags, *args, **kwargs):
 
 os.open = controlled_open
 exec(compile(original_code, "<absence-helper>", "exec"))
-' "$5" "$6" "$4"
+' "$6" "$7" "$5"
 WRAPPER
     chmod 700 "$_absence_wrapper"
     _absence_python_saved="${_MDM_ABSENCE_PYTHON:-}"
@@ -2150,6 +2242,171 @@ EOF
     pass "mdm-install: standard dscl identity record の delimiter を除いて束縛"
   else
     fail "mdm-install: standard same-line UniqueID/GeneratedUID を拒否"
+  fi
+)
+(
+  _canonical_guid=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+  export MDM_CANONICAL_USER_OVERRIDE=Jane42
+  _mdm_bind_target_identity_tuple() {
+    [[ "$1" == Jane42 && "$2" == 501 ]] || return 1
+    printf '501\t%s' "$_canonical_guid"
+  }
+  mdm_validate_user_home() {
+    [[ "$1" == jane42 || "$1" == Jane42 ]] || return 1
+    printf '%s' /Users/Jane42
+  }
+  _canonical_user=""
+  if _mdm_bind_canonical_target_username _canonical_user jane42 501 \
+      "$_canonical_guid" && [[ "$_canonical_user" == Jane42 ]]; then
+    pass "mdm-install: UIDから得たcase-sensitive canonical short nameへ再束縛"
+  else
+    fail "mdm-install: requested spellingをcanonical short nameへ置換できない"
+  fi
+)
+(
+  _canonical_record="$(_mdm_parse_dscacheutil_user_for_uid 501 <<'EOF'
+name: Jane42
+password: ********
+uid: 501
+gid: 20
+dir: /Users/Jane42
+shell: /bin/zsh
+
+EOF
+)"
+  if [[ "$_canonical_record" == Jane42 ]]; then
+    pass "mdm-install: dscacheutilの単一name/uid recordを厳密解析"
+  else
+    fail "mdm-install: 正常なdscacheutil user recordを拒否"
+  fi
+)
+(
+  _dscache_bad_records=(
+    ''
+    $'name: Jane\nname: Other\nuid: 501\n'
+    $'name: Jane\nuid: 501\nuid: 501\n'
+    $'name: Jane\nuid: 501\n\nname: Other\nuid: 501\n'
+    $'uid: 501\n'
+    $'name: Jane\n'
+    $'name:\tJane\nuid: 501\n'
+    $'name:  Jane\nuid: 501\n'
+    $'name: Jane\001\nuid: 501\n'
+    $'name: Jane\r\nuid: 501\n'
+    $'name: Jane\nuid: 0501\n'
+    $'name: Jane\nuid: 502\n'
+  )
+  _dscache_bad_accepted=false
+  for _dscache_record in "${_dscache_bad_records[@]}"; do
+    if printf '%s' "$_dscache_record" \
+      | _mdm_parse_dscacheutil_user_for_uid 501 >/dev/null 2>&1; then
+      _dscache_bad_accepted=true
+    fi
+  done
+  [[ "$_dscache_bad_accepted" == false ]] \
+    && pass "mdm-install: dscacheutilの空/重複/複数/欠落/制御文字/不正UIDを拒否" \
+    || fail "mdm-install: malformed dscacheutil recordを受理"
+)
+(
+  unset MDM_CANONICAL_USER_OVERRIDE
+  _mdm_read_search_user_for_uid() {
+    [[ "$1" == 501 ]] || return 1
+    printf 'name: Jane42\nuid: 501\n'
+  }
+  _search_name="$(_mdm_search_policy_username_for_uid 501 2>/dev/null || true)"
+  _mdm_read_search_user_for_uid() {
+    printf 'name: Jane42\nuid: 501\n'
+    return 9
+  }
+  _producer_rc=0
+  _mdm_search_policy_username_for_uid 501 >/dev/null 2>&1 || _producer_rc=$?
+  if [[ "$_search_name" == Jane42 && "$_producer_rc" -ne 0 ]]; then
+    pass "mdm-install: UID属性検索でcanonical nameを解決しproducer非0を拒否"
+  else
+    fail "mdm-install: dscacheutil producerの成否を束縛できない"
+  fi
+)
+(
+  _requested_255="a$(printf '%254s' '' | /usr/bin/tr ' ' b)"
+  _requested_256="${_requested_255}c"
+  _canonical_32="a$(printf '%31s' '' | /usr/bin/tr ' ' b)"
+  _canonical_33="${_canonical_32}c"
+  KIT_MDM_TARGET_USER="$_requested_255"
+  _resolved_requested=""
+  if _mdm_requested_username_is_safe "$_requested_255" \
+    && ! _mdm_requested_username_is_safe "$_requested_256" \
+    && _mdm_requested_username_is_safe 'long.alias+mdm@example.test' \
+    && [[ "$(_mdm_root_value KIT_MDM_TARGET_USER "$_requested_255")" \
+      == "$_requested_255" ]] \
+    && ! _mdm_root_value KIT_MDM_TARGET_USER "$_requested_256" >/dev/null 2>&1 \
+    && _mdm_resolve_target_username _resolved_requested \
+    && [[ "$_resolved_requested" == "$_requested_255" ]] \
+    && _mdm_canonical_username_is_safe "$_canonical_32" \
+    && ! _mdm_canonical_username_is_safe "$_canonical_33" \
+    && ! _mdm_canonical_username_is_safe 'short+alias'; then
+    pass "mdm-install: requested 255/canonical 32の各username境界を分離"
+  else
+    fail "mdm-install: requested/canonical username長・grammar境界が不正"
+  fi
+)
+(
+  _unsafe_requested_accepted=false
+  for _unsafe_requested in 'bad/user' 'bad user' 'bad;user' 'bad:user' \
+    'bad$user' $'bad\tuser' $'bad\nuser' '.leading'; do
+    if _mdm_requested_username_is_safe "$_unsafe_requested"; then
+      _unsafe_requested_accepted=true
+    fi
+  done
+  [[ "$_unsafe_requested_accepted" == false ]] \
+    && pass "mdm-install: requested aliasのunsafe ASCII/control/path文字を拒否" \
+    || fail "mdm-install: unsafe requested aliasを受理"
+)
+(
+  _alias_guid=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+  _long_alias='this.is.a.long+appleid.alias@example.test'
+  export MDM_CANONICAL_USER_OVERRIDE=shortname
+  _mdm_bind_target_identity_tuple() {
+    [[ "$1" == shortname && "$2" == 501 ]] || return 1
+    printf '501\t%s' "$_alias_guid"
+  }
+  mdm_validate_user_home() {
+    case "$1" in "$_long_alias"|shortname) printf '%s' /Users/shortname ;; *) return 1 ;; esac
+  }
+  _alias_output=unchanged
+  if _mdm_bind_canonical_target_username _alias_output "$_long_alias" 501 \
+      "$_alias_guid" && [[ "$_alias_output" == shortname ]]; then
+    pass "mdm-install: 長いrequested aliasを同homeのcanonical short nameへ束縛"
+  else
+    fail "mdm-install: 有効な長aliasをcanonical short nameへ解決できない"
+  fi
+)
+(
+  _alias_guid=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+  export MDM_CANONICAL_USER_OVERRIDE=shortname
+  _mdm_bind_target_identity_tuple() { printf '501\t%s' "$_alias_guid"; }
+  mdm_validate_user_home() {
+    case "$1" in alias@example.test) printf '%s' /Users/alias ;; shortname) printf '%s' /Users/shortname ;; esac
+  }
+  _alias_output=unchanged
+  if ! _mdm_bind_canonical_target_username _alias_output alias@example.test 501 \
+      "$_alias_guid" && [[ "$_alias_output" == unchanged ]]; then
+    pass "mdm-install: alias/canonical home不一致をoutput非更新で拒否"
+  else
+    fail "mdm-install: 別homeのaliasをcanonical accountとして受理"
+  fi
+)
+(
+  _canonical_guid=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+  export MDM_CANONICAL_USER_OVERRIDE=Jane42
+  _mdm_bind_target_identity_tuple() {
+    [[ "$1" == Jane42 && "$2" == 501 ]] || return 1
+    printf '501\t%s' FFFFFFFF-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+  }
+  _canonical_user=unchanged
+  if ! _mdm_bind_canonical_target_username _canonical_user jane42 501 \
+      "$_canonical_guid" && [[ "$_canonical_user" == unchanged ]]; then
+    pass "mdm-install: canonical short nameのGeneratedUID不一致をfail-closed"
+  else
+    fail "mdm-install: canonical short nameを別account generationへ再束縛"
   fi
 )
 (
@@ -2321,7 +2578,7 @@ EOF
   _username_bad_accepted=false
   for _username_bad in .john john. john..smith @john john@ 'bad;user' \
     'john/smith' 'john smith' $'john\nsmith' 123456789012345678901234567890123; do
-    if _mdm_username_is_safe "$_username_bad"; then
+    if _mdm_canonical_username_is_safe "$_username_bad"; then
       _username_bad_accepted=true
     fi
   done
@@ -2557,6 +2814,813 @@ EOF
   fi
 )
 (
+  _python_fixture="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK="$_python_fixture/Library/Frameworks/Python3.framework"
+  _MDM_SYSTEM_PYTHON_SOURCE_LINK="$_python_fixture/usr/bin/python3"
+  /bin/mkdir -p "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin" \
+    "$_python_fixture/usr/bin"
+  printf '#!/bin/sh\nexit 0\n' \
+    > "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9"
+  /bin/chmod 0755 "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9"
+  /bin/ln -s python3.9 \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3"
+  /bin/ln -s ../../Library/Frameworks/Python3.framework/Versions/3.9/bin/python3 \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_LINK"
+  _mdm_system_python_dir_chain_trusted() { return 0; }
+  _mdm_system_python_link_trusted() {
+    local _fixture_target
+    _mdm_readlink_exact "$1" _fixture_target || return 1
+    printf -v "$2" '%s' "$1:$_fixture_target"
+  }
+  _resolved=""; _chain=""
+  _mdm_system_python_resolve_fixed_link _resolved _chain
+  _expected="$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9"
+  _positive_ok=false
+  [[ "$_resolved" == "$_expected" \
+    && "$(printf '%s' "$_chain" | /usr/bin/grep -c 'python3')" -eq 2 ]] \
+    && _positive_ok=true
+
+  /bin/rm -f "$_MDM_SYSTEM_PYTHON_SOURCE_LINK"
+  /bin/mkdir -p "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/current/bin"
+  printf '#!/bin/sh\nexit 0\n' \
+    > "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/current/bin/pythoncurrent"
+  /bin/chmod 0755 \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/current/bin/pythoncurrent"
+  /bin/ln -s ../../Library/Frameworks/Python3.framework/Versions/current/bin/pythoncurrent \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_LINK"
+  _nonnumeric_rejected=false
+  _mdm_system_python_resolve_fixed_link _resolved _chain >/dev/null 2>&1 \
+    || _nonnumeric_rejected=true
+
+  /bin/rm -f "$_MDM_SYSTEM_PYTHON_SOURCE_LINK"
+  /bin/mkdir -p "$_python_fixture/outside"
+  printf '#!/bin/sh\nexit 0\n' > "$_python_fixture/outside/python3"
+  /bin/chmod 0755 "$_python_fixture/outside/python3"
+  /bin/ln -s ../../outside/python3 "$_MDM_SYSTEM_PYTHON_SOURCE_LINK"
+  _escape_rejected=false
+  _mdm_system_python_resolve_fixed_link _resolved _chain >/dev/null 2>&1 \
+    || _escape_rejected=true
+  if [[ "$_positive_ok" == true && "$_nonnumeric_rejected" == true \
+    && "$_escape_rejected" == true ]]; then
+    pass "mdm-install: fixed CLT python3を2-hop解決しversion偽装/escapeを拒否"
+  else
+    fail "mdm-install: fixed CLT Python resolverのbounded/path契約が不正"
+  fi
+  /bin/rm -rf "$_python_fixture"
+)
+(
+  _python_meta="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK="$_python_meta/Python3.framework"
+  _python_binary="$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9"
+  /bin/mkdir -p "$(/usr/bin/dirname "$_python_binary")"
+  printf '#!/bin/sh\nexit 0\n' > "$_python_binary"
+  /bin/chmod 0755 "$_python_binary"
+  MDM_AUTH_OWNER_UID_OVERRIDE="$(/usr/bin/id -u)"
+  _mdm_system_python_dir_chain_trusted() { return 0; }
+  _identity=""; _metadata=""
+  _valid_metadata=false
+  _mdm_system_python_target_trusted "$_python_binary" _identity _metadata \
+    && _valid_metadata=true
+  /bin/chmod 0777 "$_python_binary"
+  _writable_rejected=false
+  _mdm_system_python_target_trusted "$_python_binary" _identity _metadata \
+    >/dev/null 2>&1 || _writable_rejected=true
+  /bin/chmod 0755 "$_python_binary"
+  /bin/ln "$_python_binary" "$_python_binary.hardlink"
+  _hardlink_allowed=false
+  _mdm_system_python_target_trusted "$_python_binary" _identity _metadata \
+    >/dev/null 2>&1 && _hardlink_allowed=true
+  /bin/rm -f "$_python_binary.hardlink"
+  /bin/ln -s python3.9 "$_python_binary.link"
+  _symlink_rejected=false
+  _mdm_system_python_target_trusted "$_python_binary.link" _identity _metadata \
+    >/dev/null 2>&1 || _symlink_rejected=true
+  if [[ "$_valid_metadata" == true && "$_writable_rejected" == true \
+    && "$_hardlink_allowed" == true && "$_symlink_rejected" == true ]]; then
+    pass "mdm-install: source CLT Pythonはhardlink DoSを許さずmode/symlinkを拒否"
+  else
+    fail "mdm-install: CLT Python実体のmetadata検証が不正"
+  fi
+  /bin/rm -rf "$_python_meta"
+)
+(
+  _override_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _override_bin="$_override_tmp/python"
+  printf '#!/bin/sh\nexit 0\n' > "$_override_bin"
+  /bin/chmod 0755 "$_override_bin"
+  MDM_SYSTEM_PYTHON_OVERRIDE="$_override_bin"
+  _override_valid="$(_mdm_source_test_system_python 2>/dev/null || true)"
+  /bin/ln -s "$_override_bin" "$_override_tmp/python-link"
+  MDM_SYSTEM_PYTHON_OVERRIDE="$_override_tmp/python-link"
+  _symlink_override_rejected=false
+  _mdm_source_test_system_python >/dev/null 2>&1 \
+    || _symlink_override_rejected=true
+  MDM_SYSTEM_PYTHON_OVERRIDE=relative/python
+  _relative_override_rejected=false
+  _mdm_source_test_system_python >/dev/null 2>&1 \
+    || _relative_override_rejected=true
+  /bin/chmod 0644 "$_override_bin"
+  MDM_SYSTEM_PYTHON_OVERRIDE="$_override_bin"
+  _nonexec_override_rejected=false
+  _mdm_source_test_system_python >/dev/null 2>&1 \
+    || _nonexec_override_rejected=true
+  if [[ "$_override_valid" == "$_override_bin" \
+    && "$_symlink_override_rejected" == true \
+    && "$_relative_override_rejected" == true \
+    && "$_nonexec_override_rejected" == true ]]; then
+    pass "mdm-install: source-only Python overrideはcanonical regular executable限定"
+  else
+    fail "mdm-install: source-only Python overrideがunsafe pathを受理"
+  fi
+  /bin/rm -rf "$_override_tmp"
+)
+(
+  _clt_present_impl="$(declare -f _mdm_clt_present)"
+  _python_validate_impl="$(declare -f _mdm_validate_system_python)"
+  _private_validate_impl="$(declare -f _mdm_validate_private_system_python)"
+  _python_tree_impl="$(declare -f _mdm_system_python_framework_tree_properties)"
+  _python_full_impl="$(declare -f _mdm_system_python_framework_full_spec)"
+  _python_copy_impl="$(declare -f _mdm_system_python_copy_tool)"
+  _python_rebind_impl="$(declare -f _mdm_system_python_cache_rebound)"
+  _python_accessor_impl="$(declare -f _mdm_system_python)"
+  _external_transaction_impl="$(declare -f _mdm_external_transaction_invoke)"
+  _target_calls="$(/usr/bin/grep -cF '$(_mdm_target_system_python)' \
+    "$PROJECT_DIR/mdm/install-mdm.sh")"
+  if [[ "$(_mdm_system_python_codesign_requirement)" \
+      == '=identifier "com.apple.python3" and anchor apple' \
+    && "$_clt_present_impl" != *xcode-select* \
+    && "$_python_validate_impl" == *'--verify --deep --strict -R'* \
+    && "$_python_validate_impl" == *'_mdm_system_python_resource_envelope_v2'* \
+    && "$_private_validate_impl" == *'--verify --deep --strict -R'* \
+    && "$_private_validate_impl" == *'_mdm_system_python_resource_envelope_v2'* \
+    && "$_python_tree_impl" == *'-flags +uchg'* \
+    && "$_python_full_impl" == *'nlink'* \
+    && "$_python_full_impl" == *'xattrsdigest'* \
+    && "$_python_copy_impl" == *'--noclone --rsrc --extattr --qtn --acl'* \
+    && "$_python_copy_impl" == *'--nopersistRootless'* \
+    && "$_python_rebind_impl" == *'_MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL'* \
+    && "$_python_accessor_impl" != *'_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK'* \
+    && "$_external_transaction_impl" == *'_mdm_target_system_python'* \
+    && "$_external_transaction_impl" == *'_mdm_system_python'* \
+    && "$_target_calls" -eq 4 ]]; then
+    pass "mdm-install: CLT Pythonは0700 private full-sealと4 user callsiteへ限定"
+  else
+    fail "mdm-install: CLT Pythonがshim/Xcode/self-selected署名へfallback"
+  fi
+)
+(
+  _envelope_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE="$_envelope_tmp/workspace"
+  _MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK="$_envelope_tmp/source/Python3.framework"
+  _MDM_SYSTEM_PYTHON_SOURCE_LINK="$_envelope_tmp/source/usr/bin/python3"
+  /bin/mkdir -p "$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE" \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" \
+    "$(/usr/bin/dirname "$_MDM_SYSTEM_PYTHON_SOURCE_LINK")"
+  _envelope_mode=v2
+  _mdm_system_python_codesign() {
+    if [[ "$1" == -dvv ]]; then
+      case "$_envelope_mode" in
+        v2) printf '%s\n' 'Sealed Resources version=2 rules=13 files=42' >&2 ;;
+        v1) printf '%s\n' 'Sealed Resources version=1 rules=13 files=42' >&2 ;;
+        missing) printf '%s\n' 'Executable=fixture' >&2 ;;
+        stdout) printf '%s\n' 'unexpected stdout'
+          printf '%s\n' 'Sealed Resources version=2 rules=13 files=42' >&2 ;;
+        failure) return 97 ;;
+      esac
+    fi
+  }
+  _v2_ok=false
+  _mdm_system_python_resource_envelope_v2 \
+    "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" && _v2_ok=true
+  _envelope_rejects=true
+  for _envelope_mode in v1 missing stdout failure; do
+    _mdm_system_python_resource_envelope_v2 \
+      "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK" >/dev/null 2>&1 \
+      && _envelope_rejects=false
+  done
+
+  _envelope_mode=v2
+  _mdm_system_python_dir_chain_trusted() { return 0; }
+  _mdm_auth_expected_uid() { /usr/bin/id -u; }
+  _mdm_stat_gid() { /usr/bin/id -g; }
+  _mdm_system_python_framework_tree_properties() { return 0; }
+  _mdm_system_python_dir_identity() { printf 'framework-identity'; }
+  _mdm_system_python_link_trusted() { printf -v "$2" '%s' link-identity; }
+  _dynamic_resolve_calls=0
+  _mdm_system_python_resolve_fixed_link() {
+    _dynamic_resolve_calls=$((_dynamic_resolve_calls + 1))
+    printf -v "$1" '%s' \
+      "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9"
+    printf -v "$2" '%s' resolution-identity
+  }
+  _mdm_system_python_target_trusted() {
+    printf -v "$2" '%s' target-identity
+    printf -v "$3" '%s' 0:1:0755
+  }
+  _dynamic_path=""; _dynamic_framework=""; _dynamic_target=""
+  _dynamic_ok=false
+  _mdm_validate_system_python _dynamic_path _dynamic_framework _dynamic_target \
+    && [[ "$_dynamic_path" == \
+      "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9" \
+      && "$_dynamic_framework" == framework-identity \
+      && "$_dynamic_target" == target-identity ]] && _dynamic_ok=true
+  if [[ "$_v2_ok" == true && "$_envelope_rejects" == true \
+    && "$_dynamic_ok" == true && "$_dynamic_resolve_calls" -eq 2 ]]; then
+    pass "mdm-install: resource envelope v2後にsource identityを再束縛"
+  else
+    fail "mdm-install: codesign envelopeまたはsource再束縛契約が不正"
+  fi
+  /bin/rm -rf "$_envelope_tmp"
+)
+(
+  _MDM_TEST_MODE=0
+  _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL=""
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK=/private/fixture/Python3.framework
+  _baseline_full_called=false
+  _mdm_system_python_private_identity_matches() { return 0; }
+  _mdm_system_python_runtime_uid() { printf '0'; }
+  _mdm_stat_uid() { printf '0'; }
+  _mdm_stat_gid() { printf '0'; }
+  _mdm_system_python_framework_tree_properties() { return 97; }
+  _mdm_system_python_framework_full_seal() {
+    _baseline_full_called=true
+    printf 'unexpected'
+  }
+  _baseline_rejected=false
+  _mdm_system_python_cache_baseline >/dev/null 2>&1 \
+    || _baseline_rejected=true
+
+  _private_validation_calls=0
+  _mdm_system_python_create_workspace() {
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE=/private/fixture/workspace
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY=workspace-identity
+  }
+  _mdm_validate_system_python() {
+    printf -v "$1" '%s' \
+      "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9"
+    printf -v "$2" '%s' source-framework-identity
+    printf -v "$3" '%s' source-target-identity
+  }
+  _mdm_system_python_copy_framework() { return 98; }
+  _mdm_validate_private_system_python() {
+    _private_validation_calls=$((_private_validation_calls + 1))
+  }
+  _copy_failure_rejected=false
+  _mdm_initialize_system_python >/dev/null 2>&1 \
+    || _copy_failure_rejected=true
+  if [[ "$_baseline_rejected" == true \
+    && "$_baseline_full_called" == false \
+    && "$_copy_failure_rejected" == true \
+    && "$_private_validation_calls" -eq 0 \
+    && -z "$_MDM_SYSTEM_PYTHON_TARGET_PATH" ]]; then
+    pass "mdm-install: self-test後property driftとcopy失敗を未publishで拒否"
+  else
+    fail "mdm-install: baseline/copy failureがunsafe runtimeを公開"
+  fi
+)
+(
+  _MDM_TEST_MODE=0
+  _init_failure_unpublished=true
+  for _init_failure_mode in self-test baseline; do
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE=""
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY=""
+    _mdm_clear_system_python_runtime_state
+    _MDM_FAILURE_ROLLBACK_ACTIVE=0
+    _MDM_FAILURE_ROLLBACK_SOURCE_PATH=""
+    _MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY=""
+    _MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY=""
+    _mdm_system_python_create_workspace() {
+      _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE=/private/fixture/workspace
+      _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY=workspace-identity
+    }
+    _mdm_validate_system_python() {
+      printf -v "$1" '%s' \
+        "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9"
+      printf -v "$2" '%s' source-framework-identity
+      printf -v "$3" '%s' source-target-identity
+    }
+    _mdm_system_python_copy_framework() { return 0; }
+    _mdm_validate_private_system_python() {
+      printf -v "$5" '%s' \
+        "$1/Versions/3.9/bin/python3.9"
+      printf -v "$6" '%s' private-framework-identity
+      printf -v "$7" '%s' private-target-identity
+    }
+    _mdm_system_python_private_self_test() {
+      [[ "$_init_failure_mode" != self-test ]]
+    }
+    _mdm_system_python_cache_baseline() {
+      [[ "$_init_failure_mode" != baseline ]] || return 98
+      _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL="$(printf '%064d' 0)"
+    }
+    _init_failure_rc=0
+    _mdm_initialize_system_python >/dev/null 2>&1 \
+      || _init_failure_rc=$?
+    _runtime_failure_rc=0
+    _mdm_system_python >/dev/null 2>&1 || _runtime_failure_rc=$?
+    _target_failure_rc=0
+    _mdm_target_system_python >/dev/null 2>&1 || _target_failure_rc=$?
+    if [[ "$_init_failure_rc" -eq 0 \
+      || "$_runtime_failure_rc" -eq 0 \
+      || "$_target_failure_rc" -eq 0 \
+      || -n "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+      || -n "$_MDM_SYSTEM_PYTHON_TARGET_PATH" \
+      || -n "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH" ]]; then
+      _init_failure_unpublished=false
+    fi
+  done
+  _MDM_TEST_MODE=1
+  _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE=""
+  _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY=""
+  _mdm_clear_system_python_runtime_state
+  _test_init_failure_rc=0
+  _mdm_initialize_system_python >/dev/null 2>&1 \
+    || _test_init_failure_rc=$?
+  if [[ "$_test_init_failure_rc" -eq 0 \
+    || -n "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+    || -n "$_MDM_SYSTEM_PYTHON_TARGET_PATH" ]]; then
+    _init_failure_unpublished=false
+  fi
+  if [[ "$_init_failure_unpublished" == true ]]; then
+    pass "mdm-install: Python self-test/baseline失敗時は全modeで未publish"
+  else
+    fail "mdm-install: Python初期化失敗後に未承認runtimeを参照可能"
+  fi
+)
+(
+  _MDM_TEST_MODE=0
+  _MDM_TRANSACTION_STATE=active
+  _MDM_FAILURE_ROLLBACK_ACTIVE=1
+  _MDM_FAILURE_ROLLBACK_SOURCE_PATH=/fixed/clt/python3
+  _MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY=source-framework
+  _MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY=source-target
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK=/private/old/Python3.framework
+  _MDM_SYSTEM_PYTHON_PRIVATE_PATH=/private/old/Python3.framework/Versions/3.9/bin/python3.9
+  _recovery_mode=success
+  _mdm_failure_rollback_source_python() { printf '%s' /fixed/clt/python3; }
+  _mdm_cleanup_system_python_workspace() {
+    _mdm_clear_system_python_runtime_state
+  }
+  _mdm_initialize_system_python() {
+    [[ "$_recovery_mode" == success ]] || return 97
+    _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK=/private/new/Python3.framework
+    _MDM_SYSTEM_PYTHON_PRIVATE_PATH=/private/new/Python3.framework/Versions/3.9/bin/python3.9
+  }
+  _mdm_system_python_cache_rebound() {
+    [[ "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" == /private/new/* ]]
+  }
+  _fresh_ok=false
+  _mdm_system_python_recover_after_rebound_failure \
+    && [[ "$(_mdm_system_python)" == /private/new/* ]] && _fresh_ok=true
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK=/private/old/Python3.framework
+  _MDM_SYSTEM_PYTHON_PRIVATE_PATH=/private/old/Python3.framework/Versions/3.9/bin/python3.9
+  _recovery_mode=failure
+  _fresh_failure_rejected=false
+  _mdm_system_python_recover_after_rebound_failure >/dev/null 2>&1 \
+    || _fresh_failure_rejected=true
+  _failure_fallback="$(_mdm_system_python 2>/dev/null || true)"
+  if [[ "$_fresh_ok" == true && "$_fresh_failure_rejected" == true \
+    && "$_failure_fallback" == /fixed/clt/python3 ]]; then
+    pass "mdm-install: rebound recoveryはfresh private優先・失敗時source fallback"
+  else
+    fail "mdm-install: rebound recoveryが旧privateを再利用またはfallback喪失"
+  fi
+)
+(
+  _fallback_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _fallback_log="$_fallback_tmp/validate.log"
+  _MDM_TEST_MODE=0
+  _MDM_TRANSACTION_STATE=active
+  _MDM_FAILURE_ROLLBACK_ACTIVE=1
+  _MDM_FAILURE_ROLLBACK_FRESH_PRIVATE=0
+  _MDM_FAILURE_ROLLBACK_SOURCE_PATH="$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK/Versions/3.9/bin/python3.9"
+  _MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY=source-framework
+  _MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY=source-target
+  _MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK=/private/old/Python3.framework
+  _MDM_SYSTEM_PYTHON_PRIVATE_PATH=/private/old/Python3.framework/Versions/3.9/bin/python3.9
+  _validation_mode=stable
+  _mdm_auth_tmp_base() { printf '%s' /private/tmp; }
+  _mdm_auth_base_trusted() { return 0; }
+  _mdm_validate_system_python() {
+    printf 'validate\n' >> "$_fallback_log"
+    printf -v "$1" '%s' "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH"
+    printf -v "$2" '%s' "$_MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY"
+    if [[ "$_validation_mode" == stable ]]; then
+      printf -v "$3" '%s' "$_MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY"
+    else
+      printf -v "$3" '%s' drifted-target
+    fi
+  }
+  _fallback_root="$(_mdm_system_python)"
+  _fallback_target="$(_mdm_target_system_python)"
+  _validation_mode=drift
+  _fallback_drift_rejected=false
+  _mdm_system_python >/dev/null 2>&1 || _fallback_drift_rejected=true
+  _fallback_calls="$(/usr/bin/wc -l < "$_fallback_log" | /usr/bin/tr -d ' ')"
+  _fallback_impl="$(declare -f _mdm_failure_rollback_source_python)"
+  if [[ "$_fallback_root" == "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH" \
+    && "$_fallback_target" == "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH" \
+    && "$_fallback_calls" -eq 3 && "$_fallback_drift_rejected" == true \
+    && "$_fallback_impl" == *'_mdm_validate_system_python'* \
+    && "$_fallback_impl" == *'_mdm_auth_base_trusted'* ]]; then
+    pass "mdm-install: failure-only sourceは各呼出しでfull再検証・identity再束縛"
+  else
+    fail "mdm-install: failure-only sourceの再検証または旧private遮断が不正"
+  fi
+  /bin/rm -rf "$_fallback_tmp"
+)
+(
+  _main_behavior_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+
+  # Exercise the production entry point while replacing only its external
+  # boundaries. The trace therefore proves mdm_main's real success/failure
+  # control flow instead of merely matching its function text.
+  _mdm_main_behavior_fixture() { # <success|rebound-failure> <trace>
+    local _main_mode="$1" _main_trace_file="$2"
+    local _main_home="$_main_behavior_tmp/home"
+    local _main_init_calls=0 _main_source_calls=0
+    /bin/mkdir -p "$_main_home"
+
+    _main_trace() { printf '%s\n' "$1" >> "$_main_trace_file"; }
+    _mdm_supported_macos_host() { return 0; }
+    _mdm_config_path() { printf '%s' /fixture/mdm-config.conf; }
+    _mdm_root_config_apply() { return 0; }
+    _mdm_apply_mdm_defaults() {
+      KIT_MDM_DRY_RUN=false
+      PROFILE=standard
+      LANGUAGE=en
+    }
+    _mdm_main_euid() { printf '%s' 0; }
+    _mdm_expected_policy_input_valid() { return 0; }
+    _mdm_resolve_target_username() { printf -v "$1" '%s' jane; }
+    _mdm_bind_target_identity_tuple() {
+      printf '501\tAAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+    }
+    _mdm_bind_canonical_target_username() {
+      printf -v "$1" '%s' jane
+    }
+    mdm_validate_user_home() { printf '%s' "$_main_home"; }
+    _mdm_user_shell() { printf '%s' /bin/zsh; }
+    _mdm_validate_semantic_config() { return 0; }
+    _mdm_acquire_run_lock() { return 0; }
+    _mdm_setup_log_file() {
+      MDM_LOG_FILE="$_main_behavior_tmp/mdm.log"
+      return 0
+    }
+    mdm_log() { :; }
+    _mdm_ensure_clt() { return 0; }
+    _mdm_brew_usable_for_user() { return 0; }
+    mdm_prereq_plan() { printf '%s' skip; }
+    _mdm_transaction_begin() {
+      _MDM_TRANSACTION_STATE=active
+      _main_trace transaction-begin
+    }
+    _mdm_run_user_phase() {
+      _main_trace user-phase
+      return 0
+    }
+    _mdm_revalidate_target_identity() {
+      _main_trace identity
+      return 0
+    }
+    _mdm_capture_postcondition() {
+      _main_trace postcondition
+      return 0
+    }
+    _mdm_attest_components() {
+      _main_trace attest
+      return 0
+    }
+    _mdm_persist_managed_history() {
+      _main_trace history
+      return 0
+    }
+    _mdm_revalidate_success_state() {
+      _main_trace revalidate
+      return 0
+    }
+    _mdm_initialize_system_python() {
+      _main_init_calls=$((_main_init_calls + 1))
+      if [[ "$_main_mode" == rebound-failure \
+        && "$_main_init_calls" -gt 1 ]]; then
+        _main_trace \
+          "fresh-recovery:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}"
+        return 97
+      fi
+      return 0
+    }
+    _mdm_system_python_cache_rebound() {
+      _main_trace "seal:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}"
+      [[ "$_main_mode" == success ]]
+    }
+    _mdm_arm_transient_signal_cleanup() {
+      _main_trace \
+        "signal-cleanup-rearm:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}:state=${_MDM_TRANSACTION_STATE:-idle}"
+    }
+    _mdm_failure_rollback_source_python() {
+      _main_source_calls=$((_main_source_calls + 1))
+      _main_trace \
+        "source-${_main_source_calls}:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}"
+      printf '%s' /fixed/clt/python3
+    }
+    _mdm_cleanup_system_python_workspace() {
+      _main_trace \
+        "recovery-clean:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}"
+      return 0
+    }
+    _mdm_transaction_abort() {
+      local _rollback_python=""
+      case "${_MDM_TRANSACTION_STATE:-idle}" in
+        active|partial)
+          _rollback_python="$(_mdm_system_python)" || return 1
+          _main_trace \
+            "abort:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}:python=$_rollback_python"
+          _MDM_TRANSACTION_STATE=aborted ;;
+        *) : ;;
+      esac
+      return 0
+    }
+    _mdm_transaction_mark_partial() { _MDM_TRANSACTION_STATE=partial; }
+    _mdm_arm_transient_cleanup() {
+      _main_trace \
+        "cleanup-rearm:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}:state=${_MDM_TRANSACTION_STATE:-idle}"
+    }
+    _mdm_receipt_dir_for() { printf '%s' "$_main_behavior_tmp/receipts"; }
+    mdm_receipt_prepare() {
+      _main_trace \
+        "finish:$2:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}:code=$3"
+      [[ "$2" == success && "$3" -eq 0 ]]
+    }
+    _mdm_receipt_prepared_ready() { return 0; }
+    _mdm_transaction_ready_to_commit() { return 0; }
+    _mdm_receipt_publish_prepared() {
+      _MDM_RECEIPT_PUBLISHED=1
+      return 0
+    }
+    _mdm_receipt_discard_prepared() { return 0; }
+    mdm_receipt_write() {
+      _main_trace \
+        "finish:$2:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}:code=$3"
+      return 0
+    }
+    _mdm_transaction_commit() {
+      _main_trace \
+        "commit:active=${_MDM_FAILURE_ROLLBACK_ACTIVE:-0}"
+      _MDM_TRANSACTION_STATE=committed
+    }
+
+    _MDM_TEST_MODE=1
+    _MDM_TRANSACTION_STATE=idle
+    _MDM_FAILURE_ROLLBACK_ACTIVE=0
+    _MDM_FAILURE_ROLLBACK_FRESH_PRIVATE=0
+    _MDM_RECEIPT_PUBLISHED=0
+    _MDM_SYSTEM_PYTHON_REBOUND_PENDING_SIGNAL=""
+    mdm_main
+  }
+
+  _main_success_trace="$_main_behavior_tmp/success.trace"
+  _main_success_expected="$_main_behavior_tmp/success.expected"
+  _main_success_rc=0
+  (_mdm_main_behavior_fixture success "$_main_success_trace") \
+    >/dev/null 2>&1 || _main_success_rc=$?
+  printf '%s\n' \
+    transaction-begin \
+    user-phase \
+    identity \
+    postcondition \
+    attest \
+    history \
+    revalidate \
+    'seal:active=1' \
+    'signal-cleanup-rearm:active=1:state=active' \
+    'finish:success:active=0:code=0' \
+    'commit:active=0' > "$_main_success_expected"
+  if [[ "$_main_success_rc" -eq 0 ]] \
+    && /usr/bin/cmp -s "$_main_success_expected" "$_main_success_trace"; then
+    pass "mdm-install: mdm_main successは全検証後にfallback解除・finish・commit"
+  else
+    fail "mdm-install: mdm_main successの実行順またはfallback状態が不正"
+  fi
+
+  _main_failure_trace="$_main_behavior_tmp/rebound-failure.trace"
+  _main_failure_expected="$_main_behavior_tmp/rebound-failure.expected"
+  _main_failure_rc=0
+  (_mdm_main_behavior_fixture rebound-failure "$_main_failure_trace") \
+    >/dev/null 2>&1 || _main_failure_rc=$?
+  printf '%s\n' \
+    transaction-begin \
+    user-phase \
+    identity \
+    postcondition \
+    attest \
+    history \
+    revalidate \
+    'seal:active=1' \
+    'signal-cleanup-rearm:active=1:state=active' \
+    'source-1:active=1' \
+    'recovery-clean:active=1' \
+    'fresh-recovery:active=1' \
+    'source-2:active=1' \
+    'abort:active=1:python=/fixed/clt/python3' \
+    'cleanup-rearm:active=1:state=aborted' \
+    "finish:failure:active=1:code=$MDM_EXIT_PREREQ" \
+    > "$_main_failure_expected"
+  if [[ "$_main_failure_rc" -eq "$MDM_EXIT_PREREQ" ]] \
+    && /usr/bin/cmp -s "$_main_failure_expected" "$_main_failure_trace"; then
+    pass "mdm-install: mdm_main final seal失敗はfresh失敗後もsourceでrollback"
+  else
+    fail "mdm-install: mdm_main rebound failureのfallback/rollback順序が不正"
+  fi
+  /bin/rm -rf "$_main_behavior_tmp"
+)
+(
+  _workspace_probe="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _MDM_TEST_MODE=1
+  export MDM_SYSTEM_PYTHON_TMP_BASE_OVERRIDE="$_workspace_probe"
+  _mdm_system_python_dir_identity() { return 97; }
+  _identity_rejected=false
+  _mdm_system_python_create_workspace >/dev/null 2>&1 \
+    || _identity_rejected=true
+  _identity_orphans="$(/usr/bin/find "$_workspace_probe" -maxdepth 1 \
+    -name 'claude-kit-mdm-python.*' -print -quit)"
+  if [[ "$_identity_rejected" == true && -z "$_identity_orphans" \
+    && -z "$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE" ]]; then
+    pass "mdm-install: workspace identity初回失敗もorphanなし"
+  else
+    fail "mdm-install: workspace identity初回失敗でorphan残留"
+  fi
+  /bin/rm -rf "$_workspace_probe"
+)
+(
+  _signal_probe="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _signal_rc=0
+  /bin/bash --noprofile --norc -c '
+    MDM_SOURCE_ONLY=1 source "$1"
+    _MDM_TEST_MODE=1
+    MDM_SYSTEM_PYTHON_TMP_BASE_OVERRIDE="$2"
+    _mdm_arm_transient_cleanup() {
+      /bin/kill -TERM "$$"
+      trap '\''_mdm_cleanup_transient_checkouts'\'' EXIT
+      trap '\''_mdm_cleanup_transient_checkouts HUP; exit 129'\'' HUP
+      trap '\''_mdm_cleanup_transient_checkouts INT; exit 130'\'' INT
+      trap '\''_mdm_cleanup_transient_checkouts TERM; exit 143'\'' TERM
+    }
+    _mdm_system_python_create_workspace
+    : > "$3"
+  ' mdm-python-signal "$PROJECT_DIR/mdm/install-mdm.sh" \
+    "$_signal_probe" "$_signal_probe/survived" >/dev/null 2>&1 \
+    || _signal_rc=$?
+  _signal_orphans="$(/usr/bin/find "$_signal_probe" -maxdepth 1 \
+    -name 'claude-kit-mdm-python.*' -print -quit)"
+  if [[ "$_signal_rc" -eq 143 && ! -e "$_signal_probe/survived" \
+    && -z "$_signal_orphans" ]]; then
+    pass "mdm-install: workspace pending TERMをtrap切替後に再配送"
+  else
+    fail "mdm-install: workspace pending TERMを飲み込み"
+  fi
+  /bin/rm -rf "$_signal_probe"
+)
+if _mdm_is_darwin; then
+  (
+    _tree_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE="$_tree_tmp/workspace"
+    _tree_framework="$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE/Python3.framework"
+    _tree_binary="$_tree_framework/Versions/3.9/bin/python3.9"
+    _tree_site="$_tree_framework/Versions/3.9/lib/python3.9/site-packages"
+    /bin/mkdir -p "$(/usr/bin/dirname "$_tree_binary")" "$_tree_site"
+    /bin/chmod 0700 "$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE"
+    printf '#!/bin/sh\nexit 0\n' > "$_tree_binary"
+    printf 'fixture\n' > "$_tree_site/module.py"
+    /bin/chmod 0755 "$_tree_binary"
+    /bin/ln -s Versions/3.9/bin/python3.9 \
+      "$_tree_framework/Python3"
+    _tree_uid="$(/usr/bin/id -u)"
+    _tree_gid="$(_mdm_stat_gid "$_tree_framework")"
+    _tree_positive=false
+    _mdm_system_python_framework_tree_properties \
+      "$_tree_framework" "$_tree_uid" "$_tree_gid" true \
+      && _tree_positive=true
+    _tree_seal_before="$(_mdm_system_python_framework_full_seal \
+      "$_tree_framework")"
+    /bin/chmod 0777 "$_tree_site"
+    _tree_writable_rejected=false
+    _mdm_system_python_framework_tree_properties \
+      "$_tree_framework" "$_tree_uid" "$_tree_gid" true >/dev/null 2>&1 \
+      || _tree_writable_rejected=true
+    /bin/chmod 0755 "$_tree_site"
+    /bin/rm -f "$_tree_framework/Python3"
+    printf 'outside\n' > "$_tree_tmp/outside"
+    /bin/ln -s "$_tree_tmp/outside" "$_tree_framework/Python3"
+    _tree_escape_rejected=false
+    _mdm_system_python_framework_tree_properties \
+      "$_tree_framework" "$_tree_uid" "$_tree_gid" true >/dev/null 2>&1 \
+      || _tree_escape_rejected=true
+    /bin/rm -f "$_tree_framework/Python3"
+    /bin/ln -s Versions/3.9/bin/python3.9 \
+      "$_tree_framework/Python3"
+    _tree_seal_same="$(_mdm_system_python_framework_full_seal \
+      "$_tree_framework")"
+    printf 'mutated\n' >> "$_tree_site/module.py"
+    _tree_seal_after="$(_mdm_system_python_framework_full_seal \
+      "$_tree_framework")"
+    _tree_seal_drift=false
+    [[ "$_tree_seal_same" == "$_tree_seal_before" \
+      && "$_tree_seal_after" != "$_tree_seal_before" ]] \
+      && _tree_seal_drift=true
+    _tree_acl_available=false; _tree_acl_rejected=false
+    if /bin/chmod +a 'everyone deny write' "$_tree_site/module.py" 2>/dev/null; then
+      _tree_acl_available=true
+      _mdm_system_python_framework_tree_properties \
+        "$_tree_framework" "$_tree_uid" "$_tree_gid" true >/dev/null 2>&1 \
+        || _tree_acl_rejected=true
+      /bin/chmod -N "$_tree_site/module.py" 2>/dev/null || true
+    fi
+    _tree_flags_available=false; _tree_flags_rejected=false
+    if /usr/bin/chflags uchg,hidden "$_tree_site/module.py" 2>/dev/null; then
+      _tree_flags_available=true
+      _mdm_system_python_framework_tree_properties \
+        "$_tree_framework" "$_tree_uid" "$_tree_gid" true >/dev/null 2>&1 \
+        || _tree_flags_rejected=true
+      /usr/bin/chflags nouchg,nohidden "$_tree_site/module.py" 2>/dev/null || true
+    fi
+    if [[ "$_tree_positive" == true && "$_tree_writable_rejected" == true \
+      && "$_tree_escape_rejected" == true \
+      && "$_tree_seal_drift" == true ]]; then
+      pass "mdm-install: CLT framework全treeのtrustとsymlink sealを強制"
+    else
+      fail "mdm-install: CLT framework全treeのtrust検査が不正"
+    fi
+    if [[ "$_tree_acl_available" == true && "$_tree_acl_rejected" == true ]]; then
+      pass "mdm-install: CLT framework内ACLを拒否"
+    elif [[ "$_tree_acl_available" == false ]]; then
+      skip "mdm-install: CLT framework内ACLを拒否" "ACL fixture unavailable"
+    else
+      fail "mdm-install: CLT framework内ACLを受理"
+    fi
+    if [[ "$_tree_flags_available" == true \
+      && "$_tree_flags_rejected" == true ]]; then
+      pass "mdm-install: CLT framework内の複合immutable flagsを拒否"
+    elif [[ "$_tree_flags_available" == false ]]; then
+      skip "mdm-install: CLT framework内の複合immutable flagsを拒否" \
+        "chflags fixture unavailable"
+    else
+      fail "mdm-install: CLT framework内の複合immutable flagsを受理"
+    fi
+    /bin/rm -rf "$_tree_tmp"
+  )
+  (
+    _MDM_TEST_MODE=0
+    MDM_SYSTEM_PYTHON_TMP_BASE_OVERRIDE="${MDM_TEST_TMP_ROOT:-}"
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE=""
+    _MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE_IDENTITY=""
+    _mdm_clear_system_python_runtime_state
+    _real_init=false
+    _mdm_initialize_system_python && _real_init=true
+    _real_python="$_MDM_SYSTEM_PYTHON_PRIVATE_PATH"
+    _real_framework="$_MDM_SYSTEM_PYTHON_PRIVATE_FRAMEWORK"
+    _real_workspace="$_MDM_SYSTEM_PYTHON_PRIVATE_WORKSPACE"
+    _real_seal="$_MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL"
+    _target_python="$(_mdm_target_system_python 2>/dev/null || true)"
+    _mdm_system_python_codesign() { return 97; }
+    _cached_python="$(_mdm_system_python 2>/dev/null || true)"
+    _rebound_ok=false
+    _mdm_system_python_cache_rebound && _rebound_ok=true
+    _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL="$(printf '0%.0s' {1..64})"
+    _drift_rejected=false
+    _mdm_system_python_cache_rebound >/dev/null 2>&1 || _drift_rejected=true
+    _MDM_SYSTEM_PYTHON_PRIVATE_FULL_SEAL="$_real_seal"
+    _exec_ok=false
+    [[ -n "$_real_python" ]] \
+      && "$_real_python" -I -B -S -c 'raise SystemExit(0)' && _exec_ok=true
+    case "$_real_python" in
+      "$_real_framework"/Versions/*/bin/python*) _shape_ok=true ;;
+      *) _shape_ok=false ;;
+    esac
+    _mode_ok=false
+    [[ "$(_mdm_launcher_stat_mode "$_real_workspace")" == 0700 ]] \
+      && _mode_ok=true
+    _mdm_cleanup_system_python_workspace
+    _cleanup_ok=false
+    [[ ! -e "$_real_workspace" \
+      && -z "$_MDM_SYSTEM_PYTHON_PRIVATE_PATH" \
+      && -z "$_MDM_SYSTEM_PYTHON_TARGET_PATH" ]] && _cleanup_ok=true
+    if [[ "$_real_init" == true && "$_cached_python" == "$_real_python" \
+      && "$_rebound_ok" == true && "$_drift_rejected" == true \
+      && "$_exec_ok" == true && "$_shape_ok" == true \
+      && "$_mode_ok" == true && "$_cleanup_ok" == true \
+      && "$_target_python" == "$_MDM_SYSTEM_PYTHON_SOURCE_FRAMEWORK"/* \
+      && "$_real_python" != "$_target_python" \
+      && "${#_real_seal}" -eq 64 ]]; then
+      pass "mdm-install: 実CLT Pythonを0700 private sealへ固定しcleanup"
+    else
+      fail "mdm-install: 実CLT Pythonの署名/path/cache再束縛に失敗"
+    fi
+  )
+else
+  skip "mdm-install: 実CLT Pythonを署名検証しcache越し再束縛で直接実行" \
+    "macOS CLT only"
+fi
+(
   _clt_tmpd="$(mktemp -d)"
   export MDM_CLT_MARKER_OVERRIDE="$_clt_tmpd/marker"
   export KIT_MDM_ALLOW_CLT_SOFTWAREUPDATE=true
@@ -2760,6 +3824,7 @@ EOF
   _MDM_EXPECTED_RENDERER="$_validation_renderer"
   _MDM_EXPECTED_RENDERER_SNAPSHOT=0
   _MDM_AUTH_CHECKOUT="$_validation_timeout_tmp/checkout"
+  KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   /bin/mkdir "$_MDM_AUTH_CHECKOUT"
   _validation_started=$SECONDS
   _validation_renderer_rc=0
@@ -3005,12 +4070,16 @@ EOF
   _node_tmp="$(builtin cd -P -- "$(mktemp -d)" && printf '%s' "$PWD")"
   export MDM_NODE_RUNTIME_ROOT_OVERRIDE="$_node_tmp/runtime"
   export MDM_NODE_ARCH_OVERRIDE=x64
-  MDM_NODE_OWNER_UID_OVERRIDE="$(/usr/bin/id -u)"
-  MDM_NODE_OWNER_GID_OVERRIDE="$(/usr/bin/id -g)"
-  export MDM_NODE_OWNER_UID_OVERRIDE MDM_NODE_OWNER_GID_OVERRIDE
   export MDM_CONFIG_SKIP_OWNER_CHECK=1
   _node_root="$(_mdm_node_runtime_path)"
   mkdir -p "$_node_root/bin" "$_node_root/lib/node_modules/npm/bin"
+  # macOS inherits a new entry's group from its parent.  The formal runner
+  # anchors TMPDIR below root:wheel /private/tmp, so id -g is not necessarily
+  # the fixture tree's actual group.  Bind the trust expectation to the tree
+  # we just created before adding files or the provenance marker.
+  MDM_NODE_OWNER_UID_OVERRIDE="$(_mdm_stat_uid "$_node_root")"
+  MDM_NODE_OWNER_GID_OVERRIDE="$(_mdm_stat_gid "$_node_root")"
+  export MDM_NODE_OWNER_UID_OVERRIDE MDM_NODE_OWNER_GID_OVERRIDE
   chmod 755 "$_node_tmp" "$_node_tmp/runtime" "$_node_root" \
     "$_node_root/bin" "$_node_root/lib" "$_node_root/lib/node_modules" \
     "$_node_root/lib/node_modules/npm" "$_node_root/lib/node_modules/npm/bin"
@@ -3978,6 +5047,7 @@ PY
   _mdm_exec_as_user() { return "$MDM_EXIT_PREREQ"; }
   mdm_log() { printf '%s\n' "$*" >> "$_phase_tmp/wrapper.log"; }
   export KIT_MDM_DRY_RUN=true KIT_MDM_GIT_REF=main KIT_MDM_INSTALL_CLAUDE_CLI=false
+  export KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   _phase_rc=0
   _mdm_run_root_user_phase "$_phase_user" "$_phase_tmp/home" 501 \
     >/dev/null 2>&1 || _phase_rc=$?
@@ -4333,6 +5403,7 @@ fi
 # ── KIT_MDM_INSTALL_DIR は対象ユーザーの canonical home 配下に制約 ──
 _tmpd="$(mktemp -d)"; _tmpd="$(cd "$_tmpd" && pwd -P)"
 _fakehome="$_tmpd/Users/jane"; mkdir -p "$_fakehome"
+export KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 (
   export KIT_MDM_INSTALL_DIR="$_tmpd/outside-home"
   export MDM_KIT_REPO_URL_OVERRIDE="$_tmpd/no-such-repo"
@@ -4365,6 +5436,7 @@ _fakehome="$_tmpd/Users/jane"; mkdir -p "$_fakehome"
     || fail "mdm-install: home 自体の install_dir を拒否すべき (got $_rc)"
 )
 rm -rf "$_tmpd"
+unset KIT_MDM_EXPECTED_POLICY_SHA256
 
 # ── Homebrew pkg URL 解決（GitHub API レスポンスのモック。jq 非依存 grep/sed）──
 _brew_tmpd="$(mktemp -d)"
@@ -5130,6 +6202,123 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
     fi
   fi
   rm -rf "$_artifact_tmp"
+)
+
+# ~/.claude の copy-equivalence は directory allocation metadata を無視し、
+# user-visible な bytes/link/mode/ACL/xattr を fd-bound capture で比較する。
+(
+  _copy_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _copy_source="$_copy_tmp/source"
+  _copy_candidate="$_copy_tmp/candidate"
+  mkdir -m 700 "$_copy_source" "$_copy_source/nested" "$_copy_candidate"
+  printf 'user-content\n' > "$_copy_source/nested/user-file"
+  printf 'other-content\n' > "$_copy_source/nested/other-file"
+  chmod 600 "$_copy_source/nested/user-file" \
+    "$_copy_source/nested/other-file"
+  ln -s nested/user-file "$_copy_source/user-link"
+  _copy_xattr_supported=false
+  if _mdm_is_darwin && /usr/bin/xattr -w com.cloudnative.mdm-copy-test \
+      original "$_copy_source/nested/user-file" 2>/dev/null; then
+    _copy_xattr_supported=true
+  fi
+  cp -a "$_copy_source/." "$_copy_candidate/"
+  chmod 700 "$_copy_candidate"
+  _copy_source_digest="$(_mdm_copy_semantics_digest "$_copy_source" \
+    2>/dev/null || true)"
+  _copy_candidate_digest="$(_mdm_copy_semantics_digest "$_copy_candidate" \
+    2>/dev/null || true)"
+  if [[ "$_copy_source_digest" =~ ^[0-9a-f]{64}$ \
+    && "$_copy_candidate_digest" == "$_copy_source_digest" \
+    && -f "$_copy_candidate/nested/user-file" \
+    && "$(/usr/bin/readlink "$_copy_candidate/user-link")" \
+      == nested/user-file ]]; then
+    pass "mdm-install: copy semantics は正常な cp -a の nested file/symlink を同値判定"
+  else
+    fail "mdm-install: copy semantics が正常な cp -a を拒否"
+  fi
+  _copy_artifact_digest="$(_mdm_artifact_digest tree "$_copy_source" \
+    2>/dev/null || true)"
+  _copy_combined="$(_mdm_artifact_copy_semantics_digests "$_copy_source" \
+    2>/dev/null || true)"
+  if [[ "$_copy_combined" =~ ^[0-9a-f]{64}:[0-9a-f]{64}$ \
+    && "${_copy_combined%%:*}" == "$_copy_artifact_digest" \
+    && "${_copy_combined#*:}" == "$_copy_source_digest" ]]; then
+    pass "mdm-install: artifact/copy digest は同じ double capture から同値に算出"
+  else
+    fail "mdm-install: artifact/copy combined digest 契約が不正"
+  fi
+
+  rm -f "$_copy_candidate/nested/user-file"
+  _copy_missing="$(_mdm_copy_semantics_digest "$_copy_candidate" \
+    2>/dev/null || true)"
+  [[ "$_copy_missing" != "$_copy_source_digest" ]] \
+    && pass "mdm-install: copy semantics は nested user file 欠落を検出" \
+    || fail "mdm-install: copy semantics が nested user file 欠落を見逃す"
+
+  rm -rf "$_copy_candidate"
+  mkdir -m 700 "$_copy_candidate"
+  cp -a "$_copy_source/." "$_copy_candidate/"
+  chmod 700 "$_copy_candidate"
+  rm -f "$_copy_candidate/user-link"
+  ln -s nested/other-file "$_copy_candidate/user-link"
+  _copy_link_changed="$(_mdm_copy_semantics_digest "$_copy_candidate" \
+    2>/dev/null || true)"
+  [[ "$_copy_link_changed" =~ ^[0-9a-f]{64}$ \
+    && "$_copy_link_changed" != "$_copy_source_digest" ]] \
+    && pass "mdm-install: copy semantics は symlink target 不一致を検出" \
+    || fail "mdm-install: copy semantics が symlink target 不一致を見逃す"
+
+  rm -f "$_copy_candidate/user-link"
+  ln -s nested/user-file "$_copy_candidate/user-link"
+  chmod 400 "$_copy_candidate/nested/user-file"
+  _copy_mode_changed="$(_mdm_copy_semantics_digest "$_copy_candidate" \
+    2>/dev/null || true)"
+  [[ "$_copy_mode_changed" =~ ^[0-9a-f]{64}$ \
+    && "$_copy_mode_changed" != "$_copy_source_digest" ]] \
+    && pass "mdm-install: copy semantics は mode 不一致を検出" \
+    || fail "mdm-install: copy semantics が mode 不一致を見逃す"
+
+  if [[ "$_copy_xattr_supported" == true ]]; then
+    chmod 600 "$_copy_candidate/nested/user-file"
+    /usr/bin/xattr -w com.cloudnative.mdm-copy-test changed \
+      "$_copy_candidate/nested/user-file"
+    _copy_xattr_changed="$(_mdm_copy_semantics_digest "$_copy_candidate" \
+      2>/dev/null || true)"
+    [[ "$_copy_xattr_changed" =~ ^[0-9a-f]{64}$ \
+      && "$_copy_xattr_changed" != "$_copy_source_digest" ]] \
+      && pass "mdm-install: copy semantics は Darwin xattr 不一致を検出" \
+      || fail "mdm-install: copy semantics が Darwin xattr 不一致を見逃す"
+  else
+    skip "mdm-install: copy semantics Darwin xattr" \
+      "fixture filesystem does not support xattr"
+  fi
+  if _mdm_is_darwin && /bin/chmod +a 'everyone deny write' \
+      "$_copy_source/nested/user-file" 2>/dev/null; then
+    rm -rf "$_copy_candidate"
+    mkdir -m 700 "$_copy_candidate"
+    cp -a "$_copy_source/." "$_copy_candidate/"
+    chmod 700 "$_copy_candidate"
+    _copy_acl_source="$(_mdm_copy_semantics_digest "$_copy_source" \
+      2>/dev/null || true)"
+    _copy_acl_preserved="$(_mdm_copy_semantics_digest "$_copy_candidate" \
+      2>/dev/null || true)"
+    /bin/chmod -N "$_copy_candidate/nested/user-file"
+    _copy_acl_removed="$(_mdm_copy_semantics_digest "$_copy_candidate" \
+      2>/dev/null || true)"
+    if [[ "$_copy_acl_source" =~ ^[0-9a-f]{64}$ \
+      && "$_copy_acl_preserved" == "$_copy_acl_source" \
+      && "$_copy_acl_removed" =~ ^[0-9a-f]{64}$ \
+      && "$_copy_acl_removed" != "$_copy_acl_source" ]]; then
+      pass "mdm-install: copy semantics は Darwin ACL 保持と不一致を検出"
+    else
+      fail "mdm-install: copy semantics の Darwin ACL 比較が不正"
+    fi
+    /bin/chmod -N "$_copy_source/nested/user-file"
+  else
+    skip "mdm-install: copy semantics Darwin ACL" \
+      "fixture filesystem does not support ACL"
+  fi
+  rm -rf "$_copy_tmp"
 )
 
 # Tree capture は pathname の再解決ではなく、root directory fd からの
@@ -6095,6 +7284,31 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   rm -rf "$_access_tmp"
 )
 
+# The effective target-user probe is an execution boundary. Rebind canonical
+# path, owner, mode, ACL, and inode after it instead of trusting pre-probe data.
+(
+  _rebind_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _rebind_dir="$_rebind_tmp/target"
+  _rebind_uid="$(/usr/bin/id -u)"
+  _rebind_user="$(/usr/bin/id -un)"
+  /bin/mkdir -m 0755 "$_rebind_dir"
+  _mdm_component_effective_test() {
+    /bin/chmod 0777 "$_rebind_dir"
+    return 0
+  }
+  _rebind_rc=0
+  _mdm_component_target_dir_accessible \
+    "$_rebind_dir" "$_rebind_uid" "$_rebind_user" "$_rebind_tmp" \
+    >/dev/null 2>&1 || _rebind_rc=$?
+  if [[ "$_rebind_rc" -ne 0 ]]; then
+    pass "mdm-install: component target dirはeffective probe後に全metadataを再束縛"
+  else
+    fail "mdm-install: component target dirがprobe後mode driftを受理"
+  fi
+  /bin/chmod 0700 "$_rebind_dir"
+  /bin/rm -rf "$_rebind_tmp"
+)
+
 # User-owned directory ACLs are authority, not merely effective-access hints.
 # Each ancestor permits no ACL or the platform's exact non-inheriting
 # deny-delete ACE; mutating, inheritable, or multiple ACEs fail closed.
@@ -6689,6 +7903,7 @@ MD
   export MDM_AUTH_READONLY_OWNER_TEST=1
   export MDM_KIT_REPO_URL_OVERRIDE="$_auth_repo"
   export KIT_MDM_GIT_REF="$_auth_sha"
+  export KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   export KIT_MDM_INSTALL_CLAUDE_CLI=false
   export KIT_MDM_DRY_RUN=false
   unset KIT_MDM_INSTALL_DIR
@@ -6705,6 +7920,7 @@ MD
     && [[ "$(cat "$_auth_home/root-authority-language")" == en ]] \
     && [[ ! -e "${_auth_path%/setup.sh}" && -z "$_MDM_AUTH_CHECKOUT" ]] \
     && _mdm_detached_head_matches "$_auth_persistent" "$_auth_sha" \
+      "$_auth_uid" \
     && _mdm_persistent_marker_trusted "$_auth_persistent" "$_auth_uid"; then
     pass "mdm-install: root は private authoritative setup のみを対象ユーザー実行"
     pass "mdm-install: target user は authoritative tree に書込不能、Git read は成功"
@@ -6779,6 +7995,7 @@ MD
   mkdir -p "$_marker_home/.claude-starter-kit"
   printf 'preserve\n' > "$_marker_home/.claude-starter-kit/user-data"
   export KIT_MDM_DRY_RUN=false KIT_MDM_GIT_REF=0123456789abcdef0123456789abcdef01234567
+  export KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   unset KIT_MDM_INSTALL_DIR
   _marker_rc=0
   _mdm_run_user_phase 0 "$(/usr/bin/id -un)" "$_marker_home" \
@@ -7002,13 +8219,144 @@ MD
   fi
 )
 
+# Every production execution is semantically invalid without a predeployed
+# desired-policy binding, including a non-mutating preview.
+(
+  _policy_semantic_tmp="$(mktemp -d)"
+  _policy_semantic_home="$_policy_semantic_tmp/home"
+  _policy_semantic_sha=0123456789abcdef0123456789abcdef01234567
+  _policy_semantic_hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  /bin/mkdir -p "$_policy_semantic_home"
+  _MDM_TEST_MODE=0
+  unset KIT_MDM_INSTALL_DIR KIT_MDM_LOG_DIR KIT_MDM_EXPECTED_POLICY_SHA256
+
+  _missing_rc=0
+  KIT_MDM_GIT_REF="$_policy_semantic_sha" KIT_MDM_DRY_RUN=false \
+    _mdm_validate_semantic_config 0 "$_policy_semantic_home" 501 false \
+      >/dev/null 2>&1 || _missing_rc=$?
+  _invalid_rc=0
+  KIT_MDM_GIT_REF="$_policy_semantic_sha" KIT_MDM_DRY_RUN=false \
+    KIT_MDM_EXPECTED_POLICY_SHA256=ABC123 \
+    _mdm_validate_semantic_config 0 "$_policy_semantic_home" 501 false \
+      >/dev/null 2>&1 || _invalid_rc=$?
+  _valid_rc=0
+  KIT_MDM_GIT_REF="$_policy_semantic_sha" KIT_MDM_DRY_RUN=false \
+    KIT_MDM_EXPECTED_POLICY_SHA256="$_policy_semantic_hash" \
+    _mdm_validate_semantic_config 0 "$_policy_semantic_home" 501 false \
+      >/dev/null 2>&1 || _valid_rc=$?
+  _preview_missing_rc=0
+  KIT_MDM_GIT_REF="$_policy_semantic_sha" KIT_MDM_DRY_RUN=true \
+    _mdm_validate_semantic_config 0 "$_policy_semantic_home" 501 true \
+      >/dev/null 2>&1 || _preview_missing_rc=$?
+  _preview_valid_rc=0
+  KIT_MDM_GIT_REF="$_policy_semantic_sha" KIT_MDM_DRY_RUN=true \
+    KIT_MDM_EXPECTED_POLICY_SHA256="$_policy_semantic_hash" \
+    _mdm_validate_semantic_config 0 "$_policy_semantic_home" 501 true \
+      >/dev/null 2>&1 || _preview_valid_rc=$?
+
+  if [[ "$_missing_rc" -eq "$MDM_EXIT_CONFIG" \
+    && "$_invalid_rc" -eq "$MDM_EXIT_CONFIG" && "$_valid_rc" -eq 0 \
+    && "$_preview_missing_rc" -eq "$MDM_EXIT_CONFIG" \
+    && "$_preview_valid_rc" -eq 0 ]]; then
+    pass "mdm-install: remediation/dry-run の policy binding入力を厳密検証"
+  else
+    fail "mdm-install: expected policy のsemantic検証が不正 (missing=$_missing_rc invalid=$_invalid_rc valid=$_valid_rc preview-missing=$_preview_missing_rc preview-valid=$_preview_valid_rc)"
+  fi
+  /bin/rm -rf "$_policy_semantic_tmp"
+)
+(
+  _policy_precedence_tmp="$(mktemp -d)"
+  _MDM_TEST_MODE=1
+  MDM_EUID_OVERRIDE=0
+  MDM_SYSTEM_RCPT_DIR_OVERRIDE="$_policy_precedence_tmp"
+  KIT_MDM_TARGET_USER='invalid/name'
+  unset KIT_MDM_EXPECTED_POLICY_SHA256
+  _mdm_supported_macos_host() { return 0; }
+  _mdm_root_config_apply() { return 0; }
+  _mdm_apply_mdm_defaults() { KIT_MDM_DRY_RUN=false; }
+  mdm_log() { :; }
+  _precedence_rc=0
+  (mdm_main) >/dev/null 2>&1 || _precedence_rc=$?
+  if [[ "$_precedence_rc" -eq "$MDM_EXIT_CONFIG" \
+    && -z "$(/usr/bin/find "$_policy_precedence_tmp" -mindepth 1 -print -quit)" ]]; then
+    pass "mdm-install: policy SHA欠落はinvalid user/receiptより先にexit 50"
+  else
+    fail "mdm-install: policy SHA欠落がuser解決より後段 (rc=$_precedence_rc)"
+  fi
+  /bin/rm -rf "$_policy_precedence_tmp"
+)
+
 # ── dry-run は一時 checkout のみを使い、終了時に除去 ─────
 (
-  _dry_tmp="$(mktemp -d)"
+  _dry_alias_root="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _dry_alias_physical="$_dry_alias_root/physical"
+  _dry_alias="$_dry_alias_root/alias"
+  /bin/mkdir "$_dry_alias_physical"
+  /bin/ln -s "$_dry_alias_physical" "$_dry_alias"
+  _dry_runner_helper="$(declare -f _mdm_test_runner_tmp_base)"
+  _mdm_test_runner_tmp_base() { printf '%s' "$_dry_alias"; }
+  function /usr/bin/mktemp {
+    local _created
+    [[ "$#" -eq 2 && "$1" == -d \
+      && "$2" == "$_dry_alias/claude-kit-mdm-dryrun.XXXXXX" ]] || return 2
+    _created="$(builtin command /usr/bin/mktemp -d \
+      "$_dry_alias_physical/claude-kit-mdm-dryrun.XXXXXX")" || return 1
+    printf '%s%s\n' "$_dry_alias" "${_created#"$_dry_alias_physical"}"
+  }
+  _mdm_git_network() { return 1; }
+  KIT_MDM_DRY_RUN=true
+  KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  KIT_MDM_INSTALL_CLAUDE_CLI=false
+  _MDM_DRYRUN_CHECKOUT=""
+  _dry_alias_rc=0
+  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" \
+    "$_dry_alias_root/home" >/dev/null 2>&1 || _dry_alias_rc=$?
+  _dry_alias_checkout="$_MDM_DRYRUN_CHECKOUT"
+  eval "$_dry_runner_helper"
+  MDM_TEST_TMP_ROOT="$_dry_alias_root"
+  _dry_alias_cleanup_rc=0
+  _mdm_cleanup_dryrun_checkout >/dev/null 2>&1 || _dry_alias_cleanup_rc=$?
+  if [[ "$_dry_alias_rc" -eq 1 \
+    && "$_dry_alias_checkout" == "$_dry_alias_physical"/claude-kit-mdm-dryrun.* \
+    && "$_dry_alias_cleanup_rc" -eq 0 \
+    && -z "$_MDM_DRYRUN_CHECKOUT" ]]; then
+    pass "mdm-install: symlink 一時baseはlexical割当後にphysical pathへ束縛"
+  else
+    fail "mdm-install: symlink 一時baseのcanonical束縛が不正 (rc=$_dry_alias_rc cleanup=$_dry_alias_cleanup_rc)"
+  fi
+  /bin/rm -rf "$_dry_alias_root"
+)
+
+(
+  _managed_tmp_probe="$(mktemp -d)"
+  _managed_tmp_checkout="$_managed_tmp_probe/claude-kit-mdm-dryrun.fixture"
+  /bin/mkdir "$_managed_tmp_checkout"
+  _MDM_DRYRUN_CHECKOUT="$_managed_tmp_checkout"
+  _mdm_run_maybe_as_user() { return 97; }
+  _managed_tmp_cleanup_rejected=false
+  _mdm_cleanup_dryrun_checkout >/dev/null 2>&1 \
+    || _managed_tmp_cleanup_rejected=true
+  if ! _mdm_managed_tmp_path_matches \
+      /private/tmp/claude-kit-mdm-dryrun.x/../../victim \
+      claude-kit-mdm-dryrun \
+    && ! _mdm_managed_tmp_path_matches \
+      /tmp/claude-kit-mdm-launcher.x/../victim claude-kit-mdm-launcher \
+    && [[ "$_managed_tmp_cleanup_rejected" == true \
+      && "$_MDM_DRYRUN_CHECKOUT" == "$_managed_tmp_checkout" \
+      && -d "$_managed_tmp_checkout" ]]; then
+    pass "mdm-install: managed tmp cleanupは単一basenameへ固定し失敗時authorityを保持"
+  else
+    fail "mdm-install: managed tmp cleanupがescapeまたは失敗を成功扱い"
+  fi
+  /bin/rm -rf "$_managed_tmp_probe"
+)
+
+(
+  _dry_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
   _dry_repo="$_dry_tmp/repo"
   _dry_home="$_dry_tmp/home"
-  mkdir -p "$_dry_repo" "$_dry_home"
-  git -C "$_dry_repo" init -q
+  mkdir -p "$_dry_home"
+  git clone -q "$PROJECT_DIR" "$_dry_repo"
   printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "$HOME/mdm-dryrun-args"\nprintf "%%s\\n" "$PATH" > "$HOME/mdm-dryrun-path"\n' > "$_dry_repo/setup.sh"
   chmod +x "$_dry_repo/setup.sh"
   git -C "$_dry_repo" add setup.sh
@@ -7020,14 +8368,52 @@ MD
   export HOME="$_dry_home"
   export MDM_KIT_REPO_URL_OVERRIDE="$_dry_repo"
   export KIT_MDM_GIT_REF="$_dry_sha"
+  export KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   export KIT_MDM_DRY_RUN=true
   export KIT_MDM_INSTALL_CLAUDE_CLI=false
   export KIT_MDM_INSTALL_DIR="$_dry_home/should-not-be-used"
+  export MDM_AUTH_TMPDIR_OVERRIDE="$_dry_tmp"
   _MDM_GIT_DROP_UID=""; _MDM_GIT_DROP_USER=""; _MDM_GIT_DROP_HOME=""
+  KIT_MDM_POLICY_SHA256=""
+  MDM_RCPT_POLICY_SHA256=""
+  export KIT_MDM_POLICY_SHA256 MDM_RCPT_POLICY_SHA256
+  printf '%s\n' receipt-sentinel > "$_dry_tmp/receipt.json"
+  _dry_receipt_before="$(_mdm_sha256_file "$_dry_tmp/receipt.json")"
 
+  _dry_wrong_rc=0
+  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_dry_home" \
+    >/dev/null 2>&1 || _dry_wrong_rc=$?
+  _dry_calculated_policy="$(_mdm_sha256_file \
+    "$_MDM_EXPECTED_OUTPUT/policy.json" 2>/dev/null || true)"
+  _dry_wrong_setup_absent=true
+  [[ ! -e "$_dry_home/mdm-dryrun-args" ]] || _dry_wrong_setup_absent=false
+  _dry_wrong_receipt_after="$(_mdm_sha256_file "$_dry_tmp/receipt.json")"
+  _mdm_cleanup_dryrun_checkout >/dev/null 2>&1 || true
+  _mdm_cleanup_expected_dir >/dev/null 2>&1 || true
+  _mdm_cleanup_renderer_snapshot >/dev/null 2>&1 || true
+  if [[ "$_dry_wrong_rc" -eq "$MDM_EXIT_CONFIG" \
+    && "$_dry_calculated_policy" =~ ^[0-9a-f]{64}$ \
+    && "$_dry_wrong_setup_absent" == true \
+    && "$_dry_receipt_before" == "$_dry_wrong_receipt_after" ]]; then
+    pass "mdm-install: non-root dry-runもpolicy不一致をsetup前exit 50で拒否"
+  else
+    fail "mdm-install: non-root dry-runがpolicy不一致でsetup/receiptを変更 (rc=$_dry_wrong_rc)"
+  fi
+
+  export KIT_MDM_EXPECTED_POLICY_SHA256="$_dry_calculated_policy"
   _dry_rc=0
   _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_dry_home" >/dev/null 2>&1 || _dry_rc=$?
   _dry_checkout="$_MDM_DRYRUN_CHECKOUT"
+  _dry_runtime_uid="$(/usr/bin/id -u)"
+  _dry_owner_bound=false
+  if [[ "${_MDM_EXPECTED_OWNER_UID:-}" == "$_dry_runtime_uid" \
+    && "${_MDM_EXPECTED_RENDERER_OWNER_UID:-}" == "$_dry_runtime_uid" \
+    && "$(_mdm_stat_uid "$_MDM_EXPECTED_DIR" 2>/dev/null || true)" \
+      == "$_dry_runtime_uid" \
+    && "$(_mdm_stat_uid "$_MDM_EXPECTED_RENDERER" 2>/dev/null || true)" \
+      == "$_dry_runtime_uid" ]]; then
+    _dry_owner_bound=true
+  fi
   _dry_path="$(cat "$_dry_home/mdm-dryrun-path" 2>/dev/null || true)"
   _dry_path_ok=true
   if [[ -x /opt/homebrew/bin/brew \
@@ -7048,12 +8434,17 @@ MD
   if [[ "$_dry_rc" -eq 0 && -d "$_dry_checkout" ]] \
     && grep -qx -- '--dry-run' "$_dry_home/mdm-dryrun-args" \
     && [[ ! -e "$_dry_home/should-not-be-used" \
-      && "$_dry_path_ok" == true ]]; then
-    pass "mdm-install: non-root dry-runは一時checkoutとHomebrew tool PATHを使用"
+      && "$_dry_path_ok" == true \
+      && "$_dry_owner_bound" == true \
+      && "$(_mdm_sha256_file "$_dry_tmp/receipt.json")" \
+        == "$_dry_receipt_before" ]]; then
+    pass "mdm-install: 正policyのnon-root dry-runは一時checkoutからsetupへ到達"
   else
     fail "mdm-install: dry-run の一時checkout/PATH契約が不正 (rc=$_dry_rc)"
   fi
   _mdm_cleanup_dryrun_checkout
+  _mdm_cleanup_expected_dir
+  _mdm_cleanup_renderer_snapshot
   if [[ -n "$_dry_checkout" && ! -e "$_dry_checkout" && -z "$_MDM_DRYRUN_CHECKOUT" ]]; then
     pass "mdm-install: dry-run 一時 checkout を完了時に除去"
   else
@@ -7062,11 +8453,26 @@ MD
 
   export KIT_MDM_INSTALL_CLAUDE_CLI=true
   _mdm_cli_present_for_home() { return 1; }
+  /bin/rm -f "$_dry_home/mdm-dryrun-args" "$_dry_home/mdm-dryrun-path"
+  export KIT_MDM_EXPECTED_POLICY_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  _dry_cli_probe_rc=0
+  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_dry_home" \
+    >/dev/null 2>&1 || _dry_cli_probe_rc=$?
+  _dry_cli_policy="$(_mdm_sha256_file \
+    "$_MDM_EXPECTED_OUTPUT/policy.json" 2>/dev/null || true)"
+  _mdm_cleanup_dryrun_checkout >/dev/null 2>&1 || true
+  _mdm_cleanup_expected_dir >/dev/null 2>&1 || true
+  _mdm_cleanup_renderer_snapshot >/dev/null 2>&1 || true
+  export KIT_MDM_EXPECTED_POLICY_SHA256="$_dry_cli_policy"
   _dry_cli_rc=0
   _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_dry_home" \
     >/dev/null 2>&1 || _dry_cli_rc=$?
   _mdm_cleanup_dryrun_checkout
-  if [[ "$_dry_cli_rc" -eq 0 ]]; then
+  _mdm_cleanup_expected_dir
+  _mdm_cleanup_renderer_snapshot
+  if [[ "$_dry_cli_probe_rc" -eq "$MDM_EXIT_CONFIG" \
+    && "$_dry_cli_policy" =~ ^[0-9a-f]{64}$ \
+    && "$_dry_cli_rc" -eq 0 ]]; then
     pass "mdm-install: non-root dry-run は未導入 CLI を失敗扱いにしない"
   else
     fail "mdm-install: non-root dry-run が未導入 CLI で失敗 (rc=$_dry_cli_rc)"
@@ -7366,6 +8772,391 @@ fi
   /bin/rm -rf "$_allocation_root"
 )
 
+# Candidate copy は marker 作成・swap より前に source/candidate/source の
+# semantic digest を一致させる。欠落と source drift は旧 inode を公開中の
+# まま fail-closed にし、途中 candidate は failed generation へ隔離する。
+(
+  _copy_transaction_fault=""
+  _copy_transaction_source=""
+  _copy_transaction_candidate=""
+  _mdm_run_maybe_as_user() {
+    local _source _candidate
+    if [[ "$1" == /bin/cp && "${2:-}" == -a ]]; then
+      "$@" || return 1
+      _source="$3"
+      _source="${_source%/.}"
+      _candidate="${4%/}"
+      _copy_transaction_source="$_source"
+      _copy_transaction_candidate="$_candidate"
+      case "$_copy_transaction_fault" in
+        omit)
+          /bin/rm -f "$_candidate/nested/user-file" ;;
+        source-drift)
+          printf 'source-drift\n' > "$_source/nested/user-file" ;;
+      esac
+      return 0
+    fi
+    "$@"
+  }
+
+  _copy_transaction_case() { # <omit|source-drift>
+    local _fault="$1" _root _home _uid _old_identity _rc=0
+    _root="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+    _home="$_root/home"
+    _uid="$(/usr/bin/id -u)"
+    /bin/mkdir -m 700 "$_home" "$_home/.claude" \
+      "$_home/.claude/nested"
+    printf 'user-content\n' > "$_home/.claude/nested/user-file"
+    printf 'other-content\n' > "$_home/.claude/nested/other-file"
+    /bin/chmod 700 "$_home/.claude" "$_home/.claude/nested"
+    /bin/chmod 600 "$_home/.claude/nested/user-file" \
+      "$_home/.claude/nested/other-file"
+    /bin/ln -s nested/user-file "$_home/.claude/user-link"
+    _old_identity="$(_mdm_persistent_dir_identity "$_home/.claude")" \
+      || return 1
+    _copy_transaction_fault="$_fault"
+    _copy_transaction_source=""
+    _copy_transaction_candidate=""
+    _MDM_TRANSACTION_STATE=active
+    _MDM_TRANSACTION_HOME="$_home"
+    _MDM_TRANSACTION_UID="$_uid"
+    _MDM_CLAUDE_TRANSACTION_STATE=idle
+    _MDM_CLAUDE_LIVE=""
+    _MDM_CLAUDE_BACKUP=""
+    _MDM_CLAUDE_FAILED=""
+    _mdm_transaction_prepare_claude "$_home" "$_uid" \
+      >/dev/null 2>&1 || _rc=$?
+    trap - EXIT HUP INT TERM
+    if [[ "$_rc" -ne 0 \
+      && "$_MDM_CLAUDE_TRANSACTION_STATE" == aborted \
+      && "$(_mdm_persistent_dir_identity "$_home/.claude")" \
+        == "$_old_identity" \
+      && ! -e "$_home/.claude/.claude-starter-kit-mdm-transaction" \
+      && ! -e "$_MDM_CLAUDE_BACKUP" && ! -L "$_MDM_CLAUDE_BACKUP" \
+      && -d "$_MDM_CLAUDE_FAILED" \
+      && -n "$_copy_transaction_source" \
+      && -n "$_copy_transaction_candidate" ]]; then
+      _MDM_TRANSACTION_STATE=aborted
+      /bin/rm -rf "$_root"
+      return 0
+    fi
+    _MDM_TRANSACTION_STATE=aborted
+    /bin/rm -rf "$_root"
+    return 1
+  }
+
+  _copy_transaction_case omit \
+    && pass "mdm-install: candidate nested file 欠落は marker/swap 前に拒否" \
+    || fail "mdm-install: candidate nested file 欠落を公開または残留"
+  _copy_transaction_case source-drift \
+    && pass "mdm-install: copy 中の source drift は marker/swap 前に拒否" \
+    || fail "mdm-install: copy 中の source drift を公開または残留"
+)
+
+# Managed live/snapshot parents are fully inventoried before mutation. Unsafe
+# modes are journaled and normalized top-down; rollback restores exact modes
+# bottom-up, while commit deliberately keeps the private result.
+(
+  _parent_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _parent_home="$_parent_tmp/home"
+  _parent_auth="$_parent_tmp/auth"
+  _parent_expected="$_parent_tmp/expected"
+  _parent_uid="$(/usr/bin/id -u)"
+  _parent_user="$(/usr/bin/id -un)"
+  /bin/mkdir -m 0700 "$_parent_home" "$_parent_auth" "$_parent_expected" \
+    "$_parent_home/.claude" \
+    "$_parent_home/.claude/.starter-kit-snapshot" \
+    "$_parent_home/.claude/rules" \
+    "$_parent_home/.claude/.starter-kit-snapshot/rules" \
+    "$_parent_home/.claude/commands" \
+    "$_parent_home/.claude/.starter-kit-snapshot/commands" \
+    "$_parent_home/.claude/user-only"
+  printf '%s\n' \
+    '{"files":["rules/managed.md"],"absent_files":["commands/old.md"]}' \
+    > "$_parent_expected/manifest.json"
+  printf 'live\n' > "$_parent_home/.claude/rules/managed.md"
+  printf 'snapshot\n' \
+    > "$_parent_home/.claude/.starter-kit-snapshot/rules/managed.md"
+  /bin/chmod 0755 "$_parent_home/.claude"
+  /bin/chmod 0500 "$_parent_home/.claude/rules" \
+    "$_parent_home/.claude/user-only"
+  /bin/chmod 0777 "$_parent_home/.claude/.starter-kit-snapshot/rules"
+  /bin/chmod 0711 "$_parent_home/.claude/commands"
+  /bin/chmod 0755 "$_parent_home/.claude/.starter-kit-snapshot/commands"
+
+  _MDM_EXPECTED_OUTPUT="$_parent_expected"
+  MDM_AUTH_TMPDIR_OVERRIDE="$_parent_auth"
+  MDM_AUTH_OWNER_UID_OVERRIDE="$_parent_uid"
+  _MDM_TRANSACTION_STATE=active
+  _MDM_TRANSACTION_USER="$_parent_user"
+  _MDM_TRANSACTION_HOME="$_parent_home"
+  _MDM_TRANSACTION_UID="$_parent_uid"
+  _MDM_PARENT_MODE_STATE=idle
+  _MDM_PARENT_MODE_JOURNAL=""
+  _MDM_PARENT_MODE_JOURNAL_IDENTITY=""
+  _parent_prepare_rc=0
+  _mdm_managed_parent_modes_prepare \
+    "$_parent_user" "$_parent_home" "$_parent_uid" || _parent_prepare_rc=$?
+  _parent_journal="$_MDM_PARENT_MODE_JOURNAL"
+  _parent_final_ok=0 _parent_unsafe_rejected=0 _parent_missing_rejected=0
+  _mdm_managed_parent_modes_final "$_parent_home" "$_parent_uid" \
+    || _parent_final_ok=$?
+  /bin/chmod 0777 "$_parent_home/.claude/commands"
+  _mdm_managed_parent_modes_final "$_parent_home" "$_parent_uid" \
+    >/dev/null 2>&1 || _parent_unsafe_rejected=$?
+  /bin/chmod 0711 "$_parent_home/.claude/commands"
+  /bin/mv "$_parent_home/.claude/rules" \
+    "$_parent_home/.claude/rules-held"
+  _mdm_managed_parent_modes_final "$_parent_home" "$_parent_uid" \
+    >/dev/null 2>&1 || _parent_missing_rejected=$?
+  /bin/mv "$_parent_home/.claude/rules-held" \
+    "$_parent_home/.claude/rules"
+  _parent_restore_rc=0
+  _mdm_managed_parent_modes_restore || _parent_restore_rc=$?
+  if [[ "$_parent_prepare_rc" -eq 0 && "$_parent_final_ok" -eq 0 \
+    && "$_parent_unsafe_rejected" -ne 0 \
+    && "$_parent_missing_rejected" -ne 0 && "$_parent_restore_rc" -eq 0 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude")" == 755 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude/rules")" == 500 \
+    && "$(_mdm_stat_mode \
+      "$_parent_home/.claude/.starter-kit-snapshot/rules")" == 777 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude/commands")" == 711 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude/user-only")" == 500 \
+    && ! -e "$_parent_journal" && ! -L "$_parent_journal" ]]; then
+    pass "mdm-install: managed parentはpreflight/final検証しrollbackでexact mode復元"
+  else
+    fail "mdm-install: managed parent preflight/final/rollback契約が不正"
+  fi
+
+  _parent_commit_prepare=0 _parent_commit_rc=0
+  _mdm_managed_parent_modes_prepare \
+    "$_parent_user" "$_parent_home" "$_parent_uid" \
+    || _parent_commit_prepare=$?
+  _parent_commit_journal="$_MDM_PARENT_MODE_JOURNAL"
+  _mdm_managed_parent_modes_commit || _parent_commit_rc=$?
+  if [[ "$_parent_commit_prepare" -eq 0 && "$_parent_commit_rc" -eq 0 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude/rules")" == 700 \
+    && "$(_mdm_stat_mode \
+      "$_parent_home/.claude/.starter-kit-snapshot/rules")" == 700 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude")" == 755 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude/user-only")" == 500 \
+    && ! -e "$_parent_commit_journal" \
+    && "$_MDM_PARENT_MODE_STATE" == idle ]]; then
+    pass "mdm-install: managed parent commitは修復済み0700を保持しjournal削除"
+  else
+    fail "mdm-install: managed parent commit/mode保持契約が不正"
+  fi
+
+  /bin/chmod 0500 "$_parent_home/.claude/rules"
+  /bin/chmod 0777 "$_parent_home/.claude/.starter-kit-snapshot/rules"
+  export MDM_PARENT_MODE_FAULT_AFTER_OVERRIDE=1
+  _parent_fault_rc=0
+  _mdm_managed_parent_modes_prepare \
+    "$_parent_user" "$_parent_home" "$_parent_uid" \
+    >/dev/null 2>&1 || _parent_fault_rc=$?
+  unset MDM_PARENT_MODE_FAULT_AFTER_OVERRIDE
+  _parent_fault_restore_rc=0
+  _mdm_managed_parent_modes_restore || _parent_fault_restore_rc=$?
+  if [[ "$_parent_fault_rc" -ne 0 && "$_parent_fault_restore_rc" -eq 0 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude/rules")" == 500 \
+    && "$(_mdm_stat_mode \
+      "$_parent_home/.claude/.starter-kit-snapshot/rules")" == 777 \
+    && "$_MDM_PARENT_MODE_STATE" == idle ]]; then
+    pass "mdm-install: managed parent partial apply faultは全original modeへ回収"
+  else
+    fail "mdm-install: managed parent partial apply fault rollbackが不正"
+  fi
+
+  _parent_best_prepare=0 _parent_best_restore=0 _parent_best_retry=0
+  _mdm_managed_parent_modes_prepare \
+    "$_parent_user" "$_parent_home" "$_parent_uid" \
+    || _parent_best_prepare=$?
+  /bin/chmod 0770 "$_parent_home/.claude/rules"
+  _mdm_managed_parent_modes_restore >/dev/null 2>&1 \
+    || _parent_best_restore=$?
+  _parent_other_restored="$(_mdm_stat_mode \
+    "$_parent_home/.claude/.starter-kit-snapshot/rules")"
+  /bin/chmod 0700 "$_parent_home/.claude/rules"
+  _mdm_managed_parent_modes_restore || _parent_best_retry=$?
+  if [[ "$_parent_best_prepare" -eq 0 && "$_parent_best_restore" -ne 0 \
+    && "$_parent_other_restored" == 777 && "$_parent_best_retry" -eq 0 \
+    && "$(_mdm_stat_mode "$_parent_home/.claude/rules")" == 500 ]]; then
+    pass "mdm-install: managed parent restoreは不正record後もbottom-up継続し再試行可能"
+  else
+    fail "mdm-install: managed parent best-effort restore/retry契約が不正"
+  fi
+
+  _parent_plan_valid="$_parent_auth/plan-valid"
+  _parent_plan_no_lf="$_parent_auth/plan-no-lf"
+  _parent_plan_nul="$_parent_auth/plan-nul"
+  _parent_plan_tabs="$_parent_auth/plan-tabs"
+  printf 'v1\t%s\t%s\nend\t0\n' "$_parent_uid" "$_parent_home" \
+    > "$_parent_plan_valid"
+  printf 'v1\t%s\t%s\nend\t0' "$_parent_uid" "$_parent_home" \
+    > "$_parent_plan_no_lf"
+  printf 'v1\t%s\t%s\nend\t0\n\0' "$_parent_uid" "$_parent_home" \
+    > "$_parent_plan_nul"
+  printf 'v1\t%s\t%s\n%s\t1:1\t0500\t\t1\nend\t1\n' \
+    "$_parent_uid" "$_parent_home" "$_parent_home/.claude" \
+    > "$_parent_plan_tabs"
+  /bin/chmod 0600 "$_parent_plan_valid" "$_parent_plan_no_lf" \
+    "$_parent_plan_nul" "$_parent_plan_tabs"
+  _parent_valid_bytes=0 _parent_no_lf_rejected=0
+  _parent_nul_rejected=0 _parent_tabs_rejected=0 _parent_phase_rejected=0
+  _mdm_managed_parent_plan_bytes_valid \
+    "$_parent_plan_valid" "$_parent_home" "$_parent_uid" \
+    || _parent_valid_bytes=$?
+  _mdm_managed_parent_plan_bytes_valid \
+    "$_parent_plan_no_lf" "$_parent_home" "$_parent_uid" \
+    >/dev/null 2>&1 || _parent_no_lf_rejected=$?
+  _mdm_managed_parent_plan_bytes_valid \
+    "$_parent_plan_nul" "$_parent_home" "$_parent_uid" \
+    >/dev/null 2>&1 || _parent_nul_rejected=$?
+  _mdm_managed_parent_plan_bytes_valid \
+    "$_parent_plan_tabs" "$_parent_home" "$_parent_uid" \
+    >/dev/null 2>&1 || _parent_tabs_rejected=$?
+  _mdm_managed_parent_plan_valid \
+    "$_parent_plan_valid" "$_parent_home" "$_parent_uid" unknown \
+    >/dev/null 2>&1 || _parent_phase_rejected=$?
+  if [[ "$_parent_valid_bytes" -eq 0 && "$_parent_no_lf_rejected" -ne 0 \
+    && "$_parent_nul_rejected" -ne 0 && "$_parent_tabs_rejected" -ne 0 \
+    && "$_parent_phase_rejected" -ne 0 ]]; then
+    pass "mdm-install: managed parent journalはNUL/LF/TAB/phaseをbyte厳密検証"
+  else
+    fail "mdm-install: managed parent journal byte grammarが不正"
+  fi
+
+  if [[ "$_parent_uid" -eq 0 ]]; then
+    /bin/chmod 0000 "$_parent_home/.claude/rules"
+    _parent_zero_prepare=0 _parent_zero_restore=0
+    _mdm_managed_parent_modes_prepare \
+      "$_parent_user" "$_parent_home" "$_parent_uid" \
+      || _parent_zero_prepare=$?
+    _parent_zero_applied="$(_mdm_stat_mode "$_parent_home/.claude/rules")"
+    _mdm_managed_parent_modes_restore || _parent_zero_restore=$?
+    _parent_zero_restored="$(_mdm_stat_mode "$_parent_home/.claude/rules")"
+    if [[ "$_parent_zero_prepare" -eq 0 && "$_parent_zero_restore" -eq 0 \
+      && "$_parent_zero_applied" == 700 && "$_parent_zero_restored" == 0 ]]; then
+      pass "mdm-install: root-private fd mutatorは実mode000 parentを修復・復元"
+    else
+      fail "mdm-install: 実mode000 parentのroot-private修復が不正"
+    fi
+    /bin/chmod 0500 "$_parent_home/.claude/rules"
+  else
+    skip "mdm-install: 実mode000 parent修復" "root実行時のみ"
+  fi
+
+  _parent_target_impl="$(declare -f _mdm_managed_parent_target_modes)"
+  if [[ "$_parent_target_impl" == *'_mdm_system_python'* \
+    && "$_parent_target_impl" != *'_mdm_target_system_python'* \
+    && "$_parent_target_impl" == *'os.O_NOFOLLOW'* \
+    && "$_parent_target_impl" == *'os.fchmod'* ]]; then
+    pass "mdm-install: mode000修復はroot-private Pythonのfd-bound fchmodへ限定"
+  else
+    fail "mdm-install: mode000 managed parentのroot-private修復契約が不正"
+  fi
+  /bin/chmod -R u+rwx "$_parent_tmp"
+  /bin/rm -rf "$_parent_tmp"
+)
+
+# A signal after managed parent modes have been applied runs the same outer
+# rollback and removes the root-private journal before returning the launcher
+# signal status.
+(
+  _parent_signal_root="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _parent_signal_ok=true
+  for _parent_signal in HUP INT TERM; do
+    case "$_parent_signal" in
+      HUP) _parent_signal_expected=129 ;;
+      INT) _parent_signal_expected=130 ;;
+      TERM) _parent_signal_expected=143 ;;
+    esac
+    _parent_signal_case="$_parent_signal_root/$_parent_signal"
+    /bin/mkdir -m 0700 "$_parent_signal_case" \
+      "$_parent_signal_case/auth" "$_parent_signal_case/expected" \
+      "$_parent_signal_case/home" \
+      "$_parent_signal_case/home/.claude" \
+      "$_parent_signal_case/home/.claude/rules" \
+      "$_parent_signal_case/home/.claude/.starter-kit-snapshot" \
+      "$_parent_signal_case/home/.claude/.starter-kit-snapshot/rules"
+    printf '%s\n' \
+      '{"files":["rules/managed.md"],"absent_files":[]}' \
+      > "$_parent_signal_case/expected/manifest.json"
+    printf 'live\n' > "$_parent_signal_case/home/.claude/rules/managed.md"
+    printf 'snapshot\n' \
+      > "$_parent_signal_case/home/.claude/.starter-kit-snapshot/rules/managed.md"
+    /bin/chmod 0500 "$_parent_signal_case/home/.claude/rules"
+    /bin/chmod 0777 \
+      "$_parent_signal_case/home/.claude/.starter-kit-snapshot/rules"
+    _parent_signal_rc=0
+    MDM_SOURCE_ONLY=1 MDM_SYSTEM_PYTHON_OVERRIDE="$MDM_SYSTEM_PYTHON_OVERRIDE" \
+      /bin/bash -c '
+        source "$1/mdm/install-mdm.sh"
+        _MDM_EXPECTED_OUTPUT="$2/expected"
+        MDM_AUTH_TMPDIR_OVERRIDE="$2/auth"
+        MDM_AUTH_OWNER_UID_OVERRIDE="$(/usr/bin/id -u)"
+        _MDM_TRANSACTION_STATE=active
+        _MDM_TRANSACTION_USER="$(/usr/bin/id -un)"
+        _MDM_TRANSACTION_HOME="$2/home"
+        _MDM_TRANSACTION_UID="$(/usr/bin/id -u)"
+        _MDM_TRANSACTION_HISTORY_STATE=untouched
+        _MDM_TRANSACTION_COMPONENT_STATE=untouched
+        _mdm_transaction_restore_root_file() { return 0; }
+        _mdm_transaction_cleanup_root_snapshots() { return 0; }
+        _mdm_managed_parent_modes_prepare \
+          "$_MDM_TRANSACTION_USER" "$_MDM_TRANSACTION_HOME" \
+          "$_MDM_TRANSACTION_UID" >/dev/null 2>&1 || exit 90
+        [[ "${_MDM_PARENT_MODE_STATE:-}" == applied \
+          && "$(_mdm_stat_mode \
+            "$_MDM_TRANSACTION_HOME/.claude/rules")" == 700 \
+          && "$(_mdm_stat_mode \
+            "$_MDM_TRANSACTION_HOME/.claude/.starter-kit-snapshot/rules")" \
+              == 700 ]] || exit 90
+        _MDM_FAILURE_ROLLBACK_SOURCE_PATH="$MDM_SYSTEM_PYTHON_OVERRIDE"
+        _MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY=source-framework
+        _MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY=source-target
+        _MDM_FAILURE_ROLLBACK_ACTIVE=1
+        _MDM_FAILURE_ROLLBACK_FRESH_PRIVATE=0
+        _mdm_validate_system_python() {
+          printf -v "$1" "%s" "$_MDM_FAILURE_ROLLBACK_SOURCE_PATH"
+          printf -v "$2" "%s" \
+            "$_MDM_FAILURE_ROLLBACK_SOURCE_FRAMEWORK_IDENTITY"
+          printf -v "$3" "%s" \
+            "$_MDM_FAILURE_ROLLBACK_SOURCE_TARGET_IDENTITY"
+        }
+        _mdm_cleanup_system_python_workspace() {
+          _mdm_clear_system_python_runtime_state
+        }
+        _recovery_signal="$3"
+        _mdm_initialize_system_python() {
+          /bin/kill "-$_recovery_signal" "$$"
+          /bin/sleep 2
+          return 97
+        }
+        _mdm_arm_transient_cleanup
+        _mdm_system_python_recover_after_rebound_failure
+        exit 91
+      ' mdm-parent-signal "$PROJECT_DIR" "$_parent_signal_case" \
+        "$_parent_signal" > "$_parent_signal_case/out" 2>&1 \
+      || _parent_signal_rc=$?
+    if [[ "$_parent_signal_rc" -ne "$_parent_signal_expected" \
+      || "$(_mdm_stat_mode \
+        "$_parent_signal_case/home/.claude/rules")" != 500 \
+      || "$(_mdm_stat_mode \
+        "$_parent_signal_case/home/.claude/.starter-kit-snapshot/rules")" != 777 ]] \
+      || /usr/bin/find "$_parent_signal_case/auth" -maxdepth 1 \
+        -name 'claude-kit-mdm-parent-modes.*' -print -quit \
+        | /usr/bin/grep -q .; then
+      _parent_signal_ok=false
+    fi
+  done
+  [[ "$_parent_signal_ok" == true ]] \
+    && pass "mdm-install: fresh recovery中HUP/INT/TERMもsource fallbackでexact復元" \
+    || fail "mdm-install: recovery signal時のfallback rollbackが不正"
+  /bin/chmod -R u+rwx "$_parent_signal_root"
+  /bin/rm -rf "$_parent_signal_root"
+)
+
 # The outer installer swaps a copied candidate into ~/.claude and restores the
 # exact previous inode on failure, even if setup removes its advisory marker.
 (
@@ -7414,6 +9205,10 @@ fi
     _MDM_PERSISTENT_PREVIOUS_DIGEST=""
     _MDM_TRANSACTION_HISTORY_STATE=absent
     _MDM_TRANSACTION_COMPONENT_STATE=absent
+    _MDM_PARENT_MODE_STATE=applied
+    _MDM_EXTERNAL_TRANSACTION_STATE=none
+    _mdm_managed_parent_journal_trusted() { return 0; }
+    _mdm_managed_parent_modes_final() { return 0; }
     _mdm_transaction_ready_to_commit || _claude_ready_before=$?
     mv "$_claude_backup" "$_claude_backup.replaced"
     mkdir "$_claude_backup"
@@ -7837,6 +9632,7 @@ fi
   _MDM_GIT_DROP_UID=""
   _MDM_TRANSACTION_STATE=active
   _MDM_TRANSACTION_HOME="$_commit_home"
+  _MDM_EXTERNAL_TRANSACTION_STATE=none
   _MDM_CLAUDE_TRANSACTION_STATE=swapped
   _MDM_CLAUDE_LIVE="$_commit_live"
   _MDM_CLAUDE_BACKUP="$_commit_current"
@@ -7864,3 +9660,5 @@ fi
   trap - EXIT
   rm -rf "$_commit_tmp"
 )
+
+mdm_test_reached_end

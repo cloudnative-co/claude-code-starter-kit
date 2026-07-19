@@ -1474,7 +1474,10 @@ _remove_retired_managed_files() {
     case "$rel_file" in
       settings.json|CLAUDE.md) continue ;;
     esac
-    if jq -e --arg file "$rel_file" 'index($file) != null' <<< "$kit_rel_json" >/dev/null 2>&1; then
+    # Feed the inventory through a normal pipeline. Bash 5.3 implements a
+    # here-string with a pipe and may fill a small pipe before jq is started.
+    if printf '%s\n' "$kit_rel_json" \
+      | jq -e --arg file "$rel_file" 'index($file) != null' >/dev/null 2>&1; then
       continue
     fi
     target="$claude_dir/$rel_file"

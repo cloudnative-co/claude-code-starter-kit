@@ -235,10 +235,14 @@ CONF
   fi
   rm -f "$_live/commands/oss-analyze.md" "$_snap/commands/oss-analyze.md"
 
-  _prior="$(/usr/bin/mktemp /tmp/claude-kit-mdm-prior.XXXXXX)"
-  printf 'commands/legacy.md\n' > "$_prior"; chmod 444 "$_prior"
-  export KIT_MDM_PRIOR_MANAGED_INVENTORY="$_prior"
-  export MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK=1
+  # Root capture/path attestation is covered by the installer and purpose
+  # suites. This case isolates downstream deletion authority after the
+  # inventory has already been authenticated and loaded.
+  _mdm_load_prior_inventory() {
+    local _rel="commands/legacy.md"
+    _MDM_PRIOR_REL_SET=()
+    _MDM_PRIOR_REL_SET["$_rel"]=1
+  }
   printf 'locally changed old managed bytes\n' > "$_live/commands/legacy.md"
   printf 'different old snapshot bytes\n' > "$_snap/commands/legacy.md"
   _prior_rc=0
@@ -250,7 +254,7 @@ CONF
   else
     fail "mdm-managed: root history 済み retired path を収束できない"
   fi
-  rm -f "$_prior"; rm -rf "$_tmp"
+  rm -rf "$_tmp"
 )
 
 # MDM backups use a reserved prefix and retain exactly one generation without
@@ -919,3 +923,5 @@ CONF
   fi
   rm -rf "$_tmp"
 )
+
+mdm_test_reached_end

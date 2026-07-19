@@ -51,7 +51,7 @@ while IFS= read -r _event; do
   if ! printf '%s\n' "$_covered_events" | grep -qx "$_event"; then
     _missing_event=true
   fi
-done <<< "$_hook_events"
+done < <(printf '%s\n' "$_hook_events")
 
 if [[ "$_missing_event" == "false" ]]; then
   pass "hook-fixtures: fixture set covers every distributed hook event"

@@ -699,14 +699,14 @@ _mdm_native_cli_acl_safe() {
     [[ "$_entry" =~ ^[[:space:]]+[0-9]+:[^[:cntrl:]]+[[:space:]]deny[[:space:]][^[:cntrl:]]+$ ]] \
       || return 1
     _saw_acl="true"
-  done <<< "$_remaining"
+  done < <(printf '%s\n' "$_remaining")
   [[ "$_saw_acl" == "true" ]]
 }
 
 _mdm_snapshot_native_cli() {
   local _target="$1" _snapshot="$2" _python="/usr/bin/python3"
   [[ -x "$_python" ]] || return 1
-  "$_python" -I -B - "$_target" "$_snapshot" <<'PY'
+  "$_python" -I -B -c '
 import hashlib
 import os
 import stat
@@ -778,13 +778,13 @@ try:
         raise OSError("native CLI bytes changed")
 finally:
     os.close(source_fd)
-PY
+' "$_target" "$_snapshot"
 }
 
 _mdm_native_cli_matches_snapshot() {
   local _target="$1" _snapshot="$2" _python="/usr/bin/python3"
   [[ -x "$_python" ]] || return 1
-  "$_python" -I -B - "$_target" "$_snapshot" <<'PY'
+  "$_python" -I -B -c '
 import hashlib
 import os
 import stat
@@ -823,7 +823,7 @@ def digest(path, require_executable):
 
 if digest(target, True) != digest(snapshot, False):
     raise SystemExit(1)
-PY
+' "$_target" "$_snapshot"
 }
 
 _mdm_native_claude_cli_present() {
@@ -833,7 +833,7 @@ _mdm_native_claude_cli_present() {
   local _target _requirement _details _snapshot _tmp_base _acl_path _rc=1
 
   [[ -x "$_python" ]] || return 1
-  _target="$("$_python" -I -B - "$_link" "$_versions" <<'PY'
+  _target="$("$_python" -I -B -c '
 import os
 import re
 import stat
@@ -893,7 +893,7 @@ if (not stat.S_ISREG(metadata.st_mode)
         or not os.access(target, os.X_OK)):
     raise SystemExit(1)
 sys.stdout.write(target)
-PY
+' "$_link" "$_versions"
   )" || return 1
   [[ -n "$_target" ]] || return 1
 
@@ -949,7 +949,7 @@ _mdm_prepare_native_claude_cli_reinstall() {
 
   [[ -x "$_python" ]] || return 1
   _mdm_native_cli_acl_safe "$HOME" true || return 1
-  "$_python" -I -B - "$_link" "$_versions" <<'PY'
+  "$_python" -I -B -c '
 import os
 import re
 import secrets
@@ -1090,7 +1090,7 @@ if candidate is not None and os.path.lexists(candidate):
         remove_or_move_aside(versions_fd, os.path.basename(candidate))
     finally:
         os.close(versions_fd)
-PY
+' "$_link" "$_versions"
 }
 
 _need_claude_cli_install() {
@@ -1268,7 +1268,7 @@ install_selected_plugins() {
   [[ -n "${SELECTED_PLUGINS:-}" ]] || return 0
   printf "\n"
   local plugins
-  IFS=',' read -r -a plugins <<< "$SELECTED_PLUGINS"
+  IFS=',' read -r -a plugins < <(printf '%s\n' "$SELECTED_PLUGINS")
   if ! command -v claude &>/dev/null; then
     warn "$STR_DEPLOY_PLUGINS_SKIP"
     info "$STR_DEPLOY_PLUGINS_HINT"
@@ -1433,7 +1433,7 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
     _dryrun_log "EXTERNAL" "Claude CLI" "$(_claude_cli_install_command)"
   fi
   if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
-    IFS=',' read -r -a _dr_plugins <<< "$SELECTED_PLUGINS"
+    IFS=',' read -r -a _dr_plugins < <(printf '%s\n' "$SELECTED_PLUGINS")
     for _dr_p in "${_dr_plugins[@]}"; do
       _dr_name="${_dr_p%%@*}"
       [[ -n "$_dr_name" ]] && _dryrun_log "EXTERNAL" "Plugin" "claude plugin install $_dr_name"

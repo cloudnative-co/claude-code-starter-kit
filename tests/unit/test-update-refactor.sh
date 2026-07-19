@@ -356,6 +356,17 @@ source "$PROJECT_DIR/lib/update.sh"
 }
 
 {
+  test_name="update: retired inventory is streamed to jq without a here-string"
+  _retired_cleanup_body="$(declare -f _remove_retired_managed_files)"
+  if [[ "$_retired_cleanup_body" == *"printf '%s\\n' \"\$kit_rel_json\""* \
+    && "$_retired_cleanup_body" != *"<<< \"\$kit_rel_json\""* ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
   test_name="update-refactor: merge entry points share the _resolve_key_3way core"
   core_calls="$(grep -c '_resolve_key_3way "' "$PROJECT_DIR/lib/merge.sh" || true)"
   if grep -q '_resolve_key_3way() {' "$PROJECT_DIR/lib/merge.sh" \

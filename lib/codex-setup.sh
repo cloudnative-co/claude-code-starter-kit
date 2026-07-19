@@ -41,7 +41,7 @@ _run_capture() {
 # copy there, since uninstall.sh does not source lib/).
 _claude_plugin_list_has() {
   local _list="$1" _name="$2"
-  awk -v name="$_name" '
+  printf '%s\n' "$_list" | awk -v name="$_name" '
     {
       line = $0
       sub(/^[[:space:]]+/, "", line)
@@ -55,7 +55,7 @@ _claude_plugin_list_has() {
       if (candidate == name) { found = 1 }
     }
     END { exit found ? 0 : 1 }
-  ' <<< "$_list"
+  '
 }
 
 _save_openai_key() {

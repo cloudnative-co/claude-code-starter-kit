@@ -188,7 +188,7 @@ _step_hooks() {
         ;;
       *)
         local -a _tokens=()
-        read -r -a _tokens <<< "$choice"
+        read -r -a _tokens < <(printf '%s\n' "$choice")
         for token in "${_tokens[@]}"; do
           if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#HOOK_KEYS[@]}" ]]; then
             local idx=$((token-1))
@@ -249,7 +249,7 @@ _step_plugins() {
         ;;
       *)
         local -a _tokens=()
-        read -r -a _tokens <<< "$choice"
+        read -r -a _tokens < <(printf '%s\n' "$choice")
         for token in "${_tokens[@]}"; do
           if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#PLUGIN_NAMES[@]}" ]]; then
             local idx=$((token-1))
@@ -317,7 +317,7 @@ _step_confirm() {
   if [[ -z "$SELECTED_PLUGINS" ]]; then
     printf "%-20s : %s\n" "$STR_CONFIRM_PLUGINS" "$STR_NONE"
   else
-    IFS=',' read -r -a _plist <<< "$SELECTED_PLUGINS"
+    IFS=',' read -r -a _plist < <(printf '%s\n' "$SELECTED_PLUGINS")
     printf "%-20s : %d %s\n" "$STR_CONFIRM_PLUGINS" "${#_plist[@]}" "$STR_SELECTED"
   fi
 

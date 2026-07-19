@@ -6,6 +6,11 @@
 # root sources it, then discard the inherited environment.  There is no
 # argv/env bypass token: every directly executed invocation crosses this
 # boundary.
+_MDM_DETECT_LAUNCHER_SOURCE_CONTEXT=0
+[[ "${BASH_SOURCE[0]:-}" != "${0:-}" ]] \
+  && _MDM_DETECT_LAUNCHER_SOURCE_CONTEXT=1
+readonly _MDM_DETECT_LAUNCHER_SOURCE_CONTEXT
+
 _mdm_launcher_mode_safe() {
   local _mode="$1"
   [[ "$_mode" =~ ^[0-7]+$ ]] || return 1
@@ -15,15 +20,17 @@ _mdm_launcher_mode_safe() {
   return 0
 }
 
-_mdm_username_is_safe() {
+_mdm_requested_username_is_safe() {
+  local _user="$1"
+  [[ ${#_user} -ge 1 && ${#_user} -le 255 ]] || return 1
+  [[ "$_user" =~ ^[A-Za-z0-9_][A-Za-z0-9_.@+-]*$ ]] || return 1
+  [[ "$_user" != . && "$_user" != .. ]]
+}
+
+_mdm_canonical_username_is_safe() {
   local _user="$1"
   [[ ${#_user} -ge 1 && ${#_user} -le 32 ]] || return 1
-  [[ "$_user" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*([.@][A-Za-z0-9_-]+)*$ ]] \
-    || return 1
-  case "$_user" in
-    _[Uu][Nn][Rr][Ee][Ss][Oo][Ll][Vv][Ee][Dd]) return 1 ;;
-  esac
-  return 0
+  [[ "$_user" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*([.@][A-Za-z0-9_-]+)*$ ]]
 }
 
 _mdm_launcher_stat_owner() {
@@ -53,6 +60,33 @@ _mdm_launcher_acl_safe() {
   [[ "$_first" == *[[:space:]]* \
     && "$_permissions" =~ ^[-bcdlps][rwxStTs-]{9}[@+]?$ ]] || return 1
   [[ "$_permissions" != *+* && "$_listing" != *$'\n'* ]]
+}
+
+_mdm_launcher_tmp_base_trusted() { # <fixed-temporary-base>
+  local _base="$1" _physical _path _owner _mode
+  case "$_base" in /private/tmp|/tmp) ;; *) return 1 ;; esac
+  [[ -d "$_base" && ! -L "$_base" ]] || return 1
+  _physical="$(builtin cd -P -- "$_base" 2>/dev/null && printf '%s' "$PWD")" \
+    || return 1
+  [[ "$_physical" == "$_base" ]] || return 1
+
+  _path="$_physical"
+  while :; do
+    [[ -d "$_path" && ! -L "$_path" ]] || return 1
+    _owner="$(_mdm_launcher_stat_owner "$_path" || true)"
+    _mode="$(_mdm_launcher_stat_mode "$_path" || true)"
+    [[ "$_owner" == 0 ]] || return 1
+    if [[ "$_path" == "$_physical" ]]; then
+      [[ "$_mode" == 1777 ]] || return 1
+    else
+      _mdm_launcher_mode_safe "$_mode" || return 1
+    fi
+    _mdm_launcher_acl_safe "$_path" || return 1
+    [[ "$_path" == / ]] && break
+    _path="${_path%/*}"
+    [[ -n "$_path" ]] || _path=/
+  done
+  return 0
 }
 
 _mdm_launcher_path_trusted() {
@@ -120,7 +154,8 @@ _mdm_launcher_exit_on_signal() { # <signal> <exit-code>
 }
 
 _mdm_launcher_snapshot() { # <source> <output-variable>
-  local _source="$1" _output="$2" _before _opened _tmp_base _old_umask
+  local _source="$1" _output="$2" _before _opened _tmp_base _allocation_base
+  local _old_umask
   local _mdm_launcher_inflight=""
   [[ "$_output" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
   printf -v "$_output" '%s' ""
@@ -140,10 +175,21 @@ _mdm_launcher_snapshot() { # <source> <output-variable>
     _tmp_base=/tmp
   fi
   [[ "$_before" == "$_opened" ]] || { exec 9<&-; return 1; }
+  _mdm_launcher_tmp_base_trusted "$_tmp_base" \
+    || { exec 9<&-; return 1; }
+  _allocation_base="$_tmp_base"
+  if [[ "$_MDM_DETECT_LAUNCHER_SOURCE_CONTEXT" == 1 \
+    && "${_MDM_DETECT_TEST_MODE:-0}" == 1 \
+    && "${MDM_TEST_TMP_ROOT:-}" == /* && -d "$MDM_TEST_TMP_ROOT" \
+    && ! -L "$MDM_TEST_TMP_ROOT" \
+    && "$(cd -P "$MDM_TEST_TMP_ROOT" && /bin/pwd -P)" \
+      == "$MDM_TEST_TMP_ROOT" ]]; then
+    _allocation_base="$MDM_TEST_TMP_ROOT"
+  fi
   _old_umask="$(umask)"
   umask 077
   _mdm_launcher_inflight="$(
-    /usr/bin/mktemp "$_tmp_base/claude-kit-mdm-launcher.XXXXXX"
+    /usr/bin/mktemp "$_allocation_base/claude-kit-mdm-launcher.XXXXXX"
   )" \
     || { umask "$_old_umask"; exec 9<&-; return 1; }
   umask "$_old_umask"
@@ -259,28 +305,532 @@ _mdm_is_darwin() {
   [[ "$(/usr/bin/uname -s 2>/dev/null)" == "Darwin" ]]
 }
 
-_mdm_detect_system_python() {
-  local _python=/usr/bin/python3 _details
+_MDM_DETECT_SOURCE_PYTHON_TRUST_BASE=/Library
+_MDM_DETECT_SOURCE_PYTHON_CLT_ROOT=/Library/Developer/CommandLineTools
+_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework
+_MDM_DETECT_SOURCE_PYTHON_LINK=/Library/Developer/CommandLineTools/usr/bin/python3
+_MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK=""
+_MDM_DETECT_PRIVATE_PYTHON_PATH=""
+_MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK_IDENTITY=""
+_MDM_DETECT_PRIVATE_PYTHON_TARGET_IDENTITY=""
+_MDM_DETECT_PRIVATE_PYTHON_FULL_TREE_SEAL=""
+
+_MDM_DETECT_PYTHON_TREE_MAX_ENTRIES=10000
+_MDM_DETECT_PYTHON_TREE_MAX_PATH_BYTES=4194304
+_MDM_DETECT_PYTHON_TREE_MAX_FILE_BYTES=536870912
+_MDM_DETECT_PYTHON_TREE_MAX_SPEC_BYTES=8388608
+
+_mdm_detect_python_codesign_requirement() {
+  printf '%s' '=identifier "com.apple.python3" and anchor apple'
+}
+
+_mdm_detect_python_codesign() {
+  /usr/bin/codesign "$@"
+}
+
+_mdm_detect_python_codesign_is_valid() { # <framework>
+  local _framework="$1" _requirement _details _envelope
+  _requirement="$(_mdm_detect_python_codesign_requirement)" || return 1
+  _mdm_detect_python_codesign --verify --deep --strict -R "$_requirement" \
+    -- "$_framework" >/dev/null 2>&1 || return 1
+  _details="$(LC_ALL=C _mdm_detect_python_codesign \
+    -dvv -- "$_framework" 2>&1)" || return 1
+  [[ -n "$_details" && ${#_details} -le 65536 \
+    && "$_details" != *$'\r'* ]] || return 1
+  _envelope="$(printf '%s\n' "$_details" | LC_ALL=C /usr/bin/awk '
+    /^Sealed Resources version=/ { count++; line = $0 }
+    END { if (count != 1) exit 1; print line }
+  ')" || return 1
+  [[ "$_envelope" =~ ^Sealed\ Resources\ version=2\ rules=[0-9]+\ files=[0-9]+$ ]]
+}
+
+_mdm_detect_python_mtree() {
+  LC_ALL=C /usr/sbin/mtree "$@"
+}
+
+_mdm_detect_python_ditto() {
+  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    LC_ALL=C /usr/bin/ditto "$@"
+}
+
+_mdm_detect_python_lexical_path() { # <absolute-path>
+  local _path="$1" _rest _segment _result="" _index
+  local -a _segments=()
+  [[ "$_path" == /* && ${#_path} -le 4096 \
+    && ! "$_path" =~ [[:cntrl:]] ]] || return 1
+  _rest="${_path#/}"
+  while [[ -n "$_rest" ]]; do
+    _segment="${_rest%%/*}"
+    if [[ "$_rest" == */* ]]; then _rest="${_rest#*/}"; else _rest=""; fi
+    case "$_segment" in
+      ''|.) : ;;
+      ..)
+        [[ "${#_segments[@]}" -gt 0 ]] || return 1
+        _index=$((${#_segments[@]} - 1))
+        unset '_segments[_index]' ;;
+      *)
+        [[ ! "$_segment" =~ [[:cntrl:]] \
+          && "${#_segments[@]}" -lt 64 ]] || return 1
+        _segments+=("$_segment") ;;
+    esac
+  done
+  for _segment in "${_segments[@]}"; do _result="$_result/$_segment"; done
+  [[ -n "$_result" ]] || _result=/
+  printf '%s' "$_result"
+}
+
+_mdm_detect_python_dir_chain_trusted() { # <canonical trust-base descendant>
+  local _target="$1" _base="$_MDM_DETECT_SOURCE_PYTHON_TRUST_BASE"
+  local _owner
+  _owner="$(_mdm_expected_trust_owner)" || return 1
+  [[ "$_base" == /* && "$_target" == /* ]] || return 1
+  case "$_target" in "$_base"|"$_base"/*) : ;; *) return 1 ;; esac
+  if [[ "$_base" == /Library ]]; then
+    _mdm_trusted_component / "$_owner" dir || return 1
+  fi
+  _mdm_verify_trusted_dir_chain "$_target" "$_base" "$_owner"
+}
+
+_mdm_detect_python_link_binding() { # <symlink>
+  local _link="$1" _owner _metadata _mode
+  [[ -L "$_link" ]] || return 1
+  _owner="$(_mdm_expected_trust_owner)" || return 1
+  [[ "$(_mdm_stat_owner "$_link")" == "$_owner" ]] || return 1
+  _metadata="$(_mdm_stat_metadata "$_link")" || return 1
+  case "$_metadata" in *:Symbolic\ Link:*|*:symbolic\ link:*) : ;; *) return 1 ;; esac
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_link")")" || return 1
+  _mdm_mode_is_safe "$_mode" || return 1
+  ! _mdm_has_acl "$_link" || return 1
+  printf '%s' "$_metadata"
+}
+
+_mdm_detect_python_resolve_fixed_link() { # <resolved-out> <chain-out>
+  local _resolved_out="$1" _chain_out="$2"
+  local _path="$_MDM_DETECT_SOURCE_PYTHON_LINK" _link _parent _target
+  local _before _after _chain="" _hops=0 _relative _version _expected
+  [[ "$_resolved_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_chain_out" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+    && "$_resolved_out" != "$_chain_out" ]] || return 1
+  while [[ -L "$_path" ]]; do
+    _hops=$((_hops + 1))
+    [[ "$_hops" -le 8 ]] || return 1
+    _link="$_path"
+    _parent="${_link%/*}"; [[ -n "$_parent" ]] || _parent=/
+    _mdm_detect_python_dir_chain_trusted "$_parent" || return 1
+    _before="$(_mdm_detect_python_link_binding "$_link")" || return 1
+    _target="$(_mdm_readlink_value "$_link")" || return 1
+    _after="$(_mdm_detect_python_link_binding "$_link")" || return 1
+    [[ "$_after" == "$_before" ]] || return 1
+    _chain="$_chain${_link}"$'\t'"${_before}"$'\t'"$_target"$'\n'
+    if [[ "$_target" == /* ]]; then
+      _path="$(_mdm_detect_python_lexical_path "$_target")" || return 1
+    else
+      _path="$(_mdm_detect_python_lexical_path "$_parent/$_target")" \
+        || return 1
+    fi
+    case "$_path" in
+      "$_MDM_DETECT_SOURCE_PYTHON_CLT_ROOT"/*) : ;;
+      *) return 1 ;;
+    esac
+  done
+  [[ "$_hops" -ge 1 ]] || return 1
+  case "$_path" in
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK"/Versions/*/bin/python*) : ;;
+    *) return 1 ;;
+  esac
+  _relative="${_path#"$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK"/Versions/}"
+  _version="${_relative%%/*}"
+  [[ "$_version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+  _expected="$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK/Versions/$_version/bin/python$_version"
+  [[ "$_path" == "$_expected" ]] || return 1
+  printf -v "$_resolved_out" '%s' "$_path"
+  printf -v "$_chain_out" '%s' "$_chain"
+}
+
+_mdm_detect_python_target_binding() { # <executable> <framework> <source|private>
+  local _python="$1" _framework="$2" _kind="$3"
+  local _owner _canonical _identity _metadata _mode _parent
+  case "$_kind" in source|private) : ;; *) return 1 ;; esac
+  case "$_python" in
+    "$_framework"/*) : ;; *) return 1 ;;
+  esac
+  [[ -f "$_python" && ! -L "$_python" && -x "$_python" ]] || return 1
+  _canonical="$(_mdm_canonical_file "$_python")" || return 1
+  [[ "$_canonical" == "$_python" ]] || return 1
+  _parent="${_python%/*}"
+  if [[ "$_kind" == source ]]; then
+    _mdm_detect_python_dir_chain_trusted "$_parent" || return 1
+  else
+    [[ "$(_mdm_canonical_dir "$_parent")" == "$_parent" ]] || return 1
+  fi
+  _owner="$(_mdm_expected_trust_owner)" || return 1
+  if [[ "$_kind" == private ]]; then
+    _mdm_trusted_component "$_python" "$_owner" file || return 1
+  else
+    [[ "$(_mdm_stat_owner "$_python")" == "$_owner" ]] || return 1
+    ! _mdm_has_acl "$_python" || return 1
+  fi
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_python")")" || return 1
+  _mdm_mode_owner_executable "$_mode" || return 1
+  _identity="$(_mdm_stat_identity "$_python")" || return 1
+  _metadata="$(_mdm_stat_metadata "$_python")" || return 1
+  printf '%s\t%s' "$_identity" "$_metadata"
+}
+
+_mdm_detect_python_framework_tree_file_bytes() { # <framework>
+  local _root="$1" _bytes
+  if _mdm_is_darwin; then
+    _bytes="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev -type f \
+      -exec /usr/bin/stat -f '%z' {} + \
+      | LC_ALL=C /usr/bin/awk \
+        -v limit="$_MDM_DETECT_PYTHON_TREE_MAX_FILE_BYTES" '
+          BEGIN { total = 0; bad = 0 }
+          !/^[0-9]+$/ { bad = 1; exit 1 }
+          { total += $1; if (total > limit) { bad = 1; exit 1 } }
+          END { if (bad) exit 1; printf "%.0f\n", total }
+        ')" || return 1
+  else
+    _bytes="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev -type f \
+      -exec /usr/bin/stat -c '%s' {} + \
+      | LC_ALL=C /usr/bin/awk \
+        -v limit="$_MDM_DETECT_PYTHON_TREE_MAX_FILE_BYTES" '
+          BEGIN { total = 0; bad = 0 }
+          !/^[0-9]+$/ { bad = 1; exit 1 }
+          { total += $1; if (total > limit) { bad = 1; exit 1 } }
+          END { if (bad) exit 1; printf "%.0f\n", total }
+        ')" || return 1
+  fi
+  [[ "$_bytes" =~ ^[0-9]+$ \
+    && "$_bytes" -le "$_MDM_DETECT_PYTHON_TREE_MAX_FILE_BYTES" ]]
+}
+
+_mdm_detect_python_framework_tree_properties() { # <framework> <source|private>
+  local _root="$1" _kind="$2" _owner _unsafe _entry
+  local -a _link_test=(-o -false)
+  local _canonical _relative _rest _depth
+  local _count=0 _path_bytes=0 _complete=0 LC_ALL=C
+  _owner="$(_mdm_expected_trust_owner)" || return 1
+  case "$_kind" in
+    source) : ;;
+    private) _link_test=(-o \( ! -type d ! -links 1 \)) ;;
+    *) return 1 ;;
+  esac
+  [[ -d "$_root" && ! -L "$_root" \
+    && "$(_mdm_canonical_dir "$_root")" == "$_root" ]] || return 1
+  if _mdm_is_darwin; then
+    _unsafe="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev \
+      \( ! -user "$_owner" -o -perm -0020 -o -perm -0002 -o -acl \
+        -o -flags +uchg -o -flags +uappnd \
+        -o -flags +schg -o -flags +sappnd \
+        -o -flags +restricted \
+        -o ! \( -type d -o -type f -o -type l \) \
+        "${_link_test[@]}" \) -print -quit 2>/dev/null)" \
+      || return 1
+  else
+    # Production reaches this trust path only on macOS.  The ACL-less branch
+    # keeps the fixed-layout fixture executable in the Linux test job; tests
+    # separately inject an ACL failure through the root trust check below.
+    _unsafe="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev \
+      \( ! -user "$_owner" -o -perm -0020 -o -perm -0002 \
+        -o ! \( -type d -o -type f -o -type l \) \
+        "${_link_test[@]}" \) -print -quit 2>/dev/null)" \
+      || return 1
+    ! _mdm_has_acl "$_root" || return 1
+  fi
+  [[ -z "$_unsafe" ]] || return 1
+  while IFS= read -r -d '' _entry; do
+    if [[ -z "$_entry" ]]; then _complete=1; break; fi
+    _count=$((_count + 1))
+    _relative="${_entry#"$_root"}"
+    _path_bytes=$((_path_bytes + ${#_relative}))
+    [[ "$_count" -le "$_MDM_DETECT_PYTHON_TREE_MAX_ENTRIES" \
+      && "$_path_bytes" -le "$_MDM_DETECT_PYTHON_TREE_MAX_PATH_BYTES" \
+      && "$_entry" != *$'\n'* && ! "$_entry" =~ [[:cntrl:]] ]] || return 1
+    case "$_entry" in "$_root"|"$_root"/*) : ;; *) return 1 ;; esac
+    _rest="${_relative#/}"
+    _depth=0
+    while [[ "$_rest" == */* ]]; do
+      _depth=$((_depth + 1)); [[ "$_depth" -lt 32 ]] || return 1
+      _rest="${_rest#*/}"
+    done
+    if [[ -L "$_entry" ]]; then
+      _canonical="$(_mdm_canonical_any "$_entry")" || return 1
+      case "$_canonical" in "$_root"|"$_root"/*) : ;; *) return 1 ;; esac
+    fi
+  done < <(
+    if LC_ALL=C /usr/bin/find -P "$_root" -xdev -print0; then
+      printf '\0'
+    fi
+  )
+  [[ "$_complete" -eq 1 && "$_count" -gt 0 ]] \
+    && _mdm_detect_python_framework_tree_file_bytes "$_root"
+}
+
+_mdm_detect_python_framework_tree_spec() { # <framework> <full>
+  local _root="$1" _kind="$2" _keys _stderr
+  case "$_kind" in
+    full)
+      _keys=type,uid,gid,mode,nlink,size,link,sha256digest,acldigest,xattrsdigest,flags ;;
+    *) return 1 ;;
+  esac
+  exec 8>&1
+  _stderr="$({
+    LC_ALL=C _mdm_detect_python_mtree \
+      -c -n -P -x -p "$_root" -k "$_keys" \
+      2>&1 >&8
+    printf '\036%s' "$?"
+  })"
+  exec 8>&-
+  [[ "$_stderr" == $'\036'0 ]]
+}
+
+_mdm_detect_python_sha256_stream() {
+  if _mdm_is_darwin; then
+    /usr/bin/shasum -a 256 | /usr/bin/awk 'NR == 1 { print $1 }'
+  elif [[ -x /usr/bin/sha256sum ]]; then
+    /usr/bin/sha256sum | /usr/bin/awk 'NR == 1 { print $1 }'
+  else
+    return 1
+  fi
+}
+
+_mdm_detect_python_framework_tree_seal() { # <framework>
+  local _root="$1" _spec _digest LC_ALL=C
+  _spec="$({
+    _mdm_detect_python_framework_tree_spec "$_root" full || exit 1
+    printf '\036'
+  })" || return 1
+  [[ "$_spec" == *$'\036' ]] || return 1
+  _spec="${_spec%$'\036'}"
+  [[ "${#_spec}" -gt 0 \
+    && "${#_spec}" -le "$_MDM_DETECT_PYTHON_TREE_MAX_SPEC_BYTES" ]] \
+    || return 1
+  _digest="$(printf '%s' "$_spec" \
+    | _mdm_detect_python_sha256_stream)" || return 1
+  [[ "$_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$_digest"
+}
+
+_mdm_detect_validate_source_python() { # <path-out> <framework-out> <target-out>
+  local _path_out="$1" _framework_out="$2" _target_out="$3"
+  local _framework _resolved_python _resolution_chain _target
+  _mdm_detect_python_dir_chain_trusted \
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" || return 1
+  _mdm_detect_python_dir_chain_trusted \
+    "${_MDM_DETECT_SOURCE_PYTHON_LINK%/*}" || return 1
+  _framework="$(_mdm_stat_dir_identity \
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK")" || return 1
+  _mdm_detect_python_link_binding \
+    "$_MDM_DETECT_SOURCE_PYTHON_LINK" >/dev/null || return 1
+  _mdm_detect_python_resolve_fixed_link \
+    _resolved_python _resolution_chain || return 1
+  _target="$(_mdm_detect_python_target_binding "$_resolved_python" \
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" source)" || return 1
+  _mdm_detect_python_framework_tree_properties \
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" source || return 1
+  _mdm_detect_python_codesign_is_valid \
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" || return 1
+  printf -v "$_path_out" '%s' "$_resolved_python"
+  printf -v "$_framework_out" '%s' "$_framework"
+  printf -v "$_target_out" '%s' "$_target"
+}
+
+_mdm_detect_source_test_python() {
+  local _python="${MDM_DETECT_PYTHON_OVERRIDE:-}" _canonical
+  [[ "$_MDM_DETECT_TEST_MODE" == 1 && "$_python" == /* \
+    && -f "$_python" && ! -L "$_python" && -x "$_python" ]] || return 1
+  _canonical="$(_mdm_canonical_file "$_python")" || return 1
+  [[ "$_canonical" == "$_python" ]] || return 1
+  printf '%s' "$_python"
+}
+
+_mdm_detect_private_python_path() { # <source-python> <private-framework>
+  local _source="$1" _framework="$2" _relative _version _expected
+  case "$_source" in
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK"/Versions/*/bin/python*) : ;;
+    *) return 1 ;;
+  esac
+  _relative="${_source#"$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK"/}"
+  _version="${_relative#Versions/}"; _version="${_version%%/*}"
+  [[ "$_version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 1
+  _expected="Versions/$_version/bin/python$_version"
+  [[ "$_relative" == "$_expected" ]] || return 1
+  printf '%s/%s' "$_framework" "$_relative"
+}
+
+_mdm_detect_validate_private_python() {
+  # <workspace> <workspace-identity> <source-python> <private-framework>
+  # <path-out> <framework-out> <target-out>
+  local _workspace="$1" _workspace_identity="$2" _source="$3" _root="$4"
+  local _path_out="$5" _framework_out="$6" _target_out="$7"
+  local _binding _path _framework _target
+  _binding="$(_mdm_private_workspace_binding "$_workspace")" || return 1
+  [[ "$_binding" == "$_workspace_identity" \
+    && "$_root" == "$_workspace/Python3.framework" \
+    && -d "$_root" && ! -L "$_root" \
+    && "$(_mdm_canonical_dir "$_root")" == "$_root" ]] || return 1
+  _path="$(_mdm_detect_private_python_path "$_source" "$_root")" || return 1
+  _mdm_detect_python_framework_tree_properties "$_root" private || return 1
+  _framework="$(_mdm_stat_dir_identity "$_root")" || return 1
+  _target="$(_mdm_detect_python_target_binding \
+    "$_path" "$_root" private)" || return 1
+  [[ "$(_mdm_private_workspace_binding "$_workspace")" \
+    == "$_workspace_identity" ]] || return 1
+  printf -v "$_path_out" '%s' "$_path"
+  printf -v "$_framework_out" '%s' "$_framework"
+  printf -v "$_target_out" '%s' "$_target"
+}
+
+_mdm_detect_capture_private_python() {
+  # <workspace> <workspace-identity> <private-path> <private-framework>
+  # <framework-out> <target-out> <full-out>
+  local _workspace="$1" _workspace_identity="$2" _path="$3" _root="$4"
+  local _framework_out="$5" _target_out="$6" _full_out="$7"
+  local _binding _captured_framework _captured_target _captured_full
+  _binding="$(_mdm_private_workspace_binding "$_workspace")" || return 1
+  [[ "$_binding" == "$_workspace_identity" \
+    && "$_root" == "$_workspace/Python3.framework" \
+    && "$_path" == "$_root"/* ]] || return 1
+  _mdm_detect_python_framework_tree_properties "$_root" private || return 1
+  _captured_framework="$(_mdm_stat_dir_identity "$_root")" || return 1
+  _captured_target="$(_mdm_detect_python_target_binding \
+    "$_path" "$_root" private)" || return 1
+  _captured_full="$(_mdm_detect_python_framework_tree_seal "$_root")" \
+    || return 1
+  [[ "$_captured_full" =~ ^[0-9a-f]{64}$ \
+    && "$(_mdm_private_workspace_binding "$_workspace")" \
+      == "$_workspace_identity" ]] || return 1
+  printf -v "$_framework_out" '%s' "$_captured_framework"
+  printf -v "$_target_out" '%s' "$_captured_target"
+  printf -v "$_full_out" '%s' "$_captured_full"
+}
+
+_mdm_detect_private_python_selftest() { # <python> <framework>
+  local _python="$1" _framework="$2" _output
+  [[ "$(/usr/bin/id -u)" == 0 ]] || return 1
+  _output="$(/usr/bin/env -i HOME=/var/root \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    "$_python" -I -B -S - "$_framework" <<'PY'
+import os
+import signal
+import sys
+
+signal.alarm(15)
+import _ctypes
+import ctypes
+import json
+framework = os.path.realpath(sys.argv[1])
+origins = (sys.executable, sys.prefix, json.__file__, ctypes.__file__,
+           _ctypes.__file__)
+if (not sys.flags.isolated or not sys.flags.dont_write_bytecode
+        or not sys.flags.no_site
+        or not all(isinstance(path, str) and path for path in origins)):
+    raise SystemExit(1)
+for path in origins:
+    resolved = os.path.realpath(path)
+    if resolved != framework and not resolved.startswith(framework + os.sep):
+        raise SystemExit(1)
+ctypes.CDLL(None)
+signal.alarm(0)
+print("private-python-ok")
+PY
+)" || return 1
+  [[ "$_output" == private-python-ok ]]
+}
+
+_mdm_detect_copy_python_framework() { # <source-framework> <private-framework>
+  local _source="$1" _destination="$2"
+  [[ -d "$_source" && ! -L "$_source" \
+    && ! -e "$_destination" && ! -L "$_destination" ]] || return 1
+  _mdm_detect_python_ditto --clone --nopersistRootless \
+    --rsrc --extattr --qtn --acl -X "$_source" "$_destination"
+}
+
+_mdm_detect_reset_system_python() {
+  _MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK=""
+  _MDM_DETECT_PRIVATE_PYTHON_PATH=""
+  _MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK_IDENTITY=""
+  _MDM_DETECT_PRIVATE_PYTHON_TARGET_IDENTITY=""
+  _MDM_DETECT_PRIVATE_PYTHON_FULL_TREE_SEAL=""
+}
+
+_mdm_detect_initialize_system_python() { # <active-private-workspace>
+  local _workspace="${1:-}" _workspace_identity
+  local _source_path _source_framework _source_target _private_root
+  local _private_path _private_framework_before _private_target_before
+  local _private_framework_after _private_target_after _private_full
+  _mdm_detect_reset_system_python
   if [[ "$_MDM_DETECT_TEST_MODE" == 1 ]]; then
-    _python="${MDM_DETECT_PYTHON_OVERRIDE:-/usr/bin/python3}"
-    [[ "$_python" == /* && -x "$_python" && ! -L "$_python" ]] || return 1
-    printf '%s' "$_python"
+    _MDM_DETECT_PRIVATE_PYTHON_PATH="$(_mdm_detect_source_test_python)" \
+      || return 1
     return 0
   fi
-  [[ -x "$_python" && ! -L "$_python" && -x /usr/bin/codesign ]] || return 1
-  /usr/bin/codesign --verify --strict "$_python" >/dev/null 2>&1 || return 1
-  _details="$(/usr/bin/codesign -dv --verbose=4 "$_python" 2>&1)" || return 1
-  printf '%s\n' "$_details" | /usr/bin/grep -q '^Platform identifier=' || return 1
-  printf '%s\n' "$_details" | /usr/bin/grep -qx 'Authority=Software Signing' || return 1
-  printf '%s\n' "$_details" | /usr/bin/grep -qx 'Authority=Apple Root CA' || return 1
-  printf '%s' "$_python"
+  [[ -n "$_workspace" && "$_workspace" == "$_MDM_DETECT_ACTIVE_WORKSPACE" \
+    && -n "$_MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY" ]] || return 1
+  _workspace_identity="$(_mdm_private_workspace_binding "$_workspace")" \
+    || return 1
+  [[ "$_workspace_identity" == "$_MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY" ]] \
+    || return 1
+  _mdm_detect_validate_source_python \
+    _source_path _source_framework _source_target || return 1
+  _private_root="$_workspace/Python3.framework"
+  _mdm_detect_copy_python_framework \
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" "$_private_root" || return 1
+  _mdm_detect_validate_private_python \
+    "$_workspace" "$_workspace_identity" "$_source_path" "$_private_root" \
+    _private_path _private_framework_before _private_target_before || return 1
+  [[ "$_private_framework_before" != "$_source_framework" \
+    && "$_private_target_before" != "$_source_target" ]] || return 1
+  _mdm_detect_python_codesign_is_valid "$_private_root" || return 1
+  _mdm_detect_private_python_selftest \
+    "$_private_path" "$_private_root" || return 1
+  _mdm_detect_capture_private_python \
+    "$_workspace" "$_workspace_identity" "$_private_path" "$_private_root" \
+    _private_framework_after _private_target_after _private_full || return 1
+  [[ "$_private_framework_after" == "$_private_framework_before" \
+    && "$_private_target_after" == "$_private_target_before" \
+    && "$_private_full" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK="$_private_root"
+  _MDM_DETECT_PRIVATE_PYTHON_PATH="$_private_path"
+  _MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK_IDENTITY="$_private_framework_after"
+  _MDM_DETECT_PRIVATE_PYTHON_TARGET_IDENTITY="$_private_target_after"
+  _MDM_DETECT_PRIVATE_PYTHON_FULL_TREE_SEAL="$_private_full"
+}
+
+_mdm_detect_system_python_cache_rebound() {
+  local _private_framework _private_target _private_full
+  [[ -n "$_MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK" \
+    && -n "$_MDM_DETECT_PRIVATE_PYTHON_PATH" \
+    && -n "$_MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK_IDENTITY" \
+    && -n "$_MDM_DETECT_PRIVATE_PYTHON_TARGET_IDENTITY" \
+    && "$_MDM_DETECT_PRIVATE_PYTHON_FULL_TREE_SEAL" =~ ^[0-9a-f]{64}$ \
+    && -n "$_MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY" ]] || return 1
+  _mdm_detect_capture_private_python \
+    "$_MDM_DETECT_ACTIVE_WORKSPACE" \
+    "$_MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY" \
+    "$_MDM_DETECT_PRIVATE_PYTHON_PATH" \
+    "$_MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK" \
+    _private_framework _private_target _private_full \
+    || return 1
+  [[ "$_private_framework" == "$_MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK_IDENTITY" \
+    && "$_private_target" == "$_MDM_DETECT_PRIVATE_PYTHON_TARGET_IDENTITY" \
+    && "$_private_full" == "$_MDM_DETECT_PRIVATE_PYTHON_FULL_TREE_SEAL" ]]
+}
+
+_mdm_detect_system_python() {
+  if [[ "$_MDM_DETECT_TEST_MODE" == 1 ]]; then
+    _mdm_detect_source_test_python
+    return
+  fi
+  [[ -n "$_MDM_DETECT_PRIVATE_PYTHON_PATH" ]] || return 1
+  printf '%s' "$_MDM_DETECT_PRIVATE_PYTHON_PATH"
 }
 
 _mdm_json_query() { # <file> <key-path> <raw|count|type> [expected-type]
   local _file="$1" _key="$2" _operation="$3" _expected="${4:-}"
   local _python
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_file" "$_key" "$_operation" "$_expected" <<'PY'
+  "$_python" -I -B -S - "$_file" "$_key" "$_operation" "$_expected" <<'PY'
 import json
 import math
 import sys
@@ -393,7 +943,7 @@ _mdm_issuer_json_is_canonical() { # <file> <receipt|component|deployment>
   local _file="$1" _kind="$2" _python
   case "$_kind" in receipt|component|deployment) : ;; *) return 1 ;; esac
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_file" "$_kind" <<'PY'
+  "$_python" -I -B -S - "$_file" "$_kind" <<'PY'
 import json
 import sys
 
@@ -571,6 +1121,14 @@ _mdm_stat_gid() {
 _mdm_stat_mode() {
   if _mdm_is_darwin; then
     /usr/bin/stat -f '%Lp' "$1" 2>/dev/null
+  else
+    /usr/bin/stat -c '%a' "$1" 2>/dev/null
+  fi
+}
+
+_mdm_stat_mode_with_special_bits() {
+  if _mdm_is_darwin; then
+    /usr/bin/stat -f '%Mp%Lp' "$1" 2>/dev/null
   else
     /usr/bin/stat -c '%a' "$1" 2>/dev/null
   fi
@@ -918,6 +1476,86 @@ _mdm_detect_target_binding_tuple() { # <target-user>
   printf '%s\t%s' "$_identity" "$_home"
 }
 
+_mdm_detect_read_canonical_user_record() { # <search-policy-uid>
+  LC_ALL=C /usr/bin/dscacheutil -q user -a uid "$1" 2>/dev/null
+}
+
+_mdm_detect_parse_canonical_user_record() { # <expected-uid>
+  local _expected_uid="$1"
+  [[ "$_expected_uid" =~ ^(0|[1-9][0-9]*)$ \
+    && ${#_expected_uid} -le 10 ]] || return 1
+  LC_ALL=C /usr/bin/awk -v expected="$_expected_uid" '
+    BEGIN {
+      active = 0; records = 0; name_seen = 0; uid_seen = 0; bad = 0
+    }
+    function finish_record() {
+      if (!active) return
+      records++
+      active = 0
+    }
+    $0 == "" { finish_record(); next }
+    {
+      active = 1
+      if ($0 ~ /[[:cntrl:]]/) { bad = 1; next }
+      if ($0 ~ /^name:/) {
+        if ($0 !~ /^name: [^[:space:]][^[:cntrl:]]*$/ || name_seen) {
+          bad = 1; next
+        }
+        name = substr($0, length("name: ") + 1)
+        name_seen++
+        next
+      }
+      if ($0 ~ /^uid:/) {
+        if ($0 !~ /^uid: (0|[1-9][0-9]*)$/ || uid_seen) {
+          bad = 1; next
+        }
+        uid = substr($0, length("uid: ") + 1)
+        uid_seen++
+        next
+      }
+      # Other standard fields are data only, but still require a field name
+      # and the exact dscacheutil colon delimiter shape.
+      if ($0 !~ /^[A-Za-z][A-Za-z0-9_-]*:($| [^[:cntrl:]]*)$/) bad = 1
+    }
+    END {
+      finish_record()
+      if (!bad && records == 1 && name_seen == 1 && uid_seen == 1 \
+          && ("x" uid) == ("x" expected) && length(uid) <= 10) {
+        printf "%s", name
+        exit 0
+      }
+      exit 1
+    }
+  '
+}
+
+_mdm_detect_canonical_username_for_uid() { # <search-policy-uid>
+  local _uid="$1" _override _user
+  [[ "$_uid" =~ ^[0-9]+$ && "$_uid" -ge 501 && ${#_uid} -le 10 ]] \
+    || return 1
+  [[ ${#_uid} -eq 1 || "${_uid:0:1}" != 0 ]] || return 1
+  if _override="$(_mdm_test_value MDM_DETECT_CANONICAL_USER_OVERRIDE)"; then
+    _user="$_override"
+  else
+    _user="$(_mdm_detect_read_canonical_user_record "$_uid" \
+      | _mdm_detect_parse_canonical_user_record "$_uid")" || return 1
+  fi
+  [[ -n "$_user" && ! "$_user" =~ [[:cntrl:]] ]] || return 1
+  printf '%s' "$_user"
+}
+
+_mdm_detect_canonical_target_binding() { # <supplied-target-user>
+  local _supplied="$1" _initial _canonical _rebound _uid
+  _initial="$(_mdm_detect_target_binding_tuple "$_supplied")" || return 1
+  _uid="${_initial%%$'\t'*}"
+  _canonical="$(_mdm_detect_canonical_username_for_uid "$_uid")" || return 1
+  _mdm_canonical_username_is_safe "$_canonical" || return 2
+  ! _mdm_user_is_not_applicable "$_canonical" || return 3
+  _rebound="$(_mdm_detect_target_binding_tuple "$_canonical")" || return 1
+  [[ "$_rebound" == "$_initial" ]] || return 1
+  printf '%s\t%s' "$_canonical" "$_rebound"
+}
+
 _mdm_detect_user_uid() {
   local _tuple
   _tuple="$(_mdm_detect_target_identity_tuple "$1")" || return 1
@@ -1114,7 +1752,7 @@ _mdm_font_file_is_trusted() { # <font-file>
   _sha="${_record%%$'\t'*}"
   _family="${_record#*$'\t'}"
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_path" "$_name" "$_sha" "$_family" <<'PY'
+  "$_python" -I -B -S - "$_path" "$_name" "$_sha" "$_family" <<'PY'
 import hashlib
 import os
 import stat
@@ -1341,9 +1979,11 @@ _mdm_artifact_digest() { # <file|tree> <absolute-path> [owner-uid-csv] [group-gi
   _path="$_canonical"
   _python="$(_mdm_detect_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_kind" "$_path" "$_owner_csv" "$_group_csv" <<'PY'
+    "$_python" -I -B -S - "$_kind" "$_path" "$_owner_csv" \
+    "$_group_csv" artifact <<'PY'
 import base64
 import collections
+import _ctypes
 import ctypes
 import errno
 import hashlib
@@ -1352,7 +1992,7 @@ import os
 import stat
 import sys
 
-kind, root, owner_csv, group_csv = sys.argv[1:]
+kind, root, owner_csv, group_csv, contract = sys.argv[1:]
 allowed_owners = ({int(value) for value in owner_csv.split(",")}
                   if owner_csv else None)
 allowed_groups = ({int(value) for value in group_csv.split(",")}
@@ -1376,8 +2016,12 @@ O_SYMLINK = 0x00200000
 XATTR_SHOWCOMPRESSION = 0x0020
 DARWIN = sys.platform == "darwin"
 
-if kind not in ("file", "tree"):
+if kind not in ("file", "tree") or contract not in (
+        "artifact", "copy-semantics", "artifact-copy-semantics"):
     raise SystemExit(1)
+ARTIFACT_CONTRACT = contract in ("artifact", "artifact-copy-semantics")
+COPY_SEMANTICS = contract in ("copy-semantics", "artifact-copy-semantics")
+COMBINED_CONTRACT = contract == "artifact-copy-semantics"
 
 if DARWIN:
     libc = ctypes.CDLL(None, use_errno=True)
@@ -1385,6 +2029,10 @@ if DARWIN:
     libc.acl_get_fd_np.restype = ctypes.c_void_p
     libc.acl_free.argtypes = [ctypes.c_void_p]
     libc.acl_free.restype = ctypes.c_int
+    libc.acl_to_text.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_ssize_t)
+    ]
+    libc.acl_to_text.restype = ctypes.c_void_p
     libc.flistxattr.argtypes = [
         ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int
     ]
@@ -1476,6 +2124,40 @@ def no_extended_acl(descriptor):
     if result != 0:
         raise OSError(error or errno.EIO, "acl_free")
     raise ValueError("extended ACL is not allowed")
+
+
+def copy_acl(descriptor):
+    # Linux exposes POSIX ACLs as system.posix_acl_* xattrs, which are already
+    # captured byte-for-byte below.  On Darwin, serialize the fd-bound ACL so
+    # copy equivalence covers ACL presence, order, entries, and permissions.
+    if not DARWIN:
+        return "posix-xattr"
+    ctypes.set_errno(0)
+    acl = libc.acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED)
+    if not acl:
+        error = ctypes.get_errno()
+        if error == errno.ENOENT:
+            return ""
+        raise OSError(error or errno.EIO, "acl_get_fd_np")
+    text_pointer = None
+    try:
+        length = ctypes.c_ssize_t()
+        ctypes.set_errno(0)
+        text_pointer = libc.acl_to_text(acl, ctypes.byref(length))
+        if not text_pointer or length.value < 0 or length.value > 1024 * 1024:
+            error = ctypes.get_errno()
+            raise OSError(error or errno.EIO, "acl_to_text")
+        value = ctypes.string_at(text_pointer, length.value)
+        return base64.b64encode(value).decode("ascii")
+    finally:
+        if text_pointer:
+            ctypes.set_errno(0)
+            if libc.acl_free(text_pointer) != 0:
+                raise OSError(ctypes.get_errno() or errno.EIO,
+                              "acl_free text")
+        ctypes.set_errno(0)
+        if libc.acl_free(acl) != 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
 
 
 def list_xattr_names(descriptor, is_link=False):
@@ -1580,7 +2262,9 @@ def fd_readlink(descriptor):
 
 
 def capture():
-    records = []
+    artifact_records = [] if ARTIFACT_CONTRACT else None
+    copy_records = [] if COPY_SEMANTICS else None
+    entry_count = 0
     total = 0
     path_total = 0
     xattr_count = 0
@@ -1626,8 +2310,11 @@ def capture():
         def metadata(descriptor, before):
             nonlocal xattr_count, xattr_total
             is_link = stat.S_ISLNK(before.st_mode)
-            if not (is_link and not DARWIN):
+            acl = None
+            if ARTIFACT_CONTRACT and not (is_link and not DARWIN):
                 no_extended_acl(descriptor)
+            if COPY_SEMANTICS:
+                acl = copy_acl(descriptor)
             names = list_xattr_names(descriptor, is_link)
             values = []
             for name in names:
@@ -1642,7 +2329,7 @@ def capture():
                 raise ValueError("xattr names changed")
             if identity(os.fstat(descriptor)) != identity(before):
                 raise ValueError("artifact metadata changed")
-            return values
+            return values, acl
 
         def validate_symlink(parent_parts, target):
             if target.startswith(b"/") or len(target) > MAX_SYMLINK_TARGET:
@@ -1724,9 +2411,10 @@ def capture():
                         pass
 
         def visit(descriptor, parent, name, before, relative_parts, depth):
-            nonlocal total, path_total
-            if depth > MAX_DEPTH or len(records) >= MAX_ENTRIES:
+            nonlocal total, path_total, entry_count
+            if depth > MAX_DEPTH or entry_count >= MAX_ENTRIES:
                 raise ValueError("artifact tree too large")
+            entry_count += 1
             if before.st_dev != root_dev:
                 raise ValueError("artifact crosses filesystem")
             if allowed_owners is not None and before.st_uid not in allowed_owners:
@@ -1739,15 +2427,25 @@ def capture():
             path_total += len(relative_bytes)
             if path_total > MAX_PATH_TOTAL:
                 raise ValueError("artifact paths too large")
-            base = {"path": os.fsdecode(relative_bytes),
-                    "mode": format(stat.S_IMODE(before.st_mode), "04o"),
-                    "uid": before.st_uid, "gid": before.st_gid,
-                    "nlink": before.st_nlink,
-                    "size": before.st_size,
-                    "flags": getattr(before, "st_flags", 0),
-                    "xattrs": metadata(descriptor, before)}
+            xattrs, acl = metadata(descriptor, before)
+            common = {"path": os.fsdecode(relative_bytes),
+                      "mode": format(stat.S_IMODE(before.st_mode), "04o"),
+                      "uid": before.st_uid, "gid": before.st_gid,
+                      "nlink": before.st_nlink,
+                      "flags": getattr(before, "st_flags", 0),
+                      "xattrs": xattrs}
+            artifact_base = (dict(common, size=before.st_size)
+                             if ARTIFACT_CONTRACT else None)
+            copy_base = None
+            if COPY_SEMANTICS:
+                copy_base = dict(common, acl=acl)
+                if not stat.S_ISDIR(before.st_mode):
+                    copy_base["size"] = before.st_size
             if stat.S_ISDIR(before.st_mode):
-                records.append(dict(base, kind="dir"))
+                if artifact_records is not None:
+                    artifact_records.append(dict(artifact_base, kind="dir"))
+                if copy_records is not None:
+                    copy_records.append(dict(copy_base, kind="dir"))
                 names = sorted(os.listdir(descriptor), key=os.fsencode)
                 for child_name in names:
                     child_bytes = os.fsencode(child_name)
@@ -1784,15 +2482,26 @@ def capture():
                 total += size
                 if total > MAX_TOTAL:
                     raise ValueError("artifact aggregate too large")
-                records.append(dict(base, kind="file", size=size,
-                                    sha256=digest.hexdigest()))
+                if artifact_records is not None:
+                    artifact_records.append(dict(
+                        artifact_base, kind="file", size=size,
+                        sha256=digest.hexdigest()))
+                if copy_records is not None:
+                    copy_records.append(dict(
+                        copy_base, kind="file", size=size,
+                        sha256=digest.hexdigest()))
             elif stat.S_ISLNK(before.st_mode):
                 if before.st_nlink != 1:
                     raise ValueError("hard-linked artifact symlink")
                 target = fd_readlink(descriptor)
                 validate_symlink(relative_parts[:-1], target)
-                records.append(dict(base, kind="symlink",
-                                    target=base64.b64encode(target).decode("ascii")))
+                encoded_target = base64.b64encode(target).decode("ascii")
+                if artifact_records is not None:
+                    artifact_records.append(dict(
+                        artifact_base, kind="symlink", target=encoded_target))
+                if copy_records is not None:
+                    copy_records.append(dict(
+                        copy_base, kind="symlink", target=encoded_target))
             else:
                 raise ValueError("unsupported artifact entry")
             if identity(os.fstat(descriptor)) != identity(before):
@@ -1804,8 +2513,16 @@ def capture():
         visit(root_fd, None, None, root_before, [], 0)
         for parent, name, descriptor, before, strong in reversed(bindings):
             assert_bound(parent, name, descriptor, before, strong)
-        return (json.dumps(records, ensure_ascii=True, sort_keys=True,
-                           separators=(",", ":")) + "\n").encode("ascii")
+        captures = []
+        if artifact_records is not None:
+            captures.append((json.dumps(
+                artifact_records, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":")) + "\n").encode("ascii"))
+        if copy_records is not None:
+            captures.append((json.dumps(
+                copy_records, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":")) + "\n").encode("ascii"))
+        return tuple(captures)
     finally:
         for descriptor in reversed(held):
             try:
@@ -1819,7 +2536,11 @@ try:
     second = capture()
     if first != second:
         raise ValueError("artifact changed during capture")
-    print(hashlib.sha256(first).hexdigest())
+    digests = [hashlib.sha256(value).hexdigest() for value in first]
+    if COMBINED_CONTRACT:
+        print(":".join(digests))
+    else:
+        print(digests[0])
 except (OSError, UnicodeError, ValueError, MemoryError, OverflowError,
         RuntimeError, ctypes.ArgumentError):
     sys.exit(1)
@@ -1828,13 +2549,15 @@ PY
 
 _mdm_path_is_absent_with_real_parents() { # <root> <relative>
   local _root="$1" _relative="$2" _python
-  [[ -d "$_root" && ! -L "$_root" && -n "$_relative" \
+  [[ "$_root" == /* && ! "$_root" =~ [[:cntrl:]] \
+    && -d "$_root" && ! -L "$_root" \
+    && "$(_mdm_canonical_dir "$_root")" == "$_root" && -n "$_relative" \
     && "$_relative" != /* && ! "$_relative" =~ [[:cntrl:]] ]] || return 1
   case "/$_relative/" in */../*|*/./*|*//*) return 1 ;; esac
   _python="${_MDM_DETECT_ABSENCE_PYTHON:-}"
   [[ -n "$_python" ]] || _python="$(_mdm_detect_system_python)" || return 1
   /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B -c '
+    "$_python" -I -B -S -c '
 import os, stat, sys
 root, relative = sys.argv[1], sys.argv[2]
 parts = relative.split("/")
@@ -1917,6 +2640,8 @@ try:
 
     if not rebound_absent() or not rebound_absent():
         raise SystemExit(1)
+    deepest = os.path.join(root, *parts[:missing]) if missing else root
+    sys.stdout.write(deepest)
     raise SystemExit(0)
 finally:
     for descriptor in reversed(held):
@@ -1989,39 +2714,140 @@ _mdm_canonical_file() {
   printf '%s/%s' "$_physical" "$_base"
 }
 
-_mdm_private_tmpdir() {
-  local _base _dir _old_umask
+_mdm_private_tmp_base() {
+  local _base
   if ! _base="$(_mdm_test_value MDM_DETECT_TMP_BASE_OVERRIDE)"; then
     if _mdm_is_darwin; then _base=/private/tmp; else _base=/tmp; fi
   fi
-  [[ -d "$_base" && ! -L "$_base" ]] || return 1
-  _old_umask="$(umask)"
-  umask 077
-  _dir="$(/usr/bin/mktemp -d "$_base/claude-kit-mdm-detect.XXXXXX")" \
-    || { umask "$_old_umask"; return 1; }
-  umask "$_old_umask"
-  /bin/chmod 700 "$_dir" || { /bin/rm -rf "$_dir"; return 1; }
-  [[ -d "$_dir" && ! -L "$_dir" ]] || { /bin/rm -rf "$_dir"; return 1; }
-  printf '%s' "$_dir"
+  printf '%s' "$_base"
 }
 
-_mdm_cleanup_private_tmpdir() { # <private-dir>
-  local _dir="$1" _base
-  [[ -n "$_dir" ]] || return 0
-  if ! _base="$(_mdm_test_value MDM_DETECT_TMP_BASE_OVERRIDE)"; then
-    if _mdm_is_darwin; then _base=/private/tmp; else _base=/tmp; fi
+_mdm_private_tmp_mode_is_safe() { # <directory>
+  local _mode
+  _mode="$(_mdm_mode_normalize \
+    "$(_mdm_stat_mode_with_special_bits "$1")")" || return 1
+  [[ "$_mode" == 1777 ]]
+}
+
+_mdm_private_tmp_base_is_safe() { # <canonical-base>
+  local _base="$1" _owner _mode
+  [[ -d "$_base" && ! -L "$_base" \
+    && "$(_mdm_canonical_dir "$_base")" == "$_base" ]] || return 1
+  _owner="$(_mdm_expected_trust_owner)" || return 1
+  [[ "$(_mdm_stat_owner "$_base")" == "$_owner" ]] || return 1
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_base")")" || return 1
+  ! _mdm_has_acl "$_base" || return 1
+  if [[ "$_MDM_DETECT_TEST_MODE" == 1 ]]; then
+    _mdm_mode_is_safe "$_mode" && _mdm_mode_owner_executable "$_mode"
+  else
+    [[ "$_base" == /private/tmp && "$(_mdm_stat_uid "$_base")" == 0 ]] \
+      && _mdm_private_tmp_mode_is_safe "$_base"
   fi
+}
+
+_mdm_private_workspace_binding() { # <private-workspace>
+  local _dir="$1" _base _owner _mode _identity
+  _base="$(_mdm_private_tmp_base)" || return 1
+  _mdm_private_tmp_base_is_safe "$_base" || return 1
   case "$_dir" in "$_base"/claude-kit-mdm-detect.*) : ;; *) return 1 ;; esac
-  [[ -d "$_dir" && ! -L "$_dir" ]] || return 1
-  /bin/rm -rf "$_dir"
+  [[ -d "$_dir" && ! -L "$_dir" \
+    && "$(_mdm_canonical_dir "$_dir")" == "$_dir" ]] || return 1
+  _owner="$(_mdm_expected_trust_owner)" || return 1
+  [[ "$(_mdm_stat_owner "$_dir")" == "$_owner" ]] || return 1
+  if [[ "$_MDM_DETECT_TEST_MODE" != 1 ]]; then
+    [[ "$(_mdm_stat_uid "$_dir")" == 0 ]] || return 1
+  fi
+  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
+  [[ "$_mode" == 0700 ]] || return 1
+  ! _mdm_has_acl "$_dir" || return 1
+  _identity="$(_mdm_stat_dir_identity "$_dir")" || return 1
+  case "$_identity" in *:Directory|*:directory) : ;; *) return 1 ;; esac
+  printf '%s' "$_identity"
 }
 
 _MDM_DETECT_ACTIVE_WORKSPACE=""
+_MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY=""
+_MDM_DETECT_INFLIGHT_WORKSPACE=""
+_MDM_DETECT_INFLIGHT_WORKSPACE_IDENTITY=""
+
+_mdm_private_tmpdir() { # <output-variable>
+  local _output="$1" _base _dir _old_umask _identity
+  [[ "$_output" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  [[ -z "$_MDM_DETECT_ACTIVE_WORKSPACE" \
+    && -z "$_MDM_DETECT_INFLIGHT_WORKSPACE" ]] || return 1
+  printf -v "$_output" '%s' ""
+  _base="$(_mdm_private_tmp_base)" || return 1
+  _mdm_private_tmp_base_is_safe "$_base" || return 1
+  _old_umask="$(umask)"
+  umask 077
+  _MDM_DETECT_INFLIGHT_WORKSPACE="$(
+    /usr/bin/mktemp -d "$_base/claude-kit-mdm-detect.XXXXXX"
+  )" \
+    || { umask "$_old_umask"; return 1; }
+  umask "$_old_umask"
+  _dir="$_MDM_DETECT_INFLIGHT_WORKSPACE"
+  if ! /bin/chmod 700 "$_dir" \
+    || ! _identity="$(_mdm_private_workspace_binding "$_dir")"; then
+    _mdm_cleanup_active_workspace 2>/dev/null || true
+    return 1
+  fi
+  if [[ -z "$_identity" ]]; then
+    _mdm_cleanup_active_workspace 2>/dev/null || true
+    return 1
+  fi
+  _MDM_DETECT_INFLIGHT_WORKSPACE_IDENTITY="$_identity"
+  _MDM_DETECT_ACTIVE_WORKSPACE="$_dir"
+  _MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY="$_identity"
+  _MDM_DETECT_INFLIGHT_WORKSPACE=""
+  _MDM_DETECT_INFLIGHT_WORKSPACE_IDENTITY=""
+  printf -v "$_output" '%s' "$_dir"
+}
+
+_mdm_cleanup_private_tmpdir() { # <private-dir> <stored-dir-identity>
+  local _dir="$1" _expected_identity="$2" _base _current_identity
+  [[ -n "$_dir" ]] || return 0
+  [[ -n "$_expected_identity" ]] || return 1
+  _base="$(_mdm_private_tmp_base)" || return 1
+  case "$_dir" in "$_base"/claude-kit-mdm-detect.*) : ;; *) return 1 ;; esac
+  _current_identity="$(_mdm_private_workspace_binding "$_dir")" || return 1
+  [[ "$_current_identity" == "$_expected_identity" ]] || return 1
+  if _mdm_is_darwin; then
+    /usr/bin/find -P "$_dir" -xdev -exec /usr/bin/chflags -h \
+      nouchg,nouappnd,noschg,nosappnd,norestricted {} + || return 1
+  fi
+  /bin/rm -rf "$_dir" || return 1
+  [[ ! -e "$_dir" && ! -L "$_dir" ]]
+}
+
 _mdm_cleanup_active_workspace() {
   local _dir="${_MDM_DETECT_ACTIVE_WORKSPACE:-}"
-  [[ -n "$_dir" ]] || return 0
-  if _mdm_cleanup_private_tmpdir "$_dir"; then
+  local _identity="${_MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY:-}"
+  local _base
+  _mdm_detect_reset_system_python
+  _MDM_DETECT_ABSENCE_PYTHON=""
+  if [[ -z "$_dir" ]]; then
+    _dir="${_MDM_DETECT_INFLIGHT_WORKSPACE:-}"
+    _identity="${_MDM_DETECT_INFLIGHT_WORKSPACE_IDENTITY:-}"
+  fi
+  if [[ -z "$_dir" ]]; then
+    _MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY=""
+    _MDM_DETECT_INFLIGHT_WORKSPACE_IDENTITY=""
+    return 0
+  fi
+  if [[ -n "$_identity" ]]; then
+    _mdm_cleanup_private_tmpdir "$_dir" "$_identity" || return 1
+  else
+    _base="$(_mdm_private_tmp_base)" || return 1
+    _mdm_private_tmp_base_is_safe "$_base" || return 1
+    case "$_dir" in "$_base"/claude-kit-mdm-detect.*) : ;; *) return 1 ;; esac
+    [[ -d "$_dir" && ! -L "$_dir" ]] || return 1
+    /bin/rmdir "$_dir" || return 1
+  fi
+  if [[ ! -e "$_dir" && ! -L "$_dir" ]]; then
     _MDM_DETECT_ACTIVE_WORKSPACE=""
+    _MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY=""
+    _MDM_DETECT_INFLIGHT_WORKSPACE=""
+    _MDM_DETECT_INFLIGHT_WORKSPACE_IDENTITY=""
     return 0
   fi
   return 1
@@ -2180,21 +3006,14 @@ _mdm_target_dir_matches_identity() { # <dir> <target-uid> [dev:inode:type]
 }
 
 _mdm_target_dir_is_accessible() { # <dir> <target-uid>
-  local _dir="$1" _expected_uid="$2" _before _after _mode
+  local _dir="$1" _expected_uid="$2" _before
   [[ "$_expected_uid" =~ ^[0-9]+$ && -d "$_dir" && ! -L "$_dir" ]] \
     || return 1
-  [[ "$(_mdm_canonical_dir "$_dir")" == "$_dir" \
-    && "$(_mdm_stat_uid "$_dir")" == "$_expected_uid" ]] || return 1
-  _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")" || return 1
-  _mdm_mode_is_safe "$_mode" || return 1
   _before="$(_mdm_stat_dir_identity "$_dir")" || return 1
-  case "$_before" in *:Directory|*:directory) : ;; *) return 1 ;; esac
-  _mdm_user_dir_acl_is_supported "$_dir" || return 1
+  _mdm_target_dir_matches_identity \
+    "$_dir" "$_expected_uid" "$_before" || return 1
   _mdm_component_effective_test "$_expected_uid" -x "$_dir" || return 1
-  _after="$(_mdm_stat_dir_identity "$_dir")" || return 1
-  [[ "$_after" == "$_before" ]] || return 1
-  _mdm_user_dir_acl_is_supported "$_dir" || return 1
-  [[ "$(_mdm_stat_dir_identity "$_dir")" == "$_before" ]]
+  _mdm_target_dir_matches_identity "$_dir" "$_expected_uid" "$_before"
 }
 
 _mdm_user_dir_acl_is_supported() { # <target-owned-dir>
@@ -2386,6 +3205,35 @@ _mdm_component_effective_test() { # <target-uid> <-r|-x> <path>
   fi
 }
 
+_mdm_external_dir_matches_identity() { # <dir> <target-uid> [dev:inode:type]
+  local _dir="$1" _target_uid="$2" _expected_identity="${3:-}"
+  local _owner _mode _identity
+  [[ "$_target_uid" =~ ^[0-9]+$ && -d "$_dir" && ! -L "$_dir" ]] \
+    || return 1
+  [[ "$(_mdm_canonical_dir "$_dir")" == "$_dir" ]] || return 1
+  _owner="$(_mdm_stat_uid "$_dir")" || return 1
+  [[ "$_owner" == 0 || "$_owner" == "$_target_uid" ]] || return 1
+  _mode="$(_mdm_mode_normalize \
+    "$(_mdm_stat_mode_with_special_bits "$_dir")")" || return 1
+  if ! _mdm_mode_is_safe "$_mode"; then
+    [[ "$_owner" == 0 && "$_mode" == 1777 \
+      && ( "$_dir" == /private/tmp || "$_dir" == /tmp ) ]] || return 1
+  fi
+  _mdm_user_dir_acl_is_supported "$_dir" || return 1
+  _identity="$(_mdm_stat_dir_identity "$_dir")" || return 1
+  case "$_identity" in *:Directory|*:directory) : ;; *) return 1 ;; esac
+  [[ -z "$_expected_identity" || "$_identity" == "$_expected_identity" ]]
+}
+
+_mdm_external_dir_is_accessible() { # <dir> <target-uid>
+  local _dir="$1" _target_uid="$2" _before
+  _before="$(_mdm_stat_dir_identity "$_dir")" || return 1
+  _mdm_external_dir_matches_identity \
+    "$_dir" "$_target_uid" "$_before" || return 1
+  _mdm_component_effective_test "$_target_uid" -x "$_dir" || return 1
+  _mdm_external_dir_matches_identity "$_dir" "$_target_uid" "$_before"
+}
+
 _mdm_component_ancestors_searchable() { # <path> <target-uid> [home]
   local _path="$1" _uid="$2" _home="${3:-}" _current
   [[ "$_path" == /* && "$_uid" =~ ^[0-9]+$ ]] || return 1
@@ -2399,12 +3247,10 @@ _mdm_component_ancestors_searchable() { # <path> <target-uid> [home]
         "$_home"|"$_home"/*)
           _mdm_target_dir_is_accessible "$_current" "$_uid" || return 1 ;;
         *)
-          _mdm_user_dir_acl_is_supported "$_current" || return 1
-          _mdm_component_effective_test "$_uid" -x "$_current" || return 1 ;;
+          _mdm_external_dir_is_accessible "$_current" "$_uid" || return 1 ;;
       esac
     else
-      _mdm_user_dir_acl_is_supported "$_current" || return 1
-      _mdm_component_effective_test "$_uid" -x "$_current" || return 1
+      _mdm_external_dir_is_accessible "$_current" "$_uid" || return 1
     fi
     [[ "$_current" == / ]] && break
     _current="${_current%/*}"
@@ -2423,10 +3269,10 @@ _mdm_component_tree_accessible() { # <canonical-tree> <target-uid> [home]
   if [[ -n "${3:-}" ]]; then
     case "$1" in
       "$3"|"$3"/*) _mdm_target_dir_is_accessible "$1" "$2" || return 1 ;;
-      *) ! _mdm_has_acl "$1" || return 1 ;;
+      *) _mdm_external_dir_is_accessible "$1" "$2" || return 1 ;;
     esac
   else
-    ! _mdm_has_acl "$1" || return 1
+    _mdm_external_dir_is_accessible "$1" "$2" || return 1
   fi
   _mdm_component_effective_test "$2" -r "$1" \
     && _mdm_component_effective_test "$2" -x "$1"
@@ -2522,7 +3368,7 @@ _mdm_private_component_shape_is_valid() { # <biome|safety_net> <tree>
   local _component="$1" _root="$2" _python
   case "$_component" in biome|safety_net) : ;; *) return 1 ;; esac
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_component" "$_root" <<'PY'
+  "$_python" -I -B -S - "$_component" "$_root" <<'PY'
 import os
 import stat
 import sys
@@ -2643,7 +3489,7 @@ _mdm_safety_wrapper_is_bound() { # <home> <wrapper> <private-node>
   [[ "$_expected" == *$'\036' ]] || return 1
   _expected="${_expected%$'\036'}"
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_wrapper" "$_expected" <<'PY'
+  "$_python" -I -B -S - "$_wrapper" "$_expected" <<'PY'
 import os
 import stat
 import sys
@@ -2748,7 +3594,7 @@ _mdm_node_runtime_content_sha256() { # <runtime-tree>
   local _tree="$1" _python
   _python="$(_mdm_detect_system_python)" || return 1
   /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    "$_python" -I -B - "$_tree" \
+    "$_python" -I -B -S - "$_tree" \
       .claude-code-starter-kit-node-runtime <<'PY'
 import hashlib
 import json
@@ -2863,7 +3709,7 @@ _mdm_wce_runtime_marker_is_valid() { # <runtime-root>
   _marker="$_root/.claude-code-starter-kit-wce-runtime.json"
   _arch="$(_mdm_node_runtime_arch)" || return 1
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_marker" "$_arch" <<'PY'
+  "$_python" -I -B -S - "$_marker" "$_arch" <<'PY'
 import os
 import stat
 import sys
@@ -2916,7 +3762,7 @@ _mdm_wce_runtime_metadata_is_valid() { # <runtime-root>
     _expected_gid=0
   fi
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_base" "$_root" \
+  "$_python" -I -B -S - "$_base" "$_root" \
     "$_expected_uid" "$_expected_gid" <<'PY'
 import ctypes
 import errno
@@ -3101,7 +3947,7 @@ _mdm_wce_activation_record() { # <home> <target-uid> [runtime-root]
   _mdm_component_effective_test "$_uid" -r "$_target" || return 1
   _mdm_component_effective_test "$_uid" -x "$_target" || return 1
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_link" "$_target" "$_uid" <<'PY'
+  "$_python" -I -B -S - "$_link" "$_target" "$_uid" <<'PY'
 import os
 import stat
 import sys
@@ -3136,7 +3982,7 @@ _mdm_node_runtime_provenance_is_valid() { # <runtime-root>
   _arch="$(_mdm_node_runtime_arch)" || return 1
   _mdm_node_runtime_source "$_arch" _url _sha || return 1
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_marker" "$_arch" "$_url" "$_sha" <<'PY'
+  "$_python" -I -B -S - "$_marker" "$_arch" "$_url" "$_sha" <<'PY'
 import os
 import stat
 import sys
@@ -3181,7 +4027,7 @@ _mdm_node_runtime_metadata_is_valid() { # <runtime-root>
     _expected_gid=0
   fi
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_root" "$_expected_uid" "$_expected_gid" <<'PY'
+  "$_python" -I -B -S - "$_root" "$_expected_uid" "$_expected_gid" <<'PY'
 import os
 import stat
 import sys
@@ -3747,6 +4593,18 @@ _mdm_component_manifest_is_valid() {
   [[ "$_component_count" == "$_required_count" ]]
 }
 
+_mdm_managed_parents_are_safe() { # <target-uid> <home> <parent>...
+  local _target_uid="$1" _home="$2" _parent
+  shift 2
+  [[ "$_target_uid" =~ ^[0-9]+$ && "$_home" == /* && "$#" -gt 0 ]] \
+    || return 1
+  for _parent in "$@"; do
+    [[ -n "$_parent" ]] || return 1
+    _mdm_component_ancestors_searchable \
+      "$_parent/." "$_target_uid" "$_home" || return 1
+  done
+}
+
 _mdm_manifest_is_valid() {
   # <manifest-snapshot> <sha256> <resolved-sha> <home> <profile> <language>
   # <deployment-sha256> <policy-sha256> <private-workspace> <expected-uid>
@@ -3756,6 +4614,8 @@ _mdm_manifest_is_valid() {
   local _claude_dir="$_home/.claude" _snapshot="$_home/.claude/.starter-kit-snapshot"
   local _actual_hash _kit_commit _manifest_profile _manifest_language
   local _count _index=0 _file _relative _snapshot_file _canonical
+  local _live_parent _snapshot_parent _parent _seen_parent
+  local -a _managed_parents=("$_claude_dir" "$_snapshot")
   local _live_copy _snapshot_copy _live_hash _snapshot_hash _live_size _snapshot_size
   local _live_mode _snapshot_mode _live_managed _snapshot_managed
   local _aggregate_size=0 _aggregate_limit=536870912 _digest_input _digest
@@ -3811,6 +4671,19 @@ _mdm_manifest_is_valid() {
     _canonical="$(_mdm_canonical_file "$_snapshot_file")" || return 1
     [[ "$_canonical" == "$_snapshot_file" ]] || return 1
 
+    _live_parent="${_file%/*}"
+    _snapshot_parent="${_snapshot_file%/*}"
+    for _parent in "$_live_parent" "$_snapshot_parent"; do
+      _seen_parent=0
+      for _canonical in "${_managed_parents[@]}"; do
+        if [[ "$_canonical" == "$_parent" ]]; then
+          _seen_parent=1
+          break
+        fi
+      done
+      [[ "$_seen_parent" -eq 1 ]] || _managed_parents+=("$_parent")
+    done
+
     _live_copy="$_workspace/live.$_index"
     _snapshot_copy="$_workspace/snapshot.$_index"
     _mdm_snapshot_bound_file "$_file" "$_live_copy" managed "$_expected_uid" || return 1
@@ -3857,6 +4730,13 @@ _mdm_manifest_is_valid() {
     _index=$((_index + 1))
   done
 
+  # File bytes and modes do not attest their directory entries.  Rebind each
+  # distinct immediate parent, including both managed roots, after the file
+  # snapshots so a writable, inaccessible, foreign-owned, ACL-bearing, or
+  # symlinked parent cannot produce a false-compliant deployment.
+  _mdm_managed_parents_are_safe \
+    "$_expected_uid" "$_home" "${_managed_parents[@]}" || return 1
+
   _absent_count="$(_mdm_json_array_count "$_manifest" mdm_absent_files)"
   [[ "$_absent_count" =~ ^[0-9]+$ && "$_absent_count" -le 1000 \
     && $((_count + _absent_count)) -le 2000 ]] || return 1
@@ -3867,16 +4747,34 @@ _mdm_manifest_is_valid() {
     _absent_relative="$(_mdm_json_array_get \
       "$_manifest" mdm_absent_files "$_absent_index")"
     [[ -n "$_absent_relative" ]] || return 1
-    _mdm_path_is_absent_with_real_parents "$_claude_dir" "$_absent_relative" \
-      && _mdm_path_is_absent_with_real_parents "$_snapshot" "$_absent_relative" \
-      || return 1
+    _live_parent="$(_mdm_path_is_absent_with_real_parents \
+      "$_claude_dir" "$_absent_relative")" || return 1
+    _snapshot_parent="$(_mdm_path_is_absent_with_real_parents \
+      "$_snapshot" "$_absent_relative")" || return 1
+    [[ -n "$_live_parent" && -n "$_snapshot_parent" ]] || return 1
+    for _parent in "$_live_parent" "$_snapshot_parent"; do
+      _seen_parent=0
+      for _canonical in "${_managed_parents[@]}"; do
+        if [[ "$_canonical" == "$_parent" ]]; then
+          _seen_parent=1
+          break
+        fi
+      done
+      [[ "$_seen_parent" -eq 1 ]] || _managed_parents+=("$_parent")
+    done
     printf 'absent\t%s\n' "$_absent_relative" >> "$_digest_input" || return 1
     _absent_index=$((_absent_index + 1))
   done
   _MDM_DETECT_ABSENCE_PYTHON=""
 
+  _mdm_managed_parents_are_safe \
+    "$_expected_uid" "$_home" "${_managed_parents[@]}" || return 1
+
   _digest="$(_mdm_sha256 "$_digest_input")" || return 1
-  [[ "$_digest" =~ ^[0-9a-f]{64}$ && "$_digest" == "$_expected_deployment" ]]
+  [[ "$_digest" =~ ^[0-9a-f]{64}$ && "$_digest" == "$_expected_deployment" ]] \
+    || return 1
+  _mdm_managed_parents_are_safe \
+    "$_expected_uid" "$_home" "${_managed_parents[@]}"
 }
 
 _MDM_DETECT_VERIFIED_KIT_VERSION=""
@@ -4015,7 +4913,8 @@ _mdm_detect_from_snapshots() {
 mdm_detect() { # <receipt> <target-user> [expected-commit] [expected-policy]
   local _receipt="$1" _user="$2" _expected_commit="${3:-}"
   local _expected_policy="${4:-}" _override
-  local _workspace="" _receipt_snapshot _rc=1
+  local _workspace="" _workspace_identity _receipt_snapshot _rc=1
+  local _python_initialized=0
   _MDM_DETECT_VERIFIED_KIT_VERSION=""
   if [[ -z "$_expected_commit" ]] \
     && _override="$(_mdm_test_value MDM_DETECT_EXPECTED_COMMIT_OVERRIDE)"; then
@@ -4028,13 +4927,27 @@ mdm_detect() { # <receipt> <target-user> [expected-commit] [expected-policy]
   [[ "$_expected_commit" =~ ^[0-9a-f]{40}$ \
     && "$_expected_policy" =~ ^[0-9a-f]{64}$ ]] || return 1
   _mdm_receipt_is_trusted "$_receipt" "$_user" || return 1
-  _workspace="$(_mdm_private_tmpdir)" || return 1
-  _MDM_DETECT_ACTIVE_WORKSPACE="$_workspace"
+  _mdm_private_tmpdir _workspace || return 1
+  _workspace_identity="$(_mdm_private_workspace_binding "$_workspace")" \
+    || { _mdm_cleanup_active_workspace 2>/dev/null || true; return 1; }
+  if [[ "$_MDM_DETECT_ACTIVE_WORKSPACE" != "$_workspace" \
+    || "$_MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY" != "$_workspace_identity" ]]; then
+    _mdm_cleanup_active_workspace 2>/dev/null || true
+    return 1
+  fi
   _receipt_snapshot="$_workspace/receipt.json"
-  if _mdm_snapshot_bound_file "$_receipt" "$_receipt_snapshot" receipt \
-    && _mdm_detect_from_snapshots "$_receipt_snapshot" "$_user" \
-      "$_expected_commit" "$_expected_policy" "$_workspace"; then
-    _rc=0
+  if _mdm_detect_initialize_system_python "$_workspace"; then
+    _python_initialized=1
+    if _mdm_snapshot_bound_file "$_receipt" "$_receipt_snapshot" receipt \
+      && _mdm_detect_from_snapshots "$_receipt_snapshot" "$_user" \
+        "$_expected_commit" "$_expected_policy" "$_workspace"; then
+      _rc=0
+    fi
+  fi
+  if [[ "$_python_initialized" -eq 1 \
+    && "$_MDM_DETECT_TEST_MODE" != 1 ]] \
+    && ! _mdm_detect_system_python_cache_rebound; then
+    _rc=1
   fi
   _mdm_cleanup_active_workspace || _rc=1
   return "$_rc"
@@ -4176,6 +5089,7 @@ mdm_detect_main() {
   local _user="" _min_version="" _expected_commit="" _expected_policy=""
   local _user_explicit=0
   local _euid _receipt_dir _receipt _kit_version
+  local _canonical_binding _canonical_rc=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --user)
@@ -4223,11 +5137,32 @@ mdm_detect_main() {
     printf 'not-applicable: no eligible console user\n'
     return 3
   fi
-  if ! _mdm_username_is_safe "$_user"; then
+  if ! _mdm_requested_username_is_safe "$_user"; then
     if [[ "$_user_explicit" == "1" ]]; then _mdm_detect_usage; return 2; fi
     printf 'non-compliant: invalid target user (%s)\n' "$_user"
     return 1
   fi
+
+  # Resolve aliases and case variants through the search-policy UID, then
+  # rebind the canonical short name to the same UID, GeneratedUID, and home.
+  # Only that byte-exact canonical name may select a receipt namespace.
+  _canonical_binding="$(_mdm_detect_canonical_target_binding "$_user")" \
+    || _canonical_rc=$?
+  if [[ "$_canonical_rc" -ne 0 ]]; then
+    if [[ "$_canonical_rc" -eq 3 && "$_user_explicit" -ne 1 ]]; then
+      printf 'not-applicable: no eligible console user\n'
+      return 3
+    fi
+    if [[ "$_canonical_rc" -eq 2 || "$_canonical_rc" -eq 3 ]] \
+      && [[ "$_user_explicit" -eq 1 ]]; then
+      _mdm_detect_usage
+      return 2
+    fi
+    printf 'non-compliant: target user identity verification failed (%s)\n' \
+      "$_user"
+    return 1
+  fi
+  _user="${_canonical_binding%%$'\t'*}"
 
   # Root remediation has one receipt contract.  Both root inventory and a
   # non-root self-check read the same root-owned system receipt.

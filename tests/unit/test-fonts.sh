@@ -193,6 +193,22 @@ _fonts_test_is_macos() {
 }
 
 {
+  test_name="fonts: MDM helpers avoid heredoc and here-string transport"
+  _extract_transport="$(declare -f _font_mdm_extract_archive)"
+  _ttf_transport="$(declare -f _font_mdm_ttf_structure_is_valid)"
+  _family_transport="$(declare -f _font_mdm_family_is_trusted)"
+  if [[ "$_extract_transport" == *"/usr/bin/python3 -I -B -c '"* \
+    && "$_ttf_transport" == *"/usr/bin/python3 -I -B -c '"* \
+    && "$_family_transport" == *"< <(printf '%s\\n'"* \
+    && "$_extract_transport$_ttf_transport$_family_transport" != *"<<"* ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  unset _extract_transport _ttf_transport _family_transport
+}
+
+{
   test_name="fonts: MDM does not accept files by name or TTF magic alone"
   if (
     _tmpdir="$(mktemp -d)"

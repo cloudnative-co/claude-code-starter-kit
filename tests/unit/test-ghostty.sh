@@ -14,7 +14,15 @@ _ghostty_test_managed="${KIT_MDM_MANAGED:-}"
 _ghostty_test_mode_set=0
 [[ -n "${KIT_MDM_PREREQ_MODE+x}" ]] && _ghostty_test_mode_set=1
 _ghostty_test_mode="${KIT_MDM_PREREQ_MODE:-}"
+_ghostty_test_outer_set=0
+[[ -n "${KIT_MDM_OUTER_TRANSACTION+x}" ]] && _ghostty_test_outer_set=1
+_ghostty_test_outer="${KIT_MDM_OUTER_TRANSACTION:-}"
+_ghostty_test_outer_backup_set=0
+[[ -n "${KIT_MDM_OUTER_TRANSACTION_BACKUP+x}" ]] \
+  && _ghostty_test_outer_backup_set=1
+_ghostty_test_outer_backup="${KIT_MDM_OUTER_TRANSACTION_BACKUP:-}"
 unset KIT_MDM_MANAGED KIT_MDM_PREREQ_MODE
+unset KIT_MDM_OUTER_TRANSACTION KIT_MDM_OUTER_TRANSACTION_BACKUP
 
 _ghostty_test_host_os="${GHOSTTY_TEST_HOST_OS_OVERRIDE:-$(/usr/bin/uname -s 2>/dev/null || true)}"
 _ghostty_test_is_macos() {
@@ -240,6 +248,112 @@ _ghostty_test_make_app() {
   fi
 }
 
+{
+  test_name="ghostty: managed outer transaction suppresses timestamp config backup"
+  if (
+    _tmpdir="$(cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+    export HOME="$_tmpdir/home"
+    export KIT_MDM_MANAGED=true KIT_MDM_OUTER_TRANSACTION=true
+    export KIT_MDM_OUTER_TRANSACTION_BACKUP=""
+    STR_GHOSTTY_CONFIG_DEPLOYED="deployed"
+    _config_dir="$HOME/Library/Application Support/com.mitchellh.ghostty"
+    _config="$_config_dir/config"
+    _template="$_tmpdir/template"
+    mkdir -p "$_config_dir"
+    printf 'old\n' > "$_config"
+    printf 'new\n' > "$_template"
+    deploy_ghostty_config "$_template" >/dev/null 2>&1
+    _backups=("$_config".backup.*)
+    [[ "$(cat "$_config")" == new && ! -e "${_backups[0]}" ]]
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="ghostty: non-MDM config deploy keeps timestamp backup"
+  if (
+    _tmpdir="$(cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+    export HOME="$_tmpdir/home"
+    unset KIT_MDM_MANAGED KIT_MDM_OUTER_TRANSACTION
+    unset KIT_MDM_OUTER_TRANSACTION_BACKUP
+    export STR_GHOSTTY_CONFIG_BACKED_UP="backed-up"
+    export STR_GHOSTTY_CONFIG_DEPLOYED="deployed"
+    _config_dir="$HOME/Library/Application Support/com.mitchellh.ghostty"
+    _config="$_config_dir/config"
+    _template="$_tmpdir/template"
+    mkdir -p "$_config_dir"
+    printf 'old\n' > "$_config"
+    printf 'new\n' > "$_template"
+    date() { printf '%s' 20000101000000; }
+    deploy_ghostty_config "$_template" >/dev/null 2>&1
+    [[ "$(cat "$_config")" == new \
+      && "$(cat "$_config.backup.20000101000000")" == old ]]
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="ghostty: managed deploy without outer carrier keeps timestamp backup"
+  if (
+    _tmpdir="$(cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+    export HOME="$_tmpdir/home" KIT_MDM_MANAGED=true
+    unset KIT_MDM_OUTER_TRANSACTION KIT_MDM_OUTER_TRANSACTION_BACKUP
+    STR_GHOSTTY_CONFIG_BACKED_UP="backed-up"
+    export STR_GHOSTTY_CONFIG_DEPLOYED="deployed"
+    _config_dir="$HOME/Library/Application Support/com.mitchellh.ghostty"
+    _config="$_config_dir/config"
+    _template="$_tmpdir/template"
+    mkdir -p "$_config_dir"
+    printf 'old\n' > "$_config"
+    printf 'new\n' > "$_template"
+    date() { printf '%s' 20000101000000; }
+    deploy_ghostty_config "$_template" >/dev/null 2>&1
+    [[ "$(cat "$_config")" == new \
+      && "$(cat "$_config.backup.20000101000000")" == old ]]
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="ghostty: invalid outer transaction carriers fail before config mutation"
+  if (
+    _tmpdir="$(cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+    export HOME="$_tmpdir/home" KIT_MDM_MANAGED=true
+    STR_GHOSTTY_CONFIG_DEPLOYED="deployed"
+    _config_dir="$HOME/Library/Application Support/com.mitchellh.ghostty"
+    _config="$_config_dir/config"
+    _template="$_tmpdir/template"
+    mkdir -p "$_config_dir"
+    printf 'old\n' > "$_config"
+    printf 'new\n' > "$_template"
+    export KIT_MDM_OUTER_TRANSACTION=false
+    export KIT_MDM_OUTER_TRANSACTION_BACKUP=""
+    ! deploy_ghostty_config "$_template" >/dev/null 2>&1 \
+      && [[ "$(cat "$_config")" == old ]] \
+      && export KIT_MDM_OUTER_TRANSACTION=true \
+      && unset KIT_MDM_MANAGED \
+      && ! deploy_ghostty_config "$_template" >/dev/null 2>&1 \
+      && [[ "$(cat "$_config")" == old ]] \
+      && unset KIT_MDM_OUTER_TRANSACTION \
+      && export KIT_MDM_OUTER_TRANSACTION_BACKUP="$_tmpdir/outside" \
+      && ! deploy_ghostty_config "$_template" >/dev/null 2>&1 \
+      && [[ "$(cat "$_config")" == old ]]
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
 if [[ "$_ghostty_test_managed_set" -eq 1 ]]; then
   export KIT_MDM_MANAGED="$_ghostty_test_managed"
 else
@@ -250,7 +364,19 @@ if [[ "$_ghostty_test_mode_set" -eq 1 ]]; then
 else
   unset KIT_MDM_PREREQ_MODE
 fi
+if [[ "$_ghostty_test_outer_set" -eq 1 ]]; then
+  export KIT_MDM_OUTER_TRANSACTION="$_ghostty_test_outer"
+else
+  unset KIT_MDM_OUTER_TRANSACTION
+fi
+if [[ "$_ghostty_test_outer_backup_set" -eq 1 ]]; then
+  export KIT_MDM_OUTER_TRANSACTION_BACKUP="$_ghostty_test_outer_backup"
+else
+  unset KIT_MDM_OUTER_TRANSACTION_BACKUP
+fi
 unset _ghostty_test_managed_set _ghostty_test_managed
 unset _ghostty_test_mode_set _ghostty_test_mode
+unset _ghostty_test_outer_set _ghostty_test_outer
+unset _ghostty_test_outer_backup_set _ghostty_test_outer_backup
 unset _ghostty_test_host_os
 unset -f _ghostty_test_is_macos _ghostty_test_make_app

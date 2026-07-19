@@ -128,7 +128,7 @@ _font_mdm_extract_archive() {
   done < <(_font_mdm_expected_names "$family")
   [[ -x /usr/bin/python3 && -d "$destination" && ! -L "$destination" ]] \
     || return 1
-  /usr/bin/python3 -I -B - "$archive" "$destination" "${members[@]}" <<'PY'
+  /usr/bin/python3 -I -B -c '
 import os
 import stat
 import sys
@@ -199,7 +199,7 @@ try:
                 os.close(descriptor)
 except (OSError, ValueError, zipfile.BadZipFile, zipfile.LargeZipFile):
     sys.exit(1)
-PY
+' "$archive" "$destination" "${members[@]}"
 }
 
 # Validate a bounded, race-bound sfnt/TrueType file and its internal naming.
@@ -208,8 +208,7 @@ _font_mdm_ttf_structure_is_valid() {
   local path="$1" family="$2" logical_name="${3:-${1##*/}}"
   case "$family" in ibm|hackgen) : ;; *) return 1 ;; esac
   [[ -x /usr/bin/python3 && -f "$path" && ! -L "$path" ]] || return 1
-  /usr/bin/python3 -I -B - "$path" "$family" "$logical_name" <<'PY' \
-    || return 1
+  /usr/bin/python3 -I -B -c '
 import os
 import stat
 import struct
@@ -322,7 +321,7 @@ try:
             raise ValueError("HackGen font identity mismatch")
 except (OSError, ValueError, struct.error):
     sys.exit(1)
-PY
+' "$path" "$family" "$logical_name" || return 1
 }
 
 _font_mdm_ttf_is_trusted() {
@@ -339,9 +338,9 @@ _font_mdm_ttf_is_trusted() {
 _font_mdm_family_is_trusted() {
   local family="$1" font_dir="$2" name target expected_names count=0
   [[ -d "$font_dir" && ! -L "$font_dir" ]] || return 1
-  # Materialize the small trusted inventory before inspecting user-controlled
-  # files. An early validation return must not close a process-substitution
-  # pipe while its producer is still writing (which leaks EPIPE diagnostics).
+  # Materialize the trusted inventory before inspecting user-controlled files.
+  # Its bounded output fits in one minimum pipe buffer, so an early validation
+  # return cannot strand the process-substitution producer mid-write.
   expected_names="$(_font_mdm_expected_names "$family")" || return 1
   [[ -n "$expected_names" ]] || return 1
   while IFS= read -r name; do
@@ -349,7 +348,7 @@ _font_mdm_family_is_trusted() {
     [[ -f "$target" && ! -L "$target" ]] || return 1
     _font_mdm_ttf_is_trusted "$target" "$family" "$name" || return 1
     count=$((count + 1))
-  done <<< "$expected_names"
+  done < <(printf '%s\n' "$expected_names")
   [[ "$count" -gt 0 ]]
 }
 

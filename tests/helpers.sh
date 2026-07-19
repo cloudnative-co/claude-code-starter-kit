@@ -309,13 +309,26 @@ run_func() {
 # ---------------------------------------------------------------------------
 
 # Record a test result
+_record_test_assertion() {
+  local _kind="$1"
+  case "${TEST_ASSERTION_FD:-}" in
+    '') return 0 ;;
+    99) printf '%s\n' "$_kind" >&99 ;;
+    *) return 1 ;;
+  esac
+}
+
 pass() {
+  local _record_rc=0
   _TEST_COUNT=$((_TEST_COUNT + 1))
   _TEST_PASS=$((_TEST_PASS + 1))
+  _record_test_assertion pass || _record_rc=$?
   printf "  \033[0;32mPASS\033[0m  %s\n" "$1"
+  return "$_record_rc"
 }
 
 fail() {
+  local _record_rc=0
   _TEST_COUNT=$((_TEST_COUNT + 1))
   _TEST_FAIL=$((_TEST_FAIL + 1))
   # MDM tests are executed one file per process.  Some assertions run in a
@@ -325,13 +338,18 @@ fail() {
   if [[ -n "${TEST_FAILURE_SENTINEL:-}" ]]; then
     printf '%s\n' "$1" >> "$TEST_FAILURE_SENTINEL"
   fi
+  _record_test_assertion fail || _record_rc=$?
   printf "  \033[0;31mFAIL\033[0m  %s\n" "$1"
+  return "$_record_rc"
 }
 
 skip() {
+  local _record_rc=0
   _TEST_COUNT=$((_TEST_COUNT + 1))
   _TEST_SKIP=$((_TEST_SKIP + 1))
+  _record_test_assertion skip || _record_rc=$?
   printf "  \033[0;33mSKIP\033[0m  %s — %s\n" "$1" "${2:-not yet implemented}"
+  return "$_record_rc"
 }
 
 # Print summary and exit with appropriate code

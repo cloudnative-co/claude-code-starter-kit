@@ -74,8 +74,8 @@ _version_ge() {
   local rhs="${2:-0}"
   local lhs_a lhs_b lhs_c rhs_a rhs_b rhs_c _
 
-  IFS='.' read -r lhs_a lhs_b lhs_c _ <<< "$lhs"
-  IFS='.' read -r rhs_a rhs_b rhs_c _ <<< "$rhs"
+  IFS='.' read -r lhs_a lhs_b lhs_c _ < <(printf '%s\n' "$lhs")
+  IFS='.' read -r rhs_a rhs_b rhs_c _ < <(printf '%s\n' "$rhs")
   lhs_a="${lhs_a:-0}"; lhs_b="${lhs_b:-0}"; lhs_c="${lhs_c:-0}"
   rhs_a="${rhs_a:-0}"; rhs_b="${rhs_b:-0}"; rhs_c="${rhs_c:-0}"
 
@@ -1597,8 +1597,7 @@ _wce_validate_mdm_bundle_tree() { # <bundle> <arch>
     && -x /usr/bin/python3 \
     && ( "$system" != Darwin || ! -L /usr/bin/python3 ) ]] || return 1
   /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    /usr/bin/python3 -I -B - "$bundle" "$uid" "$gid" "$arch" \
-      "$_WCE_MDM_PACKAGE_SHA256" "$_WCE_MDM_LOCK_SHA256" <<'PY'
+    /usr/bin/python3 -I -B -c '
 import ctypes
 import errno
 import json
@@ -1730,10 +1729,10 @@ try:
             raise ValueError("direct dependency is missing")
 
     expected_marker = (
-        f'{{"arch":"{arch}","lock_sha256":"{lock_digest}",'
-        '"node_version":"v24.18.0","npm_version":"11.16.0",'
-        f'"package_sha256":"{package_digest}",'
-        '"registry":"https://registry.npmjs.org/","schema_version":1}\n'
+        f"{{\"arch\":\"{arch}\",\"lock_sha256\":\"{lock_digest}\","
+        "\"node_version\":\"v24.18.0\",\"npm_version\":\"11.16.0\","
+        f"\"package_sha256\":\"{package_digest}\","
+        "\"registry\":\"https://registry.npmjs.org/\",\"schema_version\":1}\n"
     ).encode("ascii")
     with open(os.path.join(root, marker_name), "rb", buffering=0) as handle:
         actual_marker = handle.read(len(expected_marker) + 1)
@@ -1742,7 +1741,8 @@ try:
 except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError,
         ctypes.ArgumentError):
     raise SystemExit(1)
-PY
+' "$bundle" "$uid" "$gid" "$arch" \
+      "$_WCE_MDM_PACKAGE_SHA256" "$_WCE_MDM_LOCK_SHA256"
 }
 
 _wce_validate_mdm_bundle() {

@@ -85,7 +85,7 @@ _ccsk_safety_snapshot_cli() {
   _ccsk_safety_system_python_is_trusted || return 1
   /usr/bin/env -i HOME="${HOME:-/}" LC_ALL=C \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-    /usr/bin/python3 -I -B - "$cli" "$expected_sha" 2>/dev/null <<'PY'
+    /usr/bin/python3 -I -B -c '
 import hashlib
 import os
 import stat
@@ -188,7 +188,7 @@ try:
 except (OSError, ValueError):
     remove_private()
     sys.exit(1)
-PY
+' "$cli" "$expected_sha" 2>/dev/null
 }
 
 _ccsk_safety_cleanup_snapshot() {

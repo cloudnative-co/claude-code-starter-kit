@@ -5,6 +5,7 @@ MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
 
 (
   export MDM_EUID_OVERRIDE=0 TMPDIR=/Users/attacker/tmp
+  _MDM_TEST_MODE=0
   _mdm_is_darwin() { return 0; }
   [[ "$(_mdm_safe_tmpdir)" == "/private/tmp" ]] \
     && pass "mdm-bootstrap: macOS root は user TMPDIR を使わない" \
@@ -12,6 +13,7 @@ MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
 )
 (
   export MDM_EUID_OVERRIDE=0 TMPDIR=/Users/attacker/tmp
+  _MDM_TEST_MODE=0
   _mdm_is_darwin() { return 1; }
   [[ "$(_mdm_safe_tmpdir)" == "/tmp" ]] \
     && pass "mdm-bootstrap: Linux root は /private/tmp に依存しない" \
@@ -19,6 +21,7 @@ MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
 )
 (
   export MDM_EUID_OVERRIDE=501 TMPDIR=/custom/tmp
+  _MDM_TEST_MODE=0
   [[ "$(_mdm_safe_tmpdir)" == "/custom/tmp" ]] \
     && pass "mdm-bootstrap: source-only non-root override is testable" \
     || fail "mdm-bootstrap: source-only override failed"
@@ -165,3 +168,5 @@ else
 fi
 
 rm -rf "$_tmpd"
+
+mdm_test_reached_end

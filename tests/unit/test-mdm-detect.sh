@@ -122,7 +122,8 @@ _mdm_detect_receipts="$_mdm_detect_trust_base/ClaudeCodeStarterKit"
 _mdm_detect_private_base="$_mdm_detect_tmp/private"
 
 mkdir -p "$_mdm_detect_install" "$_mdm_detect_snapshot" \
-  "$_mdm_detect_receipts" "$_mdm_detect_private_base"
+  "$_mdm_detect_receipts" "$_mdm_detect_private_base" \
+  "$_mdm_detect_claude/rules" "$_mdm_detect_snapshot/rules"
 chmod 700 "$_mdm_detect_trust_base" "$_mdm_detect_private_base"
 chmod 755 "$_mdm_detect_receipts"
 _mdm_detect_plus_path="$_mdm_detect_tmp/no-acl+path"
@@ -134,13 +135,34 @@ else
   pass "mdm-detect: ACL 判定は path 中の + を無視"
 fi
 /bin/rmdir "$_mdm_detect_plus_path"
-if _mdm_username_is_safe jane \
-  && ! _mdm_username_is_safe _unresolved \
-  && ! _mdm_username_is_safe _UnReSoLvEd; then
-  pass "mdm-detect: 障害 receipt の予約名をユーザー名として拒否"
+printf -v _mdm_detect_requested_255 '%*s' 255 ''
+_mdm_detect_requested_255="${_mdm_detect_requested_255// /a}"
+_mdm_detect_requested_255="${_mdm_detect_requested_255:0:254}+"
+_mdm_detect_requested_256="${_mdm_detect_requested_255}a"
+_mdm_detect_canonical_32="${_mdm_detect_requested_255:0:32}"
+_mdm_detect_canonical_33="${_mdm_detect_requested_255:0:33}"
+_mdm_detect_installer_alias_rc=0
+MDM_SOURCE_ONLY=1 /bin/bash -c '
+  source "$1"
+  _mdm_requested_username_is_safe "$2"
+' _ "$PROJECT_DIR/mdm/install-mdm.sh" "$_mdm_detect_requested_255" \
+  || _mdm_detect_installer_alias_rc=$?
+if _mdm_requested_username_is_safe jane \
+  && _mdm_requested_username_is_safe "$_mdm_detect_requested_255" \
+  && ! _mdm_requested_username_is_safe "$_mdm_detect_requested_256" \
+  && _mdm_requested_username_is_safe 'alias+tag..record' \
+  && _mdm_user_is_not_applicable _UnReSoLvEd \
+  && _mdm_canonical_username_is_safe "$_mdm_detect_canonical_32" \
+  && ! _mdm_canonical_username_is_safe "$_mdm_detect_canonical_33" \
+  && ! _mdm_canonical_username_is_safe 'alias+tag..record' \
+  && [[ "$_mdm_detect_installer_alias_rc" -eq 0 ]]; then
+  pass "mdm-detect: installer対称requested 255/canonical 32文字境界を強制"
 else
-  fail "mdm-detect: _unresolved 予約名と実ユーザーが衝突"
+  fail "mdm-detect: requested/canonical username validator境界が不正"
 fi
+unset _mdm_detect_requested_255 _mdm_detect_requested_256
+unset _mdm_detect_canonical_32 _mdm_detect_canonical_33
+unset _mdm_detect_installer_alias_rc
 (
   _MDM_DETECT_TEST_MODE=0
   _mdm_expected_trust_owner() { printf 'root'; }
@@ -264,6 +286,18 @@ EOF
 (
   unset MDM_CONSOLE_USER_OVERRIDE
   _mdm_detect_read_console_user_record() {
+    printf '<dictionary> {\n  Name : jane42\n  UID : 501\n}\n'
+  }
+  _mdm_stat_owner() { printf 'fallback-user'; }
+  if [[ "$(_mdm_detect_console_user)" == jane42 ]]; then
+    pass "mdm-detect: 正常な scutil ConsoleUser を fallback せず採用"
+  else
+    fail "mdm-detect: 正常な scutil ConsoleUser が stat fallback へ退化"
+  fi
+)
+(
+  unset MDM_CONSOLE_USER_OVERRIDE
+  _mdm_detect_read_console_user_record() {
     printf '<dictionary> {\n  Name : wrong-user\n}\n'
     return 42
   }
@@ -314,6 +348,82 @@ EOF
   [[ "$_uid_records_rejected" == true ]] \
     && pass "mdm-detect: 曖昧または非canonicalな dscl UID を拒否" \
     || fail "mdm-detect: 不正な dscl UID record を許可"
+)
+(
+  _canonical_user="$(_mdm_detect_parse_canonical_user_record 501 <<'EOF'
+name: jane
+password: ********
+uid: 501
+gid: 20
+dir: /Users/jane
+shell: /bin/zsh
+gecos: Jane Doe
+uuid: 12345678-ABCD-1234-ABCD-1234567890EF
+
+EOF
+)" || _canonical_rc=$?
+  _reader_source="$(declare -f _mdm_detect_read_canonical_user_record)"
+  if [[ "${_canonical_rc:-0}" -eq 0 && "$_canonical_user" == jane \
+    && "$_reader_source" \
+      == *'/usr/bin/dscacheutil -q user -a uid "$1"'* ]]; then
+    pass "mdm-detect: dscacheutil UID queryと標準user recordを厳格に解析"
+  else
+    fail "mdm-detect: canonical username query/parserの正常系が不正"
+  fi
+)
+(
+  _canonical_records_rejected=true
+  while IFS= read -r -d '' _canonical_record; do
+    if printf '%s' "$_canonical_record" \
+      | _mdm_detect_parse_canonical_user_record 501 >/dev/null 2>&1; then
+      _canonical_records_rejected=false
+    fi
+  done < <(printf '%s\0' \
+    '' \
+    $'name: jane\nuid: 502\n' \
+    $'name: jane\nuid: 0501\n' \
+    $'name: jane\nname: alice\nuid: 501\n' \
+    $'name: jane\nuid: 501\nuid: 501\n' \
+    $'name: jane\nuid: 501\n\nname: alice\nuid: 501\n' \
+    $'uid: 501\n' \
+    $'name: jane\n' \
+    $'name: ja\tne\nuid: 501\n' \
+    $'name: jane\nuid: 501\ngecos: Jane\rDoe\n' \
+    $'name:  jane\nuid: 501\n' \
+    $'name: jane\nuid:\t501\n')
+  if printf 'name: jane\nuid: 501\n' \
+      | _mdm_detect_parse_canonical_user_record 0501 >/dev/null 2>&1; then
+    _canonical_records_rejected=false
+  fi
+  if [[ "$_canonical_records_rejected" == true ]]; then
+    pass "mdm-detect: canonical name recordの空/不一致/非canonical/重複/複数/controlを拒否"
+  else
+    fail "mdm-detect: malformed dscacheutil canonical name recordを許可"
+  fi
+)
+(
+  unset MDM_DETECT_CANONICAL_USER_OVERRIDE
+  _mdm_detect_read_canonical_user_record() {
+    [[ "$1" == 501 ]] || return 64
+    printf 'name: jane\nuid: 501\n\n'
+    return 42
+  }
+  _canonical_user=""; _canonical_rc=0
+  _canonical_user="$(_mdm_detect_canonical_username_for_uid 501)" \
+    || _canonical_rc=$?
+  if [[ "$_canonical_rc" -ne 0 && -z "$_canonical_user" ]]; then
+    pass "mdm-detect: dscacheutil producer非0のvalid-looking stdoutを破棄"
+  else
+    fail "mdm-detect: 失敗したdscacheutilのcanonical nameを採用"
+  fi
+)
+(
+  export MDM_DETECT_CANONICAL_USER_OVERRIDE=jane
+  if _mdm_detect_canonical_username_for_uid 0501 >/dev/null 2>&1; then
+    fail "mdm-detect: override経路でleading-zero UIDを許可"
+  else
+    pass "mdm-detect: canonical username query UIDをcanonical decimalへ固定"
+  fi
 )
 (
   unset MDM_DETECT_EXPECTED_UID_OVERRIDE MDM_DETECT_GENERATED_UID_OVERRIDE
@@ -398,6 +508,611 @@ EOF
     fail "mdm-detect: GeneratedUID の正規化または束縛が不正"
   fi
 )
+(
+  unset MDM_DETECT_EXPECTED_UID_OVERRIDE MDM_DETECT_GENERATED_UID_OVERRIDE
+  export MDM_DETECT_CANONICAL_USER_OVERRIDE=jane
+  _alias_guid=12345678-ABCD-1234-ABCD-1234567890EF
+  _canonical_guid="$_alias_guid"
+  _mdm_detect_read_local_identity_record() {
+    _guid="$_alias_guid"
+    [[ "$1" != jane ]] || _guid="$_canonical_guid"
+    printf 'UniqueID: 501\nGeneratedUID: %s\n' "$_guid"
+  }
+  _mdm_detect_read_search_identity_record() {
+    _mdm_detect_read_local_identity_record "$1"
+  }
+  _mdm_detect_user_home() { printf '%s' /Users/jane; }
+  _canonical_binding="$(_mdm_detect_canonical_target_binding JANE)" \
+    || _canonical_rc=$?
+  _canonical_guid=00000000-ABCD-1234-ABCD-1234567890EF
+  _guid_mismatch_rc=0
+  _mdm_detect_canonical_target_binding JANE >/dev/null 2>&1 \
+    || _guid_mismatch_rc=$?
+  if [[ "${_canonical_rc:-0}" -eq 0 \
+    && "${_canonical_binding%%$'\t'*}" == jane \
+    && "$_guid_mismatch_rc" -ne 0 ]]; then
+    pass "mdm-detect: JANEをsearch-policy canonical名janeへ束縛しGUID差替を拒否"
+  else
+    fail "mdm-detect: canonical usernameのUID/GeneratedUID/home再束縛が不正"
+  fi
+)
+
+_mdm_detect_python_accessor_source="$(declare -f \
+  _mdm_detect_system_python _mdm_detect_validate_source_python \
+  _mdm_detect_validate_private_python _mdm_detect_capture_private_python \
+  _mdm_detect_copy_python_framework \
+  _mdm_detect_private_python_selftest)"
+if [[ "$_MDM_DETECT_SOURCE_PYTHON_LINK" \
+    == /Library/Developer/CommandLineTools/usr/bin/python3 \
+  && "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" \
+    == /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework \
+  && "$(_mdm_detect_python_codesign_requirement)" \
+    == '=identifier "com.apple.python3" and anchor apple' ]] \
+  && ! grep -Eq '/usr/bin/python3|xcrun|/Applications/Xcode' \
+    <<< "$_mdm_detect_python_accessor_source"; then
+  pass "mdm-detect: production Pythonをfixed CLT frameworkだけへ固定"
+else
+  fail "mdm-detect: system PythonにshimまたはXcode fallbackが残存"
+fi
+(
+  _spy_root="$_mdm_detect_tmp/python-argv-spy"
+  _spy_log="$_spy_root/argv.log"
+  _fixture="$_spy_root/fixture"
+  /bin/mkdir -p "$_fixture/absence" "$_fixture/component" \
+    "$_fixture/runtime/node_modules" \
+    "$_fixture/trust/ClaudeCodeStarterKit" \
+    "$_fixture/wce/node_modules" \
+    "$_fixture/home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin" \
+    "$_fixture/home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/dist/bin"
+  printf '{}\n' > "$_fixture/value.json"
+  : > "$_fixture/IBMPlexMono-Bold.ttf"
+  : > "$_fixture/artifact"
+  : > "$_fixture/home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/dist/bin/cc-safety-net.js"
+
+  _helpers="$(LC_ALL=C /usr/bin/awk '
+    function emit() {
+      if (accessor && executable && current != "_mdm_detect_private_python_selftest") print current
+    }
+    /^[[:alnum:]_]+\(\)[[:space:]]*\{/ {
+      emit()
+      current = $1
+      sub(/\(\).*/, "", current)
+      accessor = 0
+      executable = 0
+    }
+    /_mdm_detect_system_python/ { accessor = 1 }
+    /"\$_python"/ { executable = 1 }
+    END { emit() }
+  ' "$PROJECT_DIR/mdm/detect-mdm.sh" | LC_ALL=C /usr/bin/sort)"
+  printf '%s\n' '#!/bin/bash' \
+    '_dir=${0%/*}' \
+    '_label=${0##*/}' \
+    'printf "%s\t%s\t%s\t%s\t%s\n" "$_label" "${1-}" "${2-}" "${3-}" "${4-}" >> "$_dir/argv.log"' \
+    '/bin/cat >/dev/null' \
+    '[[ "${1-}" == -I && "${2-}" == -B && "${3-}" == -S ]] || exit 97' \
+    'case "${4-}" in -|-c) exit 0 ;; *) exit 97 ;; esac' \
+    > "$_spy_root/spy"
+  /bin/chmod 700 "$_spy_root/spy"
+  while IFS= read -r _helper; do
+    [[ -n "$_helper" ]] || continue
+    /bin/ln -s spy "$_spy_root/$_helper"
+  done <<< "$_helpers"
+  : > "$_spy_log"
+
+  _mdm_detect_system_python() { printf '%s/%s' "$_spy_root" "$_spy_label"; }
+  _mdm_canonical_dir() { printf '%s' "$1"; }
+  _mdm_has_acl() { return 1; }
+  _mdm_node_runtime_arch() { printf '%s' x64; }
+  _mdm_receipt_trust_base() { printf '%s' "$_fixture/trust"; }
+  _mdm_target_dir_is_accessible() { return 0; }
+  _mdm_component_ancestors_searchable() { return 0; }
+  _mdm_component_effective_test() { return 0; }
+  _MDM_DETECT_TEST_MODE=1
+  unset _MDM_DETECT_ABSENCE_PYTHON
+
+  _spy_label=_mdm_json_query
+  _mdm_json_query "$_fixture/value.json" value raw '' >/dev/null 2>&1 || true
+  _spy_label=_mdm_issuer_json_is_canonical
+  _mdm_issuer_json_is_canonical "$_fixture/value.json" receipt \
+    >/dev/null 2>&1 || true
+  _spy_label=_mdm_font_file_is_trusted
+  _mdm_font_file_is_trusted "$_fixture/IBMPlexMono-Bold.ttf" \
+    >/dev/null 2>&1 || true
+  _spy_label=_mdm_artifact_digest
+  _mdm_artifact_digest file "$_fixture/artifact" >/dev/null 2>&1 || true
+  _spy_label=_mdm_path_is_absent_with_real_parents
+  _mdm_path_is_absent_with_real_parents "$_fixture/absence" missing \
+    >/dev/null 2>&1 || true
+  _spy_label=_mdm_private_component_shape_is_valid
+  _mdm_private_component_shape_is_valid biome "$_fixture/component" \
+    >/dev/null 2>&1 || true
+  _spy_label=_mdm_safety_wrapper_is_bound
+  _mdm_safety_wrapper_is_bound "$_fixture/home" \
+    "$_fixture/home/.local/lib/claude-code-starter-kit/cc-safety-net/1.0.6/bin/cc-safety-net" \
+    "$_fixture/private-node" >/dev/null 2>&1 || true
+  _spy_label=_mdm_node_runtime_content_sha256
+  _mdm_node_runtime_content_sha256 "$_fixture/runtime" >/dev/null 2>&1 || true
+  _spy_label=_mdm_wce_runtime_marker_is_valid
+  _mdm_wce_runtime_marker_is_valid "$_fixture/wce" >/dev/null 2>&1 || true
+  _spy_label=_mdm_wce_runtime_metadata_is_valid
+  _mdm_wce_runtime_metadata_is_valid "$_fixture/wce" >/dev/null 2>&1 || true
+  _spy_label=_mdm_wce_activation_record
+  _mdm_wce_activation_record "$_fixture/home" "$(/usr/bin/id -u)" \
+    "$_fixture/wce" >/dev/null 2>&1 || true
+  _spy_label=_mdm_node_runtime_provenance_is_valid
+  _mdm_node_runtime_provenance_is_valid "$_fixture/runtime" \
+    >/dev/null 2>&1 || true
+  _spy_label=_mdm_node_runtime_metadata_is_valid
+  _mdm_node_runtime_metadata_is_valid "$_fixture/runtime" \
+    >/dev/null 2>&1 || true
+
+  _observed="$(/usr/bin/cut -f1 "$_spy_log" | LC_ALL=C /usr/bin/sort)"
+  _argv_ok=1
+  while IFS=$'\t' read -r _helper _flag_i _flag_b _flag_s _stdin_mode; do
+    [[ "$_flag_i" == -I && "$_flag_b" == -B && "$_flag_s" == -S ]] \
+      || _argv_ok=0
+    if [[ "$_helper" == _mdm_path_is_absent_with_real_parents ]]; then
+      [[ "$_stdin_mode" == -c ]] || _argv_ok=0
+    else
+      [[ "$_stdin_mode" == - ]] || _argv_ok=0
+    fi
+  done < "$_spy_log"
+  _selftest_source="$(declare -f _mdm_detect_private_python_selftest)"
+  if [[ "$_observed" == "$_helpers" && "$_argv_ok" -eq 1 \
+    && "$(/usr/bin/wc -l < "$_spy_log" | /usr/bin/tr -d '[:space:]')" \
+      == "$(printf '%s\n' "$_helpers" | /usr/bin/wc -l \
+        | /usr/bin/tr -d '[:space:]')" \
+    && "$_selftest_source" == *'"$_python" -I -B -S - "$_framework"'* ]]; then
+    pass "mdm-detect: 全production Python helperの実argvを-I -B -Sへ固定"
+  else
+    fail "mdm-detect: production Python helperのisolation argvが不正"
+  fi
+)
+if grep -Fq 'origins = (sys.executable, sys.prefix, json.__file__, ctypes.__file__,' \
+    <<< "$_mdm_detect_python_accessor_source" \
+  && grep -Fq '_ctypes.__file__' <<< "$_mdm_detect_python_accessor_source" \
+  && grep -Fq 'ctypes.CDLL(None)' <<< "$_mdm_detect_python_accessor_source" \
+  && grep -Fq 'signal.alarm(15)' \
+    <<< "$_mdm_detect_python_accessor_source"; then
+  pass "mdm-detect: private Python自己検査はstdlib/extension originとloaderを固定"
+else
+  fail "mdm-detect: private Python自己検査が不足"
+fi
+(
+  _MDM_DETECT_TEST_MODE=0
+  _mdm_detect_reset_system_python
+  if ! _mdm_detect_system_python >/dev/null 2>&1; then
+    pass "mdm-detect: production Python accessorは初期化前にfail-closed"
+  else
+    fail "mdm-detect: production Python accessorがsourceへlazy fallback"
+  fi
+)
+(
+  _source_python="${MDM_DETECT_PYTHON_OVERRIDE:-}"
+  _source_link="$_mdm_detect_tmp/source-python-link"
+  ln -s "$_source_python" "$_source_link"
+  _source_ok=0; _relative_rc=0; _symlink_rc=0
+  _mdm_detect_source_test_python >/dev/null 2>&1 || _source_ok=$?
+  MDM_DETECT_PYTHON_OVERRIDE=relative/python3
+  _mdm_detect_source_test_python >/dev/null 2>&1 || _relative_rc=$?
+  MDM_DETECT_PYTHON_OVERRIDE="$_source_link"
+  _mdm_detect_source_test_python >/dev/null 2>&1 || _symlink_rc=$?
+  if [[ "$_source_ok" -eq 0 && "$_relative_rc" -ne 0 \
+    && "$_symlink_rc" -ne 0 ]]; then
+    pass "mdm-detect: source-only Python overrideはcanonical実体だけを受理"
+  else
+    fail "mdm-detect: test overrideがproduction Python trustを迂回"
+  fi
+  rm -f "$_source_link"
+)
+(
+  _MDM_DETECT_TEST_MODE=1
+  MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$(/usr/bin/id -un)"
+  export MDM_DETECT_EXPECTED_OWNER_OVERRIDE
+  export MDM_DETECT_TMP_BASE_OVERRIDE="$_mdm_detect_private_base"
+  _workspace="" _identity=""
+  if _mdm_private_tmpdir _workspace \
+    && _identity="$(_mdm_private_workspace_binding "$_workspace")" \
+    && [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_workspace")")" \
+      == 0700 ]] \
+    && [[ "$_MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY" == "$_identity" ]] \
+    && _mdm_cleanup_active_workspace \
+    && [[ ! -e "$_workspace" ]]; then
+    pass "mdm-detect: detector workspaceはcanonical owner-bound 0700"
+  else
+    fail "mdm-detect: detector workspace trust/cleanup contractが不正"
+  fi
+
+  _mdm_private_tmpdir _workspace
+  _identity="$(_mdm_private_workspace_binding "$_workspace")"
+  mv "$_workspace" "$_workspace.original"
+  mkdir -m 700 "$_workspace"
+  printf 'keep\n' > "$_workspace/canary"
+  if ! _mdm_cleanup_active_workspace \
+    && [[ -f "$_workspace/canary" ]]; then
+    pass "mdm-detect: cleanupはstored workspace inodeの差替えを拒否"
+  else
+    fail "mdm-detect: cleanupが差替えworkspaceを再帰削除"
+  fi
+  rm -rf "$_workspace"
+  mv "$_workspace.original" "$_workspace"
+  _mdm_cleanup_active_workspace
+)
+_mode_sticky="$_mdm_detect_private_base/mode-1777"
+_mode_plain="$_mdm_detect_private_base/mode-0777"
+mkdir "$_mode_sticky" "$_mode_plain"
+chmod 1777 "$_mode_sticky"; chmod 0777 "$_mode_plain"
+if _mdm_private_tmp_mode_is_safe "$_mode_sticky" \
+  && ! _mdm_private_tmp_mode_is_safe "$_mode_plain"; then
+  pass "mdm-detect: private tmp modeはsticky 1777だけを受理"
+else
+  fail "mdm-detect: private tmp modeが1777と0777を識別できない"
+fi
+rmdir "$_mode_sticky" "$_mode_plain"
+if _mdm_is_darwin; then
+  (
+    _MDM_DETECT_TEST_MODE=0
+    if _mdm_private_tmp_base_is_safe /private/tmp; then
+      pass "mdm-detect: production /private/tmpのsticky 1777を受理"
+    else
+      fail "mdm-detect: production /private/tmpをmode判定で拒否"
+    fi
+  )
+fi
+
+(
+  MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$(/usr/bin/id -un)"
+  export MDM_DETECT_EXPECTED_OWNER_OVERRIDE
+  export MDM_DETECT_TMP_BASE_OVERRIDE="$_mdm_detect_private_base"
+  _mdm_private_workspace_binding() { return 1; }
+  _workspace=unexpected
+  if ! _mdm_private_tmpdir _workspace \
+    && [[ -z "$_workspace$_MDM_DETECT_ACTIVE_WORKSPACE$_MDM_DETECT_INFLIGHT_WORKSPACE" ]] \
+    && ! find "$_mdm_detect_private_base" -maxdepth 1 -type d \
+      -name 'claude-kit-mdm-detect.*' -print | grep -q .; then
+    pass "mdm-detect: identity取得失敗でも空inflight workspaceを回収"
+  else
+    fail "mdm-detect: identity取得失敗でworkspaceが残留"
+  fi
+)
+
+_signal_ok=1
+for _signal_case in HUP:129 INT:130 TERM:143; do
+  _signal="${_signal_case%%:*}"; _expected="${_signal_case#*:}"
+  _signal_base="$_mdm_detect_private_base/signal-$_signal"
+  mkdir -m 700 "$_signal_base"
+  _observed=0
+  MDM_SOURCE_ONLY=1 \
+    MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$(/usr/bin/id -un)" \
+    MDM_DETECT_TMP_BASE_OVERRIDE="$_signal_base" \
+    /bin/bash -c '
+      source "$1/mdm/detect-mdm.sh"
+      signal_name=$2; signal_rc=$3; marker=$4
+      _mdm_private_workspace_binding() {
+        local identity
+        if [[ ! -e "$marker" ]]; then
+          : > "$marker"
+          /bin/kill "-$signal_name" "$$"
+        fi
+        identity="$(_mdm_stat_dir_identity "$1")" || return 1
+        printf "%s" "$identity"
+      }
+      trap "_mdm_cleanup_active_workspace; exit $signal_rc" "$signal_name"
+      workspace=""
+      _mdm_private_tmpdir workspace
+    ' _ "$PROJECT_DIR" "$_signal" "$_expected" "$_signal_base/fired" \
+    >/dev/null 2>&1 || _observed=$?
+  [[ "$_observed" -eq "$_expected" ]] || _signal_ok=0
+  find "$_signal_base" -maxdepth 1 -type d \
+    -name 'claude-kit-mdm-detect.*' -print | grep -q . && _signal_ok=0
+  rm -rf "$_signal_base"
+done
+if [[ "$_signal_ok" -eq 1 ]]; then
+  pass "mdm-detect: mktemp identity窓のHUP/INT/TERMを回収"
+else
+  fail "mdm-detect: signal窓でprivate workspaceが残留"
+fi
+unset _mode_sticky _mode_plain _signal_case _signal _expected
+unset _signal_base _observed _signal_ok
+(
+  _python_fixture="$_mdm_detect_tmp/clt-python-fixture"
+  _MDM_DETECT_SOURCE_PYTHON_TRUST_BASE="$_python_fixture/Library"
+  _MDM_DETECT_SOURCE_PYTHON_CLT_ROOT="$_python_fixture/Library/Developer/CommandLineTools"
+  _MDM_DETECT_SOURCE_PYTHON_FRAMEWORK="$_MDM_DETECT_SOURCE_PYTHON_CLT_ROOT/Library/Frameworks/Python3.framework"
+  _MDM_DETECT_SOURCE_PYTHON_LINK="$_MDM_DETECT_SOURCE_PYTHON_CLT_ROOT/usr/bin/python3"
+  _python_target="$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK/Versions/3.9/bin/python3.9"
+  _python_short="${_python_target%/*}/python3"
+  _event_log="$_python_fixture/events.log"
+  _ditto_log="$_python_fixture/ditto.log"
+  _verify_rc=0; _details_rc=0; _resource_version=2
+  _private_resource_version=""; _mtree_stderr=0
+  _ditto_bad_private=0; _ditto_partial_flag=0
+
+  mkdir -p "${_MDM_DETECT_SOURCE_PYTHON_LINK%/*}" \
+    "${_python_target%/*}"
+  cp /usr/bin/true "$_python_target"; chmod 0755 "$_python_target"
+  ln -s python3.9 "$_python_short"
+  ln -s ../../Library/Frameworks/Python3.framework/Versions/3.9/bin/python3 \
+    "$_MDM_DETECT_SOURCE_PYTHON_LINK"
+  : > "$_event_log"; : > "$_ditto_log"
+
+  _MDM_DETECT_TEST_MODE=0
+  _mdm_expected_trust_owner() { /usr/bin/id -un; }
+  _mdm_private_tmp_base() { printf '%s' "$_mdm_detect_private_base"; }
+  _mdm_private_workspace_binding() {
+    local _workspace="$1" _mode _identity
+    case "$_workspace" in
+      "$_mdm_detect_private_base"/claude-kit-mdm-detect.*) : ;;
+      *) return 1 ;;
+    esac
+    [[ -d "$_workspace" && ! -L "$_workspace" \
+      && "$(_mdm_canonical_dir "$_workspace")" == "$_workspace" \
+      && "$(_mdm_stat_owner "$_workspace")" == "$(/usr/bin/id -un)" ]] \
+      || return 1
+    _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_workspace")")" \
+      || return 1
+    [[ "$_mode" == 0700 ]] || return 1
+    _identity="$(_mdm_stat_dir_identity "$_workspace")" || return 1
+    printf '%s' "$_identity"
+  }
+  _python_fixture_workspace() {
+    local _output="$1" _fixture_dir
+    _fixture_dir="$(/usr/bin/mktemp -d \
+      "$_mdm_detect_private_base/claude-kit-mdm-detect.XXXXXX")" || return 1
+    chmod 700 "$_fixture_dir"
+    _MDM_DETECT_ACTIVE_WORKSPACE="$_fixture_dir"
+    _MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY="$(
+      _mdm_private_workspace_binding "$_fixture_dir"
+    )" || return 1
+    printf -v "$_output" '%s' "$_fixture_dir"
+  }
+  _mdm_detect_python_codesign() {
+    local _framework="" _kind=source _version _argument
+    for _argument in "$@"; do _framework="$_argument"; done
+    [[ "$_framework" == "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" ]] \
+      || _kind=private
+    if [[ "$1" == --verify ]]; then
+      [[ "$#" -eq 7 && "$2" == --deep && "$3" == --strict \
+        && "$4" == -R \
+        && "$5" == '=identifier "com.apple.python3" and anchor apple' \
+        && "$6" == -- ]] || return 98
+      printf '%s-verify\n' "$_kind" >> "$_event_log"
+      return "$_verify_rc"
+    fi
+    [[ "$#" -eq 3 && "$1" == -dvv && "$2" == -- \
+      && "${LC_ALL:-}" == C ]] || return 98
+    printf '%s-details\n' "$_kind" >> "$_event_log"
+    [[ "$_details_rc" -eq 0 ]] || return "$_details_rc"
+    _version="$_resource_version"
+    [[ "$_kind" != private || -z "$_private_resource_version" ]] \
+      || _version="$_private_resource_version"
+    [[ "$_version" == missing ]] \
+      || printf 'Sealed Resources version=%s rules=13 files=1\n' \
+        "$_version" >&2
+  }
+  _mdm_detect_python_mtree() {
+    printf 'mtree\n' >> "$_event_log"
+    [[ "${LC_ALL:-}" == C ]] || return 98
+    [[ "$_mtree_stderr" -eq 0 ]] || printf 'unexpected mtree stderr\n' >&2
+    if _mdm_is_darwin; then
+      LC_ALL=C /usr/sbin/mtree "$@"
+      return
+    fi
+    [[ "$1" == -c && "$2" == -n && "$3" == -P && "$4" == -x \
+      && "$5" == -p && "$7" == -k \
+      && "$8" == type,uid,gid,mode,nlink,size,link,sha256digest,acldigest,xattrsdigest,flags ]] \
+      || return 98
+    local _root="$6" _file _sha
+    (builtin cd "$_root" && LC_ALL=C /usr/bin/find -P . -xdev \
+      -printf 'node\t%P\t%y\t%U\t%G\t%m\t%n\t%l\n' \
+      | LC_ALL=C /usr/bin/sort)
+    while IFS= read -r _file; do
+      _sha="$(/usr/bin/sha256sum "$_root/$_file" \
+        | /usr/bin/awk '{print $1}')" || return 1
+      printf 'file\t%s\t%s\n' "$_file" "$_sha"
+    done < <(builtin cd "$_root" && LC_ALL=C /usr/bin/find -P . -xdev \
+      -type f -print | LC_ALL=C /usr/bin/sort)
+  }
+  _mdm_detect_python_ditto() {
+    printf '%s\n' "$@" > "$_ditto_log"; printf 'ditto\n' >> "$_event_log"
+    [[ "$#" -eq 9 && "$1" == --clone && "$2" == --nopersistRootless \
+      && "$3" == --rsrc && "$4" == --extattr && "$5" == --qtn \
+      && "$6" == --acl && "$7" == -X ]] || return 98
+    if _mdm_is_darwin; then /usr/bin/ditto "$@" || return 1
+    else /bin/cp -a "$8" "$9" || return 1; fi
+    [[ "$_ditto_bad_private" -eq 0 ]] || chmod 0777 "$9/Versions"
+    if [[ "$_ditto_partial_flag" -eq 1 ]]; then
+      /usr/bin/chflags uchg "$9/Versions/3.9/bin/python3.9" || return 1
+      return 1
+    fi
+  }
+  _mdm_detect_private_python_selftest() {
+    printf 'selftest\n' >> "$_event_log"
+  }
+  _mdm_stat_mode() {
+    if [[ -L "$1" ]]; then printf '0755'
+    elif _mdm_is_darwin; then /usr/bin/stat -f '%Lp' "$1" 2>/dev/null
+    else /usr/bin/stat -c '%a' "$1" 2>/dev/null; fi
+  }
+
+  _v2_ok=1
+  for _resource_case in 1 missing; do
+    _resource_version="$_resource_case"
+    _mdm_detect_validate_source_python p f t >/dev/null 2>&1 && _v2_ok=0
+  done
+  _resource_version=2; _details_rc=9
+  _mdm_detect_validate_source_python p f t >/dev/null 2>&1 && _v2_ok=0
+  _details_rc=0
+  if [[ "$_v2_ok" -eq 1 ]]; then
+    pass "mdm-detect: codesign v1/欠落/producer失敗を拒否"
+  else
+    fail "mdm-detect: codesign v2 envelope検証が不正"
+  fi
+
+  ln "$_python_target" "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK/source-hardlink"
+  if _mdm_detect_validate_source_python p f t; then
+    pass "mdm-detect: source hardlink増加だけでは非準拠化しない"
+  else
+    fail "mdm-detect: source nlinkをDoS条件として拒否"
+  fi
+  rm "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK/source-hardlink"
+
+  if _mdm_is_darwin; then
+    _flags_ok=1
+    for _source_flag in uchg uappnd; do
+      /usr/bin/chflags "$_source_flag" "$_python_target"
+      _mdm_detect_validate_source_python p f t >/dev/null 2>&1 \
+        && _flags_ok=0
+      /usr/bin/chflags "no$_source_flag" "$_python_target"
+    done
+    if [[ "$_flags_ok" -eq 1 ]] \
+      && grep -Fq -- '-flags +restricted' \
+        "$PROJECT_DIR/mdm/detect-mdm.sh"; then
+      pass "mdm-detect: immutable/append/restricted source flagをcopy前に拒否"
+    else
+      fail "mdm-detect: flagged sourceを許可"
+    fi
+  else
+    skip "mdm-detect: immutable/append/restricted source flagをcopy前に拒否" \
+      "BSD file flags unavailable"
+  fi
+
+  : > "$_event_log"; : > "$_ditto_log"
+  _python_fixture_workspace _workspace
+  _source_framework_identity="$(
+    _mdm_stat_dir_identity "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK"
+  )"
+  _source_target_identity="$(_mdm_stat_identity "$_python_target")"
+  _init_rc=0
+  _mdm_detect_initialize_system_python "$_workspace" || _init_rc=$?
+  _private="$(_mdm_detect_system_python)" || true
+  _private_root="$_workspace/Python3.framework"
+  _expected_events="$(printf '%s\n' source-verify source-details ditto \
+    private-verify private-details selftest mtree mtree)"
+  _expected_ditto="$(printf '%s\n' --clone --nopersistRootless \
+    --rsrc --extattr --qtn --acl -X \
+    "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" "$_private_root")"
+  _rebound_ok=0
+  _mdm_detect_system_python_cache_rebound && _rebound_ok=1
+  if [[ "$_init_rc" -eq 0 \
+    && "$_private" == "$_private_root/Versions/3.9/bin/python3.9" \
+    && "$_MDM_DETECT_PRIVATE_PYTHON_FRAMEWORK_IDENTITY" \
+      != "$_source_framework_identity" \
+    && "${_MDM_DETECT_PRIVATE_PYTHON_TARGET_IDENTITY%%$'\t'*}" \
+      != "$_source_target_identity" \
+    && "$_MDM_DETECT_PRIVATE_PYTHON_FULL_TREE_SEAL" =~ ^[0-9a-f]{64}$ \
+    && "$(< "$_event_log")" == "$_expected_events" \
+    && "$(< "$_ditto_log")" == "$_expected_ditto" \
+    && "$_rebound_ok" -eq 1 \
+    && "$(grep -c '^mtree$' "$_event_log")" == 2 ]]; then
+    pass "mdm-detect: 別inode private copyを署名/自己検査後にbaseline化"
+  else
+    fail "mdm-detect: private Python初期化contractが不正"
+  fi
+
+  _drift="$_private_root/private-drift.py"
+  printf 'drift\n' > "$_drift"; chmod 0644 "$_drift"
+  _drift_rc=0
+  _mdm_detect_system_python_cache_rebound >/dev/null 2>&1 || _drift_rc=$?
+  rm "$_drift"
+  _rebound_ok=0
+  _mdm_detect_system_python_cache_rebound && _rebound_ok=1
+  if [[ "$_drift_rc" -ne 0 && "$_rebound_ok" -eq 1 ]]; then
+    pass "mdm-detect: 終了境界でprivate identity/full driftを拒否"
+  else
+    fail "mdm-detect: private full driftを許可"
+  fi
+  _mdm_cleanup_active_workspace
+  if [[ ! -e "$_workspace" && -z "$_MDM_DETECT_PRIVATE_PYTHON_PATH" ]]; then
+    pass "mdm-detect: private runtimeをidentity-bound cleanup"
+  else
+    fail "mdm-detect: private runtime/cacheがcleanup後に残存"
+  fi
+
+  _python_fixture_workspace _workspace
+  _private_resource_version=1
+  _mdm_detect_initialize_system_python "$_workspace" >/dev/null 2>&1 \
+    && _private_v1_published=1
+  _mdm_cleanup_active_workspace
+  _private_resource_version=""
+  if [[ "${_private_v1_published:-0}" -eq 0 ]]; then
+    pass "mdm-detect: private v1 envelopeを未publishで拒否"
+  else
+    fail "mdm-detect: private v1 envelopeをpublish"
+  fi
+
+  : > "$_event_log"
+  _python_fixture_workspace _workspace
+  _ditto_bad_private=1
+  _mdm_detect_initialize_system_python "$_workspace" >/dev/null 2>&1 \
+    && _bad_private_published=1
+  _ditto_bad_private=0
+  _mdm_cleanup_active_workspace
+  if [[ "${_bad_private_published:-0}" -eq 0 ]] \
+    && ! grep -q '^private-verify$' "$_event_log"; then
+    pass "mdm-detect: private properties成功前はcodesignを実行しない"
+  else
+    fail "mdm-detect: unsafe private treeへcodesignを実行"
+  fi
+
+  if _mdm_is_darwin; then
+    _python_fixture_workspace _workspace
+    _ditto_partial_flag=1
+    _mdm_detect_initialize_system_python "$_workspace" >/dev/null 2>&1 || true
+    _ditto_partial_flag=0
+    if _mdm_cleanup_active_workspace && [[ ! -e "$_workspace" ]]; then
+      pass "mdm-detect: flagged partial copyをno-follow解除してcleanup"
+    else
+      fail "mdm-detect: flagged partial copyがworkspaceに残留"
+    fi
+  else
+    skip "mdm-detect: flagged partial copyをno-follow解除してcleanup" \
+      "BSD file flags unavailable"
+  fi
+  rm -rf "$_python_fixture"
+)
+if _mdm_is_darwin && [[ -L "$_MDM_DETECT_SOURCE_PYTHON_LINK" \
+  && -d "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK" ]]; then
+  (
+    _MDM_DETECT_TEST_MODE=0
+    _real_path="" _real_framework="" _real_target=""
+    if _mdm_detect_validate_source_python \
+      _real_path _real_framework _real_target \
+      && [[ "$_real_path" \
+        == "$_MDM_DETECT_SOURCE_PYTHON_FRAMEWORK"/Versions/*/bin/python* ]]; then
+      pass "mdm-detect: macOS実CLT PythonをApple署名/v2 envelopeで検証"
+    else
+      fail "mdm-detect: macOS実CLT Python trust chainを拒否"
+    fi
+  )
+else
+  skip "mdm-detect: macOS実CLT Python frameworkのApple署名を検証" \
+    "fixed CLT Python unavailable on this platform"
+fi
+if _mdm_is_darwin && [[ "$(/usr/bin/id -u)" == 0 \
+  && -L "$_MDM_DETECT_SOURCE_PYTHON_LINK" ]]; then
+  (
+    _MDM_DETECT_TEST_MODE=0
+    _workspace="" _private=""
+    _mdm_private_tmpdir _workspace
+    _MDM_DETECT_ACTIVE_WORKSPACE="$_workspace"
+    _MDM_DETECT_ACTIVE_WORKSPACE_IDENTITY="$(_mdm_private_workspace_binding \
+      "$_workspace")"
+    if _mdm_detect_initialize_system_python "$_workspace" \
+      && _private="$(_mdm_detect_system_python)" \
+      && [[ "$_private" == "$_workspace/Python3.framework"/* ]] \
+      && _mdm_detect_system_python_cache_rebound \
+      && _mdm_cleanup_active_workspace; then
+      pass "mdm-detect: macOS実CLT Python private runtimeを自己検査"
+    else
+      fail "mdm-detect: macOS実CLT Python private runtimeを拒否"
+      _mdm_cleanup_active_workspace || true
+    fi
+  )
+else
+  skip "mdm-detect: macOS実CLT Python private runtimeを自己検査" \
+    "root-owned private snapshot requires a root macOS test"
+fi
 # Host-global Git templates may contain absolute hook symlinks.  The retained
 # checkout fixture is intentionally self-contained so its artifact contract is
 # independent of developer-machine configuration.
@@ -420,6 +1135,9 @@ printf '{"managed":true}\n' > "$_mdm_detect_claude/settings.json"
 printf '%s\n# managed\n%s\n# user\npersonal\n' \
   "$_MDM_MARKER_BEGIN" "$_MDM_MARKER_END" > "$_mdm_detect_claude/CLAUDE.md"
 cp "$_mdm_detect_claude/settings.json" "$_mdm_detect_snapshot/settings.json"
+printf 'managed nested rule\n' > "$_mdm_detect_claude/rules/managed.md"
+cp "$_mdm_detect_claude/rules/managed.md" \
+  "$_mdm_detect_snapshot/rules/managed.md"
 printf '%s\n# managed\n%s\n' \
   "$_MDM_MARKER_BEGIN" "$_MDM_MARKER_END" > "$_mdm_detect_snapshot/CLAUDE.md"
 
@@ -435,7 +1153,7 @@ _mdm_detect_component_hash=ccccccccccccccccccccccccccccccccccccccccccccccccccccc
 _mdm_detect_write_manifest() {
   local _python
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_mdm_detect_manifest" "$_mdm_detect_short" \
+  "$_python" -I -B -S - "$_mdm_detect_manifest" "$_mdm_detect_short" \
     "$_mdm_detect_manifest_profile" "$_mdm_detect_manifest_language" \
     "$_mdm_detect_claude" "$_mdm_detect_snapshot" \
     "$_mdm_detect_policy_sha" "$_mdm_detect_manifest_absent_json" <<'PY'
@@ -457,7 +1175,11 @@ value = {
     "new_init": "false",
     "plugins": "",
     "codex_plugin": "false",
-    "files": [claude_dir + "/settings.json", claude_dir + "/CLAUDE.md"],
+    "files": [
+        claude_dir + "/settings.json",
+        claude_dir + "/CLAUDE.md",
+        claude_dir + "/rules/managed.md",
+    ],
     "cleanup_paths": [],
     "mdm_absent_files": absent,
     "mdm_managed": True,
@@ -486,7 +1208,7 @@ _mdm_detect_fixture_deployment_sha() {
   local _live_source _snapshot_source _live_managed _snapshot_managed
   local _absent_count _absent_index=0 _absent_relative
   : > "$_input"
-  for _relative in settings.json CLAUDE.md; do
+  for _relative in settings.json CLAUDE.md rules/managed.md; do
     _live_source="$_mdm_detect_claude/$_relative"
     _snapshot_source="$_mdm_detect_snapshot/$_relative"
     if [[ "$_relative" == CLAUDE.md ]]; then
@@ -611,7 +1333,7 @@ _mdm_detect_write_components() { # <entries-json> [schema] [uid] [generated] [po
   local _outer_extra="${6:-}"
   local _canonical_entries _python
   _python="$(_mdm_detect_system_python)" || return 1
-  if _canonical_entries="$("$_python" -I -B - "$_entries" <<'PY'
+  if _canonical_entries="$("$_python" -I -B -S - "$_entries" <<'PY'
 import json
 import sys
 
@@ -695,7 +1417,7 @@ fi
 
 _mdm_detect_deep_json="$_mdm_detect_tmp/deep-json.json"
 _mdm_detect_python="$(_mdm_detect_system_python)"
-"$_mdm_detect_python" -I -B - "$_mdm_detect_deep_json" <<'PY'
+"$_mdm_detect_python" -I -B -S - "$_mdm_detect_deep_json" <<'PY'
 import sys
 
 with open(sys.argv[1], "wb") as handle:
@@ -730,7 +1452,7 @@ fi
 _mdm_detect_json_variant() { # <source> <target> <kind> <variant>
   local _source="$1" _target="$2" _kind="$3" _variant="$4" _python
   _python="$(_mdm_detect_system_python)" || return 1
-  "$_python" -I -B - "$_source" "$_target" "$_kind" "$_variant" <<'PY'
+  "$_python" -I -B -S - "$_source" "$_target" "$_kind" "$_variant" <<'PY'
 import sys
 
 source, target, kind, variant = sys.argv[1:]
@@ -2140,6 +2862,34 @@ fi
   fi
 )
 
+(
+  _mdm_detect_drift_dir="$_mdm_detect_home/effective-drift"
+  mkdir "$_mdm_detect_drift_dir"
+  chmod 0755 "$_mdm_detect_drift_dir"
+  _mdm_detect_drift_phase=before
+  _mdm_stat_uid() {
+    if [[ "$1" == "$_mdm_detect_drift_dir" \
+      && "$_mdm_detect_drift_phase" == after ]]; then
+      printf '%s' "$((_mdm_detect_fixture_uid + 1))"
+    else
+      printf '%s' "$_mdm_detect_fixture_uid"
+    fi
+  }
+  _mdm_component_effective_test() {
+    _mdm_detect_drift_phase=after
+    chmod 0777 "$_mdm_detect_drift_dir"
+    return 0
+  }
+  if _mdm_target_dir_is_accessible \
+      "$_mdm_detect_drift_dir" "$_mdm_detect_fixture_uid"; then
+    fail "mdm-detect: effective access中のtarget dir UID/mode driftを許可"
+  else
+    pass "mdm-detect: effective access後にtarget dir UID/modeを完全再束縛"
+  fi
+  chmod 0755 "$_mdm_detect_drift_dir"
+  rmdir "$_mdm_detect_drift_dir"
+)
+
 mkdir -p "$_mdm_detect_home/Library/Fonts"
 printf 'font fixture\n' > "$_mdm_detect_home/Library/Fonts/fixture.ttf"
 (
@@ -2162,6 +2912,74 @@ mkdir -p "$_mdm_detect_external"
 chmod 0755 "$_mdm_detect_external"
 printf 'tool fixture\n' > "$_mdm_detect_external_file"
 chmod 0644 "$_mdm_detect_external_file"
+if _mdm_component_tree_accessible \
+    "$_mdm_detect_external" "$_mdm_detect_fixture_uid" \
+    "$_mdm_detect_home"; then
+  pass "mdm-detect: safe home外tree本体を受理"
+else
+  fail "mdm-detect: safe home外tree本体を拒否"
+fi
+chmod 0777 "$_mdm_detect_external"
+if _mdm_component_tree_accessible \
+    "$_mdm_detect_external" "$_mdm_detect_fixture_uid" \
+    "$_mdm_detect_home"; then
+  fail "mdm-detect: mode 0777 home外tree本体をcompliant判定"
+else
+  pass "mdm-detect: home外tree本体にもowner/mode/ACL再束縛を適用"
+fi
+if _mdm_component_file_readable \
+    "$_mdm_detect_external_file" "$_mdm_detect_fixture_uid" \
+    "$_mdm_detect_home"; then
+  fail "mdm-detect: writable home外ancestorをcompliant判定"
+else
+  pass "mdm-detect: home外ancestorのunsafe modeを拒否"
+fi
+chmod 0755 "$_mdm_detect_external"
+
+(
+  _mdm_stat_uid() {
+    if [[ "$1" == "$_mdm_detect_external" ]]; then
+      printf '%s' "$((_mdm_detect_fixture_uid + 1))"
+    elif _mdm_is_darwin; then
+      /usr/bin/stat -f '%u' "$1" 2>/dev/null
+    else
+      /usr/bin/stat -c '%u' "$1" 2>/dev/null
+    fi
+  }
+  if _mdm_component_file_readable \
+      "$_mdm_detect_external_file" "$_mdm_detect_fixture_uid" \
+      "$_mdm_detect_home"; then
+    fail "mdm-detect: foreign-owned home外ancestorをcompliant判定"
+  else
+    pass "mdm-detect: home外ancestor ownerをrootまたはtarget UIDへ限定"
+  fi
+)
+
+(
+  _mdm_component_effective_test() {
+    chmod 0777 "$_mdm_detect_external"
+    return 0
+  }
+  if _mdm_component_file_readable \
+      "$_mdm_detect_external_file" "$_mdm_detect_fixture_uid" \
+      "$_mdm_detect_home"; then
+    fail "mdm-detect: effective access中のhome外ancestor mode driftを許可"
+  else
+    pass "mdm-detect: effective access後にhome外ancestorを完全再束縛"
+  fi
+  chmod 0755 "$_mdm_detect_external"
+)
+
+_mdm_detect_sticky_tmp=/tmp
+_mdm_is_darwin && _mdm_detect_sticky_tmp=/private/tmp
+if _mdm_external_dir_is_accessible \
+    "$_mdm_detect_sticky_tmp" "$_mdm_detect_fixture_uid"; then
+  pass "mdm-detect: root-owned exact sticky tmpだけをwritable ancestorとして受理"
+else
+  fail "mdm-detect: canonical sticky tmp ancestor例外を拒否"
+fi
+unset _mdm_detect_sticky_tmp
+
 if _mdm_is_darwin \
   && /bin/chmod +a \
     'group:everyone allow search,list,add_file,add_subdirectory,delete_child' \
@@ -3056,13 +3874,76 @@ _mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane '["kit"]'
 
 # Manifest-declared absences are part of the deployment digest and must hold
 # independently in both the live tree and its managed snapshot.
-_mdm_detect_manifest_absent_json='["commands/retired.md"]'
+_mdm_detect_manifest_absent_json='["commands/nested/retired.md","commands/retired.md"]'
 _mdm_detect_write_manifest
 _mdm_detect_write_receipt 2 success "$_mdm_detect_sha" jane '["kit"]'
 if mdm_detect "$_mdm_detect_receipt" jane; then
   pass "mdm-detect: manifest-declared absent paths are deployment-attested"
 else
   fail "mdm-detect: a genuinely absent deployment path was rejected"
+fi
+
+mkdir -p "$_mdm_detect_claude/commands/nested" \
+  "$_mdm_detect_snapshot/commands/nested"
+_mdm_detect_live_absent_parent="$(_mdm_path_is_absent_with_real_parents \
+  "$_mdm_detect_claude" commands/nested/retired.md)" || true
+_mdm_detect_snapshot_absent_parent="$(_mdm_path_is_absent_with_real_parents \
+  "$_mdm_detect_snapshot" commands/nested/retired.md)" || true
+if [[ "$_mdm_detect_live_absent_parent" \
+      == "$_mdm_detect_claude/commands/nested" \
+  && "$_mdm_detect_snapshot_absent_parent" \
+      == "$_mdm_detect_snapshot/commands/nested" ]]; then
+  pass "mdm-detect: live/snapshot absent pathのdeepest existing parentを公開"
+else
+  fail "mdm-detect: absent path helperのdeepest parentが不正"
+fi
+unset _mdm_detect_live_absent_parent _mdm_detect_snapshot_absent_parent
+
+chmod 000 "$_mdm_detect_claude/commands/nested"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: mode 000 absent-only live parentをcompliant判定"
+else
+  pass "mdm-detect: absent-only live pathのdeepest mode 000 parentを拒否"
+fi
+chmod 0755 "$_mdm_detect_claude/commands/nested"
+
+chmod 0777 "$_mdm_detect_snapshot/commands/nested"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: mode 0777 absent-only snapshot parentをcompliant判定"
+else
+  pass "mdm-detect: absent-only snapshot pathのdeepest writable parentを拒否"
+fi
+chmod 0755 "$_mdm_detect_snapshot/commands/nested"
+
+(
+  _mdm_stat_uid() {
+    if [[ "$1" == "$_mdm_detect_claude/commands/nested" ]]; then
+      if [[ "$_mdm_detect_fixture_uid" == 0 ]]; then printf '1'; else printf '0'; fi
+    elif _mdm_is_darwin; then
+      /usr/bin/stat -f '%u' "$1" 2>/dev/null
+    else
+      /usr/bin/stat -c '%u' "$1" 2>/dev/null
+    fi
+  }
+  if mdm_detect "$_mdm_detect_receipt" jane; then
+    fail "mdm-detect: foreign-owned absent-only parentをcompliant判定"
+  else
+    pass "mdm-detect: absent-only deepest parentをtarget UIDへ束縛"
+  fi
+)
+
+if _mdm_is_darwin \
+  && chmod +a 'everyone allow write' \
+    "$_mdm_detect_snapshot/commands/nested" 2>/dev/null; then
+  if mdm_detect "$_mdm_detect_receipt" jane; then
+    fail "mdm-detect: ACL付きabsent-only snapshot parentをcompliant判定"
+  else
+    pass "mdm-detect: absent-only deepest parentのwritable ACLを拒否"
+  fi
+  chmod -N "$_mdm_detect_snapshot/commands/nested"
+else
+  skip "mdm-detect: absent-only deepest parentのwritable ACLを拒否" \
+    "ACL fixture unavailable on this platform"
 fi
 
 mkdir -p "$_mdm_detect_claude/commands"
@@ -3095,13 +3976,10 @@ rm "$_mdm_detect_claude/commands"
 
 mkdir -p "$_mdm_detect_claude/commands"
 chmod 000 "$_mdm_detect_claude/commands"
-if [[ "$(/usr/bin/id -u)" == 0 ]]; then
-  skip "mdm-detect: unreadable absent-path parents fail closed" \
-    "root can traverse the mode-000 fixture"
-elif mdm_detect "$_mdm_detect_receipt" jane; then
+if mdm_detect "$_mdm_detect_receipt" jane; then
   fail "mdm-detect: unreadable parent was treated as evidence of absence"
 else
-  pass "mdm-detect: unreadable absent-path parents fail closed"
+  pass "mdm-detect: mode-000 absent-path parents fail closed"
 fi
 chmod 700 "$_mdm_detect_claude/commands"
 rm -rf "$_mdm_detect_claude/commands" \
@@ -3137,6 +4015,72 @@ else
 fi
 rm "$_mdm_detect_claude/settings.json"
 mv "$_mdm_detect_tmp/settings.real" "$_mdm_detect_claude/settings.json"
+
+_mdm_detect_live_parent_mode="$(_mdm_stat_mode \
+  "$_mdm_detect_claude/rules")"
+chmod 000 "$_mdm_detect_claude/rules"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: mode 000 live managed parentをcompliant判定"
+else
+  pass "mdm-detect: unchanged managed bytesでもmode 000 live parentを拒否"
+fi
+chmod "$_mdm_detect_live_parent_mode" "$_mdm_detect_claude/rules"
+
+_mdm_detect_snapshot_parent_mode="$(_mdm_stat_mode \
+  "$_mdm_detect_snapshot/rules")"
+chmod 0777 "$_mdm_detect_snapshot/rules"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: mode 0777 snapshot managed parentをcompliant判定"
+else
+  pass "mdm-detect: unchanged snapshot bytesでもwritable parentを拒否"
+fi
+chmod "$_mdm_detect_snapshot_parent_mode" "$_mdm_detect_snapshot/rules"
+
+(
+  _mdm_stat_uid() {
+    if [[ "$1" == "$_mdm_detect_claude/rules" ]]; then
+      if [[ "$_mdm_detect_fixture_uid" == 0 ]]; then printf '1'; else printf '0'; fi
+    elif _mdm_is_darwin; then
+      /usr/bin/stat -f '%u' "$1" 2>/dev/null
+    else
+      /usr/bin/stat -c '%u' "$1" 2>/dev/null
+    fi
+  }
+  if mdm_detect "$_mdm_detect_receipt" jane; then
+    fail "mdm-detect: foreign-owned live managed parentをcompliant判定"
+  else
+    pass "mdm-detect: managed parentをtarget UIDへ束縛"
+  fi
+)
+
+if _mdm_is_darwin \
+  && chmod +a 'everyone allow write' "$_mdm_detect_snapshot/rules" 2>/dev/null; then
+  if mdm_detect "$_mdm_detect_receipt" jane; then
+    fail "mdm-detect: writable ACL付きsnapshot parentをcompliant判定"
+  else
+    pass "mdm-detect: managed parentのwritable ACLを拒否"
+  fi
+  chmod -N "$_mdm_detect_snapshot/rules"
+else
+  skip "mdm-detect: managed parentのwritable ACLを拒否" \
+    "ACL fixture unavailable on this platform"
+fi
+
+mv "$_mdm_detect_snapshot/rules" "$_mdm_detect_snapshot/rules.real"
+ln -s "$_mdm_detect_snapshot/rules.real" "$_mdm_detect_snapshot/rules"
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  fail "mdm-detect: symlinked snapshot managed parentをcompliant判定"
+else
+  pass "mdm-detect: symlinked managed parentを拒否"
+fi
+rm "$_mdm_detect_snapshot/rules"
+mv "$_mdm_detect_snapshot/rules.real" "$_mdm_detect_snapshot/rules"
+
+if mdm_detect "$_mdm_detect_receipt" jane; then
+  pass "mdm-detect: managed parent復元後はbaselineへ再収束"
+else
+  fail "mdm-detect: valid managed parent復元後も非準拠"
+fi
 
 _mdm_detect_live_mode="$(_mdm_stat_mode "$_mdm_detect_claude/settings.json")"
 chmod 666 "$_mdm_detect_claude/settings.json"
@@ -3187,7 +4131,7 @@ if _mdm_is_darwin && [[ -x /usr/bin/python3 ]]; then
       if [[ "$1" == "$_present_slot/managed" ]]; then
         printf 'read\n' >> "$_present_counter"
         _present_reads="$(wc -l < "$_present_counter" | tr -d ' ')"
-        if [[ "$_present_reads" -eq 3 ]] && /usr/bin/python3 -I -B -c '
+        if [[ "$_present_reads" -eq 3 ]] && /usr/bin/python3 -I -B -S -c '
 import ctypes
 import sys
 
@@ -3237,8 +4181,9 @@ if _mdm_is_darwin && [[ -x /usr/bin/python3 ]]; then
     : > "$_absence_spare/target"
     cat > "$_absence_wrapper" <<'WRAPPER'
 #!/bin/bash
-[[ "$#" -eq 6 && "$1" == -I && "$2" == -B && "$3" == -c ]] || exit 64
-exec /usr/bin/python3 -I -B -c '
+[[ "$#" -eq 7 && "$1" == -I && "$2" == -B \
+  && "$3" == -S && "$4" == -c ]] || exit 64
+exec /usr/bin/python3 -I -B -S -c '
 import os
 import sys
 import time
@@ -3269,7 +4214,7 @@ def controlled_open(path, flags, *args, **kwargs):
 
 os.open = controlled_open
 exec(compile(original_code, "<absence-helper>", "exec"))
-' "$5" "$6" "$4"
+' "$6" "$7" "$5"
 WRAPPER
     chmod 700 "$_absence_wrapper"
     _absence_python_saved="${_MDM_DETECT_ABSENCE_PYTHON:-}"
@@ -3284,7 +4229,7 @@ WRAPPER
     done
     _absence_swap_rc=1
     if [[ -e "$_absence_root/.absence-ready" ]]; then
-      /usr/bin/python3 -I -B -c '
+      /usr/bin/python3 -I -B -S -c '
 import ctypes
 import sys
 
@@ -3588,6 +4533,38 @@ rm -f "$_mdm_detect_cli_source" "$_mdm_detect_tmp/claude-cli-peer" \
   "$_mdm_detect_cli_copy"
 
 (
+  _mdm_detect_parent_workspace="$_mdm_detect_private_base/final-parent-workspace"
+  mkdir -m 700 "$_mdm_detect_parent_workspace"
+  _mdm_snapshot_bound_file() {
+    /bin/cp "$1" "$2" || return 1
+    /bin/chmod 600 "$2" || return 1
+    _MDM_DETECT_SNAPSHOT_SIZE="$(/usr/bin/wc -c < "$1" \
+      | /usr/bin/tr -d '[:space:]')"
+    _MDM_DETECT_SNAPSHOT_MODE="$(_mdm_detect_fixture_mode "$1")"
+  }
+  _mdm_detect_parent_checks=0
+  _mdm_managed_parents_are_safe() {
+    _mdm_detect_parent_checks=$((_mdm_detect_parent_checks + 1))
+    [[ "$_mdm_detect_parent_checks" -lt 3 ]]
+  }
+  _mdm_detect_manifest_hash="$(_mdm_sha256 "$_mdm_detect_manifest")"
+  _mdm_detect_deployment_hash="$(_mdm_detect_fixture_deployment_sha)"
+  _mdm_detect_parent_rc=0
+  _mdm_manifest_is_valid "$_mdm_detect_manifest" \
+    "$_mdm_detect_manifest_hash" "$_mdm_detect_sha" "$_mdm_detect_home" \
+    standard ja "$_mdm_detect_deployment_hash" "$_mdm_detect_policy_sha" \
+    "$_mdm_detect_parent_workspace" "$MDM_DETECT_EXPECTED_UID_OVERRIDE" \
+    || _mdm_detect_parent_rc=$?
+  if [[ "$_mdm_detect_parent_rc" -ne 0 \
+    && "$_mdm_detect_parent_checks" -eq 3 ]]; then
+    pass "mdm-detect: deployment digest後return直前に全managed parentを再検証"
+  else
+    fail "mdm-detect: final managed-parent rerunを省略"
+  fi
+  rm -rf "$_mdm_detect_parent_workspace"
+)
+
+(
   _mdm_detect_budget_workspace="$_mdm_detect_private_base/budget-workspace"
   mkdir -m 700 "$_mdm_detect_budget_workspace"
   _mdm_snapshot_bound_file() {
@@ -3684,6 +4661,7 @@ fi
 # Source-only main tests exercise strict argument status codes and constraints.
 export MDM_RECEIPT_DIR_OVERRIDE="$_mdm_detect_receipts"
 export MDM_EUID_OVERRIDE=0 MDM_CONSOLE_USER_OVERRIDE=jane
+export MDM_DETECT_CANONICAL_USER_OVERRIDE=jane
 export MDM_DETECT_CLI_PRESENT_OVERRIDE=1
 (
   export MDM_EUID_OVERRIDE=501
@@ -3731,6 +4709,60 @@ for _mdm_detect_explicit_system_user in root Root _mbsetupuser _unresolved \
   fi
 done
 
+for _mdm_detect_canonical_mode in implicit explicit; do
+  (
+    export MDM_CONSOLE_USER_OVERRIDE=JANE
+    _mdm_detect_main_rc=0
+    if [[ "$_mdm_detect_canonical_mode" == explicit ]]; then
+      _mdm_detect_main_out="$(mdm_detect_main --user JANE \
+        --expected-commit "$_mdm_detect_sha" \
+        --expected-policy-sha256 "$_mdm_detect_policy_sha")" \
+        || _mdm_detect_main_rc=$?
+    else
+      _mdm_detect_main_out="$(mdm_detect_main \
+        --expected-commit "$_mdm_detect_sha" \
+        --expected-policy-sha256 "$_mdm_detect_policy_sha")" \
+        || _mdm_detect_main_rc=$?
+    fi
+    if [[ "$_mdm_detect_main_rc" -eq 0 \
+      && "$_mdm_detect_main_out" == compliant ]]; then
+      pass "mdm-detect: $_mdm_detect_canonical_mode targetをcanonical receipt名へ正規化"
+    else
+      fail "mdm-detect: $_mdm_detect_canonical_mode targetがalias receipt名へ分岐"
+    fi
+  )
+done
+
+printf -v _mdm_detect_long_alias '%*s' 255 ''
+_mdm_detect_long_alias="${_mdm_detect_long_alias// /a}"
+_mdm_detect_long_alias="${_mdm_detect_long_alias:0:254}+"
+for _mdm_detect_alias_mode in implicit explicit; do
+  (
+    export MDM_CONSOLE_USER_OVERRIDE="$_mdm_detect_long_alias"
+    export MDM_DETECT_CANONICAL_USER_OVERRIDE=jane
+    _mdm_detect_main_rc=0
+    if [[ "$_mdm_detect_alias_mode" == explicit ]]; then
+      _mdm_detect_main_out="$(mdm_detect_main \
+        --user "$_mdm_detect_long_alias" \
+        --expected-commit "$_mdm_detect_sha" \
+        --expected-policy-sha256 "$_mdm_detect_policy_sha")" \
+        || _mdm_detect_main_rc=$?
+    else
+      _mdm_detect_main_out="$(mdm_detect_main \
+        --expected-commit "$_mdm_detect_sha" \
+        --expected-policy-sha256 "$_mdm_detect_policy_sha")" \
+        || _mdm_detect_main_rc=$?
+    fi
+    if [[ "$_mdm_detect_main_rc" -eq 0 \
+      && "$_mdm_detect_main_out" == compliant ]]; then
+      pass "mdm-detect: $_mdm_detect_alias_mode 255文字aliasを短いcanonical名へ束縛"
+    else
+      fail "mdm-detect: $_mdm_detect_alias_mode long aliasのcanonical束縛が不正"
+    fi
+  )
+done
+unset _mdm_detect_long_alias _mdm_detect_alias_mode
+
 for _mdm_detect_missing_desired in commit policy; do
   _mdm_detect_main_rc=0
   if [[ "$_mdm_detect_missing_desired" == commit ]]; then
@@ -3775,20 +4807,25 @@ for _mdm_detect_bad_args in \
 done
 
 for _mdm_detect_valid_user in John.Smith alice@corp; do
-  _mdm_detect_main_rc=0
-  mdm_detect_main --user "$_mdm_detect_valid_user" >/dev/null 2>&1 \
-    --expected-commit "$_mdm_detect_sha" \
-    --expected-policy-sha256 "$_mdm_detect_policy_sha" \
-    || _mdm_detect_main_rc=$?
-  if [[ "$_mdm_detect_main_rc" -eq 1 ]]; then
-    pass "mdm-detect: macOS short name を引数として受理 ($_mdm_detect_valid_user)"
-  else
-    fail "mdm-detect: 有効な short name の引数判定が不正 ($_mdm_detect_valid_user rc=$_mdm_detect_main_rc)"
-  fi
+  (
+    export MDM_DETECT_CANONICAL_USER_OVERRIDE="$_mdm_detect_valid_user"
+    _mdm_detect_main_rc=0
+    mdm_detect_main --user "$_mdm_detect_valid_user" >/dev/null 2>&1 \
+      --expected-commit "$_mdm_detect_sha" \
+      --expected-policy-sha256 "$_mdm_detect_policy_sha" \
+      || _mdm_detect_main_rc=$?
+    if [[ "$_mdm_detect_main_rc" -eq 1 ]]; then
+      pass "mdm-detect: macOS short name を引数として受理 ($_mdm_detect_valid_user)"
+    else
+      fail "mdm-detect: 有効な short name の引数判定が不正 ($_mdm_detect_valid_user rc=$_mdm_detect_main_rc)"
+    fi
+  )
 done
 
-for _mdm_detect_bad_user in .john john. john..smith @john john@ \
-  123456789012345678901234567890123; do
+printf -v _mdm_detect_bad_user_256 '%*s' 256 ''
+_mdm_detect_bad_user_256="${_mdm_detect_bad_user_256// /a}"
+for _mdm_detect_bad_user in .john @john john/ 'john$' \
+  "$_mdm_detect_bad_user_256"; do
   _mdm_detect_main_rc=0
   mdm_detect_main --user "$_mdm_detect_bad_user" \
     --expected-commit "$_mdm_detect_sha" \
@@ -3800,6 +4837,7 @@ for _mdm_detect_bad_user in .john john. john..smith @john john@ \
     fail "mdm-detect: 不正 username を許可 ($_mdm_detect_bad_user rc=$_mdm_detect_main_rc)"
   fi
 done
+unset _mdm_detect_bad_user_256
 
 _mdm_detect_main_rc=0
 mdm_detect_main --min-version 0.74.0 --expected-commit "$_mdm_detect_sha" \
@@ -3865,6 +4903,18 @@ fi
 
 # The direct launcher is privileged Bash, trusts a physical root-owned chain,
 # rejects final symlinks, and snapshots exact inode+size-bound bytes.
+if [[ "$_MDM_DETECT_LAUNCHER_SOURCE_CONTEXT" == 1 ]] \
+  && /usr/bin/awk '
+    /^_MDM_DETECT_LAUNCHER_SOURCE_CONTEXT=0$/ { binding = NR }
+    /^_mdm_launcher_snapshot\(\)/ { snapshot = NR }
+    /_MDM_DETECT_LAUNCHER_SOURCE_CONTEXT" == 1/ { gate = NR }
+    END { exit(binding && gate && snapshot && binding < snapshot && gate > binding ? 0 : 1) }
+  ' "$PROJECT_DIR/mdm/detect-mdm.sh"; then
+  pass "mdm-detect: test tmp overrideはsource済みlauncherだけに限定"
+else
+  fail "mdm-detect: direct launcherがpre-clean test tmpを信頼し得る"
+fi
+
 _mdm_detect_launcher_first="$(/usr/bin/head -n 1 "$PROJECT_DIR/mdm/detect-mdm.sh")"
 if [[ -x "$PROJECT_DIR/mdm/detect-mdm.sh" \
   && "$_mdm_detect_launcher_first" == '#!/bin/bash -p' ]] \
@@ -3879,8 +4929,12 @@ if _mdm_launcher_path_trusted /usr/bin/true \
 else
   fail "mdm-detect: launcher rejected a trusted system path"
 fi
-_mdm_detect_sticky_base=/tmp
-_mdm_is_darwin && _mdm_detect_sticky_base=/private/tmp
+_mdm_detect_sticky_base="$_mdm_detect_tmp/launcher-sticky"
+mkdir "$_mdm_detect_sticky_base"
+chmod 1777 "$_mdm_detect_sticky_base"
+_mdm_detect_launcher_tmp_base=/tmp
+[[ "$(/usr/bin/uname -s 2>/dev/null || true)" == Darwin ]] \
+  && _mdm_detect_launcher_tmp_base=/private/tmp
 _mdm_detect_sticky_script="$(/usr/bin/mktemp \
   "$_mdm_detect_sticky_base/mdm-detect-launcher.XXXXXX")"
 chmod 755 "$_mdm_detect_sticky_script"
@@ -3910,7 +4964,7 @@ if _mdm_launcher_snapshot \
   && [[ "$(_mdm_stat_mode "$_mdm_detect_launcher_copy")" == 500 ]] \
   && _mdm_launcher_mode_safe 755 \
   && ! _mdm_launcher_mode_safe 775 \
-  && grep -q '"$_mode" == 1777' "$PROJECT_DIR/mdm/detect-mdm.sh" \
+  && _mdm_launcher_tmp_base_trusted "$_mdm_detect_launcher_tmp_base" \
   && [[ "$(grep -c "'%i:%z'" "$PROJECT_DIR/mdm/detect-mdm.sh")" -ge 2 ]] \
   && grep -Fq \
     '_mdm_launcher_snapshot "$_mdm_clean_script" _mdm_clean_snapshot' \
@@ -3928,12 +4982,64 @@ else
 fi
 rm -f "$_mdm_detect_launcher_copy"
 
+_mdm_detect_unsafe_tmp_marker="$_mdm_detect_tmp/unsafe-tmp-mktemp-called"
+(
+  _mdm_launcher_stat_owner() { printf '0'; }
+  _mdm_launcher_stat_mode() {
+    if [[ "$1" == "$_mdm_detect_sticky_base" ]]; then
+      printf '0777'
+    else
+      printf '0755'
+    fi
+  }
+  _mdm_launcher_acl_safe() { return 0; }
+  function /usr/bin/mktemp {
+    : > "$_mdm_detect_unsafe_tmp_marker"
+    return 1
+  }
+  _mdm_detect_unsafe_tmp_copy=sentinel
+  if _mdm_launcher_snapshot \
+      "$PROJECT_DIR/mdm/detect-mdm.sh" _mdm_detect_unsafe_tmp_copy \
+    || [[ -e "$_mdm_detect_unsafe_tmp_marker" ]] \
+    || [[ -n "$_mdm_detect_unsafe_tmp_copy" ]]; then
+    fail "mdm-detect: launcher used an unsafe non-sticky temporary base"
+  else
+    pass "mdm-detect: launcher rejects an unsafe base before mktemp"
+  fi
+)
+rm -f "$_mdm_detect_unsafe_tmp_marker"
+
+(
+  _mdm_launcher_stat_owner() { printf '501'; }
+  if _mdm_launcher_tmp_base_trusted "$_mdm_detect_sticky_base"; then
+    fail "mdm-detect: launcher trusted a non-root temporary base"
+  else
+    pass "mdm-detect: launcher requires a root-owned temporary base"
+  fi
+)
+
+(
+  _mdm_launcher_stat_owner() { printf '0'; }
+  _mdm_launcher_stat_mode() {
+    if [[ "$1" == "$_mdm_detect_sticky_base" ]]; then
+      printf '1777'
+    else
+      printf '0755'
+    fi
+  }
+  _mdm_launcher_acl_safe() { return 1; }
+  if _mdm_launcher_tmp_base_trusted "$_mdm_detect_sticky_base"; then
+    fail "mdm-detect: launcher trusted an ACL-bearing temporary chain"
+  else
+    pass "mdm-detect: launcher rejects ACL-bearing temporary chains"
+  fi
+)
+
 # The parent owns the snapshot pathname before copying begins and retains its
 # cleanup traps while the clean shell starts. Exercise all catchable signals
 # during copy and after handoff, plus ordinary EXIT and the pre-snapshot state.
 (
-  _mdm_detect_launcher_signal_base=/tmp
-  _mdm_is_darwin && _mdm_detect_launcher_signal_base=/private/tmp
+  _mdm_detect_launcher_signal_base="$MDM_TEST_TMP_ROOT"
   _mdm_detect_launcher_signal_dir="$_mdm_detect_tmp/launcher-signal"
   mkdir "$_mdm_detect_launcher_signal_dir"
 
@@ -4192,4 +5298,7 @@ unset MDM_DETECT_EXPECTED_OWNER_OVERRIDE MDM_DETECT_EXPECTED_UID_OVERRIDE
 unset MDM_DETECT_TRUST_BASE_OVERRIDE
 unset MDM_DETECT_TMP_BASE_OVERRIDE MDM_DETECT_HOME_OVERRIDE
 unset MDM_RECEIPT_DIR_OVERRIDE MDM_EUID_OVERRIDE MDM_CONSOLE_USER_OVERRIDE
+unset MDM_DETECT_CANONICAL_USER_OVERRIDE
 unset MDM_DETECT_CLI_PRESENT_OVERRIDE MDM_SOURCE_ONLY
+
+mdm_test_reached_end

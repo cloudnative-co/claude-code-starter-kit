@@ -714,3 +714,5 @@ if [[ "$_ensure_line" =~ ^[0-9]+$ && "$_active_line" =~ ^[0-9]+$ \
 else
   fail "mdm-wce: root phase の WCE ordering/static wiring が不正"
 fi
+
+mdm_test_reached_end

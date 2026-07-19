@@ -188,3 +188,5 @@ PY
 
 _test_mdm_keys_in_sync_main
 unset -f _test_mdm_keys_in_sync_main
+
+mdm_test_reached_end

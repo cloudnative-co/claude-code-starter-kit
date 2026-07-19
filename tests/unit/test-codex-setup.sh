@@ -100,6 +100,25 @@ else
   fail "codex-setup: plugin list matching regressed on legacy -/*/+ markers or bare name@marketplace lines"
 fi
 
+# macOS reports a 512-byte pipe limit (`ulimit -p` = 1). Bash 5.3 can block
+# while materializing a large here-string before awk starts reading it, so keep
+# the target entry beyond 4 KiB and exercise the production streaming path.
+_LONG_PLUGIN_LIST="Installed plugins:"$'\n'
+_long_plugin_index=0
+while [[ "$_long_plugin_index" -lt 512 ]]; do
+  _LONG_PLUGIN_LIST="${_LONG_PLUGIN_LIST}  filler-${_long_plugin_index}@marketplace"$'\n'
+  _long_plugin_index=$((_long_plugin_index + 1))
+done
+_LONG_PLUGIN_LIST="${_LONG_PLUGIN_LIST}  ❯ codex@openai-codex"$'\n'
+if [[ "${#_LONG_PLUGIN_LIST}" -gt 4096 ]] \
+  && _claude_plugin_list_has "$_LONG_PLUGIN_LIST" "codex" \
+  && ! _claude_plugin_list_has "$_LONG_PLUGIN_LIST" "codex-tools"; then
+  pass "codex-setup: plugin list matching streams lists larger than 4 KiB"
+else
+  fail "codex-setup: plugin list matching should not block or misparse a large list"
+fi
+unset _LONG_PLUGIN_LIST _long_plugin_index
+
 reset_codex_mocks() {
   # shellcheck disable=SC2034  # globals are consumed by sourced codex-setup.sh
   MOCK_HAS_PLUGIN=false

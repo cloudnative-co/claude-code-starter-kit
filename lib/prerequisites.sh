@@ -516,13 +516,13 @@ _ensure_nvm_in_zshrc() {
   fi
 
   info "Adding nvm to ~/.zshrc (login shell is zsh)..."
-  cat >> "$zshrc" <<'ZSHRC'
-
-# nvm - Node Version Manager (added by claude-code-starter-kit)
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-ZSHRC
+  printf '%s\n' \
+    '' \
+    '# nvm - Node Version Manager (added by claude-code-starter-kit)' \
+    'export NVM_DIR="$HOME/.nvm"' \
+    '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' \
+    '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' \
+    >> "$zshrc"
 }
 
 _install_node() {
@@ -867,7 +867,7 @@ _prereq_exact_text_file() { # <regular-file> <expected-without-final-LF>
   local path="$1" expected="$2"
   _prereq_system_python_is_trusted || return 1
   /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    /usr/bin/python3 -I -B - "$path" "$expected" <<'PY'
+    /usr/bin/python3 -I -B -c '
 import os
 import stat
 import sys
@@ -900,7 +900,7 @@ try:
         raise ValueError("exact-text file changed")
 except (OSError, UnicodeError, ValueError):
     raise SystemExit(1)
-PY
+' "$path" "$expected"
 }
 
 _prereq_symlink_value_exact() {
@@ -1334,8 +1334,7 @@ _mdm_atomic_replace_component_leaf() {
   # removed.  This also avoids the old `.starter-kit-old.*` crash residue.
   _output="$(/usr/bin/env -i HOME="$HOME" \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    /usr/bin/python3 -I -B - "$candidate" "$destination" \
-      "$replacement_kind" <<'PY'
+    /usr/bin/python3 -I -B -c '
 import ctypes
 import errno
 import os
@@ -1637,7 +1636,7 @@ except (AttributeError, OSError, ValueError):
     raise SystemExit(1)
 finally:
     os.close(parent)
-PY
+' "$candidate" "$destination" "$replacement_kind"
 )" || _rc=$?
   [[ "$_rc" -eq 0 ]] || return "$_rc"
   if [[ "$replacement_kind" == link-preserve-dir ]]; then
@@ -1661,8 +1660,7 @@ _mdm_rollback_preserved_component_leaf() {
     && -n "$token" && ! "$token" =~ [[:space:][:cntrl:]] ]] || return 1
 
   /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    /usr/bin/python3 -I -B - "$preserved" "$destination" "$token" <<'PY' \
-      || _rc=$?
+    /usr/bin/python3 -I -B -c '
 import ctypes
 import errno
 import os
@@ -1796,7 +1794,7 @@ except (AttributeError, OSError, ValueError):
     raise SystemExit(1)
 finally:
     os.close(parent)
-PY
+' "$preserved" "$destination" "$token" || _rc=$?
   [[ "$_rc" -eq 0 ]]
 }
 
@@ -1813,8 +1811,7 @@ _mdm_finalize_preserved_component_leaf() {
     && -n "$token" && ! "$token" =~ [[:space:][:cntrl:]] ]] || return 1
 
   /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
-    /usr/bin/python3 -I -B - "$preserved" "$destination" "$token" <<'PY' \
-      || _rc=$?
+    /usr/bin/python3 -I -B -c '
 import os
 import stat
 import sys
@@ -1922,7 +1919,7 @@ except (AttributeError, OSError, ValueError):
     raise SystemExit(1)
 finally:
     os.close(parent)
-PY
+' "$preserved" "$destination" "$token" || _rc=$?
   [[ "$_rc" -eq 0 ]]
 }
 
@@ -2366,7 +2363,7 @@ _add_to_path_now_and_persist() {
       printf '\n# %s\nexport PATH="%s:$PATH"\n' "$comment" "$dir" \
         >> "$rc_file" || return 1
     fi
-  done <<< "$rc_files"
+  done < <(printf '%s\n' "$rc_files")
 }
 
 # Main entry point

@@ -48,3 +48,5 @@ assert_exit_code "$MDM_EXIT_SETUP" "$_rc" "存在しない ref は exit SETUP" \
   || fail "mdm-ref: 存在しない ref で exit 30 を返すべき"
 
 rm -rf "$_repo"
+
+mdm_test_reached_end

@@ -75,7 +75,7 @@ if jq -e --arg root "$_wbl_skill" '
     index($root) == null
     and index($root + "/node_modules") != null
     and index($root + "/logs") != null
-  ' <<< "$_wbl_cleanup_json" >/dev/null; then
+  ' < <(printf '%s\n' "$_wbl_cleanup_json") >/dev/null; then
   pass "WCE backup lifecycle: manifest cleanup is leaf-scoped"
 else
   fail "WCE backup lifecycle: manifest still authorizes recursive skill cleanup"

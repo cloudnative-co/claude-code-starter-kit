@@ -59,6 +59,19 @@ _write_json() {
   printf '%s' "$tmp"
 }
 
+# Build a small object whose newline-delimited key stream is deliberately
+# larger than macOS's smallest observed pipe capacity.  A low key count keeps
+# these behavioral tests fast while still exercising the transport boundary.
+_large_merge_doc() {
+  local value_prefix="$1"
+  jq -cn --arg value_prefix "$value_prefix" '
+    reduce range(0; 10) as $i
+      ({};
+        .[(" large key " + ($i | tostring) + " " + ("x" * 520) + " ")] =
+          ($value_prefix + ($i | tostring)))
+  '
+}
+
 # ---------------------------------------------------------------------------
 # 1. _merge_settings_bootstrap: kit-only keys adopted
 # ---------------------------------------------------------------------------
@@ -754,7 +767,8 @@ _write_json() {
     && jq -e '.permissions.allow == ["a", "b"]' "$output" >/dev/null \
     && jq -e '.permissions.deny == ["x"]' "$output" >/dev/null \
     && jq -e '.permissions.ask == ["q"]' "$output" >/dev/null \
-    && ! grep -Eq 'conflict.*(allow|deny)' <<< "$_RF_STDERR"; then
+    && ! grep -Eq 'conflict.*(allow|deny)' \
+      < <(printf '%s\n' "$_RF_STDERR"); then
     pass "$test_name"
   else
     fail "$test_name (stderr=$_RF_STDERR)"
@@ -802,4 +816,76 @@ _write_json() {
     fail "$test_name"
   fi
   rm -f "$snapshot" "$current" "$new_kit" "$output"
+}
+
+# ---------------------------------------------------------------------------
+# Large key streams: the producer must run concurrently with each consumer.
+# These cover bootstrap, top-level 3-way, and nested-object iteration without
+# replacing the smaller semantic fixtures above.
+# ---------------------------------------------------------------------------
+{
+  test_name="bootstrap: key stream larger than pipe capacity completes"
+  current_doc="$(_large_merge_doc 'current-')"
+  new_kit_doc="$(_large_merge_doc 'kit-')"
+  current="$(_write_json "$current_doc")"
+  new_kit="$(_write_json "$new_kit_doc")"
+  output="$(mktemp)"
+  key_bytes="$(printf '%s' "$current_doc" | jq -r 'keys[]' | wc -c | tr -d ' ')"
+
+  run_func _merge_settings_bootstrap "$current" "$new_kit" "$output"
+
+  if [[ "$key_bytes" -gt 4096 ]] \
+    && [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e 'length == 10 and all(.[]; startswith("current-"))' "$output" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$current" "$new_kit" "$output"
+  unset current_doc new_kit_doc key_bytes
+}
+
+{
+  test_name="3way: key stream larger than pipe capacity completes"
+  snapshot_doc="$(_large_merge_doc 'base-')"
+  current_doc="$snapshot_doc"
+  new_kit_doc="$(_large_merge_doc 'kit-')"
+  snapshot="$(_write_json "$snapshot_doc")"
+  current="$(_write_json "$current_doc")"
+  new_kit="$(_write_json "$new_kit_doc")"
+  output="$(mktemp)"
+  key_bytes="$(printf '%s' "$snapshot_doc" | jq -r 'keys[]' | wc -c | tr -d ' ')"
+
+  run_func merge_settings_3way "$snapshot" "$current" "$new_kit" "$output"
+
+  if [[ "$key_bytes" -gt 4096 ]] \
+    && [[ "$_RF_RC" -eq 0 ]] \
+    && jq -e 'length == 10 and all(.[]; startswith("kit-"))' "$output" >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -f "$snapshot" "$current" "$new_kit" "$output"
+  unset snapshot_doc current_doc new_kit_doc key_bytes
+}
+
+{
+  test_name="object_3way: key stream larger than pipe capacity completes"
+  s_val="$(_large_merge_doc 'base-')"
+  c_val="$s_val"
+  n_val="$(_large_merge_doc 'kit-')"
+  merged="$(jq -cn --argjson env "$c_val" '{env: $env}')"
+  key_bytes="$(printf '%s' "$s_val" | jq -r 'keys[]' | wc -c | tr -d ' ')"
+
+  run_func _merge_object_3way "env" "$s_val" "$c_val" "$n_val" merged
+
+  if [[ "$key_bytes" -gt 4096 ]] \
+    && [[ "$_RF_RC" -eq 0 ]] \
+    && jq -ne --argjson m "$merged" \
+      '$m.env | length == 10 and all(.[]; startswith("kit-"))' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  unset s_val c_val n_val merged key_bytes
 }
