@@ -269,11 +269,10 @@ else
 fi
 _drop_exec_body="$(sed -n '/^_mdm_exec_as_user()/,/^}/p' \
   "$PROJECT_DIR/mdm/install-mdm.sh")"
-if printf '%s\n' "$_drop_exec_body" \
-  | grep -q '_MDM_ACTIVE_DROP_SUPERVISOR_PID' \
-  && printf '%s\n' "$_drop_exec_body" | grep -Eq '[[:space:]]&[[:space:]]*$' \
-  && printf '%s\n' "$_drop_exec_body" | grep -q 'wait' \
-  && printf '%s\n' "$_drop_exec_body" | grep -q 'TZ=UTC0'; then
+if grep -q '_MDM_ACTIVE_DROP_SUPERVISOR_PID' <<< "$_drop_exec_body" \
+  && grep -Eq '[[:space:]]&[[:space:]]*$' <<< "$_drop_exec_body" \
+  && grep -q 'wait' <<< "$_drop_exec_body" \
+  && grep -q 'TZ=UTC0' <<< "$_drop_exec_body"; then
   pass "mdm-lock: user drop は追跡可能な foreground supervisor として待機"
 else
   fail "mdm-lock: _mdm_exec_as_user の supervisor 配線が不正"
@@ -292,8 +291,8 @@ else
 fi
 _main_lock_body="$(sed -n '/# Serialize every mutating run/,/# ログ開始/p' \
   "$PROJECT_DIR/mdm/install-mdm.sh")"
-if printf '%s\n' "$_main_lock_body" | grep -q 'exit "$MDM_EXIT_CONTEXT"' \
-  && printf '%s\n' "$_main_lock_body" | grep -q 'exit "$MDM_EXIT_OS"'; then
+if grep -q 'exit "$MDM_EXIT_CONTEXT"' <<< "$_main_lock_body" \
+  && grep -q 'exit "$MDM_EXIT_OS"' <<< "$_main_lock_body"; then
   pass "mdm-lock: main は contention=21 と backend=60 を区別"
 else
   fail "mdm-lock: main の contention/backend exit 分類が不正"
@@ -459,7 +458,8 @@ _mdm_test_corrupt_worker_record_preserved() { # <tmp>
     printf "%s\n" "$_MDM_RUN_LOCK_CONTROL_DIR" > "$2/corrupt-control"
     : > "$2/corrupt-coordinator.ready"
     _exec_rc=0
-    _mdm_exec_as_user 501 alice "$2/home-alice" "$2/drop-worker" "$2" \
+    MDM_EXEC_AS_USER_RECORD_VERIFIED_MARKER_OVERRIDE="$2/worker-record-verified" \
+      _mdm_exec_as_user 501 alice "$2/home-alice" "$2/drop-worker" "$2" \
       || _exec_rc=$?
     _release_rc=0
     _mdm_release_run_lock || _release_rc=$?
@@ -472,6 +472,7 @@ _mdm_test_corrupt_worker_record_preserved() { # <tmp>
   _mdm_test_wait_for_file "$_tmp/corrupt-coordinator.ready" "$_holder" \
     || return 1
   _mdm_test_wait_for_file "$_tmp/drop-worker.ready" "$_holder" || return 1
+  _mdm_test_wait_for_file "$_tmp/worker-record-verified" "$_holder" || return 1
   _control="$(/bin/cat "$_tmp/corrupt-control")" || return 1
   _worker="$_control/worker"
   [[ -f "$_worker" && ! -L "$_worker" ]] || return 1

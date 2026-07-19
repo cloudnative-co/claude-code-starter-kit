@@ -46,6 +46,45 @@ fi
 runner_tmp="$(mktemp -d)"
 trap 'rm -rf "$runner_tmp"' EXIT INT TERM
 
+# Reject an ambiguous GNU kill invocation before any process-group fixture can
+# execute it.  procps-ng 4.0.4 can misparse a negative PID without `--` and
+# signal an unrelated process group (or every permitted process) instead.
+_mdm_unsafe_negative_group_kills() { # <shell-files...>
+  LC_ALL=C /usr/bin/awk '
+    /^[[:space:]]*#/ { next }
+    /\/bin\/kill[[:space:]]+-[[:alnum:]]+[[:space:]]+"-\$[^"]+"/ ||
+    /\/bin\/kill[[:space:]]+"-\$[^"]+"[[:space:]]+"-\$[^"]+"/ {
+      print FILENAME ":" FNR ":" $0
+    }
+  ' "$@"
+}
+
+kill_scan_safe="$runner_tmp/kill-safe.sh"
+kill_scan_unsafe="$runner_tmp/kill-unsafe.sh"
+printf '%s\n' \
+  '/bin/kill -KILL -- "-$group"' \
+  '/bin/kill "-$signal" "$pid"' > "$kill_scan_safe"
+printf '%s\n' \
+  '/bin/kill -KILL "-$group"' \
+  '/bin/kill "-$signal" "-$group"' > "$kill_scan_unsafe"
+if [[ -n "$(_mdm_unsafe_negative_group_kills "$kill_scan_safe")" \
+  || "$(_mdm_unsafe_negative_group_kills "$kill_scan_unsafe" \
+    | /usr/bin/wc -l | /usr/bin/tr -d '[:space:]')" != 2 ]]; then
+  printf 'FAIL: negative process-group kill preflight is not fail-closed\n' >&2
+  exit 1
+fi
+
+unsafe_group_kills="$(_mdm_unsafe_negative_group_kills \
+  "$SCRIPT_DIR/../mdm/install-mdm.sh" \
+  "$SCRIPT_DIR/../mdm/detect-mdm.sh" \
+  "$SCRIPT_DIR"/unit/test-mdm-*.sh)"
+if [[ -n "$unsafe_group_kills" ]]; then
+  printf 'FAIL: negative process-group kill operand requires --:\n%s\n' \
+    "$unsafe_group_kills" >&2
+  exit 1
+fi
+printf 'PASS: negative process-group kill operands use --\n'
+
 # Prove that a failure inside a subshell reaches the shared sentinel before
 # trusting results from the real test files.
 probe="$runner_tmp/probe.fail"

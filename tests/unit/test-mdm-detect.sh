@@ -4057,7 +4057,7 @@ rm -f "$_mdm_detect_launcher_copy"
         _mdm_detect_ready_count=$((_mdm_detect_ready_count + 1))
       done
       if [[ ! -e "$_ready" || ! -s "$_foreground" ]]; then
-        /bin/kill -TERM "-$_mdm_clean_child_pgid" 2>/dev/null || true
+        /bin/kill -TERM -- "-$_mdm_clean_child_pgid" 2>/dev/null || true
         wait "$_mdm_clean_child_pid" 2>/dev/null || true
         _mdm_clean_child_pid=""
         _mdm_clean_child_pgid=""

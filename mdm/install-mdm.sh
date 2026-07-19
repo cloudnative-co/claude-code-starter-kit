@@ -189,14 +189,14 @@ _mdm_launcher_group_state() { # <process-group-id>; 0=live, 1=gone/zombie, 2=unk
   _platform="$(/usr/bin/uname -s 2>/dev/null || true)"
   if [[ "$_platform" == Darwin ]]; then
     if ! _listing="$(LC_ALL=C /bin/ps -o stat= -g "$_pgid" 2>/dev/null)"; then
-      /bin/kill -0 "-$_pgid" 2>/dev/null && return 2
+      /bin/kill -0 -- "-$_pgid" 2>/dev/null && return 2
       return 1
     fi
   else
     if ! _listing="$(
       LC_ALL=C /bin/ps -o stat= --pgroup "$_pgid" 2>/dev/null
     )"; then
-      /bin/kill -0 "-$_pgid" 2>/dev/null && return 2
+      /bin/kill -0 -- "-$_pgid" 2>/dev/null && return 2
       return 1
     fi
   fi
@@ -234,16 +234,17 @@ _mdm_launcher_group_quiesced() { # <process-group-id>
 _mdm_launcher_stop_group() { # <process-group-id>
   local _pgid="$1" _attempt=0 _state=0
   [[ "$_pgid" =~ ^[1-9][0-9]*$ ]] || return 2
-  if /bin/kill -0 "-$_pgid" 2>/dev/null; then
-    /bin/kill -STOP "-$_pgid" 2>/dev/null || true
+  # GNU kill requires -- before a negative process-group target.
+  if /bin/kill -0 -- "-$_pgid" 2>/dev/null; then
+    /bin/kill -STOP -- "-$_pgid" 2>/dev/null || true
     while ! _mdm_launcher_group_quiesced "$_pgid" \
       && [[ "$_attempt" -lt "$_MDM_LAUNCHER_GROUP_WAIT_ITERATIONS" ]]; do
       /bin/sleep 0.01
       _attempt=$((_attempt + 1))
     done
-    /bin/kill -KILL "-$_pgid" 2>/dev/null || true
+    /bin/kill -KILL -- "-$_pgid" 2>/dev/null || true
     if ! _mdm_launcher_wait_group_bounded "$_pgid"; then
-      /bin/kill -KILL "-$_pgid" 2>/dev/null || true
+      /bin/kill -KILL -- "-$_pgid" 2>/dev/null || true
       _mdm_launcher_wait_group_bounded "$_pgid" && return 0
       _mdm_launcher_group_state "$_pgid" || _state=$?
       [[ "$_state" -ne 1 ]] || return 0
@@ -313,7 +314,7 @@ _mdm_launcher_exit_on_signal() {
   fi
   if [[ "$_stop_rc" -ne 0 && "$_pgid" =~ ^[1-9][0-9]*$ \
     && "$_pgid" == "$_pid" ]]; then
-    /bin/kill -KILL "-$_pgid" 2>/dev/null || true
+    /bin/kill -KILL -- "-$_pgid" 2>/dev/null || true
   fi
   _mdm_launcher_cleanup_snapshots
   exit "$_rc"
@@ -578,7 +579,7 @@ _mdm_timeout_stop_group() { # <process-group-id>
   # enough to emit asynchronous "Killed: 9" diagnostics on the caller's
   # stderr.  The bounded KILL below still reaps the complete process group.
   /bin/kill -TERM "$_pgid" 2>/dev/null || true
-  while /bin/kill -0 "-$_pgid" 2>/dev/null \
+  while /bin/kill -0 -- "-$_pgid" 2>/dev/null \
     && [[ "$_ticks" -lt 25 ]]; do
     /bin/sleep 0.01
     _ticks=$((_ticks + 1))
@@ -587,16 +588,16 @@ _mdm_timeout_stop_group() { # <process-group-id>
   # after one of its children dies and leak a job-control diagnostic to the
   # caller.  STOP follows the graceful TERM window, so cooperative leaders
   # still receive their normal shutdown opportunity.
-  /bin/kill -STOP "-$_pgid" 2>/dev/null || true
+  /bin/kill -STOP -- "-$_pgid" 2>/dev/null || true
   _ticks=0
   while ! _mdm_timeout_group_quiesced "$_pgid" \
     && [[ "$_ticks" -lt 25 ]]; do
     /bin/sleep 0.01
     _ticks=$((_ticks + 1))
   done
-  /bin/kill -KILL "-$_pgid" 2>/dev/null || true
+  /bin/kill -KILL -- "-$_pgid" 2>/dev/null || true
   _ticks=0
-  while /bin/kill -0 "-$_pgid" 2>/dev/null \
+  while /bin/kill -0 -- "-$_pgid" 2>/dev/null \
     && [[ "$_ticks" -lt 10 ]]; do
     /bin/sleep 0.01
     _ticks=$((_ticks + 1))
@@ -674,7 +675,7 @@ _mdm_timeout_coordinator() { # <seconds> <command-or-function> [args...]
       # Freeze the complete group while its leader is still present.  If TERM
       # removes the leader first, a signal-ignoring command-substitution child
       # can keep running during Bash 3.2's deferred wait handling.
-      /bin/kill -STOP "-$_signal_child" 2>/dev/null || true
+      /bin/kill -STOP -- "-$_signal_child" 2>/dev/null || true
       _mdm_timeout_stop_group "$_signal_child" || true
       wait "$_signal_child" 2>/dev/null || true
     fi
@@ -3620,6 +3621,7 @@ _mdm_exec_as_user() {
   local _uid="$1" _user="$2" _home="$3"; shift 3
   local _launchctl=/bin/launchctl _sudo=/usr/bin/sudo _supervisor="" _rc=0
   local _control="" _dir_identity="" _record_state=0 _wait_count=0 _previous=""
+  local _record_verified_marker=""
   local _nounset_was_on=false
   local _deadline="${_MDM_EXEC_AS_USER_DEADLINE_SECONDS:-0}"
   [[ "$_uid" =~ ^[0-9]+$ && "$_uid" -ge 501 ]] || return 1
@@ -3719,21 +3721,21 @@ _mdm_exec_as_user() {
       _watchdog_pgid=$_deadline_watchdog
       /bin/kill -TERM "$_watchdog_pgid" 2>/dev/null || :
       _watchdog_stop_count=0
-      while /bin/kill -0 "-$_watchdog_pgid" 2>/dev/null \
+      while /bin/kill -0 -- "-$_watchdog_pgid" 2>/dev/null \
         && [ "$_watchdog_stop_count" -lt 25 ]; do
         /bin/sleep 0.01
         _watchdog_stop_count=$((_watchdog_stop_count + 1))
       done
-      /bin/kill -STOP "-$_watchdog_pgid" 2>/dev/null || :
+      /bin/kill -STOP -- "-$_watchdog_pgid" 2>/dev/null || :
       _watchdog_stop_count=0
       while ! _group_quiesced "$_watchdog_pgid" \
         && [ "$_watchdog_stop_count" -lt 25 ]; do
         /bin/sleep 0.01
         _watchdog_stop_count=$((_watchdog_stop_count + 1))
       done
-      /bin/kill -KILL "-$_watchdog_pgid" 2>/dev/null || :
+      /bin/kill -KILL -- "-$_watchdog_pgid" 2>/dev/null || :
       _watchdog_stop_count=0
-      while /bin/kill -0 "-$_watchdog_pgid" 2>/dev/null \
+      while /bin/kill -0 -- "-$_watchdog_pgid" 2>/dev/null \
         && [ "$_watchdog_stop_count" -lt 10 ]; do
         /bin/sleep 0.01
         _watchdog_stop_count=$((_watchdog_stop_count + 1))
@@ -3758,13 +3760,13 @@ _mdm_exec_as_user() {
           /bin/kill -TERM "$_child" 2>/dev/null || :
         fi
         _stop_count=0
-        while /bin/kill -0 "-$_pgid" 2>/dev/null \
+        while /bin/kill -0 -- "-$_pgid" 2>/dev/null \
           && [ "$_stop_count" -lt 100 ]; do
           /bin/sleep 0.01
           _stop_count=$((_stop_count + 1))
         done
         if [ -n "$_pgid" ]; then
-          /bin/kill -STOP "-$_pgid" 2>/dev/null || :
+          /bin/kill -STOP -- "-$_pgid" 2>/dev/null || :
           _stop_count=0
           while ! _group_quiesced "$_pgid" \
             && [ "$_stop_count" -lt 25 ]; do
@@ -3773,12 +3775,12 @@ _mdm_exec_as_user() {
           done
         fi
         if [ -n "$_pgid" ]; then
-          /bin/kill -KILL "-$_pgid" 2>/dev/null || :
+          /bin/kill -KILL -- "-$_pgid" 2>/dev/null || :
         else
           /bin/kill -KILL "$_child" 2>/dev/null || :
         fi
         _stop_count=0
-        while /bin/kill -0 "-$_pgid" 2>/dev/null \
+        while /bin/kill -0 -- "-$_pgid" 2>/dev/null \
           && [ "$_stop_count" -lt 20 ]; do
           /bin/sleep 0.01
           _stop_count=$((_stop_count + 1))
@@ -3845,21 +3847,21 @@ _mdm_exec_as_user() {
     if _group_live "$_pgid"; then
       /bin/kill -TERM "$_pgid" 2>/dev/null || :
       _stop_count=0
-      while /bin/kill -0 "-$_pgid" 2>/dev/null \
+      while /bin/kill -0 -- "-$_pgid" 2>/dev/null \
         && [ "$_stop_count" -lt 100 ]; do
         /bin/sleep 0.01
         _stop_count=$((_stop_count + 1))
       done
-      /bin/kill -STOP "-$_pgid" 2>/dev/null || :
+      /bin/kill -STOP -- "-$_pgid" 2>/dev/null || :
       _stop_count=0
       while ! _group_quiesced "$_pgid" \
         && [ "$_stop_count" -lt 25 ]; do
         /bin/sleep 0.01
         _stop_count=$((_stop_count + 1))
       done
-      /bin/kill -KILL "-$_pgid" 2>/dev/null || :
+      /bin/kill -KILL -- "-$_pgid" 2>/dev/null || :
       _stop_count=0
-      while /bin/kill -0 "-$_pgid" 2>/dev/null \
+      while /bin/kill -0 -- "-$_pgid" 2>/dev/null \
         && [ "$_stop_count" -lt 20 ]; do
         /bin/sleep 0.01
         _stop_count=$((_stop_count + 1))
@@ -3890,6 +3892,20 @@ _mdm_exec_as_user() {
       _mdm_wait_lock_holder "$_supervisor" || true
       _MDM_ACTIVE_DROP_SUPERVISOR_PID=""
       return 1
+    fi
+    if [[ "${_MDM_TEST_MODE:-0}" == 1 \
+      && -n "${MDM_EXEC_AS_USER_RECORD_VERIFIED_MARKER_OVERRIDE:-}" ]]; then
+      _record_verified_marker="$MDM_EXEC_AS_USER_RECORD_VERIFIED_MARKER_OVERRIDE"
+      if [[ "$_record_verified_marker" != /* \
+        || "$_record_verified_marker" =~ [[:cntrl:]] \
+        || -e "$_record_verified_marker" || -L "$_record_verified_marker" ]] \
+        || ! (umask 077; set -C; : > "$_record_verified_marker") 2>/dev/null \
+        || [[ ! -f "$_record_verified_marker" || -L "$_record_verified_marker" ]]; then
+        /bin/kill -TERM "$_supervisor" 2>/dev/null || true
+        _mdm_wait_lock_holder "$_supervisor" || true
+        _MDM_ACTIVE_DROP_SUPERVISOR_PID=""
+        return 1
+      fi
     fi
   fi
   wait "$_supervisor" || _rc=$?

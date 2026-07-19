@@ -107,7 +107,7 @@ _mdm_launcher_exit_on_signal() { # <signal> <exit-code>
   fi
   if [[ "$_pid" =~ ^[1-9][0-9]*$ ]]; then
     if [[ "$_pgid" =~ ^[1-9][0-9]*$ && "$_pgid" == "$_pid" ]]; then
-      /bin/kill "-$_signal" "-$_pgid" 2>/dev/null \
+      /bin/kill "-$_signal" -- "-$_pgid" 2>/dev/null \
         || /bin/kill "-$_signal" "$_pid" 2>/dev/null \
         || true
     else

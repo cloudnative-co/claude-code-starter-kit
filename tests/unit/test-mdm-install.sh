@@ -1489,7 +1489,7 @@ rm -rf "$_tmpd"
         _launcher_ready_count=$((_launcher_ready_count + 1))
       done
       if [[ ! -e "$_ready" ]]; then
-        /bin/kill -TERM "-$_mdm_clean_child_pgid" 2>/dev/null || true
+        /bin/kill -TERM -- "-$_mdm_clean_child_pgid" 2>/dev/null || true
         wait "$_mdm_clean_child_pid" 2>/dev/null || true
         _mdm_clean_child_pid=""
         _mdm_clean_child_pgid=""
@@ -1570,8 +1570,8 @@ rm -rf "$_tmpd"
       fail "mdm-install: outer $_signal supervisorが不正 (rc=$_rc child=$_observed cleanup=$_cleanup_observed group=$_group_gone pid=$_recorded_pid ppid=$_recorded_ppid/$_actual_ppid pgid=$_recorded_pgid sender=$_sender_completed/$_sender_gone snapshots=$([[ ! -e "$_script_snapshot" && ! -e "$_renderer_snapshot" ]] && printf gone || printf remain) noise=$_diagnostic_clean)"
     fi
     if [[ "$_recorded_pgid" =~ ^[1-9][0-9]*$ ]]; then
-      /bin/kill -STOP "-$_recorded_pgid" 2>/dev/null || true
-      /bin/kill -KILL "-$_recorded_pgid" 2>/dev/null || true
+      /bin/kill -STOP -- "-$_recorded_pgid" 2>/dev/null || true
+      /bin/kill -KILL -- "-$_recorded_pgid" 2>/dev/null || true
     fi
     [[ ! "$_sender" =~ ^[1-9][0-9]*$ ]] \
       || /bin/kill -KILL "$_sender" 2>/dev/null || true
@@ -1670,8 +1670,8 @@ rm -rf "$_tmpd"
       fail "mdm-install: PID-only handoffの$_signal 回収が不正 (rc=$_rc group=$_group_gone pgid=$_actual_pgid elapsed=$_elapsed noise=$_diagnostic_clean)"
     fi
     if [[ "$_child" =~ ^[1-9][0-9]*$ ]]; then
-      /bin/kill -STOP "-$_child" 2>/dev/null || true
-      /bin/kill -KILL "-$_child" 2>/dev/null || true
+      /bin/kill -STOP -- "-$_child" 2>/dev/null || true
+      /bin/kill -KILL -- "-$_child" 2>/dev/null || true
     fi
     /bin/rm -f "$_ready" "$_pid_record" "$_pgid_record" "$_script_snapshot" \
       "$_renderer_snapshot" "$_diagnostic"
@@ -1690,8 +1690,8 @@ rm -rf "$_tmpd"
       _leader=""
       _cleanup_quiescence_case() {
         if [[ "$_leader" =~ ^[1-9][0-9]*$ ]]; then
-          /bin/kill -STOP "-$_leader" 2>/dev/null || true
-          /bin/kill -KILL "-$_leader" 2>/dev/null || true
+          /bin/kill -STOP -- "-$_leader" 2>/dev/null || true
+          /bin/kill -KILL -- "-$_leader" 2>/dev/null || true
           _mdm_launcher_wait_child_bounded "$_leader" 100 || true
         fi
       }
@@ -1716,7 +1716,7 @@ rm -rf "$_tmpd"
         _attempt=$((_attempt + 1))
       done
       [[ -e "$_ready" && "$_actual_pgid" == "$_leader" ]]
-      /bin/kill -STOP "-$_leader"
+      /bin/kill -STOP -- "-$_leader"
       _attempt=0
       while ! _mdm_launcher_group_quiesced "$_leader" \
         && [[ "$_attempt" -lt 100 ]]; do
@@ -1730,7 +1730,7 @@ rm -rf "$_tmpd"
       [[ "$_member_count" -ge 2 ]]
       _mdm_launcher_group_quiesced "$_leader"
       exec 2>/dev/null
-      /bin/kill -KILL "-$_leader" 2>/dev/null || true
+      /bin/kill -KILL -- "-$_leader" 2>/dev/null || true
       _mdm_launcher_wait_child_bounded "$_leader" 100 || true
       _state=0
       _mdm_launcher_group_state "$_leader" || _state=$?
@@ -1839,8 +1839,8 @@ rm -rf "$_tmpd"
       fail "mdm-install: child PID handoff前のouter $_signal cleanupが不正 (rc=$_rc)"
     fi
     if [[ "$_actual_pgid" =~ ^[1-9][0-9]*$ ]]; then
-      /bin/kill -STOP "-$_actual_pgid" 2>/dev/null || true
-      /bin/kill -KILL "-$_actual_pgid" 2>/dev/null || true
+      /bin/kill -STOP -- "-$_actual_pgid" 2>/dev/null || true
+      /bin/kill -KILL -- "-$_actual_pgid" 2>/dev/null || true
     fi
     /bin/rm -f "$_pid_record" "$_pgid_record" "$_script_snapshot" \
       "$_renderer_snapshot" "$_diagnostic"
