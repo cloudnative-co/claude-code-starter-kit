@@ -51,7 +51,9 @@ inject_feature() {
   tmp_file="$(mktemp)" || return 1
   _register_tmp "$tmp_file" || return 1
   printf '%s\n' "${file_content//"$marker"/$partial_content}" > "$tmp_file" || return 1
-  mv "$tmp_file" "$file" || return 1
+  # Authoritative MDM checkout files are read-only.  BSD mv prompts on a TTY
+  # before replacing them unless force mode is explicit.
+  mv -f "$tmp_file" "$file" || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -86,7 +88,7 @@ remove_unresolved() {
       ;;
   esac
 
-  mv "$tmp_file" "$file" || return 1
+  mv -f "$tmp_file" "$file" || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -159,7 +161,7 @@ _replace_kit_section() {
     $0 == marker { found = 1 }
   ' "$file" >> "$tmp_out" || return 1
 
-  mv "$tmp_out" "$file" || return 1
+  mv -f "$tmp_out" "$file" || return 1
 }
 
 # ---------------------------------------------------------------------------

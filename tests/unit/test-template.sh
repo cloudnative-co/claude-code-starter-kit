@@ -286,6 +286,31 @@ test_remove_unresolved_delete_mode_removes_lines() {
 }
 test_remove_unresolved_delete_mode_removes_lines
 
+test_remove_unresolved_forces_noninteractive_readonly_replacement() {
+  local target; target="$(mktemp)"
+  local mv_calls=0 rc=0
+  printf 'keep\n{{REMOVE_ME}}\n' > "$target"
+  chmod 0444 "$target"
+
+  mv() {
+    [[ "$1" == -f ]] || return 73
+    mv_calls=$((mv_calls + 1))
+    command mv "$@"
+  }
+  remove_unresolved "$target" "delete" || rc=$?
+  unset -f mv
+
+  if [[ "$rc" -eq 0 && "$mv_calls" -eq 1 ]] \
+    && assert_file_contains "$target" "keep" \
+    && assert_file_not_contains "$target" '{{REMOVE_ME}}'; then
+    pass "remove_unresolved: read-only target replacement is non-interactive"
+  else
+    fail "remove_unresolved: read-only target replacement is non-interactive"
+  fi
+  rm -f "$target"
+}
+test_remove_unresolved_forces_noninteractive_readonly_replacement
+
 test_remove_unresolved_delete_propagates_awk_failure_without_changing_target() {
   local target; target="$(mktemp)"
   local before rc=0

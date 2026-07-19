@@ -261,9 +261,9 @@ _post_setup_git_block="$(/usr/bin/sed -n \
   '/No post-setup Git process/,/_mdm_cleanup_auth_entry_list/p' \
   "$PROJECT_DIR/mdm/install-mdm.sh")"
 if [[ -n "$_post_setup_git_block" ]] \
-  && ! printf '%s\n' "$_post_setup_git_block" | /usr/bin/grep -Fq '_mdm_git ' \
-  && printf '%s\n' "$_post_setup_git_block" \
-    | /usr/bin/grep -Fq '_MDM_EXPECTED_KIT_COMPONENT_SHA256'; then
+  && ! /usr/bin/grep -Fq '_mdm_git ' <<< "$_post_setup_git_block" \
+  && /usr/bin/grep -Fq '_MDM_EXPECTED_KIT_COMPONENT_SHA256' \
+    <<< "$_post_setup_git_block"; then
   pass "mdm-install: setup 後は Git を起動せず事前 kit digest と再照合"
 else
   fail "mdm-install: setup 後の Git 禁止/digest 再照合契約が不正"
@@ -3302,9 +3302,24 @@ PY
     export MDM_NODE_OWNER_UID_OVERRIDE MDM_NODE_OWNER_GID_OVERRIDE
     export MDM_CONFIG_SKIP_OWNER_CHECK=1
     _gid_before="$(_mdm_stat_gid "$_gid_support/runtime")"
+    _gid_initial_mode="$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_gid_support/runtime")")"
+    _gid_setgid_guard=1
+    if [[ "$_gid_initial_mode" == 2755 ]]; then
+      _gid_unsafe_rc=0
+      _mdm_node_runtime_prepare_base >/dev/null 2>&1 || _gid_unsafe_rc=$?
+      if [[ "$_gid_unsafe_rc" -eq 0 \
+        || "$(_mdm_stat_gid "$_gid_support/runtime")" != "$_gid_alternate" \
+        || "$(_mdm_mode_normalize \
+          "$(_mdm_stat_mode "$_gid_support/runtime")")" != 2755 ]]; then
+        _gid_setgid_guard=0
+      fi
+      /bin/chmod g-s "$_gid_support/runtime"
+    fi
     _gid_rc=0
     _mdm_node_runtime_prepare_base >/dev/null 2>&1 || _gid_rc=$?
-    if [[ "$_gid_before" == "$_gid_alternate" && "$_gid_rc" -eq 0 \
+    if [[ "$_gid_before" == "$_gid_alternate" \
+      && "$_gid_setgid_guard" -eq 1 && "$_gid_rc" -eq 0 \
       && "$(_mdm_stat_gid "$_gid_support/runtime")" == "$_gid_primary" \
       && "$(_mdm_mode_normalize \
         "$(_mdm_stat_mode "$_gid_support/runtime")")" == 0755 ]]; then
@@ -3317,6 +3332,27 @@ PY
       "test user has no usable supplementary group"
   fi
   rm -rf "$_gid_tmp"
+)
+
+# The fd-bound normalizer must preserve and reject an unsafe directory instead
+# of allowing the following ACL check to mask the Python verifier's failure.
+(
+  _normalize_tmp="$(builtin cd -P -- "$(mktemp -d)" && printf '%s' "$PWD")"
+  chmod 0777 "$_normalize_tmp"
+  _normalize_identity="$(_mdm_stat_identity "$_normalize_tmp")"
+  _normalize_rc=0
+  _mdm_wce_runtime_normalize_base_dir "$_normalize_tmp" \
+    "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" >/dev/null 2>&1 \
+    || _normalize_rc=$?
+  if [[ "$_normalize_rc" -ne 0 \
+    && "$(_mdm_stat_identity "$_normalize_tmp")" == "$_normalize_identity" \
+    && "$(_mdm_mode_normalize \
+      "$(_mdm_stat_mode "$_normalize_tmp")")" == 0777 ]]; then
+    pass "mdm-install: runtime base normalizer は危険modeを非変更で拒否"
+  else
+    fail "mdm-install: runtime base normalizer の失敗がACL検査で消失"
+  fi
+  rm -rf "$_normalize_tmp"
 )
 
 (
@@ -5131,10 +5167,17 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   _component_home="$_component_tmp/home"
   _component_kit="$_component_home/.claude-starter-kit"
   _component_guid="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
-  _component_uid=501
+  _component_uid="$(/usr/bin/id -u)"
   mkdir -p "$_component_support" "$_component_kit"
   chmod 755 "$_component_support"
   printf 'kit\n' > "$_component_kit/setup.sh"
+  export MDM_NODE_ARCH_OVERRIDE=arm64
+  if [[ "$_component_uid" -lt 501 ]]; then
+    _component_uid=501
+    _component_chown="$(command -v chown || true)"
+    [[ "$_component_chown" == /* && -x "$_component_chown" ]] \
+      && "$_component_chown" -R "$_component_uid" "$_component_home"
+  fi
   export MDM_SYSTEM_RCPT_DIR_OVERRIDE="$_component_support"
   export MDM_CONFIG_SKIP_OWNER_CHECK=1
   MDM_RCPT_POLICY_SHA256="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -5785,6 +5828,7 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   mkdir -p "$_font_support" "$_font_dir" "$_font_kit"
   chmod 755 "$_font_support"
   printf 'kit\n' > "$_font_kit/setup.sh"
+  export MDM_NODE_ARCH_OVERRIDE=arm64
   while read -r _font_name _font_sha _font_family; do
     printf 'pinned-fixture\n' > "$_font_dir/$_font_name"
   done < <(_mdm_component_font_expected_inventory)
@@ -6125,20 +6169,21 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   _access_cli="$(declare -f _mdm_component_cli_target)"
   _access_ghost_signatures="$(printf '%s\n' "$_access_attest" \
     | /usr/bin/grep -c '_mdm_component_ghostty_signed "$_path"')"
-  if printf '%s\n' "$_access_fixed" | /usr/bin/grep -Fq \
-      '_mdm_component_target_dir_accessible' \
-    && printf '%s\n' "$_access_fixed" | /usr/bin/grep -Fq \
-      '_mdm_component_tree_accessible' \
-    && printf '%s\n' "$_access_fixed" | /usr/bin/grep -Fq \
-      '_mdm_component_path_accessible' \
-    && printf '%s\n' "$_access_cli" | /usr/bin/grep -Fq \
-      '_mdm_component_target_dir_accessible' \
-    && printf '%s\n' "$_access_cli" | /usr/bin/grep -Fq \
-      '_mdm_component_path_accessible' \
-    && printf '%s\n' "$_access_attest" | /usr/bin/grep -Fq \
+  if /usr/bin/grep -Fq '_mdm_component_target_dir_accessible' \
+      <<< "$_access_fixed" \
+    && /usr/bin/grep -Fq '_mdm_component_tree_accessible' \
+      <<< "$_access_fixed" \
+    && /usr/bin/grep -Fq '_mdm_component_path_accessible' \
+      <<< "$_access_fixed" \
+    && /usr/bin/grep -Fq '_mdm_component_target_dir_accessible' \
+      <<< "$_access_cli" \
+    && /usr/bin/grep -Fq '_mdm_component_path_accessible' \
+      <<< "$_access_cli" \
+    && /usr/bin/grep -Fq \
       '_mdm_component_tree_accessible "$_path" "$_uid" "$_user" "$_home"' \
-    && printf '%s\n' "$_access_attest" | /usr/bin/grep -Fq \
-      '_mdm_component_file_readable' \
+      <<< "$_access_attest" \
+    && /usr/bin/grep -Fq '_mdm_component_file_readable' \
+      <<< "$_access_attest" \
     && [[ "$_access_ghost_signatures" -eq 2 ]]; then
     pass "mdm-install: CLI/private tree/fonts/Ghosttyのaccessをattestationへ配線"
   else
@@ -6177,28 +6222,29 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
     && "$_safety_semantics" -eq 2 && "$_wce_trusts" -eq 2 \
     && "$_wce_activations" -eq 2 && "$_wce_expected_refs" -ge 4 \
     && "$_wce_verified_refs" -ge 1 ]] \
-    && printf '%s\n' "$_attest_impl" | /usr/bin/grep -Fq \
+    && /usr/bin/grep -Fq \
       '_mdm_component_append_entry fonts "$_canonical" file "$_pre_digest"' \
-    && printf '%s\n' "$_attest_impl" | /usr/bin/grep -Fq \
+      <<< "$_attest_impl" \
+    && /usr/bin/grep -Fq \
       '_mdm_component_append_entry biome "$_dir" tree "$_pre_digest"' \
-    && printf '%s\n' "$_attest_impl" | /usr/bin/grep -Fq \
+      <<< "$_attest_impl" \
+    && /usr/bin/grep -Fq \
       '_mdm_component_append_entry safety_net "$_dir" tree "$_pre_digest"' \
-    && printf '%s\n' "$_attest_impl" | /usr/bin/grep -Fq \
+      <<< "$_attest_impl" \
+    && /usr/bin/grep -Fq \
       '_mdm_component_append_entry web_content_runtime "$_path" tree' \
-    && printf '%s\n' "$_attest_impl" | /usr/bin/grep -Fq \
-      '"$_MDM_EXPECTED_WCE_COMPONENT_SHA256"' \
-    && printf '%s\n' "$_exact_impl" | /usr/bin/grep -Fq \
-      '_wce_runtime_path' \
-    && printf '%s\n' "$_exact_impl" | /usr/bin/grep -Fq \
-      '_MDM_WCE_PACKAGE_SHA256' \
-    && printf '%s\n' "$_exact_impl" | /usr/bin/grep -Fq \
-      '"web_content_runtime": (wce_runtime, "tree")' \
-    && ! printf '%s\n' "$_exact_impl" | /usr/bin/grep -Fq \
-      '.claude/skills/web-content-extraction/node_modules' \
-    && printf '%s\n' "$_append_impl" | /usr/bin/grep -Fq \
-      'node_runtime | web_content_runtime)' \
-    && printf '%s\n' "$_append_impl" | /usr/bin/grep -Fq \
-      '_group_csv=0'; then
+      <<< "$_attest_impl" \
+    && /usr/bin/grep -Fq '"$_MDM_EXPECTED_WCE_COMPONENT_SHA256"' \
+      <<< "$_attest_impl" \
+    && /usr/bin/grep -Fq '_wce_runtime_path' <<< "$_exact_impl" \
+    && /usr/bin/grep -Fq '_MDM_WCE_PACKAGE_SHA256' <<< "$_exact_impl" \
+    && /usr/bin/grep -Fq \
+      '"web_content_runtime": (wce_runtime, "tree")' <<< "$_exact_impl" \
+    && ! /usr/bin/grep -Fq \
+      '.claude/skills/web-content-extraction/node_modules' <<< "$_exact_impl" \
+    && /usr/bin/grep -Fq 'node_runtime | web_content_runtime)' \
+      <<< "$_append_impl" \
+    && /usr/bin/grep -Fq '_group_csv=0' <<< "$_append_impl"; then
     pass "mdm-install: semantic→digest TOCTOUとactive launcherを前後束縛"
   else
     fail "mdm-install: component semantic/digest/activationの再束縛が不正"

@@ -1017,10 +1017,10 @@ fi
 
 # --- 11. MDM activates a root-owned runtime without running user npm ---
 _wce_activation_impl="$(declare -f _wce_activate_mdm_runtime)"
-if printf '%s\n' "$_wce_activation_impl" | /usr/bin/grep -Fq \
-  '"$candidate" "$link" link-preserve-dir' \
-  && printf '%s\n' "$_wce_activation_impl" | /usr/bin/grep -Fq \
-    '_mdm_finalize_preserved_component_leaf'; then
+if /usr/bin/grep -Fq '"$candidate" "$link" link-preserve-dir' \
+    <<< "$_wce_activation_impl" \
+  && /usr/bin/grep -Fq '_mdm_finalize_preserved_component_leaf' \
+    <<< "$_wce_activation_impl"; then
   pass "web-content-extraction: MDM activation preserves only real directories"
 else
   fail "web-content-extraction: MDM activation lost its directory-only preservation contract"

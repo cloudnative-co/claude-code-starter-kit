@@ -10577,7 +10577,7 @@ _mdm_wce_runtime_normalize_base_dir() { # <directory> <owner-uid> <owner-gid>
   # normalize that exact inode to the root:wheel managed contract.
   _mdm_has_extended_acl "$_dir" && return 1
   _python="$(_mdm_system_python)" || return 1
-  /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+  if ! /usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
     "$_python" -I -B - "$_dir" "$_owner" "$_group" <<'PY'
 import os
 import stat
@@ -10612,6 +10612,9 @@ try:
 except (OSError, ValueError):
     raise SystemExit(1)
 PY
+  then
+    return 1
+  fi
   ! _mdm_has_extended_acl "$_dir"
 }
 
@@ -11091,7 +11094,11 @@ _mdm_wce_runtime_activation_previewable() { # <user> <home> <uid> <bundle>
     return
   fi
   [[ "$_links" == 1 ]] || return 1
-  [[ -L "$_link" || ( -f "$_link" && ! -L "$_link" ) ]] || return 1
+  # Symlink mode bits are non-portable and do not control traversal.  Match
+  # deploy.sh's replacement boundary: owner, ACL and link count are the
+  # relevant properties for an atomically replaceable symlink.
+  [[ -L "$_link" ]] && return 0
+  [[ -f "$_link" && ! -L "$_link" ]] || return 1
   _mdm_mode_is_safe "$_mode"
 }
 

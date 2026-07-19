@@ -1247,7 +1247,10 @@ _mdm_test_write_safety_wrapper \
   "$_mdm_detect_safety_root/dist/bin/cc-safety-net.js"
 
 chmod 0611 "$_mdm_detect_home/.local/bin"
-if _mdm_component_command_path "$_mdm_detect_home" cc-safety-net \
+if [[ "$_mdm_detect_fixture_uid" == 0 ]]; then
+  skip "mdm-detect: original command pathのtarget search権を検証" \
+    "root DAC bypass cannot model a non-root target owner"
+elif _mdm_component_command_path "$_mdm_detect_home" cc-safety-net \
   "$_mdm_detect_fixture_uid" >/dev/null 2>&1; then
   fail "mdm-detect: target ownerがsearch不能なcommand parentを許可"
 else
@@ -1312,7 +1315,10 @@ if ! _mdm_component_tree_accessible \
   fail "mdm-detect: readable runtime treeを対象UIDで検証できない"
 fi
 chmod 0600 "$_mdm_detect_access_parent"
-if _mdm_component_tree_accessible \
+if [[ "$_mdm_detect_fixture_uid" == 0 ]]; then
+  skip "mdm-detect: user-executed treeのancestor traverse/readを検証" \
+    "root DAC bypass cannot model a non-root target owner"
+elif _mdm_component_tree_accessible \
   "$_mdm_detect_access_parent/node_modules" "$_mdm_detect_fixture_uid"; then
   fail "mdm-detect: ancestor search不能なruntime treeを許可"
 else
