@@ -1305,6 +1305,35 @@ export MDM_DETECT_COMPONENT_MANIFEST_OVERRIDE=1
 export MDM_DETECT_TRUST_BASE_OVERRIDE="$_mdm_detect_trust_base"
 export MDM_DETECT_TMP_BASE_OVERRIDE="$_mdm_detect_private_base"
 export MDM_DETECT_HOME_OVERRIDE="$_mdm_detect_home"
+# The production binder correctly rejects UID < 501, and that boundary is
+# covered above.  A root test process nevertheless owns this synthetic user
+# tree as UID 0.  Keep the downstream filesystem fixture usable without
+# weakening production or accepting any identity other than this exact tuple.
+if [[ "$_mdm_detect_fixture_uid" == 0 ]]; then
+  _mdm_detect_target_identity_tuple() {
+    local _uid _generated
+    _uid="$(_mdm_test_value MDM_DETECT_EXPECTED_UID_OVERRIDE)" \
+      || return 1
+    _generated="$(_mdm_test_value MDM_DETECT_GENERATED_UID_OVERRIDE)" \
+      || return 1
+    [[ "$_uid" == "$_mdm_detect_fixture_uid" \
+      && "$_generated" == "$_mdm_detect_fixture_generated_uid" ]] \
+      || return 1
+    printf '%s\t%s' "$_uid" "$_generated"
+  }
+  _mdm_detect_canonical_username_for_uid() {
+    local _uid="$1" _expected_uid _user
+    _expected_uid="$(_mdm_test_value MDM_DETECT_EXPECTED_UID_OVERRIDE)" \
+      || return 1
+    [[ "$_uid" == "$_mdm_detect_fixture_uid" \
+      && "$_expected_uid" == "$_mdm_detect_fixture_uid" ]] \
+      || return 1
+    _user="$(_mdm_test_value MDM_DETECT_CANONICAL_USER_OVERRIDE)" \
+      || return 1
+    [[ -n "$_user" && ! "$_user" =~ [[:cntrl:]] ]] || return 1
+    printf '%s' "$_user"
+  }
+fi
 _mdm_detect_wce_root="$(_mdm_wce_runtime_root)"
 
 _mdm_detect_history="$_mdm_detect_receipts/managed-history-$MDM_DETECT_GENERATED_UID_OVERRIDE.json"
@@ -4886,19 +4915,24 @@ else
   fail "mdm-detect: production source-only isolation failed (rc=$_mdm_detect_main_rc)"
 fi
 
-_mdm_detect_main_rc=0
-MDM_SOURCE_ONLY=1 MDM_RECEIPT_DIR_OVERRIDE="$_mdm_detect_receipts" \
-  MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$(/usr/bin/id -un)" \
-  MDM_DETECT_HOME_OVERRIDE="$_mdm_detect_home" \
-  MDM_DETECT_CLI_PRESENT_OVERRIDE=1 \
-  "$PROJECT_DIR/mdm/detect-mdm.sh" --user jane \
-    --expected-commit "$_mdm_detect_sha" \
-    --expected-policy-sha256 "$_mdm_detect_policy_sha" >/dev/null 2>&1 \
-  || _mdm_detect_main_rc=$?
-if [[ "$_mdm_detect_main_rc" -eq 4 ]]; then
-  pass "mdm-detect: production entrypoint discards test/root overrides"
+if [[ "$(/usr/bin/id -u)" == 0 ]]; then
+  skip "mdm-detect: production entrypoint discards test/root overrides" \
+    "root caller cannot exercise non-root privilege rejection"
 else
-  fail "mdm-detect: production privilege isolation failed (rc=$_mdm_detect_main_rc)"
+  _mdm_detect_main_rc=0
+  MDM_SOURCE_ONLY=1 MDM_RECEIPT_DIR_OVERRIDE="$_mdm_detect_receipts" \
+    MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$(/usr/bin/id -un)" \
+    MDM_DETECT_HOME_OVERRIDE="$_mdm_detect_home" \
+    MDM_DETECT_CLI_PRESENT_OVERRIDE=1 \
+    "$PROJECT_DIR/mdm/detect-mdm.sh" --user jane \
+      --expected-commit "$_mdm_detect_sha" \
+      --expected-policy-sha256 "$_mdm_detect_policy_sha" >/dev/null 2>&1 \
+    || _mdm_detect_main_rc=$?
+  if [[ "$_mdm_detect_main_rc" -eq 4 ]]; then
+    pass "mdm-detect: production entrypoint discards test/root overrides"
+  else
+    fail "mdm-detect: production privilege isolation failed (rc=$_mdm_detect_main_rc)"
+  fi
 fi
 
 # The direct launcher is privileged Bash, trusts a physical root-owned chain,
