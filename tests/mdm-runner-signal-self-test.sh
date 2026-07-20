@@ -50,7 +50,7 @@ _mdm_runner_signal_case() { # <signal> <expected-exit> [closed-stderr] [fallback
   _MDM_LAUNCH_SIGNAL=""
   attempt=0
   while [[ ! -e "$probe_dir/ready" && "$attempt" -lt 200 ]]; do
-    /bin/kill -0 "$target_pid" 2>/dev/null || break
+    _mdm_record_matches "$target_pid" "$target_record" || break
     /bin/sleep 0.05
     attempt=$((attempt + 1))
   done
@@ -95,10 +95,22 @@ _mdm_runner_signal_case() { # <signal> <expected-exit> [closed-stderr] [fallback
       "$target_pid" "$target_record" TERM || true
   fi
   if [[ "$outer_waited" != true ]]; then
-    set +e
-    wait "$target_pid"
-    target_rc=$?
-    set -e
+    if [[ -z "$target_record" ]]; then
+      _mdm_cleanup_unbound_direct_child "$target_pid" || true
+      target_rc=125
+      failed=true
+    elif _mdm_wait_bound_supervisor "$target_pid" "$target_record"; then
+      target_rc="${_MDM_LAST_BOUND_WAIT_STATUS:-125}"
+      outer_waited=true
+    else
+      _mdm_signal_record "$target_record" KILL || true
+      if _mdm_wait_bound_supervisor "$target_pid" "$target_record"; then
+        target_rc="${_MDM_LAST_BOUND_WAIT_STATUS:-125}"
+        outer_waited=true
+      else
+        failed=true
+      fi
+    fi
   fi
   _MDM_ACTIVE_NESTED_RUNNER_PID=""
   _MDM_ACTIVE_NESTED_RUNNER_RECORD=""

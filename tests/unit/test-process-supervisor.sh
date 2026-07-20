@@ -663,5 +663,73 @@ else
   fail "process-supervisor: inherited SIGCHLD ignore changed target status"
 fi
 
+_ps_runner_process_contract() {
+  local tmp child="" expected zombie_record record_calls wait_calls
+  local group_leader_record group_leader_pid=43210
+  tmp="$(mktemp -d)" || return 1
+  _ps_runner_process_tmp="$tmp"
+  _ps_runner_process_child=""
+  /usr/bin/touch "$tmp/record-calls" "$tmp/wait-calls"
+  _ps_runner_process_cleanup() {
+    if [[ "${_ps_runner_process_child:-}" =~ ^[1-9][0-9]*$ ]]; then
+      /bin/kill -KILL "$_ps_runner_process_child" 2>/dev/null || true
+      builtin wait "$_ps_runner_process_child" 2>/dev/null || true
+    fi
+    [[ -z "${_ps_runner_process_tmp:-}" ]] \
+      || /bin/rm -rf -- "$_ps_runner_process_tmp"
+  }
+  trap '_ps_runner_process_cleanup' EXIT HUP INT TERM
+  # shellcheck source=../mdm-runner-process-lib.sh
+  source "$PROJECT_DIR/tests/mdm-runner-process-lib.sh"
+
+  /bin/sleep 30 &
+  child=$!
+  _ps_runner_process_child="$child"
+  expected="$child|1|$child|501|S|Mon Jul 20 00:00:00 2026"
+  zombie_record="$child|1|$child|501|Z|Mon Jul 20 00:00:00 2026"
+  _mdm_process_record() {
+    local calls
+    printf 'call\n' >> "$tmp/record-calls"
+    calls="$(/usr/bin/wc -l < "$tmp/record-calls" \
+      | /usr/bin/tr -d '[:space:]')"
+    [[ "$calls" -gt 1 ]] || return 0
+    printf '%s\n' "$zombie_record"
+  }
+  wait() {
+    printf 'wait\n' >> "$tmp/wait-calls"
+    return 23
+  }
+  _mdm_wait_bound_supervisor "$child" "$expected" || return 1
+  record_calls="$(/usr/bin/wc -l < "$tmp/record-calls" \
+    | /usr/bin/tr -d '[:space:]')"
+  wait_calls="$(/usr/bin/wc -l < "$tmp/wait-calls" \
+    | /usr/bin/tr -d '[:space:]')"
+  [[ "$_MDM_LAST_BOUND_WAIT_STATUS" == 23 \
+    && "$record_calls" == 2 && "$wait_calls" == 1 ]] || return 1
+  /bin/kill -KILL "$child" 2>/dev/null || true
+  builtin wait "$child" 2>/dev/null || true
+  child=""
+  _ps_runner_process_child=""
+
+  group_leader_record="$group_leader_pid|1|$group_leader_pid|501|S|\
+Mon Jul 20 00:00:00 2026"
+  _mdm_process_record() { printf '%s\n' "$group_leader_record"; }
+  _mdm_process_session_id() { printf '%s\n' $((group_leader_pid + 1)); }
+  if MDM_TEST_SYSTEM_PYTHON=/usr/bin/true SUPERVISOR=/dev/null \
+      _mdm_external_cleanup_session "$group_leader_record"; then
+    return 1
+  fi
+  _mdm_process_session_id() { printf '%s\n' "$group_leader_pid"; }
+  MDM_TEST_SYSTEM_PYTHON=/usr/bin/true SUPERVISOR=/dev/null \
+    _mdm_external_cleanup_session "$group_leader_record" || return 1
+}
+
+if (_ps_runner_process_contract); then
+  pass "process-supervisor: runner waits and external SID cleanup stay bound"
+else
+  fail "process-supervisor: runner wait or external SID cleanup escaped bounds"
+fi
+
 unset -f _ps_sigchld_contract 2>/dev/null || true
+unset -f _ps_runner_process_contract 2>/dev/null || true
 unset _ps_supervisor _ps_python

@@ -29,6 +29,14 @@ _mdm_record_state() { # <process-record>
   printf '%s\n' "$state"
 }
 
+_mdm_process_session_id() { # <pid>
+  local pid="$1"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  "$MDM_TEST_SYSTEM_PYTHON" -I -B -S -c \
+    'import os, sys; print(os.getsid(int(sys.argv[1], 10)))' \
+    "$pid" 2>/dev/null
+}
+
 _mdm_record_matches() { # <pid> <expected-record>
   local pid="$1" expected="$2" current expected_identity current_identity
   [[ "$pid" =~ ^[1-9][0-9]*$ && -n "$expected" ]] || return 1
@@ -50,11 +58,14 @@ _mdm_session_record_identity() { # <session-leader-record>
 
 _mdm_session_record_matches() { # <expected-session-leader-record>
   local expected="$1" pid="${1%%|*}" current expected_identity current_identity
+  local current_sid
   expected_identity="$(_mdm_session_record_identity "$expected" || true)"
   [[ -n "$expected_identity" ]] || return 1
   current="$(_mdm_process_record "$pid" || true)"
   current_identity="$(_mdm_session_record_identity "$current" || true)"
+  current_sid="$(_mdm_process_session_id "$pid" || true)"
   [[ "$current_identity" == "$expected_identity" \
+    && "$current_sid" == "$pid" \
     && "$(_mdm_record_state "$current")" != Z* ]]
 }
 
@@ -74,7 +85,7 @@ _mdm_read_nested_supervisor_record() { # <record-file> <nested-runner-pid>
 
 _mdm_external_cleanup_session() { # <session-leader-record>
   local record="$1" pid _ppid _pgid uid _state started
-  _mdm_session_record_identity "$record" >/dev/null || return 1
+  _mdm_session_record_matches "$record" || return 1
   IFS='|' read -r pid _ppid _pgid uid _state started <<< "$record"
   "$MDM_TEST_SYSTEM_PYTHON" -I -B -S "$SUPERVISOR" \
     --cleanup-session "$pid" --expected-uid "$uid" \
@@ -95,6 +106,11 @@ _mdm_wait_bound_supervisor() { # <pid> <expected-record>
   [[ -n "$expected_identity" ]] || return 1
   while [[ "$attempt" -lt 400 ]]; do
     current="$(_mdm_process_record "$pid" || true)"
+    if [[ -z "$current" ]] && /bin/kill -0 "$pid" 2>/dev/null; then
+      /bin/sleep 0.02
+      attempt=$((attempt + 1))
+      continue
+    fi
     current_identity="$(_mdm_record_identity "$current" || true)"
     current_state="$(_mdm_record_state "$current" 2>/dev/null || true)"
     if [[ -z "$current" || "$current_identity" != "$expected_identity" \
@@ -116,9 +132,9 @@ _mdm_wait_bound_supervisor() { # <pid> <expected-record>
 
 _mdm_cleanup_bound_supervisor() { # <pid> <expected-record> [signal]
   local pid="$1" expected="$2" signal_name="${3:-TERM}"
-  local current_pid current_ppid current_pgid _rest
+  local current_pid current_ppid _current_pgid _rest
   [[ -n "$expected" ]] || return 0
-  IFS='|' read -r current_pid current_ppid current_pgid _rest <<< "$expected"
+  IFS='|' read -r current_pid current_ppid _current_pgid _rest <<< "$expected"
   [[ "$current_pid" == "$pid" && "$current_ppid" == "$$" ]] || return 1
 
   _mdm_signal_record "$expected" "$signal_name" || true
@@ -130,8 +146,7 @@ _mdm_cleanup_bound_supervisor() { # <pid> <expected-record> [signal]
   fi
 
   # Fallback collection requires the exact live supervisor/session leader SID.
-  if [[ "$current_pgid" == "$pid" ]] \
-    && _mdm_record_matches "$pid" "$expected"; then
+  if _mdm_session_record_matches "$expected"; then
     _mdm_external_cleanup_session "$expected" || true
   fi
   if _mdm_wait_bound_supervisor "$pid" "$expected"; then
