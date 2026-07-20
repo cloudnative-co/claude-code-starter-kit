@@ -131,13 +131,44 @@ _mdm_test_wait_for_absence() { # <path>
   done
   [[ ! -e "$_path" ]]
 }
-_mdm_test_wait_for_pid_absence() { # <pid>
-  local _pid="$1" _count=0
-  while /bin/kill -0 "$_pid" 2>/dev/null && [[ "$_count" -lt 500 ]]; do
+_mdm_test_process_record() { # <pid>
+  local _pid="$1" _record
+  [[ "$_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  _record="$(
+    TZ=UTC0 LC_ALL=C /bin/ps -p "$_pid" -o stat= -o lstart= 2>/dev/null \
+      | /usr/bin/awk '
+          NF >= 6 {
+            state = $1
+            $1 = ""
+            sub(/^[[:space:]]+/, "")
+            printf "%s|%s", state, $0
+            exit
+          }
+        '
+  )" || return 1
+  [[ "$_record" == *'|'* ]] || return 1
+  printf '%s' "$_record"
+}
+_mdm_test_process_record_is_same_live() { # <record> <expected-start>
+  local _record="$1" _expected="$2" _state _start
+  _state="${_record%%|*}"
+  _start="${_record#*|}"
+  [[ -n "$_state" && "$_start" != "$_record" && -n "$_expected" \
+    && "$_state" != Z* && "$_start" == "$_expected" ]]
+}
+_mdm_test_pid_is_same_live() { # <pid> <expected-start>
+  local _record
+  _record="$(_mdm_test_process_record "$1" || true)"
+  _mdm_test_process_record_is_same_live "$_record" "$2"
+}
+_mdm_test_wait_for_pid_absence() { # <pid> <expected-start>
+  local _pid="$1" _expected="$2" _count=0
+  while _mdm_test_pid_is_same_live "$_pid" "$_expected" \
+    && [[ "$_count" -lt 500 ]]; do
     /bin/sleep 0.01
     _count=$((_count + 1))
   done
-  ! /bin/kill -0 "$_pid" 2>/dev/null
+  ! _mdm_test_pid_is_same_live "$_pid" "$_expected"
 }
 _mdm_test_wait_child_bounded() { # <child-pid>
   local _child="$1" _watchdog _rc=0
@@ -181,6 +212,18 @@ _mdm_test_configure_lock_backend() { # <tmp> <fd|legacy|mkdir>
     *) return 1 ;;
   esac
 }
+_mdm_test_identity_fixture='Sun Jul 20 00:00:00 2026'
+if _mdm_test_process_record_is_same_live \
+    "Z|$_mdm_test_identity_fixture" "$_mdm_test_identity_fixture" \
+  || ! _mdm_test_process_record_is_same_live \
+    "S|$_mdm_test_identity_fixture" "$_mdm_test_identity_fixture" \
+  || _mdm_test_process_record_is_same_live \
+    "S|$_mdm_test_identity_fixture" 'Sun Jul 20 00:00:01 2026'; then
+  fail "mdm-lock: process predicate が zombie/PID reuse を live 扱い"
+else
+  pass "mdm-lock: process predicate は non-zombie の同一 PID identity のみ live"
+fi
+unset _mdm_test_identity_fixture
 _mdm_test_global_contention_cycle() { # <tmp> <fd|legacy|mkdir>
   local _tmp="$1" _backend="$2" _expected_mode
   local _holder _contender _contender_rc _contender_error _count=0 _lock
@@ -300,7 +343,8 @@ fi
 _mdm_test_legacy_crash_cleanup() { # <tmp>
   local _tmp="$1"
   local _support="$_tmp/support" _wrapper="$_tmp/legacy-lockf"
-  local _owner _info _control _holder _worker _count=0 _residue
+  local _owner _info _control _holder _worker _holder_start _worker_start
+  local _count=0 _residue
   mkdir -p "$_support" || return 1
   chmod 755 "$_support" || return 1
   _mdm_test_write_lockf_wrapper "$_wrapper" || return 1
@@ -328,20 +372,24 @@ _mdm_test_legacy_crash_cleanup() { # <tmp>
   _control="${_info%%:*}"
   _info="${_info#*:}"; _holder="${_info%%:*}"; _worker="${_info#*:}"
   [[ "$_holder" =~ ^[0-9]+$ && "$_worker" =~ ^[0-9]+$ ]] || return 1
+  _holder_start="$(_mdm_process_start_identity "$_holder")" || return 1
+  _worker_start="$(_mdm_process_start_identity "$_worker")" || return 1
+  _mdm_test_pid_is_same_live "$_holder" "$_holder_start" || return 1
+  _mdm_test_pid_is_same_live "$_worker" "$_worker_start" || return 1
   /bin/kill -KILL "$_owner" 2>/dev/null || return 1
   _mdm_test_wait_child_bounded "$_owner" || true
   while [[ "$_count" -lt 500 ]]; do
     if [[ ! -e "$_control" ]] \
-      && ! /bin/kill -0 "$_holder" 2>/dev/null \
-      && ! /bin/kill -0 "$_worker" 2>/dev/null; then
+      && ! _mdm_test_pid_is_same_live "$_holder" "$_holder_start" \
+      && ! _mdm_test_pid_is_same_live "$_worker" "$_worker_start"; then
       break
     fi
     /bin/sleep 0.01
     _count=$((_count + 1))
   done
   [[ ! -e "$_control" ]] || return 1
-  ! /bin/kill -0 "$_holder" 2>/dev/null || return 1
-  ! /bin/kill -0 "$_worker" 2>/dev/null || return 1
+  ! _mdm_test_pid_is_same_live "$_holder" "$_holder_start" || return 1
+  ! _mdm_test_pid_is_same_live "$_worker" "$_worker_start" || return 1
   _mdm_test_reset_lock_state
   _mdm_acquire_run_lock jane "$_tmp/home" || return 1
   _mdm_release_run_lock || return 1
@@ -377,6 +425,7 @@ _mdm_test_nonusage_failure() { # <tmp>
 }
 _mdm_test_supervisor_lifetime() { # <tmp> <fd|legacy|mkdir>
   local _tmp="$1" _backend="$2" _holder _worker _grandchild _info
+  local _worker_start _grandchild_start
   local _rc=0 _attempt=0 _acquired=0
   _mdm_test_configure_lock_backend "$_tmp" "$_backend" || return 1
   _mdm_test_write_drop_wrappers "$_tmp" || return 1
@@ -410,13 +459,17 @@ _mdm_test_supervisor_lifetime() { # <tmp> <fd|legacy|mkdir>
   _worker="$_info"
   _grandchild="$(/bin/cat "$_tmp/drop-grandchild.pid")"
   [[ "$_grandchild" =~ ^[0-9]+$ ]] || return 1
+  _worker_start="$(_mdm_process_start_identity "$_worker")" || return 1
+  _grandchild_start="$(_mdm_process_start_identity "$_grandchild")" || return 1
+  _mdm_test_pid_is_same_live "$_worker" "$_worker_start" || return 1
+  _mdm_test_pid_is_same_live "$_grandchild" "$_grandchild_start" || return 1
   [[ "$(/bin/cat "$_tmp/lifetime.mode")" == "$_backend" ]] || return 1
   _MDM_TEST_BG_SUPERVISOR="$_worker"
   _MDM_TEST_BG_DESCENDANT="$_grandchild"
   /bin/kill -KILL "$_holder" 2>/dev/null || return 1
   _mdm_test_wait_child_bounded "$_holder" || true
-  /bin/kill -0 "$_worker" 2>/dev/null || return 1
-  /bin/kill -0 "$_grandchild" 2>/dev/null || return 1
+  _mdm_test_pid_is_same_live "$_worker" "$_worker_start" || return 1
+  _mdm_test_pid_is_same_live "$_grandchild" "$_grandchild_start" || return 1
   _mdm_test_reset_lock_state
   _mdm_acquire_run_lock bob "$_tmp/home-bob" >/dev/null 2>&1 || _rc=$?
   if [[ "$_rc" -eq 0 ]]; then
@@ -427,8 +480,8 @@ _mdm_test_supervisor_lifetime() { # <tmp> <fd|legacy|mkdir>
   fi
   [[ "$_MDM_RUN_LOCK_ERROR" == contention ]] || return 1
   : > "$_tmp/drop-worker.release"
-  _mdm_test_wait_for_pid_absence "$_worker" || return 1
-  _mdm_test_wait_for_pid_absence "$_grandchild" || return 1
+  _mdm_test_wait_for_pid_absence "$_worker" "$_worker_start" || return 1
+  _mdm_test_wait_for_pid_absence "$_grandchild" "$_grandchild_start" || return 1
   while [[ "$_attempt" -lt 500 ]]; do
     _mdm_test_reset_lock_state
     if _mdm_acquire_run_lock carol "$_tmp/home-carol" >/dev/null 2>&1; then
@@ -492,6 +545,7 @@ _mdm_test_corrupt_worker_record_preserved() { # <tmp>
 }
 _mdm_test_term_cleanup_order() { # <tmp> <fd|legacy|mkdir>
   local _tmp="$1" _backend="$2" _holder _worker _grandchild _info
+  local _worker_start _grandchild_start
   local _coord_rc=0 _attempt=0 _acquired=0
   declare -f _mdm_stop_active_drop_supervisor >/dev/null 2>&1 || return 1
   _mdm_test_configure_lock_backend "$_tmp" "$_backend" || return 1
@@ -506,7 +560,8 @@ _mdm_test_term_cleanup_order() { # <tmp> <fd|legacy|mkdir>
     _mdm_acquire_run_lock alice "$2/home-alice" || exit 71
     printf "%s\n" "$_MDM_RUN_LOCK_MODE" > "$2/term.mode"
     : > "$2/term-coordinator.ready"
-    _mdm_exec_as_user 501 alice "$2/home-alice" "$2/drop-worker" "$2"
+    MDM_EXEC_AS_USER_RECORD_VERIFIED_MARKER_OVERRIDE="$2/term-record-verified" \
+      _mdm_exec_as_user 501 alice "$2/home-alice" "$2/drop-worker" "$2"
     _rc=$?
     _mdm_release_run_lock || exit 72
     exit "$_rc"
@@ -518,19 +573,27 @@ _mdm_test_term_cleanup_order() { # <tmp> <fd|legacy|mkdir>
     || ! _mdm_test_wait_for_file "$_tmp/drop-worker.ready" "$_holder"; then
     return 1
   fi
+  if [[ "$_backend" == mkdir ]] \
+    && ! _mdm_test_wait_for_file "$_tmp/term-record-verified" "$_holder"; then
+    return 1
+  fi
   _info="$(/bin/cat "$_tmp/drop-worker.pid")"
   [[ "$_info" =~ ^[0-9]+$ ]] || return 1
   _worker="$_info"
   _grandchild="$(/bin/cat "$_tmp/drop-grandchild.pid")"
   [[ "$_grandchild" =~ ^[0-9]+$ ]] || return 1
+  _worker_start="$(_mdm_process_start_identity "$_worker")" || return 1
+  _grandchild_start="$(_mdm_process_start_identity "$_grandchild")" || return 1
+  _mdm_test_pid_is_same_live "$_worker" "$_worker_start" || return 1
+  _mdm_test_pid_is_same_live "$_grandchild" "$_grandchild_start" || return 1
   _MDM_TEST_BG_SUPERVISOR="$_worker"
   _MDM_TEST_BG_DESCENDANT="$_grandchild"
   [[ "$(/bin/cat "$_tmp/term.mode")" == "$_backend" ]] || return 1
   /bin/kill -TERM "$_holder" 2>/dev/null || return 1
   _mdm_test_wait_child_bounded "$_holder" || _coord_rc=$?
   [[ "$_coord_rc" -eq 143 ]] || return 1
-  _mdm_test_wait_for_pid_absence "$_worker" || return 1
-  _mdm_test_wait_for_pid_absence "$_grandchild" || return 1
+  _mdm_test_wait_for_pid_absence "$_worker" "$_worker_start" || return 1
+  _mdm_test_wait_for_pid_absence "$_grandchild" "$_grandchild_start" || return 1
   while [[ "$_attempt" -lt 500 ]]; do
     _mdm_test_reset_lock_state
     if _mdm_acquire_run_lock bob "$_tmp/home-bob" >/dev/null 2>&1; then
