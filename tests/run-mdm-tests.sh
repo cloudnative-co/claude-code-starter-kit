@@ -564,6 +564,19 @@ if ! /usr/bin/env MDM_TEST_TMP_ROOT="$runner_tmp" \
 fi
 printf 'PASS: wrapper result includes nested assertions\n'
 
+_mdm_record_is_live() { # <process-record>
+  local state
+  [[ -n "$1" ]] || return 1
+  state="$(_mdm_record_state "$1" 2>/dev/null || true)"
+  [[ -n "$state" && "$state" != Z* ]]
+}
+if _mdm_record_is_live '123|1|123|501|Z+|Sun Jul 20 00:00:00 2026' \
+  || ! _mdm_record_is_live '123|1|123|501|S+|Sun Jul 20 00:00:00 2026'; then
+  printf 'FAIL: watchdog collection predicate mishandled process state\n' >&2
+  exit 1
+fi
+printf 'PASS: watchdog collection predicate ignores zombie records\n'
+
 watchdog_output="$runner_tmp/watchdog-probe.out"
 watchdog_record="$runner_tmp/watchdog-probe.pid"
 set +e
@@ -588,9 +601,10 @@ watchdog_value="$(sed -n '1p' "$watchdog_record" 2>/dev/null || true)"
 watchdog_pid="${watchdog_value%%:*}"
 watchdog_value="${watchdog_value#*:}"
 watchdog_pgid="${watchdog_value%%:*}"
+watchdog_process="$(_mdm_process_record "$watchdog_pid" || true)"
 if [[ "$watchdog_rc" -ne 124 || ! "$watchdog_pid" =~ ^[1-9][0-9]*$ \
-  || "$watchdog_pgid" != "$watchdog_pid" \
-  || -n "$(_mdm_process_record "$watchdog_pid" || true)" ]]; then
+  || "$watchdog_pgid" != "$watchdog_pid" ]] \
+  || _mdm_record_is_live "$watchdog_process"; then
   /bin/cat "$watchdog_output" >&2 || true
   printf 'FAIL: session watchdog did not collect a separate process group\n' >&2
   exit 1
@@ -614,8 +628,10 @@ _mdm_run_supervised 5 "$orphan_output" "orphan self-probe" \
 orphan_rc=$?
 set -e
 orphan_pid="$(sed -n '1p' "$orphan_record" 2>/dev/null || true)"
-if [[ "$orphan_rc" -ne 125 || ! "$orphan_pid" =~ ^[1-9][0-9]*$ \
-  || -n "$(_mdm_process_record "$orphan_pid" || true)" ]]; then
+orphan_process="$(_mdm_process_record "$orphan_pid" || true)"
+if [[ "$orphan_rc" -ne 125 \
+  || ! "$orphan_pid" =~ ^[1-9][0-9]*$ ]] \
+  || _mdm_record_is_live "$orphan_process"; then
   /bin/cat "$orphan_output" >&2 || true
   printf 'FAIL: completed target left a live session member\n' >&2
   exit 1
