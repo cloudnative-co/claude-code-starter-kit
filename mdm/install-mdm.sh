@@ -434,11 +434,7 @@ if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
       trap '\''/bin/rm -f "$_mdm_script"; [[ -z "$_mdm_renderer" ]] || /bin/rm -f "$_mdm_renderer"; exit 143'\'' TERM
       . "$_mdm_script"
       /bin/rm -f "$_mdm_script"
-      _MDM_EXPECTED_RENDERER="$_mdm_renderer"
-      if [[ -n "$_mdm_renderer" ]]; then
-        _MDM_EXPECTED_RENDERER_SNAPSHOT=1
-        _MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT=1
-      fi
+      _mdm_publish_launcher_renderer_snapshot "$_mdm_renderer"
       trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"'\'' EXIT
       trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"; exit 129'\'' HUP
       trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"; exit 130'\'' INT
@@ -513,6 +509,18 @@ _MDM_EXPECTED_RENDERER_OWNER_UID="${_MDM_EXPECTED_RENDERER_OWNER_UID:-}"
 _MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT="${_MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT:-0}"
 _MDM_CHECKOUT_RENDERER_SNAPSHOT="${_MDM_CHECKOUT_RENDERER_SNAPSHOT:-}"
 _MDM_CHECKOUT_RENDERER_OWNER_UID="${_MDM_CHECKOUT_RENDERER_OWNER_UID:-}"
+
+_mdm_publish_launcher_renderer_snapshot() { # <trusted-adjacent-bundle-snapshot-or-empty>
+  _MDM_EXPECTED_RENDERER="${1:-}"
+  _MDM_EXPECTED_RENDERER_OWNER_UID=""
+  if [[ -n "$_MDM_EXPECTED_RENDERER" ]]; then
+    _MDM_EXPECTED_RENDERER_SNAPSHOT=1
+    _MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT=1
+  else
+    _MDM_EXPECTED_RENDERER_SNAPSHOT=0
+    _MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT=0
+  fi
+}
 # MDM agent の umask（000 のことがある）を継承しない（契約: dir 755 /
 # file 644。レシート/ログが group/other 書込可で生成されると detect の
 # compliant 偽装に直結する。R2-High）。setup.sh は自身で umask 077 を設定する。
