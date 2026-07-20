@@ -116,13 +116,96 @@ _mdm_early_runner_cleanup() {
     runner_tmp=""
   fi
 }
+_mdm_root_tmp_base_record() { # <base>
+  local base="$1" mode_record stat_record
+  [[ -d "$base" && ! -L "$base" \
+    && "$(cd -P "$base" && /bin/pwd -P)" == "$base" ]] || return 1
+  mode_record="$(LC_ALL=C /bin/ls -ld "$base" 2>/dev/null \
+    | /usr/bin/awk 'NR == 1 { print $1 }')"
+  [[ "$mode_record" == drwxrwxrwt ]] || return 1
+  case "$(/usr/bin/uname -s 2>/dev/null || true)" in
+    Darwin)
+      stat_record="$(/usr/bin/stat -f '%d|%i|%u|%p' "$base" \
+        2>/dev/null || true)"
+      [[ "$stat_record" =~ ^[0-9]+\|[0-9]+\|0\|41777$ ]] || return 1
+      ;;
+    Linux)
+      stat_record="$(/usr/bin/stat -c '%d|%i|%u|%a' "$base" \
+        2>/dev/null || true)"
+      [[ "$stat_record" =~ ^[0-9]+\|[0-9]+\|0\|1777$ ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$stat_record"
+}
+_mdm_runner_tmp_is_safe() {
+  local expected_uid="$1" parent name canonical stat_record mode
+  [[ "$runner_tmp" == /* && -d "$runner_tmp" && ! -L "$runner_tmp" ]] \
+    || return 1
+  canonical="$(cd -P "$runner_tmp" && /bin/pwd -P)" || return 1
+  [[ "$canonical" == "$runner_tmp" ]] || return 1
+  case "$(/usr/bin/uname -s 2>/dev/null || true)" in
+    Darwin)
+      stat_record="$(/usr/bin/stat -f '%u|%p' "$runner_tmp" \
+        2>/dev/null || true)"
+      mode=40700
+      ;;
+    Linux)
+      stat_record="$(/usr/bin/stat -c '%u|%a' "$runner_tmp" \
+        2>/dev/null || true)"
+      mode=700
+      ;;
+    *) return 1 ;;
+  esac
+  [[ "$stat_record" == "$expected_uid|$mode" ]] || return 1
+  if [[ "$expected_uid" == 0 ]]; then
+    parent="${runner_tmp%/*}"
+    name="${runner_tmp##*/}"
+    case "$(/usr/bin/uname -s 2>/dev/null || true)" in
+      Darwin) [[ "$parent" == /private/tmp ]] || return 1 ;;
+      Linux) [[ "$parent" == /tmp ]] || return 1 ;;
+      *) return 1 ;;
+    esac
+    [[ "$name" =~ ^claude-kit-mdm-tests\.[A-Za-z0-9]{6}$ ]] || return 1
+  fi
+}
 trap '_mdm_early_runner_cleanup' EXIT
 trap '_mdm_note_startup_signal HUP' HUP
 trap '_mdm_note_startup_signal INT' INT
 trap '_mdm_note_startup_signal TERM' TERM
 # Record signals until the new path is assigned for authoritative cleanup.
-runner_tmp="$(/usr/bin/mktemp -d)"
+runner_uid="$(/usr/bin/id -u)"
+if [[ "$runner_uid" == 0 ]]; then
+  case "$(/usr/bin/uname -s 2>/dev/null || true)" in
+    Darwin) runner_tmp_base=/private/tmp ;;
+    Linux) runner_tmp_base=/tmp ;;
+    *)
+      printf 'FAIL: unsupported root MDM runner platform\n' >&2
+      exit 1
+      ;;
+  esac
+  runner_tmp_base_record="$(_mdm_root_tmp_base_record "$runner_tmp_base" \
+    || true)"
+  if [[ -z "$runner_tmp_base_record" ]]; then
+    printf 'FAIL: root MDM runner temporary base is unsafe: %s\n' \
+      "$runner_tmp_base" >&2
+    exit 1
+  fi
+  runner_tmp="$(/usr/bin/mktemp -d \
+    "$runner_tmp_base/claude-kit-mdm-tests.XXXXXX")"
+  if [[ "$(_mdm_root_tmp_base_record "$runner_tmp_base" || true)" \
+    != "$runner_tmp_base_record" ]]; then
+    printf 'FAIL: root MDM runner temporary base changed during creation\n' >&2
+    exit 1
+  fi
+else
+  runner_tmp="$(/usr/bin/mktemp -d)"
+fi
 runner_tmp="$(cd -P "$runner_tmp" && /bin/pwd -P)"
+if ! _mdm_runner_tmp_is_safe "$runner_uid"; then
+  printf 'FAIL: MDM runner temporary root is unsafe: %s\n' "$runner_tmp" >&2
+  exit 1
+fi
 # shellcheck source=mdm-runner-process-lib.sh
 source "$PROCESS_LIB"
 _mdm_arm_runner_signal_traps
