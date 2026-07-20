@@ -10,7 +10,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "cc-safety-net --claude-code"
+						"command": "\"$HOME/.claude/hooks/safety-net/run-cc-safety-net.sh\" --claude-code"
 					}
 				]
 			}

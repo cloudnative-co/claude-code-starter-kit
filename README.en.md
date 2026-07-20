@@ -37,6 +37,7 @@ irm https://raw.githubusercontent.com/cloudnative-co/claude-code-starter-kit/mai
 - [Profiles](#profiles)
 - [Usage](#usage)
 - [Non-Interactive Mode](#non-interactive-mode)
+- [MDM Deployment (macOS)](docs/mdm/README.md)
 - [Directory Structure](#directory-structure)
 - [Customization](#customization)
 - [Uninstall](#uninstall)
@@ -62,7 +63,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 
 ## Prerequisites
 
-Missing prerequisites are installed automatically when possible: `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, `node`, `tmux`, and `gh`. On macOS, the kit also detects the system Bash 3.2 limitation, installs Bash 4+ when needed, and re-execs automatically. Manual commands are shown only if automatic installation fails.
+Missing or unsupported prerequisites are installed or upgraded automatically when possible: `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, Node.js `22.19+`, `tmux`, and `gh`. On macOS, the kit also detects the system Bash 3.2 limitation, installs Bash 4+ when needed, and re-execs automatically. If automatic installation fails, setup exits with an error and shows the manual commands.
 
 ### Claude Account (Paid)
 
@@ -178,9 +179,9 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 
 When reading a URL, official docs, a blog/news article, or an OSS page, this executable skill **extracts the main content with [Defuddle](https://github.com/kepano/defuddle) into Markdown/JSON instead of reading raw HTML** (installed in Standard / Full). The `/web-article`, `/oss-analyze`, and `/web-source-review` commands and the CLAUDE.md standard rule rely on it.
 
-- **Requires Node.js 22+** (tested on 22/24). `npm ci --omit=dev` runs automatically on deploy. If Node is missing, the skill is still placed but URL/PDF features are disabled (a warning is shown; setup does not fail).
+- **Requires Node.js 22.19+** (tested on 22/24). Setup attempts an automatic install or upgrade when needed and fails before deployment if the minimum cannot be met. `npm ci --omit=dev` runs automatically on deploy.
 - **Security**: layered SSRF defense (http(s) only, internal/private IPs rejected, connection IP pinned, each redirect hop re-validated), a non-fetching DOM (no external sub-resource fetch, no script execution), and CJK-aware, decompression-bomb-guarded PDF extraction. Set `ALLOW_PRIVATE_URLS=true` for internal URLs in development only.
-- **Opt-in dependency auto-update**: the `web-content-update` hook updates the skill's deps (defuddle/jsdom/pdfjs-dist) on SessionStart (24h throttle, test gate + rollback). **Enabled by default in Full only**; opt-in in Standard. Manual update: `npm run update:deps`.
+- **Opt-in dependency auto-update**: the `web-content-update` hook updates the skill's deps (defuddle/jsdom/pdfjs-dist/undici) on SessionStart (24h throttle, test gate + rollback). **Enabled by default in Full only**; opt-in in Standard. Manual update: `npm run update:deps`.
 
 ### Hooks
 
@@ -364,6 +365,12 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - Dry-run output is labeled as `Preview Mode`, making it easier to distinguish from the actual update run.
 > - `--non-interactive --dry-run` installs nothing and exits immediately.
 
+## MDM Deployment (macOS)
+
+This kit can deploy the Claude Code CLI and starter kit to managed devices running macOS 13.5 or later without end-user prompts through MDM (Jamf, Intune, Workspace ONE, Ivanti, and others). The default zero-touch workflow assumes Xcode Command Line Tools have already been delivered as an MDM package baseline. Production remediation requires root, a lowercase 40-character commit SHA in `KIT_MDM_GIT_REF`, a precomputed lowercase 64-character policy SHA-256 in `KIT_MDM_EXPECTED_POLICY_SHA256`, and a trusted two-file bundle containing `mdm/install-mdm.sh` plus `mdm/render-expected.py` from the same release. The MDM layer reuses the real `setup.sh`; an idempotent rerun at the same SHA repairs drift or missing managed files. The static renderer defines present and absent paths, required runtime components, and the desired policy. A root-owned schema-v3 receipt containing the policy SHA-256, bound UID/GeneratedUID, and the runtime component manifest path/hash is issued only after postconditions pass.
+
+`settings.json` is fully MDM-managed, while the `CLAUDE.md` user section and unrelated user-created files are preserved. Auto-update, the web updater, regular marketplace plugins, and the Codex Plugin are always disabled under MDM; Ghostty and fonts remain explicit opt-ins. A global remediation lock, root history bound to the account UID and GeneratedUID, and a dedicated one-generation backup protect reruns. After validating the fixed CLT source metadata and its existing Apple signature with a v2 sealed-resource envelope, root remediation/dry-run and root detection keep a framework copy in a root-owned mode-`0700` private workspace for the entire run. Only an explicit non-root dry-run uses a current-user-owned mode-`0700` ephemeral copy; that path is non-authoritative and leaves the receipt unchanged. The target user never executes the private copy: the three dropped user-owned filesystem operations use the validated fixed-source CLT Python, and production revalidates their results with later root-private postconditions. The kit does not sign or re-sign CLT Python and needs no Developer ID certificate or private key. Production detection is root-only and requires both the expected commit and expected policy SHA-256. A 30–60 minute product-side watchdog is an initial planning estimate, not a completion guarantee. See [`docs/mdm/README.md`](docs/mdm/README.md) for the full contract and the still-unverified root end-to-end path from real MDM products. **That guide is currently Japanese-only; MDM deployment supports macOS 13.5 or later only, and Windows MDM is out of scope**.
+
 ## Directory Structure
 
 ```
@@ -373,6 +380,7 @@ claude-code-starter-kit/
 ├── setup.sh                # Main setup script (wizard + deploy)
 ├── uninstall.sh            # Manifest-based clean uninstall
 ├── lib/                    # Shared shell libraries (detect, deploy, update, merge, etc.)
+├── mdm/                    # macOS MDM installer, renderer, and detector
 ├── wizard/                 # Interactive wizard
 │   ├── wizard.sh           # Wizard entrypoint and config restore
 │   ├── registry.sh         # Hook/plugin registries and CLI parsing
@@ -453,7 +461,8 @@ Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manif
 Shell scripts are statically analyzed with [ShellCheck](https://www.shellcheck.net/). It runs automatically via GitHub Actions on PRs. To run locally:
 
 ```bash
-shellcheck setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh
+shellcheck -S warning setup.sh install.sh uninstall.sh lib/*.sh wizard/*.sh \
+  mdm/*.sh tests/run-*.sh tests/unit/test-mdm-*.sh
 ```
 
 ## Changelog

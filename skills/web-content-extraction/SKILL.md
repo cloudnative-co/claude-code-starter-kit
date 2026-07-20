@@ -28,12 +28,14 @@ Do not summarize, analyze, compare, or review a web page from raw HTML unless De
 
 ```bash
 # 公開URLを取得して本文をMarkdown/JSON化（SSRFガードあり）
-node ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs <url>
+~/.claude/skills/web-content-extraction/scripts/run-node.sh \
+  ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs <url>
 ```
 
 ```bash
 # ローカルHTMLファイルを本文抽出（外部通信なし）
-node ~/.claude/skills/web-content-extraction/scripts/defuddle-file.mjs <file>
+~/.claude/skills/web-content-extraction/scripts/run-node.sh \
+  ~/.claude/skills/web-content-extraction/scripts/defuddle-file.mjs <file>
 ```
 
 出力は JSON（stdout）。最低限 `success`, `url`, `fetchedAt`/`parsedAt`, `title`, `author`,
@@ -92,7 +94,7 @@ node ~/.claude/skills/web-content-extraction/scripts/defuddle-file.mjs <file>
 ## Tests
 
 ```bash
-cd ~/.claude/skills/web-content-extraction && npm test   # node --test
+cd ~/.claude/skills/web-content-extraction && ./scripts/run-node.sh --test
 ```
 
 `test/url-guard.test.mjs`（SSRFガード）/ `test/defuddle-core.test.mjs`（charCount）/

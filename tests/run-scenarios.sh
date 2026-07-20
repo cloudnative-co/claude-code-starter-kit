@@ -790,9 +790,9 @@ test_update_progress_output() {
   output="$(run_setup_update 2>&1)" || rc=$?
 
   if [[ $rc -eq 0 ]] \
-    && grep -q "Step 1/5:" <<< "$output" \
-    && grep -q "Managed files:" <<< "$output" \
-    && grep -q "Step 5/5:" <<< "$output"; then
+    && grep -q "Step 1/5:" < <(printf '%s\n' "$output") \
+    && grep -q "Managed files:" < <(printf '%s\n' "$output") \
+    && grep -q "Step 5/5:" < <(printf '%s\n' "$output"); then
     pass "update-progress-output"
   else
     fail "update-progress-output"
@@ -810,8 +810,9 @@ test_dry_run_progress_output() {
   output="$(run_setup_update --dry-run 2>&1)" || rc=$?
 
   if [[ $rc -eq 0 ]] \
-    && grep -q "Preview Mode: Simulating update without modifying ~/.claude" <<< "$output" \
-    && grep -q "Preview 1/5:" <<< "$output"; then
+    && grep -q "Preview Mode: Simulating update without modifying ~/.claude" \
+      < <(printf '%s\n' "$output") \
+    && grep -q "Preview 1/5:" < <(printf '%s\n' "$output"); then
     pass "dry-run-progress-output"
   else
     fail "dry-run-progress-output"
@@ -834,10 +835,10 @@ test_dry_run_quiet_merge_summary() {
   output="$(run_setup_update --dry-run 2>&1)" || rc=$?
 
   if [[ $rc -eq 0 ]] \
-    && grep -q "settings.json merge:" <<< "$output" \
-    && grep -q "settings.json merge summary:" <<< "$output" \
-    && ! grep -q "\[kit-update\]" <<< "$output" \
-    && ! grep -q "\[merge-array\]" <<< "$output"; then
+    && grep -q "settings.json merge:" < <(printf '%s\n' "$output") \
+    && grep -q "settings.json merge summary:" < <(printf '%s\n' "$output") \
+    && ! grep -q "\[kit-update\]" < <(printf '%s\n' "$output") \
+    && ! grep -q "\[merge-array\]" < <(printf '%s\n' "$output"); then
     pass "dry-run-quiet-merge-summary"
   else
     fail "dry-run-quiet-merge-summary"
@@ -852,8 +853,9 @@ test_update_kit_command_paths() {
   update_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit.md")"
   dry_run_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit-dry-run.md")"
 
-  if grep -q "bash setup.sh --update" <<< "$update_cmd" \
-    && grep -q "bash setup.sh --update --dry-run" <<< "$dry_run_cmd"; then
+  if grep -q "bash setup.sh --update" < <(printf '%s\n' "$update_cmd") \
+    && grep -q "bash setup.sh --update --dry-run" \
+      < <(printf '%s\n' "$dry_run_cmd"); then
     pass "update-kit-command-paths"
   else
     fail "update-kit-command-paths"
@@ -923,22 +925,19 @@ setup_biome_auto_install_stub() {
   done
 
   export PATH="$stub_dir:$HOME/.local/bin:/usr/bin:/bin"
-  cat > "$stub_dir/brew" <<EOF
-#!/bin/bash
-if [[ "\$1" == "--prefix" ]]; then
-  echo "$stub_dir"
-  exit 0
-fi
-if [[ "\$1" == "install" && "\$2" == "biome" ]]; then
-  cat > "$stub_dir/biome" <<'INNER'
-#!/bin/bash
-echo "biome 1.0.0"
-INNER
-  chmod +x "$stub_dir/biome"
-  exit 0
-fi
-exit 1
-EOF
+  printf '%s\n' \
+    '#!/bin/bash' \
+    'if [[ "$1" == "--prefix" ]]; then' \
+    "  echo \"$stub_dir\"" \
+    '  exit 0' \
+    'fi' \
+    'if [[ "$1" == "install" && "$2" == "biome" ]]; then' \
+    "  printf '%s\\n' '#!/bin/bash' 'echo \"biome 1.0.0\"' > \"$stub_dir/biome\"" \
+    "  chmod +x \"$stub_dir/biome\"" \
+    '  exit 0' \
+    'fi' \
+    'exit 1' \
+    > "$stub_dir/brew"
   chmod +x "$stub_dir/brew"
 }
 

@@ -188,7 +188,7 @@ _step_hooks() {
         ;;
       *)
         local -a _tokens=()
-        read -r -a _tokens <<< "$choice"
+        read -r -a _tokens < <(printf '%s\n' "$choice")
         for token in "${_tokens[@]}"; do
           if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#HOOK_KEYS[@]}" ]]; then
             local idx=$((token-1))
@@ -249,7 +249,7 @@ _step_plugins() {
         ;;
       *)
         local -a _tokens=()
-        read -r -a _tokens <<< "$choice"
+        read -r -a _tokens < <(printf '%s\n' "$choice")
         for token in "${_tokens[@]}"; do
           if [[ "$token" =~ ^[0-9]+$ ]] && [[ "$token" -ge 1 ]] && [[ "$token" -le "${#PLUGIN_NAMES[@]}" ]]; then
             local idx=$((token-1))
@@ -317,7 +317,7 @@ _step_confirm() {
   if [[ -z "$SELECTED_PLUGINS" ]]; then
     printf "%-20s : %s\n" "$STR_CONFIRM_PLUGINS" "$STR_NONE"
   else
-    IFS=',' read -r -a _plist <<< "$SELECTED_PLUGINS"
+    IFS=',' read -r -a _plist < <(printf '%s\n' "$SELECTED_PLUGINS")
     printf "%-20s : %d %s\n" "$STR_CONFIRM_PLUGINS" "${#_plist[@]}" "$STR_SELECTED"
   fi
 
@@ -340,6 +340,7 @@ _step_confirm() {
 }
 
 _fill_noninteractive_defaults() {
+  local _rc=0
   [[ -z "$LANGUAGE" ]] && LANGUAGE="en"
   [[ -z "$PROFILE" ]] && PROFILE="standard"
 
@@ -349,8 +350,12 @@ _fill_noninteractive_defaults() {
   done < <(_capture_cli_overrides)
 
   _load_profile_preserving_values "$PROFILE"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   _restore_cli_overrides "${_saved_overrides[@]+"${_saved_overrides[@]}"}"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   [[ -z "$EDITOR_CHOICE" ]] && EDITOR_CHOICE="none"
   [[ -z "$COMMIT_ATTRIBUTION" ]] && COMMIT_ATTRIBUTION="false"
@@ -363,15 +368,28 @@ _fill_noninteractive_defaults() {
   [[ -z "$ENABLE_GHOSTTY_SETUP" ]] && ENABLE_GHOSTTY_SETUP="false"
   [[ -z "$ENABLE_FONTS_SETUP" ]] && ENABLE_FONTS_SETUP="false"
   _normalize_formatter_hooks "$_PROFILE_FILL_FORMATTER_PREFER"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   if [[ "$(uname -s)" != "Darwin" ]]; then
     ENABLE_GHOSTTY_SETUP="false"
   fi
 
-  if [[ -z "$SELECTED_PLUGINS" ]]; then
+  if _wizard_mdm_managed; then
+    ENABLE_AUTO_UPDATE="false"
+    ENABLE_WEB_CONTENT_UPDATE="false"
+    ENABLE_CODEX_PLUGIN="false"
+    SELECTED_PLUGINS=""
+  elif [[ -z "$SELECTED_PLUGINS" ]]; then
     _load_plugins
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     _init_plugins_for_profile "$PROFILE"
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     _compute_selected_plugins
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
   fi
 
   WIZARD_RESULT="deploy"

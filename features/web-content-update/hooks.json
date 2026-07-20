@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node __HOME__/.claude/skills/web-content-extraction/scripts/update-deps.mjs",
+						"command": "\"$HOME/.claude/skills/web-content-extraction/scripts/run-node.sh\" \"$HOME/.claude/skills/web-content-extraction/scripts/update-deps.mjs\"",
 						"async": true,
 						"asyncTimeout": 720000
 					}

@@ -123,7 +123,7 @@ _apply_plugins_from_csv() {
     PLUGIN_SELECTED[$i]="false"
   done
 
-  IFS=',' read -r -a _wanted <<< "$csv"
+  IFS=',' read -r -a _wanted < <(printf '%s\n' "$csv")
   local w _w_name _w_mp
   for i in "${!PLUGIN_NAMES[@]}"; do
     for w in "${_wanted[@]}"; do
@@ -221,7 +221,7 @@ _apply_hooks_csv() {
     printf -v "${HOOK_KEYS[$i]}" '%s' "false"
   done
 
-  IFS=',' read -r -a _items <<< "$csv"
+  IFS=',' read -r -a _items < <(printf '%s\n' "$csv")
   local item
   for item in "${_items[@]}"; do
     item="$(printf '%s' "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"

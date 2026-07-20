@@ -114,6 +114,50 @@ test_replace_kit_section_swaps_kit_content_preserves_user() {
 }
 test_replace_kit_section_swaps_kit_content_preserves_user
 
+test_replace_kit_section_propagates_cat_failure_without_changing_target() {
+  local target; target="$(mktemp)"
+  local new_kit; new_kit="$(mktemp)"
+  local before rc=0
+  printf 'preamble\n%s\nold kit\n%s\nuser stuff\n' \
+    "$_KIT_MARKER_BEGIN" "$_KIT_MARKER_END" > "$target"
+  printf '%s\nnew kit content\n%s\n' "$_KIT_MARKER_BEGIN" "$_KIT_MARKER_END" > "$new_kit"
+  before="$(command cat "$target")"
+
+  cat() { return 73; }
+  _replace_kit_section "$target" "$new_kit" || rc=$?
+  unset -f cat
+
+  if [[ "$rc" -ne 0 ]] && assert_equals "$before" "$(command cat "$target")"; then
+    pass "replace_kit_section: cat failure propagates without changing target"
+  else
+    fail "replace_kit_section: cat failure propagates without changing target"
+  fi
+  rm -f "$target" "$new_kit"
+}
+test_replace_kit_section_propagates_cat_failure_without_changing_target
+
+test_replace_kit_section_propagates_mktemp_failure() {
+  local target; target="$(mktemp)"
+  local new_kit; new_kit="$(mktemp)"
+  local before rc=0
+  printf 'preamble\n%s\nold kit\n%s\n' \
+    "$_KIT_MARKER_BEGIN" "$_KIT_MARKER_END" > "$target"
+  printf '%s\nnew kit\n%s\n' "$_KIT_MARKER_BEGIN" "$_KIT_MARKER_END" > "$new_kit"
+  before="$(command cat "$target")"
+
+  mktemp() { return 73; }
+  _replace_kit_section "$target" "$new_kit" || rc=$?
+  unset -f mktemp
+
+  if [[ "$rc" -ne 0 ]] && assert_equals "$before" "$(command cat "$target")"; then
+    pass "replace_kit_section: mktemp failure propagates without changing target"
+  else
+    fail "replace_kit_section: mktemp failure propagates without changing target"
+  fi
+  rm -f "$target" "$new_kit"
+}
+test_replace_kit_section_propagates_mktemp_failure
+
 # =========================================================================
 # inject_feature
 # =========================================================================
@@ -136,6 +180,27 @@ test_inject_feature_replaces_marker_with_partial() {
   rm -f "$target" "$partial"
 }
 test_inject_feature_replaces_marker_with_partial
+
+test_inject_feature_propagates_mv_failure_without_changing_target() {
+  local target; target="$(mktemp)"
+  local partial; partial="$(mktemp)"
+  local before rc=0
+  printf 'before\n{{FEATURE:myfeature}}\nafter\n' > "$target"
+  printf 'injected content\n' > "$partial"
+  before="$(command cat "$target")"
+
+  mv() { return 73; }
+  inject_feature "$target" "myfeature" "$partial" || rc=$?
+  unset -f mv
+
+  if [[ "$rc" -ne 0 ]] && assert_equals "$before" "$(command cat "$target")"; then
+    pass "inject_feature: mv failure propagates without changing target"
+  else
+    fail "inject_feature: mv failure propagates without changing target"
+  fi
+  rm -f "$target" "$partial"
+}
+test_inject_feature_propagates_mv_failure_without_changing_target
 
 test_inject_feature_skips_missing_marker() {
   local target; target="$(mktemp)"
@@ -186,6 +251,25 @@ test_remove_unresolved_replaces_markers_with_empty() {
 }
 test_remove_unresolved_replaces_markers_with_empty
 
+test_remove_unresolved_propagates_sed_failure_without_changing_target() {
+  local target; target="$(mktemp)"
+  local before rc=0
+  printf 'keep this\nprefix {{GONE}} suffix\n' > "$target"
+  before="$(command cat "$target")"
+
+  _sed() { return 73; }
+  remove_unresolved "$target" || rc=$?
+  _sed() { sed "$@"; }
+
+  if [[ "$rc" -ne 0 ]] && assert_equals "$before" "$(command cat "$target")"; then
+    pass "remove_unresolved: sed failure propagates without changing target"
+  else
+    fail "remove_unresolved: sed failure propagates without changing target"
+  fi
+  rm -f "$target"
+}
+test_remove_unresolved_propagates_sed_failure_without_changing_target
+
 test_remove_unresolved_delete_mode_removes_lines() {
   local tmp; tmp="$(mktemp)"
   printf 'keep\n{{REMOVE_ME}}\nalso keep\n' > "$tmp"
@@ -201,6 +285,50 @@ test_remove_unresolved_delete_mode_removes_lines() {
   rm -f "$tmp"
 }
 test_remove_unresolved_delete_mode_removes_lines
+
+test_remove_unresolved_forces_noninteractive_readonly_replacement() {
+  local target; target="$(mktemp)"
+  local mv_calls=0 rc=0
+  printf 'keep\n{{REMOVE_ME}}\n' > "$target"
+  chmod 0444 "$target"
+
+  mv() {
+    [[ "$1" == -f ]] || return 73
+    mv_calls=$((mv_calls + 1))
+    command mv "$@"
+  }
+  remove_unresolved "$target" "delete" || rc=$?
+  unset -f mv
+
+  if [[ "$rc" -eq 0 && "$mv_calls" -eq 1 ]] \
+    && assert_file_contains "$target" "keep" \
+    && assert_file_not_contains "$target" '{{REMOVE_ME}}'; then
+    pass "remove_unresolved: read-only target replacement is non-interactive"
+  else
+    fail "remove_unresolved: read-only target replacement is non-interactive"
+  fi
+  rm -f "$target"
+}
+test_remove_unresolved_forces_noninteractive_readonly_replacement
+
+test_remove_unresolved_delete_propagates_awk_failure_without_changing_target() {
+  local target; target="$(mktemp)"
+  local before rc=0
+  printf 'keep\n{{REMOVE_ME}}\nalso keep\n' > "$target"
+  before="$(command cat "$target")"
+
+  _awk() { return 73; }
+  remove_unresolved "$target" "delete" || rc=$?
+  _awk() { awk "$@"; }
+
+  if [[ "$rc" -ne 0 ]] && assert_equals "$before" "$(command cat "$target")"; then
+    pass "remove_unresolved: awk failure propagates without changing target"
+  else
+    fail "remove_unresolved: awk failure propagates without changing target"
+  fi
+  rm -f "$target"
+}
+test_remove_unresolved_delete_propagates_awk_failure_without_changing_target
 
 # =========================================================================
 # _user_section_heading

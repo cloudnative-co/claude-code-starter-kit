@@ -5,7 +5,8 @@
 # Requires: lib/colors.sh, lib/prerequisites.sh (_brew_is_usable, _run_with_timeout)
 # Note: uses uname -s directly for platform detection (not lib/detect.sh)
 # Sets globals: FONTS_INCOMPLETE[]
-# Exports: install_ibm_plex_mono(), install_hackgen_nf(), setup_fonts()
+# Exports: install_ibm_plex_mono(), install_hackgen_nf(), setup_fonts(),
+#          fonts_mdm_are_trusted(), install_fonts_mdm()
 # Dry-run: guarded (setup.sh logs EXTERNAL, does not call setup_fonts)
 set -euo pipefail
 
@@ -13,13 +14,17 @@ FONTS_INCOMPLETE=()
 IBM_PLEX_MONO_ZIP_URL="${IBM_PLEX_MONO_ZIP_URL:-https://github.com/IBM/plex/releases/download/%40ibm/plex-mono%401.1.0/ibm-plex-mono.zip}"
 HACKGEN_NF_ZIP_URL="${HACKGEN_NF_ZIP_URL:-https://github.com/yuru7/HackGen/releases/download/v2.10.0/HackGen_NF_v2.10.0.zip}"
 
+
 _font_zip_has_magic() {
   local zip_path="$1"
   [[ -f "$zip_path" ]] || return 1
   local magic
-  magic="$(LC_ALL=C dd if="$zip_path" bs=2 count=1 2>/dev/null || true)"
+  magic="$(LC_ALL=C /bin/dd if="$zip_path" bs=2 count=1 2>/dev/null || true)"
   [[ "$magic" == "PK" ]]
 }
+
+# shellcheck source=lib/fonts-mdm.sh
+. "${BASH_SOURCE[0]%/*}/fonts-mdm.sh"
 
 # ---------------------------------------------------------------------------
 # macOS font installation helper (direct download fallback)
@@ -201,6 +206,15 @@ _install_font() {
 # Install IBM Plex Mono
 # ---------------------------------------------------------------------------
 install_ibm_plex_mono() {
+  if _fonts_mdm_managed; then
+    info "${STR_FONT_IBM_INSTALLING:-Installing IBM Plex Mono...}"
+    if _font_mdm_install_or_validate_family ibm; then
+      ok "${STR_FONT_IBM_INSTALLED:-IBM Plex Mono installed}"
+      return 0
+    fi
+    warn "${STR_FONT_IBM_FAILED:-Failed to install IBM Plex Mono}"
+    return 1
+  fi
   _install_font \
     "font-ibm-plex-mono" \
     "IBMPlex*.ttf" \
@@ -219,6 +233,15 @@ install_ibm_plex_mono() {
 # Install HackGen NF (Nerd Fonts version)
 # ---------------------------------------------------------------------------
 install_hackgen_nf() {
+  if _fonts_mdm_managed; then
+    info "${STR_FONT_HACKGEN_INSTALLING:-Installing HackGen NF...}"
+    if _font_mdm_install_or_validate_family hackgen; then
+      ok "${STR_FONT_HACKGEN_INSTALLED:-HackGen NF installed}"
+      return 0
+    fi
+    warn "${STR_FONT_HACKGEN_FAILED:-Failed to install HackGen NF}"
+    return 1
+  fi
   _install_font \
     "font-hackgen-nerd" \
     "HackGen*NF*.ttf" \
@@ -281,6 +304,19 @@ try {
 # Main entry point
 # ---------------------------------------------------------------------------
 setup_fonts() {
+  if _fonts_mdm_managed; then
+    info "${STR_FONT_IBM_INSTALLING:-Installing IBM Plex Mono...}"
+    info "${STR_FONT_HACKGEN_INSTALLING:-Installing HackGen NF...}"
+    if install_fonts_mdm; then
+      ok "${STR_FONT_IBM_INSTALLED:-IBM Plex Mono installed}"
+      ok "${STR_FONT_HACKGEN_INSTALLED:-HackGen NF installed}"
+      return 0
+    fi
+    FONTS_INCOMPLETE+=("IBM-Plex-Mono" "HackGen-NF")
+    warn "${STR_FONT_IBM_FAILED:-Failed to install IBM Plex Mono}"
+    warn "${STR_FONT_HACKGEN_FAILED:-Failed to install HackGen NF}"
+    return 1
+  fi
   install_ibm_plex_mono || FONTS_INCOMPLETE+=("IBM-Plex-Mono")
   install_hackgen_nf    || FONTS_INCOMPLETE+=("HackGen-NF")
 

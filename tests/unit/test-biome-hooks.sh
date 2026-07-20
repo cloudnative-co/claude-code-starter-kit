@@ -28,11 +28,14 @@ fi
 
 _biome_cmd="$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$_biome_hooks")"
 if [[ "$_biome_cmd" == "__HOME__/.claude/hooks/biome-hooks/format-file.sh" ]] \
-  && grep -q "biome check --write" "$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh" \
+  && grep -q 'claude-code-starter-kit/biome/2.5.4' \
+    "$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh" \
+  && grep -q 'managed="$component_root/biome"' \
+    "$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh" \
   && grep -q "|| true" "$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh"; then
-  pass "biome-hooks: hook command uses external script and handles failures"
+  pass "biome-hooks: hook prefers the pinned managed binary and handles failures"
 else
-  fail "biome-hooks: hook command should use external script with graceful failure handling"
+  fail "biome-hooks: managed binary priority or graceful failure handling is missing"
 fi
 
 if jq -e '.permissions.allow | index("Bash(biome:*)") != null' "$_permissions" >/dev/null 2>&1; then
@@ -58,6 +61,7 @@ else
 fi
 
 _tmpdir="$(mktemp -d)"
+_tmpdir="$(builtin cd -P "$_tmpdir" && pwd -P)"
 _input='{"tool_input":{"file_path":"'"$_tmpdir"'/sample.ts"}}'
 printf 'const value=1\n' > "$_tmpdir/sample.ts"
 _script="$PROJECT_DIR/features/biome-hooks/scripts/format-file.sh"
@@ -86,5 +90,89 @@ else
   fail "biome-hooks: hook should remain successful when biome fails"
 fi
 
+_saved_home="$HOME"
+export HOME="$_tmpdir/home"
+export BIOME_MANAGED_LOG="$_tmpdir/managed.log"
+export BIOME_FALLBACK_LOG="$_tmpdir/fallback.log"
+_managed_biome="$HOME/.local/lib/claude-code-starter-kit/biome/2.5.4/biome"
+mkdir -p "${_managed_biome%/*}"
+cat > "$_managed_biome" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" > "$BIOME_MANAGED_LOG"
+exit 0
+EOF
+chmod +x "$_managed_biome"
+_managed_biome_sha="$(/usr/bin/shasum -a 256 "$_managed_biome" | /usr/bin/awk '{print $1}')"
+cat > "$_tmpdir/biome" <<'EOF'
+#!/bin/bash
+: > "$BIOME_FALLBACK_LOG"
+exit 0
+EOF
+chmod +x "$_tmpdir/biome"
+if printf '%s' "$_input" | BIOME_TEST_SHA="$_managed_biome_sha" \
+  bash -c 'source "$1"; _ccsk_biome_expected_sha256() { printf "%s" "$BIOME_TEST_SHA"; }; _ccsk_biome_main' \
+    _ "$_script" >/dev/null \
+  && grep -q 'check --write' "$BIOME_MANAGED_LOG" \
+  && [[ ! -e "$BIOME_FALLBACK_LOG" ]]; then
+  pass "biome-hooks: pinned managed binary wins over a PATH shadow"
+else
+  fail "biome-hooks: PATH shadow replaced the pinned managed binary"
+fi
+
+rm -f "$_managed_biome" "$BIOME_FALLBACK_LOG"
+ln -s "$_tmpdir/biome" "$_managed_biome"
+if printf '%s' "$_input" | bash "$_script" >/dev/null \
+  && [[ ! -e "$BIOME_FALLBACK_LOG" ]]; then
+  pass "biome-hooks: symlinked managed binary is rejected without PATH fallback"
+else
+  fail "biome-hooks: symlinked managed binary reached a PATH shadow"
+fi
+
+rm -f "$_managed_biome" "$BIOME_FALLBACK_LOG"
+printf '#!/bin/bash\nexit 0\n' > "$_managed_biome"
+chmod 755 "$_managed_biome"
+if printf '%s' "$_input" | bash "$_script" >/dev/null \
+  && [[ ! -e "$BIOME_FALLBACK_LOG" ]]; then
+  pass "biome-hooks: managed binary with the wrong digest is rejected"
+else
+  fail "biome-hooks: managed binary digest was not enforced"
+fi
+
+_managed_biome_sha="$(/usr/bin/shasum -a 256 "$_managed_biome" | /usr/bin/awk '{print $1}')"
+chmod 777 "$_managed_biome"
+if printf '%s' "$_input" | BIOME_TEST_SHA="$_managed_biome_sha" \
+  bash -c 'source "$1"; _ccsk_biome_expected_sha256() { printf "%s" "$BIOME_TEST_SHA"; }; _ccsk_biome_main' \
+    _ "$_script" >/dev/null \
+  && [[ ! -e "$BIOME_FALLBACK_LOG" ]]; then
+  pass "biome-hooks: writable managed binary is rejected"
+else
+  fail "biome-hooks: managed binary mode was not enforced"
+fi
+
+rm -f "$_managed_biome" "$BIOME_FALLBACK_LOG"
+if printf '%s' "$_input" | bash "$_script" >/dev/null \
+  && [[ ! -e "$BIOME_FALLBACK_LOG" ]]; then
+  pass "biome-hooks: partial managed component does not fall through to PATH"
+else
+  fail "biome-hooks: partial managed component executed a PATH shadow"
+fi
+
+_biome_receipt="$_tmpdir/receipt-current-user.json"
+: > "$_biome_receipt"
+_biome_resolved="$(
+  # shellcheck source=/dev/null
+  source "$_script"
+  _ccsk_biome_receipt_path() { printf '%s' "$_biome_receipt"; }
+  _ccsk_biome_command 2>/dev/null || true
+)"
+if [[ -z "$_biome_resolved" && ! -e "$BIOME_FALLBACK_LOG" ]]; then
+  pass "biome-hooks: current user's root receipt keeps a missing component fail-closed"
+else
+  fail "biome-hooks: authoritative managed receipt was ignored"
+fi
+
+export HOME="$_saved_home"
 export PATH="$_saved_path"
+unset BIOME_MANAGED_LOG BIOME_FALLBACK_LOG _biome_receipt _biome_resolved \
+  _managed_biome_sha
 rm -rf "$_tmpdir"

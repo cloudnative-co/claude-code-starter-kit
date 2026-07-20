@@ -18,15 +18,11 @@ printf '# Claude\n' > "$_dr_real/CLAUDE.md"
 printf 'secret transcript\n' > "$_dr_real/projects/project-a/session.jsonl"
 printf '#!/bin/bash\n' > "$_dr_real/hooks/example/hook.sh"
 printf '{"env":{"A":"1"}}\n' > "$_dr_real/.starter-kit-snapshot/settings.json"
-cat > "$_dr_real/.starter-kit-manifest.json" <<EOF
-{
-  "version": "2",
-  "files": [
-    "$_dr_real/settings.json",
-    "$_dr_real/hooks/example/hook.sh"
-  ]
-}
-EOF
+jq -n \
+  --arg settings "$_dr_real/settings.json" \
+  --arg hook "$_dr_real/hooks/example/hook.sh" \
+  '{version: "2", files: [$settings, $hook]}' \
+  > "$_dr_real/.starter-kit-manifest.json"
 
 _dryrun_init "$_dr_real"
 
@@ -74,15 +70,11 @@ mkdir -p "$_dr_real_managed/agents" "$_dr_real_managed/hooks/example"
 printf '{"env":{"C":"3"}}\n' > "$_dr_real_managed/settings.json"
 printf '#!/bin/bash\n' > "$_dr_real_managed/hooks/example/hook.sh"
 printf '# user-added agent outside manifest\n' > "$_dr_real_managed/agents/unmanaged.md"
-cat > "$_dr_real_managed/.starter-kit-manifest.json" <<EOF
-{
-  "version": "2",
-  "files": [
-    "$_dr_real_managed/settings.json",
-    "$_dr_real_managed/hooks/example/hook.sh"
-  ]
-}
-EOF
+jq -n \
+  --arg settings "$_dr_real_managed/settings.json" \
+  --arg hook "$_dr_real_managed/hooks/example/hook.sh" \
+  '{version: "2", files: [$settings, $hook]}' \
+  > "$_dr_real_managed/.starter-kit-manifest.json"
 
 _dryrun_init "$_dr_real_managed"
 

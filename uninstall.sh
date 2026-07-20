@@ -100,27 +100,423 @@ _safe_cleanup_path() {
   esac
 }
 
-_remove_cleanup_path() {
-  local path="$1" match
-  [[ -n "$path" ]] || return 0
-  if [[ "$path" == *'*'* ]]; then
-    case "$path" in
-      "$CLAUDE_DIR/tmp/tool-count-"*)
-        # compgen -G expands the glob without word splitting, so paths with
-        # spaces (e.g. Git Bash "C:/Users/First Last") are handled safely.
-        while IFS= read -r match; do
-          [[ -n "$match" ]] || continue
-          rm -f "$match" 2>/dev/null || true
-        done < <(compgen -G "$path" 2>/dev/null || true)
-        ;;
-      *) warn "Skipping unsupported cleanup glob: $path" ;;
+_remove_tracked_file() {
+  # Return 0=handled, 2=absent, 1=unsafe/failed. Operations stay bound to the
+  # verified parent inode; final-leaf symlinks are unlinked, never followed.
+  local path="$1" relative root_physical current_physical expected_physical
+  local component leaf managed_tmp="" rc=0 index
+  local -a components=()
+
+  case "$path" in
+    "$CLAUDE_DIR"/*) relative="${path#"$CLAUDE_DIR"/}" ;;
+    *) return 1 ;;
+  esac
+  [[ -n "$relative" ]] || return 1
+  case "/$relative/" in
+    *//*|*/./*|*/../*) return 1 ;;
+  esac
+
+  [[ -e "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]] || return 2
+  [[ -d "$CLAUDE_DIR" && ! -L "$CLAUDE_DIR" ]] || return 1
+  root_physical="$(cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P)" || return 1
+
+  IFS='/' read -r -a components < <(printf '%s\n' "$relative")
+  [[ "${#components[@]}" -gt 0 ]] || return 1
+  leaf="${components[${#components[@]} - 1]}"
+  [[ -n "$leaf" ]] || return 1
+
+  (
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical" ]] || exit 1
+    expected_physical="$root_physical"
+
+    for ((index = 0; index < ${#components[@]} - 1; index++)); do
+      component="${components[$index]}"
+      [[ -e "./$component" || -L "./$component" ]] || exit 2
+      [[ -d "./$component" && ! -L "./$component" ]] || exit 1
+      cd -P "./$component" 2>/dev/null || exit 1
+      current_physical="$(pwd -P)" || exit 1
+      expected_physical="$expected_physical/$component"
+      [[ "$current_physical" == "$expected_physical" ]] || exit 1
+    done
+
+    [[ -f "./$leaf" || -L "./$leaf" ]] || exit 2
+    if [[ -L "./$leaf" ]]; then
+      rm -f "./$leaf" 2>/dev/null || exit 1
+    elif [[ "$leaf" == "CLAUDE.md" ]]; then
+      if grep -qF "<!-- BEGIN STARTER-KIT-MANAGED -->" "./$leaf" 2>/dev/null; then
+        managed_tmp="$(mktemp "./.${leaf}.tmp.XXXXXX")" || exit 1
+        if ! awk '/<!-- BEGIN STARTER-KIT-MANAGED -->/{skip=1} /<!-- END STARTER-KIT-MANAGED -->/{skip=0; next} !skip' \
+          "./$leaf" > "$managed_tmp"; then
+          rm -f "$managed_tmp" 2>/dev/null || true
+          exit 1
+        fi
+        if [[ -z "$(sed '/^[[:space:]]*$/d' "$managed_tmp" 2>/dev/null)" ]]; then
+          rm -f "./$leaf" "$managed_tmp" 2>/dev/null || exit 1
+        else
+          mv "$managed_tmp" "./$leaf" || exit 1
+        fi
+      else
+        rm -f "./$leaf" 2>/dev/null || exit 1
+      fi
+    else
+      rm -f "./$leaf" 2>/dev/null || exit 1
+    fi
+  ) || rc=$?
+  return "$rc"
+}
+
+_managed_root_physical() {
+  [[ -e "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]] || return 0
+  [[ -d "$CLAUDE_DIR" && ! -L "$CLAUDE_DIR" ]] || return 1
+  cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P
+}
+
+_wce_uninstall_lock_token=""
+_wce_uninstall_pending_signal=0
+
+_wce_uninstall_lock_owner_matches() { # <token> [lock-dir]
+  local token="$1"
+  local lock_dir="${2:-$CLAUDE_DIR/skills/web-content-extraction/logs/.update.lock}"
+  local owner_file="$lock_dir/owner" owner bytes
+  case "$token" in ""|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  [[ -d "$lock_dir" && ! -L "$lock_dir" ]] || return 1
+  [[ -f "$owner_file" && ! -L "$owner_file" ]] || return 1
+  bytes="$(LC_ALL=C wc -c < "$owner_file" 2>/dev/null | tr -d '[:space:]')" \
+    || return 1
+  [[ "$bytes" == "$((${#token} + 1))" ]] || return 1
+  IFS= read -r owner < "$owner_file" || return 1
+  [[ "$owner" == "$token" ]]
+}
+
+_wce_uninstall_lock_owner_only() { # <lock-dir>
+  local lock_dir="$1" entry count=0
+  while IFS= read -r -d '' entry; do
+    [[ "$entry" == "$lock_dir/owner" ]] || return 1
+    count=$((count + 1))
+  done < <(find "$lock_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  [[ "$count" -eq 1 ]]
+}
+
+_wce_uninstall_lock_acquire() {
+  local skills="$CLAUDE_DIR/skills"
+  local skill="$skills/web-content-extraction"
+  local logs="$skill/logs"
+  local lock="$logs/.update.lock" now token acquire_pid
+  local acquire_rc=0 wait_rc=0
+  [[ -e "$skills" || -L "$skills" ]] || return 0
+  [[ -d "$skills" && ! -L "$skills" ]] || return 1
+  [[ -e "$skill" || -L "$skill" ]] || return 0
+  [[ -d "$skill" && ! -L "$skill" ]] || return 1
+  now="$(date +%s)" || return 1
+  [[ "$now" =~ ^[0-9]+$ ]] || return 1
+  token="starter-kit-uninstall-$$-${RANDOM}-$now"
+  _WCE_UNINSTALL_ACQUIRE_WAITER_PID="$$"
+  export _WCE_UNINSTALL_ACQUIRE_WAITER_PID
+  (
+    trap '' HUP INT TERM
+    : "$_WCE_UNINSTALL_ACQUIRE_WAITER_PID"
+    [[ -d "$skills" && ! -L "$skills" \
+      && -d "$skill" && ! -L "$skill" ]] || exit 1
+    if [[ -e "$logs" || -L "$logs" ]]; then
+      [[ -d "$logs" && ! -L "$logs" ]] || exit 1
+    else
+      mkdir "$logs" || exit 1
+    fi
+    # Atomic directory creation never opens an existing FIFO, symlink, or
+    # device. Existing state is never reclaimed implicitly, regardless of age.
+    (umask 077; mkdir "$lock") 2>/dev/null || exit 1
+    if ! (umask 077; printf '%s\n' "$token" > "$lock/owner") 2>/dev/null; then
+      rmdir "$lock" 2>/dev/null || true
+      exit 1
+    fi
+  ) &
+  acquire_pid=$!
+  while true; do
+    wait_rc=0
+    wait "$acquire_pid" 2>/dev/null || wait_rc=$?
+    case "$wait_rc" in
+      129|130|143) continue ;;
+      *) acquire_rc="$wait_rc"; break ;;
     esac
+  done
+  [[ "$acquire_rc" -eq 0 ]] || return 1
+  _wce_uninstall_lock_owner_matches "$token" "$lock" || return 1
+  _wce_uninstall_lock_owner_only "$lock" || return 1
+  _wce_uninstall_lock_token="$token"
+  return 0
+}
+
+_wce_uninstall_lock_release() {
+  local skill="$CLAUDE_DIR/skills/web-content-extraction"
+  local logs="$skill/logs"
+  local lock="$logs/.update.lock"
+  local quarantine="${lock}.release-${_wce_uninstall_lock_token}"
+  [[ -n "$_wce_uninstall_lock_token" ]] || return 0
+  [[ -d "$skill" && ! -L "$skill" && -d "$logs" && ! -L "$logs" ]] || return 1
+
+  if [[ -e "$quarantine" || -L "$quarantine" ]]; then
+    _wce_uninstall_lock_owner_matches \
+      "$_wce_uninstall_lock_token" "$quarantine" || return 1
+    _wce_uninstall_lock_owner_only "$quarantine" || return 1
+  else
+    _wce_uninstall_lock_owner_matches \
+      "$_wce_uninstall_lock_token" "$lock" || return 1
+    _wce_uninstall_lock_owner_only "$lock" || return 1
+    mv "$lock" "$quarantine" || return 1
+  fi
+
+  if ! _wce_uninstall_lock_owner_matches \
+      "$_wce_uninstall_lock_token" "$quarantine" \
+    || ! _wce_uninstall_lock_owner_only "$quarantine"; then
+    if [[ ! -e "$lock" && ! -L "$lock" ]]; then
+      mv "$quarantine" "$lock" 2>/dev/null || true
+    fi
+    return 1
+  fi
+  if ! rm -f "$quarantine/owner"; then
+    [[ ! -e "$quarantine/owner" && ! -L "$quarantine/owner" ]] || return 1
+  fi
+  rmdir "$quarantine" || return 1
+  rmdir "$logs" "$skill" 2>/dev/null || true
+}
+
+_wce_uninstall_defer_signal() {
+  _wce_uninstall_pending_signal="$1"
+}
+
+_wce_uninstall_on_signal() {
+  _wce_uninstall_pending_signal="$1"
+  exit "$1"
+}
+
+_wce_uninstall_lock_release_wait() {
+  local release_pid release_rc=0 wait_rc=0
+  [[ -n "$_wce_uninstall_lock_token" ]] || return 0
+  _WCE_UNINSTALL_RELEASE_WAITER_PID="$$"
+  export _WCE_UNINSTALL_RELEASE_WAITER_PID
+  (
+    trap '' HUP INT TERM
+    _wce_uninstall_lock_release
+  ) &
+  release_pid=$!
+  while true; do
+    wait_rc=0
+    wait "$release_pid" 2>/dev/null || wait_rc=$?
+    case "$wait_rc" in
+      129|130|143) continue ;;
+      *) release_rc="$wait_rc"; break ;;
+    esac
+  done
+  if [[ "$release_rc" -eq 0 ]]; then
+    _wce_uninstall_lock_token=""
+    return 0
+  fi
+  return 1
+}
+
+_wce_uninstall_lock_cleanup() {
+  local cleanup_rc=0 pending
+  trap '_wce_uninstall_defer_signal 129' HUP
+  trap '_wce_uninstall_defer_signal 130' INT
+  trap '_wce_uninstall_defer_signal 143' TERM
+  _wce_uninstall_lock_release_wait || cleanup_rc=1
+  trap '_wce_uninstall_on_signal 129' HUP
+  trap '_wce_uninstall_on_signal 130' INT
+  trap '_wce_uninstall_on_signal 143' TERM
+  pending="$_wce_uninstall_pending_signal"
+  [[ "$pending" -eq 0 ]] || exit "$pending"
+  return "$cleanup_rc"
+}
+
+_wce_uninstall_finish() {
+  local cleanup_rc=$? release_rc=0
+  trap - EXIT
+  trap '_wce_uninstall_defer_signal 129' HUP
+  trap '_wce_uninstall_defer_signal 130' INT
+  trap '_wce_uninstall_defer_signal 143' TERM
+  _wce_uninstall_lock_release_wait || release_rc=1
+  trap - HUP INT TERM
+  [[ "$_wce_uninstall_pending_signal" -eq 0 ]] \
+    || cleanup_rc="$_wce_uninstall_pending_signal"
+  if [[ "$release_rc" -ne 0 && "$cleanup_rc" -eq 0 ]]; then
+    cleanup_rc=1
+  fi
+  exit "$cleanup_rc"
+}
+
+_remove_tool_count_files() {
+  local root_physical current_physical match rc=0
+  root_physical="$(_managed_root_physical)" || return 1
+  [[ -n "$root_physical" ]] || return 0
+  (
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical" ]] || exit 1
+    [[ -e ./tmp || -L ./tmp ]] || exit 0
+    [[ -d ./tmp && ! -L ./tmp ]] || exit 1
+    cd -P ./tmp 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical/tmp" ]] || exit 1
+    shopt -s nullglob
+    for match in ./tool-count-*; do
+      [[ -f "$match" || -L "$match" ]] || continue
+      rm -f "$match" 2>/dev/null || exit 1
+    done
+  ) || rc=$?
+  [[ "$rc" -eq 0 ]]
+}
+
+_remove_empty_hook_dirs() {
+  local root_physical current_physical entry name contents rc=0
+  root_physical="$(_managed_root_physical)" || return 1
+  [[ -n "$root_physical" ]] || return 0
+  (
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical" ]] || exit 1
+    [[ -e ./hooks || -L ./hooks ]] || exit 0
+    [[ -d ./hooks && ! -L ./hooks ]] || exit 1
+    cd -P ./hooks 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical/hooks" ]] || exit 1
+    shopt -s nullglob
+    for entry in ./*; do
+      [[ -d "$entry" && ! -L "$entry" ]] || continue
+      name="${entry#./}"
+      cd -P "$entry" 2>/dev/null || exit 1
+      current_physical="$(pwd -P)" || exit 1
+      [[ "$current_physical" == "$root_physical/hooks/$name" ]] || exit 1
+      contents="$(ls -A . 2>/dev/null)" || exit 1
+      cd -P .. 2>/dev/null || exit 1
+      current_physical="$(pwd -P)" || exit 1
+      [[ "$current_physical" == "$root_physical/hooks" ]] || exit 1
+      [[ -n "$contents" ]] || rmdir "./$name" 2>/dev/null || exit 1
+    done
+    contents="$(ls -A . 2>/dev/null)" || exit 1
+    cd -P .. 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical" ]] || exit 1
+    [[ -n "$contents" ]] || rmdir ./hooks 2>/dev/null || exit 1
+  ) || rc=$?
+  [[ "$rc" -eq 0 ]]
+}
+
+_remove_wce_runtime_path() {
+  # Remove only kit-created runtime leaves. The sibling
+  # .node-modules.pre-mdm.* namespace contains the original activation leaf
+  # preserved during MDM activation (normally a user-owned npm dependency
+  # directory, but a safely replaceable symlink/regular file can also land
+  # there). It is deliberately never enumerated or traversed here. "all" is
+  # used only to safely interpret the broad cleanup path emitted by older
+  # manifests.
+  local requested="$1" root_physical="" current_physical="" rc=0
+  case "$requested" in
+    node_modules|logs|all) ;;
+    *) return 1 ;;
+  esac
+
+  [[ -e "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]] || return 0
+  if [[ ! -d "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]]; then
+    return 1
+  fi
+  root_physical="$(cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P)" || return 1
+
+  # Descend one real component at a time and bind cleanup to the resulting
+  # working-directory inode. A concurrently substituted symlink resolves to a
+  # different physical path and is rejected before either runtime leaf is
+  # removed. Final-leaf symlinks are unlinked, never followed.
+  (
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical" ]] || exit 1
+
+    [[ -e skills || -L skills ]] || exit 0
+    [[ -d skills && ! -L skills ]] || exit 1
+    cd -P skills 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical/skills" ]] || exit 1
+
+    [[ -e web-content-extraction || -L web-content-extraction ]] || exit 0
+    [[ -d web-content-extraction && ! -L web-content-extraction ]] || exit 1
+    cd -P web-content-extraction 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical/skills/web-content-extraction" ]] \
+      || exit 1
+
+    case "$requested" in
+      node_modules|all) rm -rf ./node_modules 2>/dev/null || exit 1 ;;
+    esac
+    case "$requested" in
+      logs|all)
+        if [[ -n "$_wce_uninstall_lock_token" ]]; then
+          [[ -d ./logs && ! -L ./logs ]] || exit 1
+          cd -P ./logs 2>/dev/null || exit 1
+          current_physical="$(pwd -P)" || exit 1
+          [[ "$current_physical" == "$root_physical/skills/web-content-extraction/logs" ]] || exit 1
+          GLOBIGNORE='./.update.lock'; shopt -s dotglob nullglob
+          rm -rf ./* 2>/dev/null || exit 1
+          cd -P .. 2>/dev/null || exit 1
+        else
+          rm -rf ./logs 2>/dev/null || exit 1
+        fi
+        ;;
+    esac
+
+    # Remove the skill directory only when tracked-file cleanup and the two
+    # runtime removals left it genuinely empty. A preserved pre-MDM backup (or
+    # any other user file) keeps the directory in place.
+    cd .. || exit 1
+    rmdir ./web-content-extraction 2>/dev/null || true
+  ) || rc=$?
+  [[ "$rc" -eq 0 ]]
+}
+
+_remove_cleanup_path() {
+  local path="$1" normalized
+  [[ -n "$path" ]] || return 0
+  normalized="$path"
+  while [[ "$normalized" == */ ]]; do
+    normalized="${normalized%/}"
+  done
+
+  # Current manifests list only the two disposable WCE runtime leaves. Older
+  # manifests listed the complete skill directory; reinterpret that exact
+  # legacy value as selective cleanup so pre-MDM backups survive upgrades and
+  # uninstall. Never send these paths through the generic recursive remover.
+  case "$normalized" in
+    "$CLAUDE_DIR/skills/web-content-extraction/node_modules")
+      _remove_wce_runtime_path node_modules \
+        || { warn "Keeping web-content-extraction runtime under an unsafe path"; _uninstall_cleanup_failed=true; }
+      return 0
+      ;;
+    "$CLAUDE_DIR/skills/web-content-extraction/logs")
+      _remove_wce_runtime_path logs \
+        || { warn "Keeping web-content-extraction logs under an unsafe path"; _uninstall_cleanup_failed=true; }
+      return 0
+      ;;
+    "$CLAUDE_DIR/skills/web-content-extraction")
+      _remove_wce_runtime_path all \
+        || { warn "Keeping legacy web-content-extraction runtime under an unsafe path"; _uninstall_cleanup_failed=true; }
+      return 0
+      ;;
+  esac
+  if [[ "$path" == *'*'* ]]; then
+    if [[ "$path" == "$CLAUDE_DIR/tmp/tool-count-*" ]]; then
+      _remove_tool_count_files \
+        || { warn "Keeping tool-count runtime under an unsafe path"; _uninstall_cleanup_failed=true; }
+    else
+      warn "Skipping unsupported cleanup glob: $path"
+      _uninstall_cleanup_failed=true
+    fi
     return 0
   fi
   if _safe_cleanup_path "$path"; then
-    rm -rf "$path" 2>/dev/null || true
+    rm -rf "$path" 2>/dev/null || _uninstall_cleanup_failed=true
   else
     warn "Skipping unsafe cleanup path: $path"
+    _uninstall_cleanup_failed=true
   fi
 }
 
@@ -293,38 +689,49 @@ case "$confirm" in
     exit 0
     ;;
 esac
-
+if ! ( _managed_root_physical >/dev/null ); then
+  warn "Unsafe managed root; uninstall made no changes: $CLAUDE_DIR"
+  exit 1
+fi
+trap '_wce_uninstall_finish' EXIT
+trap '_wce_uninstall_defer_signal 129' HUP
+trap '_wce_uninstall_defer_signal 130' INT
+trap '_wce_uninstall_defer_signal 143' TERM
+_wce_uninstall_acquire_rc=0
+_wce_uninstall_lock_acquire || _wce_uninstall_acquire_rc=$?
+if [[ "$_wce_uninstall_pending_signal" -ne 0 ]]; then
+  exit "$_wce_uninstall_pending_signal"
+fi
+trap '_wce_uninstall_on_signal 129' HUP
+trap '_wce_uninstall_on_signal 130' INT
+trap '_wce_uninstall_on_signal 143' TERM
+if [[ "$_wce_uninstall_pending_signal" -ne 0 ]]; then
+  exit "$_wce_uninstall_pending_signal"
+fi
+if [[ "$_wce_uninstall_acquire_rc" -ne 0 ]]; then
+  warn "Existing or unsafe web-content-extraction update lock; verify and remove it manually before retrying"
+  exit 1
+fi
 # ---------------------------------------------------------------------------
 # Remove tracked files
 # ---------------------------------------------------------------------------
 removed=0
 skipped=0
+_uninstall_cleanup_failed=false
 
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
-  if [[ -f "$file" ]]; then
-    # CLAUDE.md: remove kit section only, preserve user content
-    if [[ "$(basename "$file")" == "CLAUDE.md" ]]; then
-      if grep -qF "<!-- BEGIN STARTER-KIT-MANAGED -->" "$file" 2>/dev/null; then
-        # Remove kit section (between markers inclusive)
-        # Use awk for cross-platform safety (BSD sed address ranges are fragile)
-        awk '/<!-- BEGIN STARTER-KIT-MANAGED -->/{skip=1} /<!-- END STARTER-KIT-MANAGED -->/{skip=0; next} !skip' "$file" > "${file}.tmp"
-        mv "${file}.tmp" "$file"
-        # If only whitespace remains, remove the file entirely
-        if [[ -z "$(sed '/^[[:space:]]*$/d' "$file" 2>/dev/null)" ]]; then
-          rm -f "$file"
-        fi
-      else
-        rm -f "$file"
-      fi
-      removed=$((removed + 1))
-    else
-      rm -f "$file"
-      removed=$((removed + 1))
-    fi
-  else
-    skipped=$((skipped + 1))
-  fi
+  _tracked_remove_rc=0
+  _remove_tracked_file "$file" || _tracked_remove_rc=$?
+  case "$_tracked_remove_rc" in
+    0) removed=$((removed + 1)) ;;
+    2) skipped=$((skipped + 1)) ;;
+    *)
+      warn "Skipping tracked file under an unsafe managed path: $file"
+      _uninstall_cleanup_failed=true
+      skipped=$((skipped + 1))
+      ;;
+  esac
 done < <(_json_files "$MANIFEST")
 
 # Legacy cleanup for pre-manifest-v2 releases that deployed AGENTS.md.
@@ -346,7 +753,8 @@ done < <(_json_cleanup_paths "$MANIFEST")
 
 if [[ "$_cleanup_paths_seen" != "true" ]]; then
   for _cleanup_path in \
-    "$CLAUDE_DIR/skills/web-content-extraction" \
+    "$CLAUDE_DIR/skills/web-content-extraction/node_modules" \
+    "$CLAUDE_DIR/skills/web-content-extraction/logs" \
     "$CLAUDE_DIR/.starter-kit-update.lock" \
     "$CLAUDE_DIR/.starter-kit-update-status" \
     "$CLAUDE_DIR/.starter-kit-update-cache" \
@@ -361,25 +769,31 @@ if [[ "$_cleanup_paths_seen" != "true" ]]; then
   done
 fi
 
-# Remove manifest itself after reading manifest-declared cleanup paths.
-rm -f "$MANIFEST"
+if ! _wce_uninstall_lock_cleanup; then
+  warn "Failed to release the web-content-extraction update lock"
+  _uninstall_cleanup_failed=true
+fi
 
 # ---------------------------------------------------------------------------
 # Clean up empty directories
 # ---------------------------------------------------------------------------
-for dir in agents rules commands skills memory hooks; do
+for dir in agents rules commands skills memory; do
   target="$CLAUDE_DIR/$dir"
-  if [[ -d "$target" ]] && [[ -z "$(ls -A "$target" 2>/dev/null)" ]]; then
+  if [[ -d "$target" && ! -L "$target" ]] \
+    && [[ -z "$(ls -A "$target" 2>/dev/null)" ]]; then
     rmdir "$target" 2>/dev/null || true
   fi
 done
 
-# Clean hooks subdirectories
-for dir in "$CLAUDE_DIR"/hooks/*/; do
-  if [[ -d "$dir" ]] && [[ -z "$(ls -A "$dir" 2>/dev/null)" ]]; then
-    rmdir "$dir" 2>/dev/null || true
-  fi
-done
+_remove_empty_hook_dirs \
+  || { warn "Keeping hook directories under an unsafe path"; _uninstall_cleanup_failed=true; }
+
+if [[ "$_uninstall_cleanup_failed" == "true" ]]; then
+  warn "Uninstall incomplete; manifest kept for retry: $MANIFEST"
+  exit 1
+fi
+
+rm -f "$MANIFEST"
 
 [[ ! -f "$HOME/.claude-starter-kit.conf" ]] && ok "$STR_REMOVED_CONFIG"
 
@@ -410,7 +824,7 @@ fi
 # suffix).
 _claude_plugin_list_has() {
   local _list="$1" _name="$2"
-  awk -v name="$_name" '
+  printf '%s\n' "$_list" | awk -v name="$_name" '
     {
       line = $0
       sub(/^[[:space:]]+/, "", line)
@@ -424,7 +838,7 @@ _claude_plugin_list_has() {
       if (candidate == name) { found = 1 }
     }
     END { exit found ? 0 : 1 }
-  ' <<< "$_list"
+  '
 }
 
 if command -v claude &>/dev/null; then

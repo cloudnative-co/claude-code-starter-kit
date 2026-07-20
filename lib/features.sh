@@ -37,6 +37,7 @@ declare -g -A _FEATURE_FLAGS=(
 # Features that have deploy scripts in features/<name>/scripts/
 # ---------------------------------------------------------------------------
 declare -g -A _FEATURE_HAS_SCRIPTS=(
+  [safety-net]=true
   [doc-blocker]=true
   [tmux-hooks]=true
   [prettier-hooks]=true

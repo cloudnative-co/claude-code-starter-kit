@@ -34,17 +34,26 @@ inject_feature() {
 
   local marker="{{FEATURE:${feature_name}}}"
   local partial_content
-  partial_content="$(< "$partial_file")"
+  partial_content="$(< "$partial_file")" || return 1
 
-  if ! grep -qF "$marker" "$file"; then
+  local grep_rc=0
+  grep -qF "$marker" "$file" || grep_rc=$?
+  if [[ "$grep_rc" -eq 1 ]]; then
     warn "Marker '$marker' not found in $file (skipping)"
     return 0
+  elif [[ "$grep_rc" -ne 0 ]]; then
+    return 1
   fi
 
   # Use bash string replacement (awk -v cannot handle multi-line content)
-  local file_content
-  file_content="$(< "$file")"
-  printf '%s\n' "${file_content//"$marker"/$partial_content}" > "$file"
+  local file_content tmp_file
+  file_content="$(< "$file")" || return 1
+  tmp_file="$(mktemp)" || return 1
+  _register_tmp "$tmp_file" || return 1
+  printf '%s\n' "${file_content//"$marker"/$partial_content}" > "$tmp_file" || return 1
+  # Authoritative MDM checkout files are read-only.  BSD mv prompts on a TTY
+  # before replacing them unless force mode is explicit.
+  mv -f "$tmp_file" "$file" || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -65,21 +74,21 @@ remove_unresolved() {
   fi
 
   local tmp_file
-  tmp_file="$(mktemp)"
-  _register_tmp "$tmp_file"
+  tmp_file="$(mktemp)" || return 1
+  _register_tmp "$tmp_file" || return 1
 
   case "$mode" in
     delete)
       # Remove entire lines containing unresolved markers
-      grep -v '{{[^}]*}}' "$file" > "$tmp_file" || true
+      _awk '!/\{\{[^}]*\}\}/' "$file" > "$tmp_file" || return 1
       ;;
     replace|*)
       # Replace markers with empty strings, keep lines
-      _sed 's/{{[^}]*}}//g' "$file" > "$tmp_file"
+      _sed 's/{{[^}]*}}//g' "$file" > "$tmp_file" || return 1
       ;;
   esac
 
-  mv "$tmp_file" "$file"
+  mv -f "$tmp_file" "$file" || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -104,8 +113,12 @@ _extract_kit_section() {
   fi
 
   # Warn on multiple marker pairs
-  local count
-  count="$(grep -cF "$_KIT_MARKER_BEGIN" "$file" 2>/dev/null)" || count=0
+  local count count_rc=0
+  count="$(grep -cF "$_KIT_MARKER_BEGIN" "$file" 2>/dev/null)" || count_rc=$?
+  if [[ "$count_rc" -gt 1 ]]; then
+    return 1
+  fi
+  count="${count:-0}"
   if [[ "$count" -gt 1 ]]; then
     warn "Multiple STARTER-KIT-MANAGED marker pairs found in $file — using first pair only"
   fi
@@ -116,7 +129,7 @@ _extract_kit_section() {
     $0 == begin { found = 1 }
     found { print }
     $0 == end && found { exit }
-  ' "$file"
+  ' "$file" || return 1
 }
 
 # _replace_kit_section <file> <new_kit_content_file>
@@ -128,27 +141,27 @@ _replace_kit_section() {
   local new_kit_file="$2"
 
   local tmp_out
-  tmp_out="$(mktemp)"
-  _register_tmp "$tmp_out"
+  tmp_out="$(mktemp)" || return 1
+  _register_tmp "$tmp_out" || return 1
 
   # Phase 1: lines before BEGIN marker
   _awk -v marker="$_KIT_MARKER_BEGIN" '
     { sub(/\r$/, "") }
     $0 == marker { exit }
     { print }
-  ' "$file" > "$tmp_out"
+  ' "$file" > "$tmp_out" || return 1
 
   # Phase 2: new kit content
-  cat "$new_kit_file" >> "$tmp_out"
+  cat "$new_kit_file" >> "$tmp_out" || return 1
 
   # Phase 3: lines after END marker (user section)
   _awk -v marker="$_KIT_MARKER_END" '
     { sub(/\r$/, "") }
     found { print; next }
     $0 == marker { found = 1 }
-  ' "$file" >> "$tmp_out"
+  ' "$file" >> "$tmp_out" || return 1
 
-  mv "$tmp_out" "$file"
+  mv -f "$tmp_out" "$file" || return 1
 }
 
 # ---------------------------------------------------------------------------

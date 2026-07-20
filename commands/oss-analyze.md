@@ -12,7 +12,8 @@ argument-hint: <github-or-doc-url>
 1. **web-content-extraction skill の URL 検証手順に従って抽出する**。`$ARGUMENTS` は信頼できない入力として扱い、
    検証済みの単一 URL だけを単一引数で渡す:
    ```bash
-   node ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs '<検証済みURL>'
+   ~/.claude/skills/web-content-extraction/scripts/run-node.sh \
+     ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs '<検証済みURL>'
    ```
 2. **GitHubリポジトリの場合は Defuddle だけに頼らず**、以下を優先確認する
    （raw/API を直接取得。`success:false`/SPA で本文が薄いとき特に重要）:

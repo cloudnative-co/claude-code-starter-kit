@@ -391,6 +391,18 @@ else
   fail "wizard: _load_plugins should not loop over repeated jq index lookups"
 fi
 
+_wizard_array_transport_safe=true
+for _wizard_source in registry.sh wizard.sh steps.sh; do
+  if grep -Fq '<<<' "$PROJECT_DIR/wizard/$_wizard_source"; then
+    _wizard_array_transport_safe=false
+  fi
+done
+if [[ "$_wizard_array_transport_safe" == "true" ]]; then
+  pass "wizard: array parsing avoids bounded here-string transport"
+else
+  fail "wizard: array parsing should not use bounded here-string transport"
+fi
+
 # ── config key registry (generated lists) ─────────────────────────────────
 
 # Test: every saved key (non-separator) is allowlisted (ALLOWED ⊇ SAVE)

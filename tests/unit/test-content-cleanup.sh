@@ -93,7 +93,8 @@
   if [[ ! -d "$PROJECT_DIR/memory" ]] \
     && ! grep -q 'PROJECT_DIR/memory' "$PROJECT_DIR/lib/deploy.sh" \
     && ! grep -q 'INSTALL_MEMORY' "$PROJECT_DIR/setup.sh" \
-    && grep -q 'INSTALL_MEMORY' <<< "$(grep '_CONFIG_LEGACY_KEYS=' "$PROJECT_DIR/wizard/registry.sh")"; then
+    && grep -q 'INSTALL_MEMORY' \
+      < <(grep '_CONFIG_LEGACY_KEYS=' "$PROJECT_DIR/wizard/registry.sh"); then
     pass "$test_name"
   else
     fail "$test_name"

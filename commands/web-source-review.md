@@ -12,7 +12,8 @@ argument-hint: <url>
 1. **web-content-extraction skill の URL 検証手順に従って抽出する**。`$ARGUMENTS` は信頼できない入力として扱い、
    検証済みの単一 URL だけを単一引数で渡す:
    ```bash
-   node ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs '<検証済みURL>'
+   ~/.claude/skills/web-content-extraction/scripts/run-node.sh \
+     ~/.claude/skills/web-content-extraction/scripts/defuddle-url.mjs '<検証済みURL>'
    ```
 2. `success:false` や `warnings` がある場合は「抽出不完全」と明示し、信頼性評価に反映する。
 3. **本文の要約ではなく、情報源としての信頼性をレビュー**する。

@@ -96,6 +96,36 @@ else
   fail "replace_home_path: missing file returns 1"
 fi
 
+# Test: jq failures propagate even when the function is called from an OR-list
+_tmp="$(mktemp)"
+printf '{"path": "__HOME__/.claude"}' > "$_tmp"
+_before="$(command cat "$_tmp")"
+_rc=0
+jq() { return 73; }
+replace_home_path "$_tmp" || _rc=$?
+unset -f jq
+if [[ "$_rc" -ne 0 ]] && assert_equals "$_before" "$(command cat "$_tmp")"; then
+  pass "replace_home_path: jq failure propagates without changing target"
+else
+  fail "replace_home_path: jq failure propagates without changing target"
+fi
+rm -f "$_tmp"
+
+# Test: mv failures propagate and leave the original file intact
+_tmp="$(mktemp)"
+printf '{"path": "__HOME__/.claude"}' > "$_tmp"
+_before="$(command cat "$_tmp")"
+_rc=0
+mv() { return 73; }
+replace_home_path "$_tmp" || _rc=$?
+unset -f mv
+if [[ "$_rc" -ne 0 ]] && assert_equals "$_before" "$(command cat "$_tmp")"; then
+  pass "replace_home_path: mv failure propagates without changing target"
+else
+  fail "replace_home_path: mv failure propagates without changing target"
+fi
+rm -f "$_tmp"
+
 # ── build_settings_json (base + permissions, no fragments) ────────────────
 
 # Test: build_settings_json merges base and permissions
@@ -115,6 +145,29 @@ if assert_exit_code 0 "$_RF_RC"; then
   fi
 else
   fail "build_settings_json: merges base + permissions"
+fi
+rm -f "$_base" "$_perms" "$_out"
+
+# Test: base merge failures preserve an existing output file
+_base="$(mktemp)"
+_perms="$(mktemp)"
+_out="$(mktemp)"
+printf '{"a": 1}' > "$_base"
+printf '{"b": 2}' > "$_perms"
+printf 'existing output\n' > "$_out"
+_rc=0
+jq() {
+  if [[ "${1:-}" == "-s" ]]; then
+    return 73
+  fi
+  command jq "$@"
+}
+build_settings_json "$_base" "$_perms" "$_out" || _rc=$?
+unset -f jq
+if [[ "$_rc" -ne 0 ]] && assert_equals "existing output" "$(command cat "$_out")"; then
+  pass "build_settings_json: base merge failure preserves existing output"
+else
+  fail "build_settings_json: base merge failure preserves existing output"
 fi
 rm -f "$_base" "$_perms" "$_out"
 
@@ -142,6 +195,34 @@ else
   fail "build_settings_json: merge_deep concatenates hook arrays"
 fi
 rm -f "$_base" "$_perms" "$_out" "$_frag1" "$_frag2"
+
+# Test: fragment merge failures preserve an existing output file
+_base="$(mktemp)"
+_perms="$(mktemp)"
+_out="$(mktemp)"
+_frag="$(mktemp)"
+printf '{"hooks": {}}' > "$_base"
+printf '{}' > "$_perms"
+printf '{"hooks": {"PreToolUse": []}}' > "$_frag"
+printf 'existing output\n' > "$_out"
+_rc=0
+jq() {
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == "--slurpfile" ]]; then
+      return 73
+    fi
+  done
+  command jq "$@"
+}
+build_settings_json "$_base" "$_perms" "$_out" "$_frag" || _rc=$?
+unset -f jq
+if [[ "$_rc" -ne 0 ]] && assert_equals "existing output" "$(command cat "$_out")"; then
+  pass "build_settings_json: fragment merge failure preserves existing output"
+else
+  fail "build_settings_json: fragment merge failure preserves existing output"
+fi
+rm -f "$_base" "$_perms" "$_out" "$_frag"
 
 # Test: merge_deep deep-merges nested objects
 _base="$(mktemp)"
