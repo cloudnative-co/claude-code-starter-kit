@@ -9,6 +9,255 @@ MDM_SYSTEM_PYTHON_OVERRIDE="$("$_MDM_TEST_PYTHON_COMMAND" -I -B -c \
   'import os, sys; print(os.path.realpath(sys.executable))')"
 export MDM_SYSTEM_PYTHON_OVERRIDE
 
+# Keep the process privilege under test separate from the real target-user
+# identity used by ownership-sensitive fixtures.  Root CI selects an existing
+# login account instead of turning UID 0 into a synthetic managed user.
+_MDM_TEST_RUNNER_UID="$(/usr/bin/id -u)"
+_MDM_TEST_TARGET_USER="$(/usr/bin/id -un)"
+_MDM_TEST_TARGET_UID="$_MDM_TEST_RUNNER_UID"
+_MDM_TEST_TARGET_GID="$(/usr/bin/id -g)"
+if [[ "$_MDM_TEST_RUNNER_UID" -eq 0 ]]; then
+  _MDM_TEST_TARGET_RECORD="$("$_MDM_TEST_PYTHON_COMMAND" -I -B - <<'PY'
+import pwd
+
+invalid_shells = {"", "/bin/false", "/usr/bin/false",
+                  "/sbin/nologin", "/usr/sbin/nologin"}
+users = [entry for entry in pwd.getpwall()
+         if 501 <= entry.pw_uid <= 60000
+         and entry.pw_shell not in invalid_shells]
+if users:
+    selected = min(users, key=lambda entry: entry.pw_uid)
+    print(f"{selected.pw_name}\t{selected.pw_uid}\t{selected.pw_gid}")
+PY
+)"
+  IFS=$'\t' read -r _MDM_TEST_TARGET_USER _MDM_TEST_TARGET_UID \
+    _MDM_TEST_TARGET_GID <<< "$_MDM_TEST_TARGET_RECORD"
+elif [[ "$_MDM_TEST_RUNNER_UID" -lt 501 ]]; then
+  printf 'test-mdm-install.sh refuses a non-root runner with UID below 501\n' >&2
+  exit 2
+fi
+_MDM_TEST_TARGET_BOUND_UID="$(/usr/bin/id -u \
+  "$_MDM_TEST_TARGET_USER" 2>/dev/null || true)"
+_MDM_TEST_TARGET_BOUND_GID="$(/usr/bin/id -g \
+  "$_MDM_TEST_TARGET_USER" 2>/dev/null || true)"
+if [[ -z "$_MDM_TEST_TARGET_USER" \
+  || ! "$_MDM_TEST_TARGET_UID" =~ ^[0-9]+$ \
+  || "$_MDM_TEST_TARGET_UID" -lt 501 \
+  || "$_MDM_TEST_TARGET_UID" -gt 60000 \
+  || ! "$_MDM_TEST_TARGET_GID" =~ ^[0-9]+$ \
+  || "$_MDM_TEST_TARGET_BOUND_UID" != "$_MDM_TEST_TARGET_UID" \
+  || "$_MDM_TEST_TARGET_BOUND_GID" != "$_MDM_TEST_TARGET_GID" ]]; then
+  printf 'test-mdm-install.sh requires a real target account with UID 501..60000\n' >&2
+  exit 2
+fi
+
+_MDM_TEST_TMP_ROOT_ORIGINAL_MODE=""
+_MDM_TEST_TMP_ROOT_IDENTITY=""
+_MDM_TEST_TMP_ROOT_OPEN_MODE=""
+_MDM_TEST_TMP_ROOT_MODE_GUARD_PID=""
+_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR=""
+
+_mdm_test_start_tmp_root_mode_guard() {
+  local _wait_ticks=0
+  [[ "$_MDM_TEST_RUNNER_UID" -eq 0 ]] || return 0
+  printf -v _MDM_TEST_TMP_ROOT_OPEN_MODE '%04o' \
+    "$(( _MDM_TEST_TMP_ROOT_ORIGINAL_MODE | 0011 ))"
+  _MDM_TEST_TMP_ROOT_MODE_GUARD_DIR="$(/usr/bin/mktemp -d \
+    "$MDM_TEST_TMP_ROOT/.mdm-install-mode-guard.XXXXXX")" || return 1
+  [[ -d "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR" \
+    && ! -L "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR" \
+    && "$(_mdm_stat_uid "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR" \
+      2>/dev/null || true)" == 0 \
+    && "$(_mdm_mode_normalize "$(_mdm_stat_mode \
+      "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR" 2>/dev/null || true)" \
+      2>/dev/null || true)" == 0700 ]] || return 1
+  /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \
+    /bin/bash --noprofile --norc -c '
+    _parent_pid="$1"
+    _root="$2"
+    _original_mode="$3"
+    _open_mode="$4"
+    _expected_identity="$5"
+    _guard="$6"
+    _identity() {
+      if [[ "$(/usr/bin/uname -s)" == Darwin ]]; then
+        /usr/bin/stat -f "%d:%i:%HT" "$1" 2>/dev/null
+      else
+        /usr/bin/stat -c "%d:%i:%F" "$1" 2>/dev/null
+      fi
+    }
+    _uid() {
+      if [[ "$(/usr/bin/uname -s)" == Darwin ]]; then
+        /usr/bin/stat -f "%u" "$1" 2>/dev/null
+      else
+        /usr/bin/stat -c "%u" "$1" 2>/dev/null
+      fi
+    }
+    _mode() {
+      if [[ "$(/usr/bin/uname -s)" == Darwin ]]; then
+        _raw="$(/usr/bin/stat -f "%Lp" "$1" 2>/dev/null)" || return 1
+      else
+        _raw="$(/usr/bin/stat -c "%a" "$1" 2>/dev/null)" || return 1
+      fi
+      printf "%04d" "$_raw"
+    }
+    _restore() {
+      _restore_rc=0
+      if [[ "$(_identity .)" == "$_expected_identity" \
+        && "$(_uid .)" == 0 ]]; then
+        /bin/chmod "$_original_mode" . || _restore_rc=1
+        [[ "$(_mode .)" == "$_original_mode" ]] || _restore_rc=1
+      else
+        _restore_rc=1
+      fi
+      [[ ! -e "$_guard/ready" ]] || /bin/rmdir "$_guard/ready" \
+        || _restore_rc=1
+      [[ ! -e "$_guard/done" ]] || /bin/rmdir "$_guard/done" \
+        || _restore_rc=1
+      /bin/rmdir "$_guard" || _restore_rc=1
+      return "$_restore_rc"
+    }
+    [[ "$_parent_pid" =~ ^[1-9][0-9]*$ \
+      && "$_root" == /* && -d "$_root" && ! -L "$_root" \
+      && "$_original_mode" =~ ^[0-7]{4}$ \
+      && "$_open_mode" =~ ^[0-7]{4}$ \
+      && "$_guard" == "$_root"/.mdm-install-mode-guard.* ]] \
+      || exit 2
+    builtin cd -P -- "$_root" || exit 2
+    [[ "$PWD" == "$_root" && "$(_identity .)" == "$_expected_identity" \
+      && "$(_uid .)" == 0 && "$(_mode .)" == "$_original_mode" ]] || exit 2
+    trap '\''_exit_rc=$?; trap - EXIT; _restore || _exit_rc=1; exit "$_exit_rc"'\'' EXIT
+    trap "exit 0" HUP INT TERM
+    /bin/chmod go+x . || exit 2
+    [[ "$(_identity .)" == "$_expected_identity" && "$(_uid .)" == 0 \
+      && "$(_mode .)" == "$_open_mode" ]] || exit 2
+    /bin/mkdir "$_guard/ready" || exit 2
+    while [[ ! -d "$_guard/done" ]]; do
+      _current_parent="$(/bin/ps -p "$$" -o ppid= 2>/dev/null \
+        | /usr/bin/tr -d "[:space:]")"
+      [[ "$_current_parent" == "$_parent_pid" ]] || exit 0
+      /bin/sleep 0.05
+    done
+    exit 0
+  ' mdm-mode-guard "$$" "$MDM_TEST_TMP_ROOT" \
+    "$_MDM_TEST_TMP_ROOT_ORIGINAL_MODE" "$_MDM_TEST_TMP_ROOT_OPEN_MODE" \
+    "$_MDM_TEST_TMP_ROOT_IDENTITY" \
+    "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR" >/dev/null 2>&1 &
+  _MDM_TEST_TMP_ROOT_MODE_GUARD_PID=$!
+  while [[ ! -d "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR/ready" \
+    && "$_wait_ticks" -lt 200 ]]; do
+    /bin/sleep 0.01
+    _wait_ticks=$((_wait_ticks + 1))
+  done
+  [[ -d "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR/ready" \
+    && ! -L "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR/ready" \
+    && "$(_mdm_persistent_dir_identity "$MDM_TEST_TMP_ROOT" \
+      2>/dev/null || true)" == "$_MDM_TEST_TMP_ROOT_IDENTITY" \
+    && "$(_mdm_mode_normalize "$(_mdm_stat_mode \
+      "$MDM_TEST_TMP_ROOT" 2>/dev/null || true)" 2>/dev/null || true)" \
+      == "$_MDM_TEST_TMP_ROOT_OPEN_MODE" ]] || return 1
+}
+
+_mdm_test_stop_tmp_root_mode_guard() {
+  local _guard_rc=0
+  [[ "$_MDM_TEST_RUNNER_UID" -eq 0 ]] || return 0
+  [[ "$_MDM_TEST_TMP_ROOT_MODE_GUARD_PID" =~ ^[1-9][0-9]*$ \
+    && -d "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR/ready" \
+    && ! -e "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR/done" ]] || return 1
+  /bin/mkdir "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR/done" || return 1
+  wait "$_MDM_TEST_TMP_ROOT_MODE_GUARD_PID" || _guard_rc=$?
+  if [[ "$(_mdm_persistent_dir_identity "$MDM_TEST_TMP_ROOT" \
+    2>/dev/null || true)" == "$_MDM_TEST_TMP_ROOT_IDENTITY" \
+    && "$(_mdm_stat_uid "$MDM_TEST_TMP_ROOT" 2>/dev/null || true)" == 0 ]]; then
+    /bin/chmod "$_MDM_TEST_TMP_ROOT_ORIGINAL_MODE" "$MDM_TEST_TMP_ROOT" \
+      || _guard_rc=1
+  else
+    _guard_rc=1
+  fi
+  [[ "$_guard_rc" -eq 0 \
+    && "$(_mdm_persistent_dir_identity "$MDM_TEST_TMP_ROOT" \
+      2>/dev/null || true)" == "$_MDM_TEST_TMP_ROOT_IDENTITY" \
+    && "$(_mdm_mode_normalize "$(_mdm_stat_mode \
+      "$MDM_TEST_TMP_ROOT" 2>/dev/null || true)" 2>/dev/null || true)" \
+      == "$_MDM_TEST_TMP_ROOT_ORIGINAL_MODE" \
+    && ! -e "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR" \
+    && ! -L "$_MDM_TEST_TMP_ROOT_MODE_GUARD_DIR" ]]
+}
+
+if [[ "$_MDM_TEST_RUNNER_UID" -eq 0 ]]; then
+  if [[ "${MDM_TEST_TMP_ROOT:-}" != /* || ! -d "$MDM_TEST_TMP_ROOT" \
+    || -L "$MDM_TEST_TMP_ROOT" \
+    || "$(_mdm_stat_uid "$MDM_TEST_TMP_ROOT" 2>/dev/null || true)" != 0 \
+    || "$(builtin cd -P -- "$MDM_TEST_TMP_ROOT" 2>/dev/null \
+      && printf '%s' "$PWD")" != "$MDM_TEST_TMP_ROOT" ]]; then
+    printf 'test-mdm-install.sh requires a root-owned runner MDM_TEST_TMP_ROOT\n' >&2
+    exit 2
+  fi
+  _MDM_TEST_TMP_ROOT_ORIGINAL_MODE="$(_mdm_mode_normalize \
+    "$(_mdm_stat_mode "$MDM_TEST_TMP_ROOT")")"
+  _MDM_TEST_TMP_ROOT_IDENTITY="$(_mdm_persistent_dir_identity \
+    "$MDM_TEST_TMP_ROOT")"
+  if ! _mdm_mode_is_safe "$_MDM_TEST_TMP_ROOT_ORIGINAL_MODE" \
+    || _mdm_has_extended_acl "$MDM_TEST_TMP_ROOT"; then
+    printf 'test-mdm-install.sh requires a safe runner MDM_TEST_TMP_ROOT\n' >&2
+    exit 2
+  fi
+  _mdm_test_start_tmp_root_mode_guard || exit 2
+fi
+
+_mdm_test_target_tmpdir() {
+  local _dir _base _mode
+  if [[ "$_MDM_TEST_RUNNER_UID" -eq 0 ]]; then
+    _base="$MDM_TEST_TMP_ROOT"
+    [[ -d "$_base" && ! -L "$_base" \
+      && "$(builtin cd -P -- "$_base" && printf '%s' "$PWD")" == "$_base" ]] \
+      || return 1
+    _dir="$(/usr/bin/mktemp -d \
+      "$_base/mdm-install-target.XXXXXX")" || return 1
+    _dir="$(builtin cd -P -- "$_dir" && printf '%s' "$PWD")" \
+      || { /bin/rm -rf "$_dir"; return 1; }
+    case "$_dir" in "$_base"/mdm-install-target.*) : ;; *) return 1 ;; esac
+    [[ -d "$_dir" && ! -L "$_dir" \
+      && "$(_mdm_stat_uid "$_dir" 2>/dev/null || true)" == 0 ]] \
+      || { /bin/rm -rf "$_dir"; return 1; }
+    chmod 0755 "$_dir" || { /bin/rm -rf "$_dir"; return 1; }
+    _mode="$(_mdm_mode_normalize "$(_mdm_stat_mode "$_dir")")"
+    [[ "$_mode" == 0755 ]] || { /bin/rm -rf "$_dir"; return 1; }
+  else
+    _dir="$(/usr/bin/mktemp -d)" || return 1
+  fi
+  builtin cd -P -- "$_dir" && printf '%s' "$PWD"
+}
+
+_mdm_test_chown_target() {
+  [[ "$_MDM_TEST_RUNNER_UID" -eq 0 ]] || return 0
+  chown -R "$_MDM_TEST_TARGET_UID:$_MDM_TEST_TARGET_GID" "$@"
+}
+
+_mdm_test_exec_as_target() {
+  local _uid="$1" _user="$2" _home="$3"
+  local -a _target_argv
+  shift 3
+  _target_argv=(
+    /usr/bin/env -i
+    "HOME=$_home"
+    "USER=$_user"
+    "LOGNAME=$_user"
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin
+    LC_ALL=C
+    /bin/sh -c 'umask 022; cd "$HOME" || exit 1; exec "$@"'
+    mdm-target-user
+    "$@"
+  )
+  if [[ "$_MDM_TEST_RUNNER_UID" -eq 0 ]]; then
+    /usr/bin/sudo -n -u "#$_uid" -H "${_target_argv[@]}"
+  elif [[ "$_MDM_TEST_RUNNER_UID" -eq "$_uid" ]]; then
+    "${_target_argv[@]}"
+  else
+    return 1
+  fi
+}
+
 # ── 終了コード定数 ────────────────────────────────────────
 if [[ "$MDM_EXIT_CONFIG" == "50" && "$MDM_EXIT_USER" == "20" ]]; then
   pass "mdm-install: 終了コード定数が定義されている"
@@ -743,12 +992,20 @@ rm -rf "$_tmpd"
 (
   _tmpu="$(mktemp -d)"
   export MDM_UNRESOLVED_RCPT_DIR_OVERRIDE="$_tmpu"
+  # shellcheck disable=SC2034
+  MDM_RCPT_TARGET_USER=""
+  # shellcheck disable=SC2034
+  MDM_RCPT_TARGET_UID=0
+  MDM_RCPT_TARGET_GENERATED_UID=""
   _rc=0
-  ( MDM_LOG_FILE=""; _mdm_fail_unresolved 50 ) >/dev/null 2>&1 || _rc=$?
+  ( MDM_EUID_OVERRIDE="$_MDM_TEST_TARGET_UID" MDM_LOG_FILE="" \
+      _mdm_fail_unresolved 50 ) >/dev/null 2>&1 || _rc=$?
   assert_exit_code 50 "$_rc" "_mdm_fail_unresolved は指定コードで exit" \
     && pass "mdm-install: _mdm_fail_unresolved が指定コードで終了" \
     || fail "mdm-install: _mdm_fail_unresolved の exit code 不一致 (got $_rc)"
-  if assert_json_field "$_tmpu/receipt-_unresolved.json" ".result" "failure" "result=failure" 2>/dev/null; then
+  if jq -e '.result == "failure" and .target_user == ""
+      and .target_uid == 0 and .target_generated_uid == ""' \
+      "$_tmpu/receipt-_unresolved.json" >/dev/null 2>&1; then
     pass "mdm-install: _unresolved レシートが best-effort で書かれる"
   else
     fail "mdm-install: _unresolved レシートが生成されない"
@@ -859,22 +1116,45 @@ rm -rf "$_tmpd"
   _finish_real_fixture() { # <root> <malformed-required|malformed-partial|signal|stderr>
     local _root="$1" _mode="$2"
     PROJECT_DIR="$PROJECT_DIR" MDM_FINISH_ROOT="$_root" \
-      MDM_FINISH_MODE="$_mode" MDM_FINISH_UID="$(/usr/bin/id -u)" \
+      MDM_FINISH_MODE="$_mode" \
+      MDM_FINISH_USER="$_MDM_TEST_TARGET_USER" \
+      MDM_FINISH_UID="$_MDM_TEST_TARGET_UID" \
+      MDM_FINISH_GID="$_MDM_TEST_TARGET_GID" \
       MDM_FINISH_GUID=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE \
       "$BASH" --noprofile --norc -c '
         MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
         _root="$MDM_FINISH_ROOT"
         _home="$_root/home"
         _receipts="$_root/receipts"
+        _user="$MDM_FINISH_USER"
         _uid="$MDM_FINISH_UID"
+        _gid="$MDM_FINISH_GID"
         _guid="$MDM_FINISH_GUID"
+        /bin/chmod 0755 "$_root" || exit 91
         /bin/mkdir -m 700 "$_home" || exit 91
+        if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+          chown "$_uid:$_gid" "$_home" || exit 91
+        fi
         export MDM_SYSTEM_RCPT_DIR_OVERRIDE="$_receipts"
         export MDM_CONFIG_SKIP_OWNER_CHECK=1
+        _mdm_exec_as_user() {
+          local _drop_uid="$1" _drop_user="$2" _drop_home="$3"
+          shift 3
+          if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+            /usr/bin/sudo -n -u "#$_drop_uid" -H /usr/bin/env -i \
+              "HOME=$_drop_home" "USER=$_drop_user" "LOGNAME=$_drop_user" \
+              PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C "$@"
+          else
+            "$@"
+          fi
+        }
+        _MDM_GIT_DROP_UID="$_uid"
+        _MDM_GIT_DROP_USER="$_user"
+        _MDM_GIT_DROP_HOME="$_home"
         _MDM_TRANSACTION_STATE=idle
         _MDM_CLAUDE_TRANSACTION_STATE=idle
         _MDM_PERSISTENT_TRANSACTION_STATE=idle
-        _mdm_transaction_begin jane "$_home" "$_uid" "$_guid" || exit 92
+        _mdm_transaction_begin "$_user" "$_home" "$_uid" "$_guid" || exit 92
         # This receipt/outer-transaction fixture intentionally has no managed
         # leaves outside the Claude and persistent trees.
         _MDM_EXTERNAL_TRANSACTION_STATE=none
@@ -896,7 +1176,7 @@ rm -rf "$_tmpd"
         MDM_RCPT_POLICY_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         MDM_RCPT_COMPONENT_MANIFEST_PATH="$_receipts/components-$_guid.json"
         MDM_RCPT_COMPONENT_MANIFEST_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-        MDM_RCPT_TARGET_USER=jane
+        MDM_RCPT_TARGET_USER="$_user"
         MDM_RCPT_TARGET_UID="$_uid"
         MDM_RCPT_TARGET_GENERATED_UID="$_guid"
         MDM_RCPT_PARTIAL='"'"'[]'"'"'
@@ -918,6 +1198,9 @@ rm -rf "$_tmpd"
             /bin/mkdir -m 700 "$_install" || exit 94
             printf "candidate\n" > "$_install/state" || exit 94
             /bin/chmod 600 "$_install/state" || exit 94
+            if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+              chown -R "$_uid:$_gid" "$_install" || exit 94
+            fi
             _MDM_PERSISTENT_INSTALL_DIR="$_install"
             _MDM_PERSISTENT_STAGE="$_home/.claude-starter-kit.mdm-stage.fixture"
             _MDM_PERSISTENT_TARGET_UID="$_uid"
@@ -937,26 +1220,27 @@ rm -rf "$_tmpd"
         esac
         if [[ "$MDM_FINISH_MODE" == stderr ]]; then
           MDM_EUID_OVERRIDE="$_uid" \
-            _mdm_finish jane "$_home" success 0 2>&-
+            _mdm_finish "$_user" "$_home" success 0 2>&-
         else
           MDM_EUID_OVERRIDE="$_uid" \
-            _mdm_finish jane "$_home" success 0
+            _mdm_finish "$_user" "$_home" success 0
         fi
       '
   }
 
-  _finish_real_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _finish_real_tmp="$(_mdm_test_target_tmpdir)"
+  _finish_receipt_name="receipt-${_MDM_TEST_TARGET_USER}.json"
   _finish_invalid_ok=true
   for _finish_invalid_mode in malformed-required malformed-partial; do
     _finish_case="$_finish_real_tmp/$_finish_invalid_mode"
     /bin/mkdir "$_finish_case"
     _finish_case_rc=0
     _finish_real_fixture "$_finish_case" "$_finish_invalid_mode" \
-      > "$_finish_case/out" 2>&1 || _finish_case_rc=$?
+      >/dev/null 2>&1 || _finish_case_rc=$?
     if [[ "$_finish_case_rc" -ne "$MDM_EXIT_SETUP" ]] \
       || ! jq -e '.result == "failure" and .exit_code == 30
         and .required_components == ["kit"] and .partial == ["receipt"]' \
-        "$_finish_case/receipts/receipt-jane.json" >/dev/null 2>&1 \
+        "$_finish_case/receipts/$_finish_receipt_name" >/dev/null 2>&1 \
       || [[ -e "$_finish_case/home/.claude" \
         || -L "$_finish_case/home/.claude" ]] \
       || /usr/bin/find "$_finish_case/receipts" -maxdepth 1 \
@@ -972,12 +1256,12 @@ rm -rf "$_tmpd"
   /bin/mkdir "$_finish_signal_case"
   _finish_signal_rc=0
   _finish_real_fixture "$_finish_signal_case" signal \
-    > "$_finish_signal_case/out" 2>&1 || _finish_signal_rc=$?
+    >/dev/null 2>&1 || _finish_signal_rc=$?
   _finish_signal_failed="$(/usr/bin/find "$_finish_signal_case/home" \
     -maxdepth 1 -type d -name '.claude.mdm-failed.*' -print -quit)"
   if [[ "$_finish_signal_rc" -eq 143 \
-    && ! -e "$_finish_signal_case/receipts/receipt-jane.json" \
-    && ! -L "$_finish_signal_case/receipts/receipt-jane.json" \
+    && ! -e "$_finish_signal_case/receipts/$_finish_receipt_name" \
+    && ! -L "$_finish_signal_case/receipts/$_finish_receipt_name" \
     && ! -e "$_finish_signal_case/home/.claude" \
     && ! -L "$_finish_signal_case/home/.claude" \
     && -n "$_finish_signal_failed" \
@@ -994,13 +1278,13 @@ rm -rf "$_tmpd"
   /bin/mkdir "$_finish_stderr_case"
   _finish_stderr_rc=0
   _finish_real_fixture "$_finish_stderr_case" stderr \
-    > "$_finish_stderr_case/out" 2>&1 || _finish_stderr_rc=$?
+    >/dev/null 2>&1 || _finish_stderr_rc=$?
   if [[ "$_finish_stderr_rc" -eq 0 \
     && -d "$_finish_stderr_case/home/.claude" \
     && -d "$_finish_stderr_case/home/.claude-starter-kit" \
     && ! -e "$_finish_stderr_case/home/.claude/.claude-starter-kit-mdm-transaction" ]] \
     && jq -e '.result == "success" and .exit_code == 0' \
-      "$_finish_stderr_case/receipts/receipt-jane.json" >/dev/null 2>&1; then
+      "$_finish_stderr_case/receipts/$_finish_receipt_name" >/dev/null 2>&1; then
     pass "mdm-install: commit 後 stderr failure は成功 receipt の exit 0 を保持"
   else
     fail "mdm-install: commit 後 diagnostic failure が成功 status を上書き"
@@ -1140,11 +1424,11 @@ rm -rf "$_tmpd"
 (
   _context_tmp="$(mktemp -d)"
   _context_home="$_context_tmp/home"; mkdir -p "$_context_home"
-  _context_uid="$(/usr/bin/id -u)"
+  _context_uid="$_MDM_TEST_TARGET_UID"
   printf 'unchanged\n' > "$_context_home/sentinel"
   unset KIT_MDM_DRY_RUN KIT_MDM_INSTALL_DIR
   _context_rc=0
-  _mdm_run_user_phase "$_context_uid" "$(/usr/bin/id -un)" "$_context_home" \
+  _mdm_run_user_phase "$_context_uid" "$_MDM_TEST_TARGET_USER" "$_context_home" \
     >/dev/null 2>&1 || _context_rc=$?
   if [[ "$_context_rc" -eq "$MDM_EXIT_CONTEXT" ]] \
     && [[ "$(cat "$_context_home/sentinel")" == unchanged ]] \
@@ -5738,7 +6022,8 @@ _loghome="$_tmpd/Users/jane"; mkdir -p "$_loghome"
   # owner 不一致（非 root 所有）コンポーネントを拒否（owner 検査有効）
   _cd="$_tmpd/chain-owner"; mkdir -p "$_cd/Library/Logs/app"
   chmod 755 "$_cd/Library" "$_cd/Library/Logs" "$_cd/Library/Logs/app"
-  # テスト実行者（非 root）所有なので owner 検査で拒否されるべき
+  # root runner でも最終 component だけを実在する target persona 所有にする。
+  _mdm_test_chown_target "$_cd/Library/Logs/app"
   if _mdm_verify_dir_chain "$_cd/Library/Logs/app" "$_cd/Library/Logs"; then
     fail "mdm-install: 非 root 所有コンポーネントを許容してしまう"
   else
@@ -7008,13 +7293,14 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
 )
 
 (
-  _font_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _font_tmp="$(_mdm_test_target_tmpdir)"
   _font_support="$_font_tmp/support"
   _font_home="$_font_tmp/home"
   _font_dir="$_font_home/Library/Fonts"
   _font_kit="$_font_home/.claude-starter-kit"
   _font_guid="BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF"
-  _font_uid="$(/usr/bin/id -u)"
+  _font_uid="$_MDM_TEST_TARGET_UID"
+  _font_user="$_MDM_TEST_TARGET_USER"
   mkdir -p "$_font_support" "$_font_dir" "$_font_kit"
   chmod 755 "$_font_support"
   printf 'kit\n' > "$_font_kit/setup.sh"
@@ -7023,6 +7309,8 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
     printf 'pinned-fixture\n' > "$_font_dir/$_font_name"
   done < <(_mdm_component_font_expected_inventory)
   printf 'user-extra\n' > "$_font_dir/IBMPlexMono-UserExtra.ttf"
+  _mdm_test_chown_target "$_font_home"
+  _mdm_exec_as_user() { _mdm_test_exec_as_target "$@"; }
   export MDM_SYSTEM_RCPT_DIR_OVERRIDE="$_font_support"
   export MDM_CONFIG_SKIP_OWNER_CHECK=1
   MDM_RCPT_POLICY_SHA256="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -7033,21 +7321,18 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   }
   MDM_REQUIRED_COMPONENTS=(fonts kit)
   _font_attest_rc=0
-  if [[ "$_font_uid" -ge 501 ]]; then
-    _mdm_attest_components test "$_font_home" "$_font_uid" \
-      "$_font_guid" >/dev/null 2>&1 || _font_attest_rc=$?
-  else
-    _font_attest_rc=99
-  fi
+  _mdm_attest_components "$_font_user" "$_font_home" "$_font_uid" \
+    "$_font_guid" >/dev/null 2>&1 || _font_attest_rc=$?
   _font_manifest="$_font_support/components-$_font_guid.json"
   _font_expected_names="$(_mdm_component_font_expected_inventory \
     | /usr/bin/awk '{print $1}' | LC_ALL=C /usr/bin/sort)"
-  _font_actual_names="$(jq -r \
-    '.entries[] | select(.component == "fonts") | .path | split("/")[-1]' \
-    "$_font_manifest" 2>/dev/null | LC_ALL=C /usr/bin/sort)"
-  if [[ "$_font_uid" -lt 501 ]]; then
-    skip "mdm-install: exact20 font manifest" "test UID is below 501"
-  elif [[ "$_font_attest_rc" -eq 0 \
+  _font_actual_names=""
+  if [[ -f "$_font_manifest" && ! -L "$_font_manifest" ]]; then
+    _font_actual_names="$(jq -r \
+      '.entries[] | select(.component == "fonts") | .path | split("/")[-1]' \
+      "$_font_manifest" 2>/dev/null | LC_ALL=C /usr/bin/sort)" || true
+  fi
+  if [[ "$_font_attest_rc" -eq 0 \
     && "$_font_actual_names" == "$_font_expected_names" ]] \
     && jq -e \
       '([.entries[] | select(.component == "fonts")] | length) == 20
@@ -7086,11 +7371,9 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
     }
     rm -f "$_font_manifest"
     _font_mutation_rc=0
-    _mdm_attest_components test "$_font_home" "$_font_uid" \
+    _mdm_attest_components "$_font_user" "$_font_home" "$_font_uid" \
       "$_font_guid" >/dev/null 2>&1 || _font_mutation_rc=$?
-    if [[ "$_font_uid" -lt 501 ]]; then
-      skip "mdm-install: font post-append mutation" "test UID is below 501"
-    elif [[ "$_font_mutation_rc" -ne 0 && ! -e "$_font_manifest" \
+    if [[ "$_font_mutation_rc" -ne 0 && ! -e "$_font_manifest" \
       && "$_font_mutation_done" == true \
       && "$_font_mutation_readable_calls" -eq 2 \
       && "$_font_mutation_trust_calls" -eq 2 ]]; then
@@ -7105,18 +7388,17 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   printf 'modified\n' > "$_font_regular"
   rm -f "$_font_manifest"
   _font_modified_rc=0
-  _mdm_attest_components test "$_font_home" "$_font_uid" \
+  _mdm_attest_components "$_font_user" "$_font_home" "$_font_uid" \
     "$_font_guid" >/dev/null 2>&1 || _font_modified_rc=$?
   printf 'pinned-fixture\n' > "$_font_regular"
   _font_missing="$_font_dir/HackGenConsoleNF-Regular.ttf"
   rm -f "$_font_missing" "$_font_manifest"
   _font_missing_rc=0
-  _mdm_attest_components test "$_font_home" "$_font_uid" \
+  _mdm_attest_components "$_font_user" "$_font_home" "$_font_uid" \
     "$_font_guid" >/dev/null 2>&1 || _font_missing_rc=$?
   printf 'pinned-fixture\n' > "$_font_missing"
-  if [[ "$_font_uid" -lt 501 ]]; then
-    skip "mdm-install: font missing/modified rejection" "test UID is below 501"
-  elif [[ "$_font_modified_rc" -ne 0 && "$_font_missing_rc" -ne 0 ]]; then
+  _mdm_test_chown_target "$_font_missing"
+  if [[ "$_font_modified_rc" -ne 0 && "$_font_missing_rc" -ne 0 ]]; then
     pass "mdm-install: font exact20の欠落・semantic改変を拒否"
   else
     fail "mdm-install: font欠落または改変をcomponent attestationが許可"
@@ -7129,11 +7411,9 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
   _mdm_node_runtime_path() { printf '%s' "$_font_tmp/missing-node-runtime"; }
   _mdm_node_runtime_trusted() { return 1; }
   _font_mask_rc=0
-  _mdm_attest_components test "$_font_home" "$_font_uid" \
+  _mdm_attest_components "$_font_user" "$_font_home" "$_font_uid" \
     "$_font_guid" >/dev/null 2>&1 || _font_mask_rc=$?
-  if [[ "$_font_uid" -lt 501 ]]; then
-    skip "mdm-install: missing node mask rejection" "test UID is below 501"
-  elif [[ "$_font_mask_rc" -ne 0 && ! -e "$_font_manifest" ]]; then
+  if [[ "$_font_mask_rc" -ne 0 && ! -e "$_font_manifest" ]]; then
     pass "mdm-install: extra font entriesでmissing node_runtimeをmask不可"
   else
     fail "mdm-install: font entry countがrequired component欠落をmask"
@@ -7144,14 +7424,16 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
 # CLI activation は executable の実体だけでなく、入口 symlink 自体も
 # 対象 UID / nlink=1 に束縛する。
 (
-  _cli_link_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
-  _cli_link_uid="$(/usr/bin/id -u)"
-  _cli_link_user="$(/usr/bin/id -un)"
+  _cli_link_tmp="$(_mdm_test_target_tmpdir)"
+  _cli_link_uid="$_MDM_TEST_TARGET_UID"
+  _cli_link_user="$_MDM_TEST_TARGET_USER"
   _cli_link_target="$_cli_link_tmp/.local/share/claude/versions/1.2.3"
   mkdir -p "$_cli_link_tmp/.local/bin" "${_cli_link_target%/*}"
   printf '#!/bin/sh\nexit 0\n' > "$_cli_link_target"
   chmod 755 "$_cli_link_target"
   ln -s "$_cli_link_target" "$_cli_link_tmp/.local/bin/claude"
+  _mdm_test_chown_target "$_cli_link_tmp"
+  _mdm_exec_as_user() { _mdm_test_exec_as_target "$@"; }
   _cli_link_out="" _cli_link_ok=0 _cli_link_wrong=0 _cli_link_hard=0
   _cli_link_blocked=0
   _mdm_component_cli_target \
@@ -7247,12 +7529,14 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
 # Component manifest が記録する artifact は、対象ユーザーから実際に
 # read/search/execute できる状態でなければ成功 postcondition にしない。
 (
-  _access_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
-  _access_uid="$(/usr/bin/id -u)"; _access_user="$(/usr/bin/id -un)"
+  _access_tmp="$(_mdm_test_target_tmpdir)"
+  _access_uid="$_MDM_TEST_TARGET_UID"; _access_user="$_MDM_TEST_TARGET_USER"
   _access_tree="$_access_tmp/tree"; _access_file="$_access_tree/payload"
   mkdir -p "$_access_tree"
   printf 'payload\n' > "$_access_file"
   chmod 755 "$_access_tree"; chmod 644 "$_access_file"
+  _mdm_test_chown_target "$_access_tmp"
+  _mdm_exec_as_user() { _mdm_test_exec_as_target "$@"; }
   _access_tree_ok=0 _access_file_ok=0 _access_tree_blocked=0
   _access_file_blocked=0 _access_acl_blocked=0
   _mdm_component_tree_accessible \
@@ -7902,10 +8186,11 @@ MD
 
 # ── root authority: private checkout を実行し、persistent clone は保持専用 ──
 (
-  _auth_tmp="$(mktemp -d)"; _auth_tmp="$(builtin cd -P "$_auth_tmp" && printf '%s' "$PWD")"
+  _auth_tmp="$(_mdm_test_target_tmpdir)"
   _auth_repo="$_auth_tmp/repo"; _auth_home="$_auth_tmp/home"; _auth_base="$_auth_tmp/auth-base"
   mkdir -p "$_auth_repo" "$_auth_home" "$_auth_base"
-  chmod 700 "$_auth_base"
+  chmod 711 "$_auth_base"
+  _mdm_test_chown_target "$_auth_home"
   /usr/bin/git -C "$_auth_repo" init -q
   printf '%s\n' \
     '#!/bin/bash' \
@@ -7929,12 +8214,16 @@ MD
     GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
     /usr/bin/git -C "$_auth_repo" commit -q -m fixture
   _auth_sha="$(/usr/bin/git -C "$_auth_repo" rev-parse HEAD)"
-  _auth_user="$(/usr/bin/id -un)"; _auth_uid="$(/usr/bin/id -u)"
+  _auth_bundle="$_auth_tmp/repo.bundle"
+  /usr/bin/git -C "$_auth_repo" bundle create "$_auth_bundle" --all
+  chmod 0644 "$_auth_bundle"
+  _auth_user="$_MDM_TEST_TARGET_USER"; _auth_uid="$_MDM_TEST_TARGET_UID"
 
   _mdm_exec_as_user() {
     local _uid="$1" _user="$2" _home="$3"; shift 3
     mdm_build_drop_argv "$_uid" "$_user" "$_home" "$@" || return 1
-    "${MDM_DROP_ARGV[@]}"
+    _mdm_test_exec_as_target "$_uid" "$_user" "$_home" \
+      "${MDM_DROP_ARGV[@]}"
   }
   _mdm_prepare_expected_state() { return 0; }
   _mdm_capture_prior_inventory() { return 0; }
@@ -7952,10 +8241,10 @@ MD
   unset PROFILE LANGUAGE
   _mdm_root_config_apply "$_auth_tmp/no-config" >/dev/null 2>&1 || exit 1
   export MDM_AUTH_TMPDIR_OVERRIDE="$_auth_base"
-  export MDM_AUTH_OWNER_UID_OVERRIDE="$_auth_uid"
+  export MDM_AUTH_OWNER_UID_OVERRIDE="$_MDM_TEST_RUNNER_UID"
   export MDM_AUTH_PRIVACY_UID_OVERRIDE=99999
   export MDM_AUTH_READONLY_OWNER_TEST=1
-  export MDM_KIT_REPO_URL_OVERRIDE="$_auth_repo"
+  export MDM_KIT_REPO_URL_OVERRIDE="$_auth_bundle"
   export KIT_MDM_GIT_REF="$_auth_sha"
   export KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   export KIT_MDM_INSTALL_CLAUDE_CLI=false
@@ -7964,7 +8253,7 @@ MD
 
   _auth_rc=0
   _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" "$_auth_uid" \
-    >/dev/null 2>&1 || _auth_rc=$?
+    >"$_auth_tmp/first.out" 2>&1 || _auth_rc=$?
   _auth_path="$(cat "$_auth_home/root-authority-path" 2>/dev/null || true)"
   _auth_persistent="$_auth_home/.claude-starter-kit"
   if [[ "$_auth_rc" -eq 0 && "$_auth_path" == "$_auth_base"/claude-kit-mdm-auth.*/setup.sh ]] \
@@ -7979,6 +8268,7 @@ MD
     pass "mdm-install: root は private authoritative setup のみを対象ユーザー実行"
     pass "mdm-install: target user は authoritative tree に書込不能、Git read は成功"
   else
+    /usr/bin/tail -120 "$_auth_tmp/first.out" >&2 || true
     fail "mdm-install: root authoritative/persistent 分離が不正 (rc=$_auth_rc path=$_auth_path)"
   fi
   if [[ "$(_mdm_mode_normalize "$(_mdm_stat_mode "$_auth_persistent")")" == 0755 \
@@ -7999,6 +8289,8 @@ MD
 
   printf 'stale\n' > "$_auth_persistent/stale-user-file"
   mkdir -p "$_auth_home/.claude"; printf '{}\n' > "$_auth_home/.claude/.starter-kit-manifest.json"
+  _mdm_test_chown_target "$_auth_persistent/stale-user-file" \
+    "$_auth_home/.claude"
   _auth_rc=0
   _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" "$_auth_uid" \
     >/dev/null 2>&1 || _auth_rc=$?
@@ -8012,6 +8304,7 @@ MD
   fi
 
   printf 'keep\n' > "$_auth_persistent/dryrun-sentinel"
+  _mdm_test_chown_target "$_auth_persistent/dryrun-sentinel"
   _auth_head_before="$(cat "$_auth_persistent/.git/HEAD")"
   export KIT_MDM_DRY_RUN=true
   _auth_rc=0
@@ -8029,6 +8322,7 @@ MD
   fi
   export KIT_MDM_DRY_RUN=false
   : > "$_auth_home/mutate-marker-on-setup"
+  _mdm_test_chown_target "$_auth_home/mutate-marker-on-setup"
   _auth_rc=0
   _mdm_run_user_phase 0 "$_auth_user" "$_auth_home" "$_auth_uid" \
     >/dev/null 2>&1 || _auth_rc=$?
@@ -8342,42 +8636,80 @@ MD
 
 # ── dry-run は一時 checkout のみを使い、終了時に除去 ─────
 (
-  _dry_alias_root="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _dry_alias_root="$(_mdm_test_target_tmpdir)"
   _dry_alias_physical="$_dry_alias_root/physical"
   _dry_alias="$_dry_alias_root/alias"
-  /bin/mkdir "$_dry_alias_physical"
+  _dry_alias_home="$_dry_alias_root/home"
+  _dry_alias_installer="$_dry_alias_root/install-mdm.sh"
+  /bin/mkdir "$_dry_alias_physical" "$_dry_alias_home"
   /bin/ln -s "$_dry_alias_physical" "$_dry_alias"
-  _dry_runner_helper="$(declare -f _mdm_test_runner_tmp_base)"
-  _mdm_test_runner_tmp_base() { printf '%s' "$_dry_alias"; }
-  function /usr/bin/mktemp {
-    local _created
-    [[ "$#" -eq 2 && "$1" == -d \
-      && "$2" == "$_dry_alias/claude-kit-mdm-dryrun.XXXXXX" ]] || return 2
-    _created="$(builtin command /usr/bin/mktemp -d \
-      "$_dry_alias_physical/claude-kit-mdm-dryrun.XXXXXX")" || return 1
-    printf '%s%s\n' "$_dry_alias" "${_created#"$_dry_alias_physical"}"
-  }
-  _mdm_git_network() { return 1; }
-  KIT_MDM_DRY_RUN=true
-  KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  KIT_MDM_INSTALL_CLAUDE_CLI=false
-  _MDM_DRYRUN_CHECKOUT=""
-  _dry_alias_uid="$(/usr/bin/id -u)"
+  /bin/cp "$PROJECT_DIR/mdm/install-mdm.sh" "$_dry_alias_installer"
+  /bin/chmod 0644 "$_dry_alias_installer"
+  _mdm_test_chown_target "$_dry_alias_root"
   _dry_alias_rc=0
-  _mdm_run_user_phase "$_dry_alias_uid" "$(/usr/bin/id -un)" \
-    "$_dry_alias_root/home" >/dev/null 2>&1 || _dry_alias_rc=$?
-  _dry_alias_checkout="$_MDM_DRYRUN_CHECKOUT"
-  eval "$_dry_runner_helper"
-  MDM_TEST_TMP_ROOT="$_dry_alias_root"
-  _dry_alias_cleanup_rc=0
-  _mdm_cleanup_dryrun_checkout >/dev/null 2>&1 || _dry_alias_cleanup_rc=$?
-  if [[ "$_dry_alias_rc" -eq 1 \
+  _mdm_test_exec_as_target "$_MDM_TEST_TARGET_UID" \
+    "$_MDM_TEST_TARGET_USER" "$_dry_alias_home" \
+    /bin/bash --noprofile --norc -s -- \
+      "$_dry_alias_installer" "$_dry_alias_root" "$_dry_alias" \
+      "$_dry_alias_physical" "$_MDM_TEST_TARGET_UID" \
+      "$_MDM_TEST_TARGET_USER" <<'DRY_ALIAS_CHILD' \
+      >/dev/null 2>&1 || _dry_alias_rc=$?
+_installer="$1"
+_root="$2"
+_alias="$3"
+_physical="$4"
+_expected_uid="$5"
+_expected_user="$6"
+MDM_SOURCE_ONLY=1 source "$_installer"
+_uid="$(/usr/bin/id -u)"
+_user="$(/usr/bin/id -un)"
+[[ "$_uid" == "$_expected_uid" && "$_user" == "$_expected_user" \
+  && "$_uid" -ge 501 ]] || exit 97
+_MDM_TEST_MODE=1
+MDM_TEST_TMP_ROOT="$_root"
+KIT_MDM_DRY_RUN=true
+KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+KIT_MDM_INSTALL_CLAUDE_CLI=false
+_dry_runner_helper="$(declare -f _mdm_test_runner_tmp_base)"
+_mdm_test_runner_tmp_base() { printf '%s' "$_alias"; }
+function /usr/bin/mktemp {
+  local _created
+  [[ "$#" -eq 2 && "$1" == -d \
+    && "$2" == "$_alias/claude-kit-mdm-dryrun.XXXXXX" ]] || return 2
+  _created="$(builtin command /usr/bin/mktemp -d \
+    "$_physical/claude-kit-mdm-dryrun.XXXXXX")" || return 1
+  if [[ ! -d "$_created" || -L "$_created" \
+    || "$(_mdm_stat_uid "$_created" 2>/dev/null || true)" != "$_uid" ]]; then
+    /bin/rm -rf "$_created"
+    return 1
+  fi
+  : > "$_root/allocation-ok" || return 1
+  printf '%s%s\n' "$_alias" "${_created#"$_physical"}"
+}
+_mdm_git_network() { return 1; }
+_MDM_DRYRUN_CHECKOUT=""
+_run_rc=0
+_mdm_run_user_phase "$_uid" "$_user" "$_root/home" "$_uid" \
+  >/dev/null 2>&1 || _run_rc=$?
+_checkout="$_MDM_DRYRUN_CHECKOUT"
+printf '%s\n' "$_checkout" > "$_root/checkout-record"
+[[ "$_run_rc" -eq 1 && -f "$_root/allocation-ok" \
+  && "$_checkout" == "$_physical"/claude-kit-mdm-dryrun.* ]] || exit 98
+eval "$_dry_runner_helper"
+_cleanup_rc=0
+_mdm_cleanup_dryrun_checkout >/dev/null 2>&1 || _cleanup_rc=$?
+[[ "$_cleanup_rc" -eq 0 && ! -e "$_checkout" && ! -L "$_checkout" \
+  && -z "$_MDM_DRYRUN_CHECKOUT" ]] || exit 99
+: > "$_root/result"
+DRY_ALIAS_CHILD
+  _dry_alias_checkout="$(/bin/cat \
+    "$_dry_alias_root/checkout-record" 2>/dev/null || true)"
+  if [[ "$_dry_alias_rc" -eq 0 && -f "$_dry_alias_root/result" \
     && "$_dry_alias_checkout" == "$_dry_alias_physical"/claude-kit-mdm-dryrun.* \
-    && "$_dry_alias_cleanup_rc" -eq 0 \
-    && -z "$_MDM_DRYRUN_CHECKOUT" ]]; then
+    && ! -e "$_dry_alias_checkout" && ! -L "$_dry_alias_checkout" ]]; then
     pass "mdm-install: symlink 一時baseはlexical割当後にphysical pathへ束縛"
   else
-    fail "mdm-install: symlink 一時baseのcanonical束縛が不正 (rc=$_dry_alias_rc cleanup=$_dry_alias_cleanup_rc)"
+    fail "mdm-install: symlink 一時baseのcanonical束縛が不正 (rc=$_dry_alias_rc)"
   fi
   /bin/rm -rf "$_dry_alias_root"
 )
@@ -8407,11 +8739,14 @@ MD
 )
 
 (
-  _dry_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _dry_tmp="$(_mdm_test_target_tmpdir)"
   _dry_repo="$_dry_tmp/repo"
   _dry_home="$_dry_tmp/home"
+  _dry_installer="$_dry_tmp/install-mdm.sh"
   mkdir -p "$_dry_home"
-  git clone -q "$PROJECT_DIR" "$_dry_repo"
+  git clone -q --no-hardlinks "$PROJECT_DIR" "$_dry_repo"
+  /bin/cp "$PROJECT_DIR/mdm/install-mdm.sh" "$_dry_installer"
+  chmod 0644 "$_dry_installer"
   printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "$HOME/mdm-dryrun-args"\nprintf "%%s\\n" "$PATH" > "$HOME/mdm-dryrun-path"\n' > "$_dry_repo/setup.sh"
   chmod +x "$_dry_repo/setup.sh"
   git -C "$_dry_repo" add setup.sh
@@ -8419,121 +8754,178 @@ MD
     GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
     git -C "$_dry_repo" commit -q -m fixture
   _dry_sha="$(git -C "$_dry_repo" rev-parse HEAD)"
+  /bin/mkdir "$_dry_tmp/runtime"
+  _mdm_test_chown_target "$_dry_tmp"
+  chmod 0700 "$_dry_tmp" "$_dry_home" "$_dry_tmp/runtime"
 
-  export HOME="$_dry_home"
-  export MDM_KIT_REPO_URL_OVERRIDE="$_dry_repo"
-  export KIT_MDM_GIT_REF="$_dry_sha"
-  export KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  export KIT_MDM_DRY_RUN=true
-  export KIT_MDM_INSTALL_CLAUDE_CLI=false
-  export KIT_MDM_INSTALL_DIR="$_dry_home/should-not-be-used"
-  export MDM_AUTH_TMPDIR_OVERRIDE="$_dry_tmp"
-  _MDM_GIT_DROP_UID=""; _MDM_GIT_DROP_USER=""; _MDM_GIT_DROP_HOME=""
-  KIT_MDM_POLICY_SHA256=""
-  MDM_RCPT_POLICY_SHA256=""
-  export KIT_MDM_POLICY_SHA256 MDM_RCPT_POLICY_SHA256
-  printf '%s\n' receipt-sentinel > "$_dry_tmp/receipt.json"
-  _dry_receipt_before="$(_mdm_sha256_file "$_dry_tmp/receipt.json")"
-  _dry_runtime_uid="$(/usr/bin/id -u)"
+  _dry_child_rc=0
+  _mdm_test_exec_as_target \
+    "$_MDM_TEST_TARGET_UID" "$_MDM_TEST_TARGET_USER" "$_dry_home" \
+    /usr/bin/env \
+    "HOME=$_dry_home" \
+    "USER=$_MDM_TEST_TARGET_USER" \
+    "LOGNAME=$_MDM_TEST_TARGET_USER" \
+    "PATH=/usr/bin:/bin:/usr/sbin:/sbin" \
+    "LC_ALL=C" \
+    "GIT_CONFIG_NOSYSTEM=1" \
+    "GIT_CONFIG_GLOBAL=/dev/null" \
+    "_MDM_TEST_MODE=1" \
+    "MDM_SYSTEM_PYTHON_OVERRIDE=$MDM_SYSTEM_PYTHON_OVERRIDE" \
+    "MDM_TEST_TMP_ROOT=$_dry_tmp/runtime" \
+    "TMPDIR=$_dry_tmp/runtime" \
+    /bin/bash --noprofile --norc -s -- \
+    "$_dry_installer" "$_dry_tmp" "$_dry_repo" "$_dry_home" "$_dry_sha" \
+    "$_MDM_TEST_TARGET_UID" "$_MDM_TEST_TARGET_USER" <<'DRYRUN_CHILD' \
+    >/dev/null 2>&1 || _dry_child_rc=$?
+_dry_installer="$1"
+_dry_tmp="$2"
+_dry_repo="$3"
+_dry_home="$4"
+_dry_sha="$5"
+_dry_expected_uid="$6"
+_dry_expected_user="$7"
+MDM_SOURCE_ONLY=1 source "$_dry_installer"
+_dry_runtime_uid="$(/usr/bin/id -u)"
+_dry_runtime_user="$(/usr/bin/id -un)"
+[[ "$_dry_runtime_uid" -ge 501 \
+  && "$_dry_runtime_uid" == "$_dry_expected_uid" \
+  && "$_dry_runtime_user" == "$_dry_expected_user" ]] || exit 97
 
-  _dry_wrong_rc=0
-  _mdm_run_user_phase "$_dry_runtime_uid" "$(/usr/bin/id -un)" "$_dry_home" \
-    >/dev/null 2>&1 || _dry_wrong_rc=$?
-  _dry_calculated_policy="$(_mdm_sha256_file \
-    "$_MDM_EXPECTED_OUTPUT/policy.json" 2>/dev/null || true)"
-  _dry_wrong_setup_absent=true
-  [[ ! -e "$_dry_home/mdm-dryrun-args" ]] || _dry_wrong_setup_absent=false
-  _dry_wrong_receipt_after="$(_mdm_sha256_file "$_dry_tmp/receipt.json")"
-  _mdm_cleanup_dryrun_checkout >/dev/null 2>&1 || true
-  _mdm_cleanup_expected_dir >/dev/null 2>&1 || true
-  _mdm_cleanup_renderer_snapshot >/dev/null 2>&1 || true
-  if [[ "$_dry_wrong_rc" -eq "$MDM_EXIT_CONFIG" \
-    && "$_dry_calculated_policy" =~ ^[0-9a-f]{64}$ \
-    && "$_dry_wrong_setup_absent" == true \
-    && "$_dry_receipt_before" == "$_dry_wrong_receipt_after" ]]; then
+export HOME="$_dry_home"
+export MDM_KIT_REPO_URL_OVERRIDE="$_dry_repo"
+export KIT_MDM_GIT_REF="$_dry_sha"
+export KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+export KIT_MDM_DRY_RUN=true
+export KIT_MDM_INSTALL_CLAUDE_CLI=false
+export KIT_MDM_INSTALL_DIR="$_dry_home/should-not-be-used"
+export MDM_AUTH_TMPDIR_OVERRIDE="$MDM_TEST_TMP_ROOT"
+_MDM_GIT_DROP_UID=""; _MDM_GIT_DROP_USER=""; _MDM_GIT_DROP_HOME=""
+KIT_MDM_POLICY_SHA256=""
+MDM_RCPT_POLICY_SHA256=""
+export KIT_MDM_POLICY_SHA256 MDM_RCPT_POLICY_SHA256
+printf '%s\n' receipt-sentinel > "$_dry_tmp/receipt.json"
+_dry_receipt_before="$(_mdm_sha256_file "$_dry_tmp/receipt.json")"
+_dry_cleanup() {
+  local _cleanup_rc=0
+  _mdm_cleanup_dryrun_checkout >/dev/null 2>&1 || _cleanup_rc=1
+  _mdm_cleanup_expected_dir >/dev/null 2>&1 || _cleanup_rc=1
+  _mdm_cleanup_checkout_renderer_snapshot >/dev/null 2>&1 || _cleanup_rc=1
+  _mdm_cleanup_renderer_snapshot >/dev/null 2>&1 || _cleanup_rc=1
+  return "$_cleanup_rc"
+}
+
+_dry_wrong_rc=0
+_mdm_run_user_phase "$_dry_runtime_uid" "$_dry_runtime_user" "$_dry_home" \
+  >/dev/null 2>&1 || _dry_wrong_rc=$?
+_dry_calculated_policy="$(_mdm_sha256_file \
+  "$_MDM_EXPECTED_OUTPUT/policy.json" 2>/dev/null || true)"
+_dry_wrong_setup_absent=true
+[[ ! -e "$_dry_home/mdm-dryrun-args" ]] || _dry_wrong_setup_absent=false
+_dry_wrong_receipt_after="$(_mdm_sha256_file "$_dry_tmp/receipt.json")"
+_dry_wrong_cleanup_rc=0
+_dry_cleanup || _dry_wrong_cleanup_rc=$?
+if [[ "$_dry_wrong_rc" -eq "$MDM_EXIT_CONFIG" \
+  && "$_dry_calculated_policy" =~ ^[0-9a-f]{64}$ \
+  && "$_dry_wrong_setup_absent" == true \
+  && "$_dry_wrong_cleanup_rc" -eq 0 \
+  && "$_dry_receipt_before" == "$_dry_wrong_receipt_after" ]]; then
+  : > "$_dry_tmp/result-policy"
+fi
+
+export KIT_MDM_EXPECTED_POLICY_SHA256="$_dry_calculated_policy"
+_dry_rc=0
+_mdm_run_user_phase "$_dry_runtime_uid" "$_dry_runtime_user" "$_dry_home" \
+  >/dev/null 2>&1 || _dry_rc=$?
+_dry_checkout="$_MDM_DRYRUN_CHECKOUT"
+_dry_owner_bound=false
+if [[ "${_MDM_EXPECTED_OWNER_UID:-}" == "$_dry_runtime_uid" \
+  && "${_MDM_EXPECTED_RENDERER_OWNER_UID:-}" == "$_dry_runtime_uid" \
+  && "$(_mdm_stat_uid "$_MDM_EXPECTED_DIR" 2>/dev/null || true)" \
+    == "$_dry_runtime_uid" \
+  && "$(_mdm_stat_uid "$_MDM_EXPECTED_RENDERER" 2>/dev/null || true)" \
+    == "$_dry_runtime_uid" ]]; then
+  _dry_owner_bound=true
+fi
+_dry_path="$(/bin/cat "$_dry_home/mdm-dryrun-path" 2>/dev/null || true)"
+_dry_path_ok=true
+if [[ -x /opt/homebrew/bin/brew \
+  && ":$_dry_path:" != *:/opt/homebrew/bin:* ]]; then
+  _dry_path_ok=false
+fi
+if [[ -x /usr/local/bin/brew \
+  && ":$_dry_path:" != *:/usr/local/bin:* ]]; then
+  _dry_path_ok=false
+fi
+for _dry_tool_dir in /opt/homebrew/opt/gnu-sed/libexec/gnubin \
+  /usr/local/opt/gnu-sed/libexec/gnubin \
+  /opt/homebrew/opt/gawk/libexec/gnubin \
+  /usr/local/opt/gawk/libexec/gnubin; do
+  [[ -d "$_dry_tool_dir" && ! -L "$_dry_tool_dir" ]] || continue
+  [[ ":$_dry_path:" == *":$_dry_tool_dir:"* ]] || _dry_path_ok=false
+done
+if [[ "$_dry_rc" -eq 0 && -d "$_dry_checkout" ]] \
+  && /usr/bin/grep -qx -- '--dry-run' "$_dry_home/mdm-dryrun-args" \
+  && [[ ! -e "$_dry_home/should-not-be-used" \
+    && "$_dry_path_ok" == true \
+    && "$_dry_owner_bound" == true \
+    && "$(_mdm_sha256_file "$_dry_tmp/receipt.json")" \
+      == "$_dry_receipt_before" ]]; then
+  : > "$_dry_tmp/result-setup"
+fi
+_dry_cleanup_rc=0
+_dry_cleanup || _dry_cleanup_rc=$?
+if [[ "$_dry_cleanup_rc" -eq 0 && -n "$_dry_checkout" \
+  && ! -e "$_dry_checkout" && -z "$_MDM_DRYRUN_CHECKOUT" ]]; then
+  : > "$_dry_tmp/result-cleanup"
+fi
+
+export KIT_MDM_INSTALL_CLAUDE_CLI=true
+_mdm_cli_present_for_home() { return 1; }
+/bin/rm -f "$_dry_home/mdm-dryrun-args" "$_dry_home/mdm-dryrun-path"
+export KIT_MDM_EXPECTED_POLICY_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+_dry_cli_probe_rc=0
+_mdm_run_user_phase "$_dry_runtime_uid" "$_dry_runtime_user" "$_dry_home" \
+  >/dev/null 2>&1 || _dry_cli_probe_rc=$?
+_dry_cli_policy="$(_mdm_sha256_file \
+  "$_MDM_EXPECTED_OUTPUT/policy.json" 2>/dev/null || true)"
+_dry_cli_probe_cleanup_rc=0
+_dry_cleanup || _dry_cli_probe_cleanup_rc=$?
+export KIT_MDM_EXPECTED_POLICY_SHA256="$_dry_cli_policy"
+_dry_cli_rc=0
+_mdm_run_user_phase "$_dry_runtime_uid" "$_dry_runtime_user" "$_dry_home" \
+  >/dev/null 2>&1 || _dry_cli_rc=$?
+_dry_cli_cleanup_rc=0
+_dry_cleanup || _dry_cli_cleanup_rc=$?
+if [[ "$_dry_cli_probe_rc" -eq "$MDM_EXIT_CONFIG" \
+  && "$_dry_cli_policy" =~ ^[0-9a-f]{64}$ \
+  && "$_dry_cli_probe_cleanup_rc" -eq 0 \
+  && "$_dry_cli_rc" -eq 0 && "$_dry_cli_cleanup_rc" -eq 0 ]]; then
+  : > "$_dry_tmp/result-cli"
+fi
+exit 0
+DRYRUN_CHILD
+
+  if [[ "$_dry_child_rc" -eq 0 && -f "$_dry_tmp/result-policy" ]]; then
     pass "mdm-install: non-root dry-runもpolicy不一致をsetup前exit 50で拒否"
   else
-    fail "mdm-install: non-root dry-runがpolicy不一致でsetup/receiptを変更 (rc=$_dry_wrong_rc)"
+    fail "mdm-install: non-root dry-runがpolicy不一致でsetup/receiptを変更 (child=$_dry_child_rc)"
   fi
-
-  export KIT_MDM_EXPECTED_POLICY_SHA256="$_dry_calculated_policy"
-  _dry_rc=0
-  _mdm_run_user_phase "$_dry_runtime_uid" "$(/usr/bin/id -un)" \
-    "$_dry_home" >/dev/null 2>&1 || _dry_rc=$?
-  _dry_checkout="$_MDM_DRYRUN_CHECKOUT"
-  _dry_owner_bound=false
-  if [[ "${_MDM_EXPECTED_OWNER_UID:-}" == "$_dry_runtime_uid" \
-    && "${_MDM_EXPECTED_RENDERER_OWNER_UID:-}" == "$_dry_runtime_uid" \
-    && "$(_mdm_stat_uid "$_MDM_EXPECTED_DIR" 2>/dev/null || true)" \
-      == "$_dry_runtime_uid" \
-    && "$(_mdm_stat_uid "$_MDM_EXPECTED_RENDERER" 2>/dev/null || true)" \
-      == "$_dry_runtime_uid" ]]; then
-    _dry_owner_bound=true
-  fi
-  _dry_path="$(cat "$_dry_home/mdm-dryrun-path" 2>/dev/null || true)"
-  _dry_path_ok=true
-  if [[ -x /opt/homebrew/bin/brew \
-    && ":$_dry_path:" != *:/opt/homebrew/bin:* ]]; then
-    _dry_path_ok=false
-  fi
-  if [[ -x /usr/local/bin/brew \
-    && ":$_dry_path:" != *:/usr/local/bin:* ]]; then
-    _dry_path_ok=false
-  fi
-  for _dry_tool_dir in /opt/homebrew/opt/gnu-sed/libexec/gnubin \
-    /usr/local/opt/gnu-sed/libexec/gnubin \
-    /opt/homebrew/opt/gawk/libexec/gnubin \
-    /usr/local/opt/gawk/libexec/gnubin; do
-    [[ -d "$_dry_tool_dir" && ! -L "$_dry_tool_dir" ]] || continue
-    [[ ":$_dry_path:" == *":$_dry_tool_dir:"* ]] || _dry_path_ok=false
-  done
-  if [[ "$_dry_rc" -eq 0 && -d "$_dry_checkout" ]] \
-    && grep -qx -- '--dry-run' "$_dry_home/mdm-dryrun-args" \
-    && [[ ! -e "$_dry_home/should-not-be-used" \
-      && "$_dry_path_ok" == true \
-      && "$_dry_owner_bound" == true \
-      && "$(_mdm_sha256_file "$_dry_tmp/receipt.json")" \
-        == "$_dry_receipt_before" ]]; then
+  if [[ "$_dry_child_rc" -eq 0 && -f "$_dry_tmp/result-setup" ]]; then
     pass "mdm-install: 正policyのnon-root dry-runは一時checkoutからsetupへ到達"
   else
-    fail "mdm-install: dry-run の一時checkout/PATH契約が不正 (rc=$_dry_rc)"
+    fail "mdm-install: dry-run の一時checkout/PATH契約が不正 (child=$_dry_child_rc)"
   fi
-  _mdm_cleanup_dryrun_checkout
-  _mdm_cleanup_expected_dir
-  _mdm_cleanup_renderer_snapshot
-  if [[ -n "$_dry_checkout" && ! -e "$_dry_checkout" && -z "$_MDM_DRYRUN_CHECKOUT" ]]; then
+  if [[ "$_dry_child_rc" -eq 0 && -f "$_dry_tmp/result-cleanup" ]]; then
     pass "mdm-install: dry-run 一時 checkout を完了時に除去"
   else
-    fail "mdm-install: dry-run 一時 checkout が残存"
+    fail "mdm-install: dry-run 一時 checkout が残存 (child=$_dry_child_rc)"
   fi
-
-  export KIT_MDM_INSTALL_CLAUDE_CLI=true
-  _mdm_cli_present_for_home() { return 1; }
-  /bin/rm -f "$_dry_home/mdm-dryrun-args" "$_dry_home/mdm-dryrun-path"
-  export KIT_MDM_EXPECTED_POLICY_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  _dry_cli_probe_rc=0
-  _mdm_run_user_phase "$_dry_runtime_uid" "$(/usr/bin/id -un)" "$_dry_home" \
-    >/dev/null 2>&1 || _dry_cli_probe_rc=$?
-  _dry_cli_policy="$(_mdm_sha256_file \
-    "$_MDM_EXPECTED_OUTPUT/policy.json" 2>/dev/null || true)"
-  _mdm_cleanup_dryrun_checkout >/dev/null 2>&1 || true
-  _mdm_cleanup_expected_dir >/dev/null 2>&1 || true
-  _mdm_cleanup_renderer_snapshot >/dev/null 2>&1 || true
-  export KIT_MDM_EXPECTED_POLICY_SHA256="$_dry_cli_policy"
-  _dry_cli_rc=0
-  _mdm_run_user_phase "$_dry_runtime_uid" "$(/usr/bin/id -un)" "$_dry_home" \
-    >/dev/null 2>&1 || _dry_cli_rc=$?
-  _mdm_cleanup_dryrun_checkout
-  _mdm_cleanup_expected_dir
-  _mdm_cleanup_renderer_snapshot
-  if [[ "$_dry_cli_probe_rc" -eq "$MDM_EXIT_CONFIG" \
-    && "$_dry_cli_policy" =~ ^[0-9a-f]{64}$ \
-    && "$_dry_cli_rc" -eq 0 ]]; then
+  if [[ "$_dry_child_rc" -eq 0 && -f "$_dry_tmp/result-cli" ]]; then
     pass "mdm-install: non-root dry-run は未導入 CLI を失敗扱いにしない"
   else
-    fail "mdm-install: non-root dry-run が未導入 CLI で失敗 (rc=$_dry_cli_rc)"
+    fail "mdm-install: non-root dry-run が未導入 CLI で失敗 (child=$_dry_child_rc)"
   fi
-  rm -rf "$_dry_tmp"
+  /bin/rm -rf "$_dry_tmp"
 )
 
 # Log setup failure during a preview must return a config error without
@@ -8558,7 +8950,8 @@ MD
   _history_support="$_history_tmp/support"
   _history_rendered="$_history_tmp/rendered"
   _history_home="$_history_tmp/home"
-  _history_uid="$(/usr/bin/id -u)"
+  _history_user="$_MDM_TEST_TARGET_USER"
+  _history_uid="$_MDM_TEST_TARGET_UID"
   _history_guid="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
   mkdir -p "$_history_support" "$_history_rendered" "$_history_home/.claude"
   chmod 755 "$_history_support"
@@ -8575,8 +8968,9 @@ MD
   _history_file="$_history_support/managed-history-${_history_guid}.json"
   _history_seed="$_history_support/history-seed"
   jq -n --arg home "$_history_home" --arg guid "$_history_guid" \
+    --arg user "$_history_user" \
     --argjson uid "$_history_uid" \
-    '{schema_version:2,target_user:"jane",target_uid:$uid,
+    '{schema_version:2,target_user:$user,target_uid:$uid,
       target_generated_uid:$guid,home:$home,
       managed_inventory:["CLAUDE.md","settings.json"]}' > "$_history_seed"
   chmod 600 "$_history_seed"
@@ -8587,8 +8981,11 @@ MD
   _history_before_mode="$(_mdm_mode_normalize "${_history_before_rest#*:}" 2>/dev/null || true)"
   printf '{"files":["commands/forged.md"]}\n' \
     > "$_history_home/.claude/.starter-kit-manifest.json"
-  printf '{"result":"failure"}\n' > "$_history_support/receipt-jane.json"
-  _mdm_capture_prior_inventory jane "$_history_home" "$_history_uid" "$_history_guid" \
+  _mdm_test_chown_target "$_history_home"
+  printf '{"result":"failure"}\n' \
+    > "$_history_support/receipt-${_history_user}.json"
+  _mdm_capture_prior_inventory "$_history_user" "$_history_home" \
+    "$_history_uid" "$_history_guid" \
     || _history_rc=$?
   if [[ "$_history_rc" -eq 0 && "$_history_before_links" == 2 \
     && "$_history_before_mode" == 0600 ]] \
@@ -8601,7 +8998,8 @@ MD
   else
     fail "mdm-install: schema 2 GUID-key history の hardlink capture 契約が不正"
   fi
-  _mdm_persist_managed_history jane "$_history_home" "$_history_uid" "$_history_guid" \
+  _mdm_persist_managed_history "$_history_user" "$_history_home" \
+    "$_history_uid" "$_history_guid" \
     || _history_rc=$?
   _history_after_meta="$(_mdm_stat_managed_metadata "$_history_file" 2>/dev/null || true)"
   _history_after_rest="${_history_after_meta#*:}"
@@ -8725,21 +9123,43 @@ fi
     local _root="$1" _mode="$2" _signal="$3"
     PROJECT_DIR="$PROJECT_DIR" MDM_ALLOCATION_ROOT="$_root" \
       MDM_ALLOCATION_MODE="$_mode" MDM_ALLOCATION_SIGNAL="$_signal" \
-      MDM_ALLOCATION_UID="$(/usr/bin/id -u)" \
+      MDM_ALLOCATION_USER="$_MDM_TEST_TARGET_USER" \
+      MDM_ALLOCATION_UID="$_MDM_TEST_TARGET_UID" \
+      MDM_ALLOCATION_GID="$_MDM_TEST_TARGET_GID" \
       MDM_ALLOCATION_GUID=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE \
       "$BASH" --noprofile --norc -c '
         MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
         _root="$MDM_ALLOCATION_ROOT"
         _home="$_root/home"
         _receipts="$_root/receipts"
+        _user="$MDM_ALLOCATION_USER"
         _uid="$MDM_ALLOCATION_UID"
+        _gid="$MDM_ALLOCATION_GID"
+        /bin/chmod 0755 "$_root" || exit 90
         /bin/mkdir -m 700 "$_home"
+        if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+          chown "$_uid:$_gid" "$_home" || exit 90
+        fi
         export MDM_SYSTEM_RCPT_DIR_OVERRIDE="$_receipts"
         export MDM_CONFIG_SKIP_OWNER_CHECK=1
+        _mdm_exec_as_user() {
+          local _drop_uid="$1" _drop_user="$2" _drop_home="$3"
+          shift 3
+          if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+            /usr/bin/sudo -n -u "#$_drop_uid" -H /usr/bin/env -i \
+              "HOME=$_drop_home" "USER=$_drop_user" "LOGNAME=$_drop_user" \
+              PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C "$@"
+          else
+            "$@"
+          fi
+        }
+        _MDM_GIT_DROP_UID="$_uid"
+        _MDM_GIT_DROP_USER="$_user"
+        _MDM_GIT_DROP_HOME="$_home"
         _MDM_TRANSACTION_STATE=idle
         _MDM_CLAUDE_TRANSACTION_STATE=idle
         _MDM_PERSISTENT_TRANSACTION_STATE=idle
-        _mdm_transaction_begin jane "$_home" "$_uid" \
+        _mdm_transaction_begin "$_user" "$_home" "$_uid" \
           "$MDM_ALLOCATION_GUID" || exit 91
         _allocation_home_identity="$(_mdm_persistent_dir_identity "$_home")" \
           || exit 92
@@ -8782,7 +9202,7 @@ fi
       '
   }
 
-  _allocation_root="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _allocation_root="$(_mdm_test_target_tmpdir)"
   _allocation_ok=true
   for _allocation_mode in claude persistent; do
     for _allocation_signal in FAULT HUP INT TERM; do
@@ -8796,28 +9216,20 @@ fi
       /bin/mkdir "$_allocation_case"
       _allocation_case_rc=0
       _allocation_window_fixture "$_allocation_case" "$_allocation_mode" \
-        "$_allocation_signal" > "$_allocation_case/out" 2>&1 \
+        "$_allocation_signal" >/dev/null 2>&1 \
         || _allocation_case_rc=$?
       if [[ "$_allocation_case_rc" -ne "$_allocation_expected" ]]; then
-        printf 'allocation diagnostic: mode=%s signal=%s rc=%s expected=%s\n' \
-          "$_allocation_mode" "$_allocation_signal" \
-          "$_allocation_case_rc" "$_allocation_expected" >&2
-        /bin/cat "$_allocation_case/out" >&2 || true
         _allocation_ok=false
       fi
       if [[ "$_allocation_mode" == claude ]]; then
         if /usr/bin/find "$_allocation_case/home" -maxdepth 1 \
           -name '.claude.mdm-backup.*' -print -quit \
           | /usr/bin/grep -q .; then
-          printf 'allocation diagnostic: mode=%s signal=%s orphan=claude\n' \
-            "$_allocation_mode" "$_allocation_signal" >&2
           _allocation_ok=false
         fi
       elif /usr/bin/find "$_allocation_case/home" -maxdepth 1 \
         -name '.claude-starter-kit.mdm-stage.*' -print -quit \
         | /usr/bin/grep -q .; then
-        printf 'allocation diagnostic: mode=%s signal=%s orphan=persistent\n' \
-          "$_allocation_mode" "$_allocation_signal" >&2
         _allocation_ok=false
       fi
     done
@@ -9355,12 +9767,13 @@ fi
 # Root history/component state joins the same rollback boundary.  A prior file
 # is restored byte-for-byte while a file absent at entry is retracted.
 (
-  _root_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _root_tmp="$(_mdm_test_target_tmpdir)"
   _root_support="$_root_tmp/support"
   _root_home="$_root_tmp/home"
   _root_guid=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
   mkdir -m 755 "$_root_support"
   mkdir -m 700 "$_root_home"
+  _mdm_test_chown_target "$_root_home"
   printf 'history-before\n' \
     > "$_root_support/managed-history-$_root_guid.json"
   chmod 600 "$_root_support/managed-history-$_root_guid.json"
@@ -9372,7 +9785,8 @@ fi
   _MDM_CLAUDE_TRANSACTION_STATE=idle
   _MDM_PERSISTENT_TRANSACTION_STATE=idle
   _root_begin_rc=0
-  _mdm_transaction_begin jane "$_root_home" 501 "$_root_guid" \
+  _mdm_transaction_begin "$_MDM_TEST_TARGET_USER" "$_root_home" \
+    "$_MDM_TEST_TARGET_UID" "$_root_guid" \
     || _root_begin_rc=$?
   _root_snapshot="$_MDM_TRANSACTION_HISTORY_SNAPSHOT"
   if [[ "$_root_begin_rc" -eq 0 ]]; then
@@ -9411,16 +9825,24 @@ fi
     local _root="$1" _signal="$2"
     PROJECT_DIR="$PROJECT_DIR" MDM_SNAPSHOT_ROOT="$_root" \
       MDM_SNAPSHOT_SIGNAL="$_signal" \
-      MDM_SNAPSHOT_UID="$(/usr/bin/id -u)" \
+      MDM_SNAPSHOT_USER="$_MDM_TEST_TARGET_USER" \
+      MDM_SNAPSHOT_UID="$_MDM_TEST_TARGET_UID" \
+      MDM_SNAPSHOT_GID="$_MDM_TEST_TARGET_GID" \
       MDM_SNAPSHOT_GUID=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE \
       "$BASH" --noprofile --norc -c '
         MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
         _root="$MDM_SNAPSHOT_ROOT"
         _home="$_root/home"
         _receipts="$_root/receipts"
+        _user="$MDM_SNAPSHOT_USER"
         _uid="$MDM_SNAPSHOT_UID"
+        _gid="$MDM_SNAPSHOT_GID"
         _guid="$MDM_SNAPSHOT_GUID"
+        /bin/chmod 0755 "$_root" || exit 90
         /bin/mkdir -m 700 "$_home"
+        if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+          chown "$_uid:$_gid" "$_home" || exit 90
+        fi
         /bin/mkdir -m 755 "$_receipts"
         printf "history-before\n" \
           > "$_receipts/managed-history-$_guid.json"
@@ -9445,7 +9867,7 @@ fi
         _MDM_TRANSACTION_STATE=idle
         _MDM_CLAUDE_TRANSACTION_STATE=idle
         _MDM_PERSISTENT_TRANSACTION_STATE=idle
-        _mdm_transaction_begin jane "$_home" "$_uid" "$_guid"
+        _mdm_transaction_begin "$_user" "$_home" "$_uid" "$_guid"
       '
   }
 
@@ -9453,16 +9875,24 @@ fi
     local _root="$1" _signal="$2"
     PROJECT_DIR="$PROJECT_DIR" MDM_SNAPSHOT_ROOT="$_root" \
       MDM_SNAPSHOT_SIGNAL="$_signal" \
-      MDM_SNAPSHOT_UID="$(/usr/bin/id -u)" \
+      MDM_SNAPSHOT_USER="$_MDM_TEST_TARGET_USER" \
+      MDM_SNAPSHOT_UID="$_MDM_TEST_TARGET_UID" \
+      MDM_SNAPSHOT_GID="$_MDM_TEST_TARGET_GID" \
       MDM_SNAPSHOT_GUID=AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE \
       "$BASH" --noprofile --norc -c '
         MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
         _root="$MDM_SNAPSHOT_ROOT"
         _home="$_root/home"
         _receipts="$_root/receipts"
+        _user="$MDM_SNAPSHOT_USER"
         _uid="$MDM_SNAPSHOT_UID"
+        _gid="$MDM_SNAPSHOT_GID"
         _guid="$MDM_SNAPSHOT_GUID"
+        /bin/chmod 0755 "$_root" || exit 90
         /bin/mkdir -m 700 "$_home"
+        if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+          chown "$_uid:$_gid" "$_home" || exit 90
+        fi
         /bin/mkdir -m 755 "$_receipts"
         printf "history-before\n" \
           > "$_receipts/managed-history-$_guid.json"
@@ -9490,13 +9920,12 @@ fi
         _MDM_TRANSACTION_STATE=idle
         _MDM_CLAUDE_TRANSACTION_STATE=idle
         _MDM_PERSISTENT_TRANSACTION_STATE=idle
-        _mdm_transaction_begin jane "$_home" "$_uid" "$_guid"
+        _mdm_transaction_begin "$_user" "$_home" "$_uid" "$_guid"
         : > "$_root/survived"
       '
   }
 
-  _snapshot_presignal_root="$(builtin cd -P "$(mktemp -d)" \
-    && printf '%s' "$PWD")"
+  _snapshot_presignal_root="$(_mdm_test_target_tmpdir)"
   _snapshot_presignal_ok=true
   for _snapshot_attempt in 1 2 3; do
     for _snapshot_signal in HUP INT TERM; do
@@ -9534,8 +9963,7 @@ fi
   fi
   /bin/rm -rf "$_snapshot_presignal_root"
 
-  _snapshot_signal_root="$(builtin cd -P "$(mktemp -d)" \
-    && printf '%s' "$PWD")"
+  _snapshot_signal_root="$(_mdm_test_target_tmpdir)"
   _snapshot_signal_ok=true
   for _snapshot_attempt in 1 2 3; do
     for _snapshot_signal in HUP INT TERM; do
@@ -9717,4 +10145,5 @@ fi
   rm -rf "$_commit_tmp"
 )
 
+_mdm_test_stop_tmp_root_mode_guard || exit 2
 mdm_test_reached_end
