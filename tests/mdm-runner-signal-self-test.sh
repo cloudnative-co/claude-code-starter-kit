@@ -111,7 +111,9 @@ _mdm_runner_signal_case() { # <signal> <expected-exit> [closed-stderr] [fallback
   supervisor_pid="${supervisor_record%%|*}"
   for current in "$root_pid" "$nested_pid" "$supervisor_pid"; do
     [[ "$current" =~ ^[1-9][0-9]*$ ]] || continue
-    [[ -z "$(_mdm_process_record "$current" || true)" ]] || failed=true
+    if _mdm_record_is_live "$(_mdm_process_record "$current" || true)"; then
+      failed=true
+    fi
   done
   target_tmp="$(sed -n '1p' "$probe_dir/runner-tmp" 2>/dev/null || true)"
   [[ "$target_tmp" == /* && ! -e "$target_tmp" && ! -L "$target_tmp" ]] \
