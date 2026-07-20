@@ -435,7 +435,10 @@ if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
       . "$_mdm_script"
       /bin/rm -f "$_mdm_script"
       _MDM_EXPECTED_RENDERER="$_mdm_renderer"
-      [[ -z "$_mdm_renderer" ]] || _MDM_EXPECTED_RENDERER_SNAPSHOT=1
+      if [[ -n "$_mdm_renderer" ]]; then
+        _MDM_EXPECTED_RENDERER_SNAPSHOT=1
+        _MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT=1
+      fi
       trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"'\'' EXIT
       trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"; exit 129'\'' HUP
       trap '\''[[ -z "${_MDM_EXPECTED_RENDERER:-}" ]] || /bin/rm -f "$_MDM_EXPECTED_RENDERER"; exit 130'\'' INT
@@ -507,6 +510,9 @@ _MDM_SOURCE_TEST_ACTIVE="${MDM_SOURCE_ONLY:-0}"
 _MDM_EXPECTED_RENDERER="${_MDM_EXPECTED_RENDERER:-}"
 _MDM_EXPECTED_RENDERER_SNAPSHOT="${_MDM_EXPECTED_RENDERER_SNAPSHOT:-0}"
 _MDM_EXPECTED_RENDERER_OWNER_UID="${_MDM_EXPECTED_RENDERER_OWNER_UID:-}"
+_MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT="${_MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT:-0}"
+_MDM_CHECKOUT_RENDERER_SNAPSHOT="${_MDM_CHECKOUT_RENDERER_SNAPSHOT:-}"
+_MDM_CHECKOUT_RENDERER_OWNER_UID="${_MDM_CHECKOUT_RENDERER_OWNER_UID:-}"
 # MDM agent の umask（000 のことがある）を継承しない（契約: dir 755 /
 # file 644。レシート/ログが group/other 書込可で生成されると detect の
 # compliant 偽装に直結する。R2-High）。setup.sh は自身で umask 077 を設定する。
@@ -6194,12 +6200,17 @@ _mdm_runtime_artifact_file_trusted() { # <regular-file> <owner-uid>
   _mdm_mode_is_safe "$_mode" && ! _mdm_has_extended_acl "$_path"
 }
 
-_mdm_snapshot_checkout_renderer() { # <clean-fixed-sha-checkout> [expected-full-sha]
-  local _checkout="$1" _expected_sha="${2:-}" _source _snapshot="" _runtime_uid
+_mdm_snapshot_checkout_renderer() { # <clean-fixed-sha-checkout> [expected-full-sha] [expected|binding]
+  local _checkout="$1" _expected_sha="${2:-}" _destination="${3:-expected}"
+  local _source _snapshot="" _runtime_uid
   local _head_before _head_after _status _source_hash _snapshot_hash _identity _size
   local _mdm_clean_renderer_snapshot=""
   [[ -d "$_checkout" && ! -L "$_checkout" ]] || return 1
   [[ -z "$_expected_sha" || "$_expected_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  case "$_destination" in expected|binding) : ;; *) return 1 ;; esac
+  if [[ "$_destination" == binding ]]; then
+    [[ -z "${_MDM_CHECKOUT_RENDERER_SNAPSHOT:-}" ]] || return 1
+  fi
   _source="$_checkout/mdm/render-expected.py"
   [[ -f "$_source" && ! -L "$_source" ]] || return 1
   _runtime_uid="$(_mdm_runtime_artifact_uid)" || return 1
@@ -6218,13 +6229,22 @@ _mdm_snapshot_checkout_renderer() { # <clean-fixed-sha-checkout> [expected-full-
   _status="$(_mdm_git -C "$_checkout" status --porcelain \
     --untracked-files=all 2>/dev/null)" || return 1
   [[ -z "$_status" ]] || return 1
+  # From this point onward the transient cleanup owns any in-flight or
+  # published snapshot.  This also replaces the direct-launcher's narrow
+  # bundle-only traps before a second temporary file can exist.
+  _mdm_arm_transient_cleanup
   _mdm_launcher_snapshot "$_source" _mdm_clean_renderer_snapshot || return 1
   _snapshot="$_mdm_clean_renderer_snapshot"
-  _MDM_EXPECTED_RENDERER="$_snapshot"
-  _MDM_EXPECTED_RENDERER_SNAPSHOT=1
-  _MDM_EXPECTED_RENDERER_OWNER_UID="$_runtime_uid"
+  if [[ "$_destination" == expected ]]; then
+    _MDM_EXPECTED_RENDERER="$_snapshot"
+    _MDM_EXPECTED_RENDERER_SNAPSHOT=1
+    _MDM_EXPECTED_RENDERER_OWNER_UID="$_runtime_uid"
+    _MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT=0
+  else
+    _MDM_CHECKOUT_RENDERER_SNAPSHOT="$_snapshot"
+    _MDM_CHECKOUT_RENDERER_OWNER_UID="$_runtime_uid"
+  fi
   _mdm_clean_renderer_snapshot=""
-  _mdm_arm_transient_cleanup
   _mdm_runtime_artifact_file_trusted "$_snapshot" "$_runtime_uid" || return 1
   _source_hash="$(_mdm_sha256_file "$_source")" || return 1
   _snapshot_hash="$(_mdm_sha256_file "$_snapshot")" || return 1
@@ -6235,6 +6255,27 @@ _mdm_snapshot_checkout_renderer() { # <clean-fixed-sha-checkout> [expected-full-
     --untracked-files=all 2>/dev/null)" || return 1
   [[ "$_head_after" == "$_head_before" && -z "$_status" \
     && ( -z "$_expected_sha" || "$_head_after" == "$_expected_sha" ) ]]
+}
+
+_mdm_verify_expected_renderer_checkout_binding() { # <checkout> <expected-sha> <bundle-snapshot> <runtime-uid>
+  local _checkout="$1" _expected_sha="$2" _bundle="$3" _runtime_uid="$4"
+  local _bundle_hash _checkout_hash _rc=0
+  [[ "$_expected_sha" =~ ^[0-9a-f]{40}$ \
+    && "$_runtime_uid" =~ ^[0-9]+$ ]] || return 1
+  _mdm_snapshot_checkout_renderer "$_checkout" "$_expected_sha" binding || _rc=1
+  if [[ "$_rc" -eq 0 ]]; then
+    _mdm_runtime_artifact_file_trusted \
+      "$_MDM_CHECKOUT_RENDERER_SNAPSHOT" "$_runtime_uid" || _rc=1
+  fi
+  if [[ "$_rc" -eq 0 ]]; then
+    _bundle_hash="$(_mdm_sha256_file "$_bundle")" || _rc=1
+    _checkout_hash="$(_mdm_sha256_file \
+      "$_MDM_CHECKOUT_RENDERER_SNAPSHOT")" || _rc=1
+    [[ "$_bundle_hash" =~ ^[0-9a-f]{64}$ \
+      && "$_checkout_hash" == "$_bundle_hash" ]] || _rc=1
+  fi
+  _mdm_cleanup_checkout_renderer_snapshot || _rc=1
+  [[ "$_rc" -eq 0 ]]
 }
 
 _mdm_cleanup_expected_inflight() {
@@ -6284,6 +6325,17 @@ _mdm_prepare_expected_state() { # <logical-home> [clean-fixed-sha-checkout] [exp
     || _MDM_EXPECTED_RENDERER_OWNER_UID="$_runtime_uid"
   [[ "$_MDM_EXPECTED_RENDERER_OWNER_UID" == "$_runtime_uid" ]] || return 1
   _mdm_runtime_artifact_file_trusted "$_renderer" "$_runtime_uid" || return 1
+  case "${_MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT:-0}" in
+    0) : ;;
+    1)
+      _mdm_verify_expected_renderer_checkout_binding \
+        "$_checkout" "$_expected_sha" "$_renderer" "$_runtime_uid" || {
+        mdm_log U1b "bundle renderer と checkout renderer の束縛に失敗"
+        return "$MDM_EXIT_CONFIG"
+      }
+      ;;
+    *) return 1 ;;
+  esac
   _python="$(_mdm_system_python)" || { mdm_log U1b "Apple署名済みsystem Pythonを確認できない"; return 1; }
   _base="$(_mdm_auth_tmp_base)"
   _old_umask="$(umask)"; umask 077
@@ -7495,10 +7547,28 @@ _mdm_cleanup_prior_inventory() {
   _MDM_PRIOR_INVENTORY=""
 }
 
+_mdm_cleanup_checkout_renderer_snapshot() {
+  local _path="${_MDM_CHECKOUT_RENDERER_SNAPSHOT:-}" _uid _expected_uid
+  [[ -n "$_path" ]] \
+    || { _MDM_CHECKOUT_RENDERER_OWNER_UID=""; return 0; }
+  _mdm_managed_tmp_path_matches "$_path" claude-kit-mdm-launcher || return 1
+  [[ -f "$_path" && ! -L "$_path" ]] || return 1
+  _uid="$(_mdm_stat_uid "$_path" || true)"
+  _expected_uid="${_MDM_CHECKOUT_RENDERER_OWNER_UID:-}"
+  [[ "$_expected_uid" =~ ^[0-9]+$ && "$_uid" == "$_expected_uid" ]] || return 1
+  /bin/rm -f "$_path" || return 1
+  _MDM_CHECKOUT_RENDERER_SNAPSHOT=""
+  _MDM_CHECKOUT_RENDERER_OWNER_UID=""
+}
+
 _mdm_cleanup_renderer_snapshot() {
   local _path="${_MDM_EXPECTED_RENDERER:-}" _uid _expected_uid
   [[ "${_MDM_EXPECTED_RENDERER_SNAPSHOT:-0}" == 1 && -n "$_path" ]] \
-    || { _MDM_EXPECTED_RENDERER_OWNER_UID=""; return 0; }
+    || {
+      _MDM_EXPECTED_RENDERER_OWNER_UID=""
+      _MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT=0
+      return 0
+    }
   _mdm_managed_tmp_path_matches "$_path" claude-kit-mdm-launcher || return 1
   [[ -f "$_path" && ! -L "$_path" ]] || return 1
   _uid="$(_mdm_stat_uid "$_path" || true)"
@@ -7509,6 +7579,7 @@ _mdm_cleanup_renderer_snapshot() {
   _MDM_EXPECTED_RENDERER=""
   _MDM_EXPECTED_RENDERER_SNAPSHOT=0
   _MDM_EXPECTED_RENDERER_OWNER_UID=""
+  _MDM_EXPECTED_RENDERER_BUNDLE_SNAPSHOT=0
 }
 
 _mdm_clear_system_python_runtime_state() {
@@ -7667,6 +7738,7 @@ _mdm_cleanup_transient_checkouts() {
   _mdm_cleanup_auth_checkout || true
   _mdm_cleanup_expected_dir || true
   _mdm_cleanup_prior_inventory || true
+  _mdm_cleanup_checkout_renderer_snapshot || true
   _mdm_cleanup_renderer_snapshot || true
   _mdm_cleanup_system_python_workspace || true
   _mdm_clear_failure_rollback_runtime
