@@ -3200,8 +3200,15 @@ fi
 chmod 755 "$_mdm_detect_install/.git"
 
 (
-  export MDM_DETECT_EXPECTED_UID_OVERRIDE
-  MDM_DETECT_EXPECTED_UID_OVERRIDE=$(( $(/usr/bin/id -u) + 1 ))
+  _mdm_stat_uid() {
+    if [[ "$1" == "$_mdm_detect_install" ]]; then
+      printf '%s' "$((_mdm_detect_fixture_uid + 1))"
+    elif _mdm_is_darwin; then
+      /usr/bin/stat -f '%u' "$1" 2>/dev/null
+    else
+      /usr/bin/stat -c '%u' "$1" 2>/dev/null
+    fi
+  }
   if mdm_detect "$_mdm_detect_receipt" jane; then
     fail "mdm-detect: wrong-owner persistent checkout was accepted"
   else
@@ -4129,18 +4136,41 @@ else
 fi
 chmod "$_mdm_detect_snapshot_mode" "$_mdm_detect_snapshot/settings.json"
 
-_mdm_detect_expected_uid_saved="$MDM_DETECT_EXPECTED_UID_OVERRIDE"
-if [[ "$_mdm_detect_expected_uid_saved" == 0 ]]; then
-  MDM_DETECT_EXPECTED_UID_OVERRIDE=1
-else
-  MDM_DETECT_EXPECTED_UID_OVERRIDE=0
-fi
-if mdm_detect "$_mdm_detect_receipt" jane; then
-  fail "mdm-detect: managed file with unexpected owner was accepted"
-else
+_mdm_detect_managed_owner_rejected=true
+for _mdm_detect_wrong_owner_path in \
+  "$_mdm_detect_claude/settings.json" \
+  "$_mdm_detect_snapshot/settings.json"; do
+  if (
+    _mdm_stat_metadata() {
+      local _metadata _inode _type _size _uid _mode _nlink
+      if _mdm_is_darwin; then
+        _metadata="$(/usr/bin/stat -f '%i:%HT:%z:%u:%Mp%Lp:%l' \
+          "$1" 2>/dev/null)" || return 1
+      else
+        _metadata="$(/usr/bin/stat -c '%i:%F:%s:%u:%a:%h' \
+          "$1" 2>/dev/null)" || return 1
+      fi
+      if [[ "$1" == "$_mdm_detect_wrong_owner_path" ]]; then
+        IFS=: read -r _inode _type _size _uid _mode _nlink \
+          <<< "$_metadata"
+        printf '%s:%s:%s:%s:%s:%s' \
+          "$_inode" "$_type" "$_size" \
+          "$((_mdm_detect_fixture_uid + 1))" "$_mode" "$_nlink"
+      else
+        printf '%s' "$_metadata"
+      fi
+    }
+    mdm_detect "$_mdm_detect_receipt" jane
+  ); then
+    _mdm_detect_managed_owner_rejected=false
+  fi
+done
+if [[ "$_mdm_detect_managed_owner_rejected" == true ]]; then
   pass "mdm-detect: live and snapshot files must belong to the target UID"
+else
+  fail "mdm-detect: managed file with unexpected owner was accepted"
 fi
-MDM_DETECT_EXPECTED_UID_OVERRIDE="$_mdm_detect_expected_uid_saved"
+unset _mdm_detect_managed_owner_rejected _mdm_detect_wrong_owner_path
 
 # A present-file snapshot must be invalidated when its real parent is swapped
 # after the original inode is open but before post-copy validation.  The
@@ -4916,8 +4946,21 @@ else
 fi
 
 if [[ "$(/usr/bin/id -u)" == 0 ]]; then
-  skip "mdm-detect: production entrypoint discards test/root overrides" \
-    "root caller cannot exercise non-root privilege rejection"
+  _mdm_detect_main_rc=0
+  MDM_SOURCE_ONLY=1 MDM_RECEIPT_DIR_OVERRIDE="$_mdm_detect_receipts" \
+    MDM_EUID_OVERRIDE=501 \
+    MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$(/usr/bin/id -un)" \
+    MDM_DETECT_HOME_OVERRIDE="$_mdm_detect_home" \
+    MDM_DETECT_CLI_PRESENT_OVERRIDE=1 \
+    "$PROJECT_DIR/mdm/detect-mdm.sh" --user root \
+      --expected-commit "$_mdm_detect_sha" \
+      --expected-policy-sha256 "$_mdm_detect_policy_sha" >/dev/null 2>&1 \
+    || _mdm_detect_main_rc=$?
+  if [[ "$_mdm_detect_main_rc" -eq 2 ]]; then
+    pass "mdm-detect: production entrypoint discards test/root overrides"
+  else
+    fail "mdm-detect: production root isolation failed (rc=$_mdm_detect_main_rc)"
+  fi
 else
   _mdm_detect_main_rc=0
   MDM_SOURCE_ONLY=1 MDM_RECEIPT_DIR_OVERRIDE="$_mdm_detect_receipts" \
