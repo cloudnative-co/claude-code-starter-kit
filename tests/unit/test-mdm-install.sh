@@ -1139,13 +1139,25 @@ rm -rf "$_tmpd"
         export MDM_CONFIG_SKIP_OWNER_CHECK=1
         _mdm_exec_as_user() {
           local _drop_uid="$1" _drop_user="$2" _drop_home="$3"
+          local -a _drop_argv
           shift 3
-          if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
-            /usr/bin/sudo -n -u "#$_drop_uid" -H /usr/bin/env -i \
-              "HOME=$_drop_home" "USER=$_drop_user" "LOGNAME=$_drop_user" \
-              PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C "$@"
-          else
+          _drop_argv=(
+            /usr/bin/env -i
+            "HOME=$_drop_home"
+            "USER=$_drop_user"
+            "LOGNAME=$_drop_user"
+            PATH=/usr/bin:/bin:/usr/sbin:/sbin
+            LC_ALL=C
+            /bin/sh -c "umask 022; cd \"\$HOME\" || exit 1; exec \"\$@\""
+            mdm-finish-user
             "$@"
+          )
+          if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+            /usr/bin/sudo -n -u "#$_drop_uid" -H "${_drop_argv[@]}"
+          elif [[ "$(/usr/bin/id -u)" -eq "$_drop_uid" ]]; then
+            "${_drop_argv[@]}"
+          else
+            return 1
           fi
         }
         _MDM_GIT_DROP_UID="$_uid"
@@ -9144,13 +9156,25 @@ fi
         export MDM_CONFIG_SKIP_OWNER_CHECK=1
         _mdm_exec_as_user() {
           local _drop_uid="$1" _drop_user="$2" _drop_home="$3"
+          local -a _drop_argv
           shift 3
-          if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
-            /usr/bin/sudo -n -u "#$_drop_uid" -H /usr/bin/env -i \
-              "HOME=$_drop_home" "USER=$_drop_user" "LOGNAME=$_drop_user" \
-              PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C "$@"
-          else
+          _drop_argv=(
+            /usr/bin/env -i
+            "HOME=$_drop_home"
+            "USER=$_drop_user"
+            "LOGNAME=$_drop_user"
+            PATH=/usr/bin:/bin:/usr/sbin:/sbin
+            LC_ALL=C
+            /bin/sh -c "umask 022; cd \"\$HOME\" || exit 1; exec \"\$@\""
+            mdm-allocation-user
             "$@"
+          )
+          if [[ "$(/usr/bin/id -u)" -eq 0 ]]; then
+            /usr/bin/sudo -n -u "#$_drop_uid" -H "${_drop_argv[@]}"
+          elif [[ "$(/usr/bin/id -u)" -eq "$_drop_uid" ]]; then
+            "${_drop_argv[@]}"
+          else
+            return 1
           fi
         }
         _MDM_GIT_DROP_UID="$_uid"
