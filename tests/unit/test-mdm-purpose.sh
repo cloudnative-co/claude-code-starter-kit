@@ -20,16 +20,144 @@ if [[ -z "${MDM_TEST_TMP_ROOT:-}" || ! -d "$MDM_TEST_TMP_ROOT" \
   printf 'test-mdm-purpose.sh requires the runner-owned MDM_TEST_TMP_ROOT\n' >&2
   exit 2
 fi
+_purpose_python_cmd="$(command -v python3)"
+_purpose_runner_user="$(/usr/bin/id -un)"
+_purpose_runner_uid="$(/usr/bin/id -u)"
+_purpose_runner_gid="$(/usr/bin/id -g)"
+_purpose_runner_tmp_mode=""
+if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+  _purpose_runner_tmp_physical="$(builtin cd -P -- "$MDM_TEST_TMP_ROOT" \
+    2>/dev/null && printf '%s' "$PWD" || true)"
+  _purpose_runner_tmp_uid="$(_mdm_stat_uid \
+    "$MDM_TEST_TMP_ROOT" 2>/dev/null || true)"
+  _purpose_runner_tmp_mode="$(_mdm_mode_normalize \
+    "$(_mdm_stat_mode "$MDM_TEST_TMP_ROOT" 2>/dev/null || true)" \
+    2>/dev/null || true)"
+  if [[ "$MDM_TEST_TMP_ROOT" != /* \
+    || "$_purpose_runner_tmp_physical" != "$MDM_TEST_TMP_ROOT" \
+    || "$_purpose_runner_tmp_uid" != 0 ]] \
+    || ! _mdm_mode_is_safe "$_purpose_runner_tmp_mode" \
+    || _mdm_has_extended_acl "$MDM_TEST_TMP_ROOT"; then
+    printf 'test-mdm-purpose.sh requires a canonical root-owned safe tmp root\n' >&2
+    exit 2
+  fi
+fi
 _purpose_tmp="$(mktemp -d "$MDM_TEST_TMP_ROOT/mdm-purpose.XXXXXX")"
 _purpose_tmp="$(builtin cd -P "$_purpose_tmp" && printf '%s' "$PWD")"
 _purpose_repo="$_purpose_tmp/repo"
+_purpose_user_repo="$_purpose_repo"
 _purpose_home="$_purpose_tmp/home"
 _purpose_auth="$_purpose_tmp/authority"
-_purpose_user="$(/usr/bin/id -un)"
-_purpose_uid="$(/usr/bin/id -u)"
+_purpose_tmp_mode_guard_pid=""
+_purpose_user="$_purpose_runner_user"
+_purpose_uid="$_purpose_runner_uid"
+_purpose_gid="$_purpose_runner_gid"
+if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+  _purpose_user_record="$("$_purpose_python_cmd" -I -B - <<'PY'
+import pwd
+
+invalid_shells = {"", "/bin/false", "/usr/bin/false",
+                  "/sbin/nologin", "/usr/sbin/nologin"}
+users = [entry for entry in pwd.getpwall()
+         if 501 <= entry.pw_uid <= 60000
+         and entry.pw_shell not in invalid_shells]
+if users:
+    selected = min(users, key=lambda entry: entry.pw_uid)
+    print(f"{selected.pw_name}\t{selected.pw_uid}\t{selected.pw_gid}")
+PY
+)"
+  IFS=$'\t' read -r _purpose_user _purpose_uid _purpose_gid \
+    <<< "$_purpose_user_record"
+  _purpose_bound_uid="$(/usr/bin/id -u "$_purpose_user" 2>/dev/null || true)"
+  _purpose_bound_gid="$(/usr/bin/id -g "$_purpose_user" 2>/dev/null || true)"
+  if [[ -z "$_purpose_user" || ! "$_purpose_uid" =~ ^[0-9]+$ \
+    || "$_purpose_uid" -lt 501 || "$_purpose_uid" -gt 60000 \
+    || ! "$_purpose_gid" =~ ^[0-9]+$ \
+    || "$_purpose_bound_uid" != "$_purpose_uid" \
+    || "$_purpose_bound_gid" != "$_purpose_gid" ]]; then
+    printf 'test-mdm-purpose.sh requires an eligible target persona under root\n' >&2
+    exit 2
+  fi
+fi
 _purpose_generated_uid=11111111-2222-3333-4444-555555555555
 mkdir -p "$_purpose_repo" "$_purpose_home" "$_purpose_auth"
-chmod 700 "$_purpose_auth"
+chmod 700 "$_purpose_home" "$_purpose_auth"
+_purpose_restore_runner_tmp_mode() {
+  [[ "$_purpose_runner_uid" -eq 0 ]] || return 0
+  /bin/chmod "$_purpose_runner_tmp_mode" "$MDM_TEST_TMP_ROOT"
+}
+_purpose_mode_guard_alive() {
+  local _ppid _stat
+  _ppid="$(LC_ALL=C /bin/ps -o ppid= \
+    -p "$_purpose_tmp_mode_guard_pid" 2>/dev/null \
+    | /usr/bin/tr -d '[:space:]')"
+  _stat="$(LC_ALL=C /bin/ps -o stat= \
+    -p "$_purpose_tmp_mode_guard_pid" 2>/dev/null \
+    | /usr/bin/tr -d '[:space:]')"
+  [[ "$_ppid" == "$$" && -n "$_stat" && "$_stat" != Z* ]]
+}
+_purpose_stop_mode_guard() {
+  local _rc=0
+  if ! /bin/mkdir "$_purpose_guard_stop" 2>/dev/null; then
+    _rc=1
+  elif ! wait "$_purpose_tmp_mode_guard_pid" 2>/dev/null; then
+    _rc=1
+  fi
+  _purpose_restore_runner_tmp_mode || _rc=1
+  [[ "$(_mdm_mode_normalize \
+    "$(_mdm_stat_mode "$MDM_TEST_TMP_ROOT" 2>/dev/null || true)" \
+    2>/dev/null || true)" == "$_purpose_runner_tmp_mode" ]] || _rc=1
+  return "$_rc"
+}
+if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+  _purpose_guard_ready="$_purpose_tmp/.mode-guard-ready"
+  _purpose_guard_stop="$_purpose_tmp/.mode-guard-stop"
+  /bin/sh -c '
+    set -u
+    mode="$1" root="$2" expected_parent="$3" ready="$4" stop="$5"
+    restore_mode() {
+      /bin/chmod "$mode" "$root" 2>/dev/null || true
+    }
+    trap restore_mode 0
+    trap "exit 0" 1 2 15
+    /bin/mkdir "$ready" || exit 1
+    while [ ! -d "$stop" ]; do
+      current_parent="$(LC_ALL=C /bin/ps -o ppid= -p "$$" 2>/dev/null \
+        | /usr/bin/tr -d "[:space:]")"
+      [ "$current_parent" = "$expected_parent" ] || exit 0
+      /bin/sleep 1
+    done
+  ' purpose-mode-guard "$_purpose_runner_tmp_mode" "$MDM_TEST_TMP_ROOT" \
+    "$$" "$_purpose_guard_ready" "$_purpose_guard_stop" &
+  _purpose_tmp_mode_guard_pid="$!"
+  _purpose_guard_ready_count=0
+  while [[ ! -d "$_purpose_guard_ready" \
+    && "$_purpose_guard_ready_count" -lt 500 ]]; do
+    /bin/sleep 0.01
+    _purpose_guard_ready_count=$((_purpose_guard_ready_count + 1))
+  done
+  if [[ ! -d "$_purpose_guard_ready" ]]; then
+    _purpose_stop_mode_guard || true
+    printf 'test-mdm-purpose.sh could not arm the tmp mode guard\n' >&2
+    exit 2
+  fi
+  /bin/rmdir "$_purpose_guard_ready"
+  chmod go+x "$MDM_TEST_TMP_ROOT"
+  if ! _purpose_mode_guard_alive; then
+    _purpose_stop_mode_guard || true
+    printf 'test-mdm-purpose.sh tmp mode guard exited before handoff\n' >&2
+    exit 2
+  fi
+  if ! /usr/bin/sudo -n -u "#$_purpose_uid" \
+    /bin/test -x "$MDM_TEST_TMP_ROOT"; then
+    _purpose_stop_mode_guard || true
+    printf 'test-mdm-purpose.sh target cannot traverse the runner tmp root\n' >&2
+    exit 2
+  fi
+  chmod 711 "$_purpose_tmp"
+  chmod 711 "$_purpose_auth"
+  chown "$_purpose_uid:$_purpose_gid" "$_purpose_home"
+fi
 
 /usr/bin/git -C "$_purpose_repo" init -q
 cat > "$_purpose_repo/setup.sh" <<'SETUP'
@@ -76,8 +204,12 @@ _purpose_commit() {
 _purpose_sha_a="$(_purpose_commit A)"
 _purpose_sha_b="$(_purpose_commit B)"
 _purpose_sha_c="$(_purpose_commit C)"
+if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+  _purpose_user_repo="$_purpose_tmp/user-repo"
+  /bin/cp -R "$_purpose_repo" "$_purpose_user_repo"
+  chown -R "$_purpose_uid:$_purpose_gid" "$_purpose_user_repo"
+fi
 
-_purpose_python_cmd="$(command -v python3)"
 _purpose_python="$("$_purpose_python_cmd" -c \
   'import os, sys; print(os.path.realpath(sys.executable))')"
 MDM_SYSTEM_PYTHON_OVERRIDE="$_purpose_python"
@@ -96,10 +228,22 @@ fi
 # Keep the production checkout, fixed-SHA, clean-env, and setup argv flow.
 # Only OS/root-only facilities are replaced by deterministic local adapters.
 _mdm_exec_as_user() {
-  local _uid="$1" _user="$2" _home="$3"
+  local _uid="$1" _user="$2" _home="$3" _item
   shift 3
   mdm_build_drop_argv "$_uid" "$_user" "$_home" "$@" || return 1
-  "${MDM_DROP_ARGV[@]}"
+  if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+    for _item in "${!MDM_DROP_ARGV[@]}"; do
+      [[ "${MDM_DROP_ARGV[$_item]}" == "$_purpose_repo" ]] \
+        && MDM_DROP_ARGV[$_item]="$_purpose_user_repo"
+    done
+  fi
+  if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+    (builtin cd -P "$_home" \
+      && /usr/bin/sudo -n -u "#$_uid" -H /bin/sh -c \
+        'umask 077; exec "$@"' sh "${MDM_DROP_ARGV[@]}")
+  else
+    "${MDM_DROP_ARGV[@]}"
+  fi
 }
 _mdm_system_python() { printf '%s' "$_purpose_python"; }
 _mdm_capture_prior_inventory() { return 0; }
@@ -130,7 +274,7 @@ _mdm_cli_present_for_home() { return 0; }
 _purpose_run() { # <sha> <profile> <language> <statusline> <cli-required>
   local _policy_input="$_purpose_tmp/fixture-policy"
   export MDM_AUTH_TMPDIR_OVERRIDE="$_purpose_auth"
-  export MDM_AUTH_OWNER_UID_OVERRIDE="$_purpose_uid"
+  export MDM_AUTH_OWNER_UID_OVERRIDE="$_purpose_runner_uid"
   export MDM_AUTH_PRIVACY_UID_OVERRIDE=99999
   export MDM_AUTH_READONLY_OWNER_TEST=1
   export MDM_KIT_REPO_URL_OVERRIDE="$_purpose_repo"
@@ -150,8 +294,25 @@ _purpose_run() { # <sha> <profile> <language> <statusline> <cli-required>
 
 _purpose_state() { /bin/cat "$_purpose_home/.mdm-purpose-state/current"; }
 _purpose_generation() { /bin/cat "$_purpose_home/.mdm-purpose-state/generation"; }
+_purpose_target_git() {
+  if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+    /usr/bin/sudo -n -u "#$_purpose_uid" -H /usr/bin/git "$@"
+  else
+    /usr/bin/git "$@"
+  fi
+}
+_purpose_target_worktree_clean() { # <repo>
+  if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+    local _MDM_GIT_DROP_UID="$_purpose_uid"
+    local _MDM_GIT_DROP_USER="$_purpose_user"
+    local _MDM_GIT_DROP_HOME="$_purpose_home"
+    _mdm_persistent_worktree_clean "$1"
+  else
+    _mdm_persistent_worktree_clean "$1"
+  fi
+}
 _purpose_head() {
-  /usr/bin/git -C "$_purpose_home/.claude-starter-kit" rev-parse HEAD
+  _purpose_target_git -C "$_purpose_home/.claude-starter-kit" rev-parse HEAD
 }
 _purpose_policy_sha() { # <profile> <language> <statusline> <cli-required>
   local _base _output _hash
@@ -194,7 +355,7 @@ _purpose_write_receipt() { # <profile> <language> <policy-sha>
   export MDM_RCPT_PARTIAL='[]'
   export MDM_RCPT_TIMESTAMP=2026-07-18T00:00:00Z
   export MDM_RCPT_LOG_PATH="$_purpose_tmp/install.log"
-  MDM_EUID_OVERRIDE=501 mdm_receipt_write \
+  MDM_EUID_OVERRIDE="$_purpose_uid" mdm_receipt_write \
     "$_purpose_receipts/receipt-$_purpose_user.json" success 0
 }
 _purpose_detect() { # <commit> <policy-sha>
@@ -388,6 +549,7 @@ fi
 # end to end: current tracked product code -> fixed-SHA authoritative checkout
 # -> real renderer/setup/postcondition/history/receipt -> real detector.
 _purpose_full_repo="$_purpose_tmp/full-repo"
+_purpose_full_user_repo="$_purpose_full_repo"
 _purpose_full_patch="$_purpose_tmp/full-working-tree.patch"
 _purpose_full_home="$_purpose_tmp/full-home"
 _purpose_full_auth="$_purpose_tmp/full-authority"
@@ -405,9 +567,14 @@ chmod 700 "$_purpose_full_home" "$_purpose_full_auth" \
   "$_purpose_full_trust" "$_purpose_full_detect_tmp" \
   "$_purpose_full_tool_bin"
 chmod 755 "$_purpose_full_receipts"
+if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+  chown "$_purpose_uid:$_purpose_gid" "$_purpose_full_home"
+  chmod 711 "$_purpose_full_auth"
+  chmod 755 "$_purpose_full_tool_bin"
+fi
 
 # The real setup path must remain in prerequisite fail mode, but hosted CI
-# images are not required to preinstall tmux. Supply only that OS prerequisite
+# images are not required to preinstall tmux or gh. Supply only those OS tools
 # through the target-user execution adapter so the test remains offline and
 # still exercises the production prerequisite, setup, and postcondition flow.
 cat > "$_purpose_full_tool_bin/tmux" <<'TMUX'
@@ -418,7 +585,19 @@ if [ "$#" -eq 1 ] && [ "$1" = "-V" ]; then
 fi
 exit 64
 TMUX
-chmod 500 "$_purpose_full_tool_bin/tmux"
+cat > "$_purpose_full_tool_bin/gh" <<'GH'
+#!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+  printf '%s\n' 'gh version purpose-fixture'
+  exit 0
+fi
+exit 64
+GH
+if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+  chmod 555 "$_purpose_full_tool_bin/tmux" "$_purpose_full_tool_bin/gh"
+else
+  chmod 500 "$_purpose_full_tool_bin/tmux" "$_purpose_full_tool_bin/gh"
+fi
 
 /usr/bin/git clone --quiet --no-local "$PROJECT_DIR" "$_purpose_full_repo"
 /usr/bin/git -C "$PROJECT_DIR" diff --binary HEAD -- . \
@@ -441,6 +620,15 @@ GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   /usr/bin/git -C "$_purpose_full_repo" commit --quiet --allow-empty \
     -m 'fixture purpose state'
 _purpose_full_sha="$(/usr/bin/git -C "$_purpose_full_repo" rev-parse HEAD)"
+_purpose_sync_full_user_repo() {
+  _purpose_full_user_repo="$_purpose_full_repo"
+  if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+    _purpose_full_user_repo="$_purpose_tmp/full-user-repo-$_purpose_full_sha"
+    /bin/cp -R "$_purpose_full_repo" "$_purpose_full_user_repo" || return 1
+    chown -R "$_purpose_uid:$_purpose_gid" "$_purpose_full_user_repo"
+  fi
+}
+_purpose_sync_full_user_repo
 /bin/cp "$_purpose_full_repo/mdm/render-expected.py" "$_purpose_full_renderer"
 chmod 500 "$_purpose_full_renderer"
 "$_purpose_python" -I -B "$_purpose_full_renderer" \
@@ -677,24 +865,50 @@ _purpose_composite_case standard-dry-run "$_purpose_standard_reference" \
 _purpose_composite_case minimal-no-wce "$_purpose_full_reference" \
   minimal auto false false
 
+_purpose_full_prior_record="$_purpose_tmp/full-prior-handoff"
 _purpose_full_install() {
+  local _rc=0 _prior_expected=false _prior_path=""
+  if [[ "$_purpose_runner_uid" -eq 0 \
+    && -f "$_purpose_full_receipts/managed-history-$_purpose_generated_uid.json" ]]; then
+    _prior_expected=true
+  fi
+  : > "$_purpose_full_prior_record"
   PROJECT_DIR="$PROJECT_DIR" PURPOSE_REPO="$_purpose_full_repo" \
+    PURPOSE_USER_REPO="$_purpose_full_user_repo" \
     PURPOSE_HOME="$_purpose_full_home" PURPOSE_AUTH="$_purpose_full_auth" \
     PURPOSE_RECEIPTS="$_purpose_full_receipts" \
     PURPOSE_RENDERER="$_purpose_full_renderer" PURPOSE_SHA="$_purpose_full_sha" \
     PURPOSE_POLICY="$_purpose_full_expected_policy" \
     PURPOSE_USER="$_purpose_user" PURPOSE_UID="$_purpose_uid" \
+    PURPOSE_RUNNER_UID="$_purpose_runner_uid" \
     PURPOSE_GENERATED_UID="$_purpose_generated_uid" \
     PURPOSE_PYTHON="$_purpose_python" PURPOSE_TOOL_BIN="$_purpose_full_tool_bin" \
+    PURPOSE_PRIOR_RECORD="$_purpose_full_prior_record" \
     PURPOSE_NODE_ARCH="$_purpose_node_arch" \
     PURPOSE_FAIL_AFTER_DEPLOY="${PURPOSE_FAIL_AFTER_DEPLOY:-false}" \
     "$BASH" --noprofile --norc -c '
       set -euo pipefail
       MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/install-mdm.sh"
-      # The real coordinator creates this handoff as root. This test runs
-      # without privilege, so allow the existing deploy.sh owner-check test hook
-      # through the test adapter; all other inventory checks stay live.
-      _MDM_PASSTHROUGH_KEYS="$_MDM_PASSTHROUGH_KEYS MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK"
+      if [[ "$PURPOSE_RUNNER_UID" -eq 0 ]]; then
+        # The user-side inventory parser accepts only the production handoff
+        # locations. Keep all other root test temporaries contained, while
+        # letting the production cleanup track this one cross-UID handoff.
+        _mdm_safe_tmpdir() {
+          if [[ "${FUNCNAME[1]:-}" == _mdm_capture_prior_inventory ]]; then
+            case "$(/usr/bin/uname -s)" in
+              Darwin) printf "%s" /private/tmp ;;
+              *) printf "%s" /tmp ;;
+            esac
+          else
+            printf "%s" "$MDM_TEST_TMP_ROOT"
+          fi
+        }
+      fi
+      # A non-root CI runner cannot create root-owned authority fixtures. Root
+      # execution keeps every production owner check live.
+      if [[ "$PURPOSE_RUNNER_UID" -ne 0 ]]; then
+        _MDM_PASSTHROUGH_KEYS="$_MDM_PASSTHROUGH_KEYS MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK"
+      fi
       _mdm_exec_as_user() {
         local uid="$1" user="$2" home="$3" item path_count=0
         shift 3
@@ -706,13 +920,23 @@ _purpose_full_install() {
               MDM_DROP_ARGV[$item]="PATH=$PURPOSE_TOOL_BIN:${MDM_DROP_ARGV[$item]#PATH=}"
               ;;
           esac
+          if [[ "$PURPOSE_RUNNER_UID" -eq 0 \
+            && "${MDM_DROP_ARGV[$item]}" == "$PURPOSE_REPO" ]]; then
+            MDM_DROP_ARGV[$item]="$PURPOSE_USER_REPO"
+          fi
         done
         [[ "$path_count" -eq 1 ]] || return 1
-        (builtin cd -P "$home" && "${MDM_DROP_ARGV[@]}")
+        if [[ "$PURPOSE_RUNNER_UID" -eq 0 ]]; then
+          (builtin cd -P "$home" \
+            && /usr/bin/sudo -n -u "#$uid" -H /bin/sh -c \
+              "umask 077; exec \"\$@\"" sh "${MDM_DROP_ARGV[@]}")
+        else
+          (builtin cd -P "$home" && "${MDM_DROP_ARGV[@]}")
+        fi
       }
       export MDM_KIT_REPO_URL_OVERRIDE="$PURPOSE_REPO"
       export MDM_AUTH_TMPDIR_OVERRIDE="$PURPOSE_AUTH"
-      export MDM_AUTH_OWNER_UID_OVERRIDE="$PURPOSE_UID"
+      export MDM_AUTH_OWNER_UID_OVERRIDE="$PURPOSE_RUNNER_UID"
       export MDM_AUTH_PRIVACY_UID_OVERRIDE=99999
       export MDM_AUTH_READONLY_OWNER_TEST=1
       export MDM_SYSTEM_PYTHON_OVERRIDE="$PURPOSE_PYTHON"
@@ -728,8 +952,13 @@ _purpose_full_install() {
       export MDM_CANONICAL_USER_OVERRIDE="$PURPOSE_USER"
       export MDM_DSCL_GENERATED_UID_OVERRIDE="$PURPOSE_GENERATED_UID"
       export MDM_SEARCH_GENERATED_UID_OVERRIDE="$PURPOSE_GENERATED_UID"
-      export MDM_CONFIG_SKIP_OWNER_CHECK=1 MDM_LOG_SKIP_OWNER_CHECK=1
-      export MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK=1
+      if [[ "$PURPOSE_RUNNER_UID" -ne 0 ]]; then
+        export MDM_CONFIG_SKIP_OWNER_CHECK=1 MDM_LOG_SKIP_OWNER_CHECK=1
+        export MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK=1
+      else
+        unset MDM_CONFIG_SKIP_OWNER_CHECK MDM_LOG_SKIP_OWNER_CHECK
+        unset MDM_PRIOR_INVENTORY_SKIP_OWNER_CHECK
+      fi
       export PROFILE=minimal LANGUAGE=en EDITOR_CHOICE=vscode
       export KIT_MDM_GIT_REF="$PURPOSE_SHA"
       export KIT_MDM_EXPECTED_POLICY_SHA256="$PURPOSE_POLICY"
@@ -743,6 +972,10 @@ _purpose_full_install() {
       _mdm_transaction_begin "$PURPOSE_USER" "$PURPOSE_HOME" \
         "$PURPOSE_UID" "$PURPOSE_GENERATED_UID"
       _mdm_run_user_phase 0 "$PURPOSE_USER" "$PURPOSE_HOME" "$PURPOSE_UID"
+      if [[ "$PURPOSE_RUNNER_UID" -eq 0 \
+        && -n "${_MDM_PRIOR_INVENTORY:-}" ]]; then
+        printf "%s\n" "$_MDM_PRIOR_INVENTORY" > "$PURPOSE_PRIOR_RECORD"
+      fi
       MDM_RCPT_TARGET_USER="$PURPOSE_USER"
       MDM_RCPT_TARGET_UID="$PURPOSE_UID"
       MDM_RCPT_TARGET_GENERATED_UID="$PURPOSE_GENERATED_UID"
@@ -759,7 +992,20 @@ _purpose_full_install() {
         "$PURPOSE_UID" "$PURPOSE_GENERATED_UID"
       MDM_EUID_OVERRIDE="$PURPOSE_UID" \
         _mdm_finish "$PURPOSE_USER" "$PURPOSE_HOME" success 0
-    '
+    ' || _rc=$?
+  if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+    IFS= read -r _prior_path < "$_purpose_full_prior_record" || true
+    if [[ "$_prior_expected" == true ]]; then
+      case "$_prior_path" in
+        /private/tmp/claude-kit-mdm-prior.??????|/tmp/claude-kit-mdm-prior.??????) ;;
+        *) return 1 ;;
+      esac
+      [[ ! -e "$_prior_path" && ! -L "$_prior_path" ]] || return 1
+    elif [[ -n "$_prior_path" ]]; then
+      return 1
+    fi
+  fi
+  return "$_rc"
 }
 
 _purpose_full_detect() { # <policy-sha>
@@ -769,11 +1015,12 @@ _purpose_full_detect() { # <policy-sha>
     PURPOSE_UID="$_purpose_uid" PURPOSE_GENERATED_UID="$_purpose_generated_uid" \
     PURPOSE_SHA="$_purpose_full_sha" PURPOSE_POLICY="$1" \
     PURPOSE_PYTHON="$_purpose_python" \
+    PURPOSE_RUNNER_USER="$_purpose_runner_user" \
     "$BASH" --noprofile --norc -c '
       MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/detect-mdm.sh"
       export MDM_RECEIPT_DIR_OVERRIDE="$PURPOSE_RECEIPTS"
       export MDM_DETECT_TRUST_BASE_OVERRIDE="$PURPOSE_TRUST"
-      export MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$PURPOSE_USER"
+      export MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$PURPOSE_RUNNER_USER"
       export MDM_DETECT_CANONICAL_USER_OVERRIDE="$PURPOSE_USER"
       export MDM_DETECT_HOME_OVERRIDE="$PURPOSE_HOME"
       export MDM_DETECT_EXPECTED_UID_OVERRIDE="$PURPOSE_UID"
@@ -845,7 +1092,8 @@ if [[ "$_purpose_full_rc" -eq 0 && "$_purpose_full_detect_rc" -eq 0 \
   && "$_purpose_full_component_rc" -eq 0 ]] \
   && /usr/bin/grep -q 'tmux purpose-fixture' \
     "$_purpose_tmp/full-install.out" \
-  && [[ "$(/usr/bin/git -C "$_purpose_full_home/.claude-starter-kit" rev-parse HEAD)" \
+  && [[ "$(_purpose_target_git -C \
+    "$_purpose_full_home/.claude-starter-kit" rev-parse HEAD)" \
     == "$_purpose_full_sha" ]]; then
   pass "mdm-purpose: 実zero-touch配備からreceipt検知までend-to-endで収束"
 else
@@ -938,10 +1186,10 @@ _purpose_idem_backup_id="$(_mdm_persistent_dir_identity \
   "$_purpose_idem_backup" 2>/dev/null || true)"
 _purpose_idem_backup_digest="$(_mdm_artifact_digest tree \
   "$_purpose_idem_backup" "$_purpose_uid" 2>/dev/null || true)"
-_purpose_idem_head="$(/usr/bin/git -C "$_purpose_idem_checkout" \
+_purpose_idem_head="$(_purpose_target_git -C "$_purpose_idem_checkout" \
   rev-parse HEAD 2>/dev/null || true)"
 _purpose_idem_status=dirty
-_mdm_persistent_worktree_clean "$_purpose_idem_checkout" \
+_purpose_target_worktree_clean "$_purpose_idem_checkout" \
   && _purpose_idem_status=clean
 _purpose_idem_residue=false
 if /usr/bin/find "$_purpose_full_home" -maxdepth 1 \
@@ -1041,6 +1289,11 @@ mkdir "$_purpose_parent_user_dir"
 printf 'purpose nested user rule\n' > "$_purpose_parent_user_nested"
 chmod 600 "$_purpose_parent_user_file" "$_purpose_parent_user_nested"
 chmod 700 "$_purpose_parent_user_dir"
+if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+  chown "$_purpose_uid:$_purpose_gid" \
+    "$_purpose_parent_user_file" "$_purpose_parent_user_dir" \
+    "$_purpose_parent_user_nested"
+fi
 
 _purpose_parent_live_copy="$_purpose_tmp/parent-live-managed.before"
 _purpose_parent_snapshot_copy="$_purpose_tmp/parent-snapshot-managed.before"
@@ -1069,7 +1322,10 @@ _purpose_parent_fixture_ok=false
 if [[ -d "$_purpose_parent_live" && ! -L "$_purpose_parent_live" \
   && -d "$_purpose_parent_snapshot" && ! -L "$_purpose_parent_snapshot" \
   && "$(_mdm_stat_uid "$_purpose_parent_live")" == "$_purpose_uid" \
-  && "$(_mdm_stat_uid "$_purpose_parent_snapshot")" == "$_purpose_uid" ]] \
+  && "$(_mdm_stat_uid "$_purpose_parent_snapshot")" == "$_purpose_uid" \
+  && "$(_mdm_stat_uid "$_purpose_parent_user_file")" == "$_purpose_uid" \
+  && "$(_mdm_stat_uid "$_purpose_parent_user_dir")" == "$_purpose_uid" \
+  && "$(_mdm_stat_uid "$_purpose_parent_user_nested")" == "$_purpose_uid" ]] \
   && ! _mdm_has_extended_acl "$_purpose_parent_live" \
   && ! _mdm_has_extended_acl "$_purpose_parent_snapshot"; then
   _purpose_parent_fixture_ok=true
@@ -1118,6 +1374,9 @@ if /usr/bin/cmp -s "$_purpose_parent_live_copy" \
   && /usr/bin/cmp -s "$_purpose_parent_user_nested_copy" \
     "$_purpose_parent_user_nested" \
   && [[ -d "$_purpose_parent_user_dir" && ! -L "$_purpose_parent_user_dir" \
+    && "$(_mdm_stat_uid "$_purpose_parent_user_file")" == "$_purpose_uid" \
+    && "$(_mdm_stat_uid "$_purpose_parent_user_dir")" == "$_purpose_uid" \
+    && "$(_mdm_stat_uid "$_purpose_parent_user_nested")" == "$_purpose_uid" \
     && "$(_mdm_mode_normalize \
       "$(_mdm_stat_mode "$_purpose_parent_live_file")")" \
       == "$_purpose_parent_live_file_mode" \
@@ -1171,7 +1430,7 @@ _purpose_txn_old_persistent_id="$(_mdm_persistent_dir_identity \
   "$_purpose_txn_persistent")"
 _purpose_txn_old_persistent_digest="$(_mdm_artifact_digest tree \
   "$_purpose_txn_persistent" "$_purpose_uid")"
-_purpose_txn_old_head="$(/usr/bin/git -C "$_purpose_txn_persistent" \
+_purpose_txn_old_head="$(_purpose_target_git -C "$_purpose_txn_persistent" \
   rev-parse HEAD)"
 chmod 0500 "$_purpose_txn_parent_live"
 chmod 0777 "$_purpose_txn_parent_snapshot"
@@ -1199,6 +1458,7 @@ GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
   /usr/bin/git -C "$_purpose_full_repo" commit --quiet \
     -m 'fixture transaction generation B'
 _purpose_full_sha="$(/usr/bin/git -C "$_purpose_full_repo" rev-parse HEAD)"
+_purpose_sync_full_user_repo
 _purpose_txn_reference="$_purpose_tmp/transaction-policy-reference"
 "$_purpose_python" -I -B "$_purpose_full_renderer" \
   --checkout "$_purpose_full_repo" --output "$_purpose_txn_reference" \
@@ -1236,9 +1496,9 @@ _purpose_txn_history_restored=false
 _purpose_txn_component_restored=false
 /usr/bin/cmp -s "$_purpose_txn_component_before" "$_purpose_txn_component" \
   && _purpose_txn_component_restored=true
-_purpose_txn_persistent_head="$(/usr/bin/git -C \
+_purpose_txn_persistent_head="$(_purpose_target_git -C \
   "$_purpose_txn_persistent" rev-parse HEAD 2>/dev/null || true)"
-_purpose_txn_failed_persistent_head="$(/usr/bin/git -C \
+_purpose_txn_failed_persistent_head="$(_purpose_target_git -C \
   "$_purpose_txn_failed_persistent" rev-parse HEAD 2>/dev/null || true)"
 _purpose_txn_receipt_result="$("$(command -v jq)" -r \
   '.result // empty' "$_purpose_full_receipt" 2>/dev/null || true)"
@@ -1303,7 +1563,7 @@ _purpose_full_detect "$_purpose_txn_retry_policy" \
 _purpose_txn_retry_component_rc=0
 _purpose_full_component_contract "$_purpose_txn_retry_policy" \
   || _purpose_txn_retry_component_rc=$?
-_purpose_txn_retry_persistent_head="$(/usr/bin/git -C \
+_purpose_txn_retry_persistent_head="$(_purpose_target_git -C \
   "$_purpose_txn_persistent" rev-parse HEAD 2>/dev/null || true)"
 _purpose_txn_retry_receipt_result="$("$(command -v jq)" -r \
   '.result // empty' "$_purpose_full_receipt" 2>/dev/null || true)"
@@ -1337,6 +1597,12 @@ else
 fi
 
 _mdm_cleanup_transient_checkouts >/dev/null 2>&1 || true
+if [[ "$_purpose_runner_uid" -eq 0 ]]; then
+  if ! _purpose_stop_mode_guard; then
+    printf 'test-mdm-purpose.sh tmp mode guard did not restore the root\n' >&2
+    exit 2
+  fi
+fi
 rm -rf "$_purpose_tmp"
 
 mdm_test_reached_end
