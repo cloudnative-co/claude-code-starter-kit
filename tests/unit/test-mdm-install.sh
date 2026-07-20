@@ -1140,10 +1140,11 @@ rm -rf "$_tmpd"
 (
   _context_tmp="$(mktemp -d)"
   _context_home="$_context_tmp/home"; mkdir -p "$_context_home"
+  _context_uid="$(/usr/bin/id -u)"
   printf 'unchanged\n' > "$_context_home/sentinel"
   unset KIT_MDM_DRY_RUN KIT_MDM_INSTALL_DIR
   _context_rc=0
-  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_context_home" \
+  _mdm_run_user_phase "$_context_uid" "$(/usr/bin/id -un)" "$_context_home" \
     >/dev/null 2>&1 || _context_rc=$?
   if [[ "$_context_rc" -eq "$MDM_EXIT_CONTEXT" ]] \
     && [[ "$(cat "$_context_home/sentinel")" == unchanged ]] \
@@ -7467,6 +7468,59 @@ _setup_argv_has() { local _e; for _e in "${MDM_SETUP_ARGV[@]}"; do [[ "$_e" == "
 
 # ── 成功レシート前の postcondition 検証 ──────────────────
 (
+  _auth_list_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _auth_list_tree="$_auth_list_tmp/tree"
+  mkdir -p "$_auth_list_tree"
+  printf 'fixture\n' > "$_auth_list_tree/file"
+  _MDM_TEST_MODE=1
+  MDM_AUTH_TMPDIR_OVERRIDE="$_auth_list_tmp"
+  _mdm_stat_identity() { printf '1:regular empty file:0'; }
+  _auth_list=""
+  if _mdm_auth_entry_list "$_auth_list_tree" _auth_list \
+    && [[ -f "$_auth_list" && ! -L "$_auth_list" ]]; then
+    pass "mdm-install: GNU stat の空 regular file 表記を auth list で許可"
+  else
+    fail "mdm-install: GNU stat の空 regular file 表記を auth list が拒否"
+  fi
+  _mdm_cleanup_auth_entry_list >/dev/null 2>&1 || true
+  /bin/rm -rf "$_auth_list_tmp"
+)
+
+(
+  _digest_guard_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
+  _digest_guard_bash=""
+  for _digest_guard_candidate in \
+    "$(command -v bash 2>/dev/null || true)" \
+    /opt/homebrew/bin/bash /usr/local/bin/bash /usr/bin/bash; do
+    [[ "$_digest_guard_candidate" == /* \
+      && -x "$_digest_guard_candidate" ]] || continue
+    _digest_guard_major="$("$_digest_guard_candidate" -c \
+      'printf "%s" "${BASH_VERSINFO[0]}"' 2>/dev/null || true)"
+    [[ "$_digest_guard_major" =~ ^[0-9]+$ \
+      && "$_digest_guard_major" -ge 4 ]] || continue
+    _digest_guard_bash="$_digest_guard_candidate"
+    break
+  done
+  if [[ -z "$_digest_guard_bash" ]]; then
+    skip "mdm-install: Bash 4+ がなく nounset 早期拒否を未検証"
+  else
+    _digest_guard_rc=0
+    "$_digest_guard_bash" -uc '
+      MDM_SOURCE_ONLY=1 source "$1"
+      _mdm_deployment_digest /nonexistent /nonexistent /nonexistent invalid
+    ' mdm-digest-guard "$PROJECT_DIR/mdm/install-mdm.sh" \
+      > /dev/null 2> "$_digest_guard_tmp/stderr" || _digest_guard_rc=$?
+    if [[ "$_digest_guard_rc" -ne 0 ]] \
+      && ! /usr/bin/grep -Fq 'unbound variable' "$_digest_guard_tmp/stderr"; then
+      pass "mdm-install: deployment digest の早期拒否は nounset 下でも安全"
+    else
+      fail "mdm-install: deployment digest の早期拒否で未初期化変数を参照"
+    fi
+  fi
+  /bin/rm -rf "$_digest_guard_tmp"
+)
+
+(
   _post_tmp="$(builtin cd -P "$(mktemp -d)" && printf '%s' "$PWD")"
   _post_home="$_post_tmp/home"
   _post_claude="$_post_home/.claude"
@@ -8308,8 +8362,9 @@ MD
   KIT_MDM_EXPECTED_POLICY_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   KIT_MDM_INSTALL_CLAUDE_CLI=false
   _MDM_DRYRUN_CHECKOUT=""
+  _dry_alias_uid="$(/usr/bin/id -u)"
   _dry_alias_rc=0
-  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" \
+  _mdm_run_user_phase "$_dry_alias_uid" "$(/usr/bin/id -un)" \
     "$_dry_alias_root/home" >/dev/null 2>&1 || _dry_alias_rc=$?
   _dry_alias_checkout="$_MDM_DRYRUN_CHECKOUT"
   eval "$_dry_runner_helper"
@@ -8379,9 +8434,10 @@ MD
   export KIT_MDM_POLICY_SHA256 MDM_RCPT_POLICY_SHA256
   printf '%s\n' receipt-sentinel > "$_dry_tmp/receipt.json"
   _dry_receipt_before="$(_mdm_sha256_file "$_dry_tmp/receipt.json")"
+  _dry_runtime_uid="$(/usr/bin/id -u)"
 
   _dry_wrong_rc=0
-  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_dry_home" \
+  _mdm_run_user_phase "$_dry_runtime_uid" "$(/usr/bin/id -un)" "$_dry_home" \
     >/dev/null 2>&1 || _dry_wrong_rc=$?
   _dry_calculated_policy="$(_mdm_sha256_file \
     "$_MDM_EXPECTED_OUTPUT/policy.json" 2>/dev/null || true)"
@@ -8402,9 +8458,9 @@ MD
 
   export KIT_MDM_EXPECTED_POLICY_SHA256="$_dry_calculated_policy"
   _dry_rc=0
-  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_dry_home" >/dev/null 2>&1 || _dry_rc=$?
+  _mdm_run_user_phase "$_dry_runtime_uid" "$(/usr/bin/id -un)" \
+    "$_dry_home" >/dev/null 2>&1 || _dry_rc=$?
   _dry_checkout="$_MDM_DRYRUN_CHECKOUT"
-  _dry_runtime_uid="$(/usr/bin/id -u)"
   _dry_owner_bound=false
   if [[ "${_MDM_EXPECTED_OWNER_UID:-}" == "$_dry_runtime_uid" \
     && "${_MDM_EXPECTED_RENDERER_OWNER_UID:-}" == "$_dry_runtime_uid" \
@@ -8456,7 +8512,7 @@ MD
   /bin/rm -f "$_dry_home/mdm-dryrun-args" "$_dry_home/mdm-dryrun-path"
   export KIT_MDM_EXPECTED_POLICY_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   _dry_cli_probe_rc=0
-  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_dry_home" \
+  _mdm_run_user_phase "$_dry_runtime_uid" "$(/usr/bin/id -un)" "$_dry_home" \
     >/dev/null 2>&1 || _dry_cli_probe_rc=$?
   _dry_cli_policy="$(_mdm_sha256_file \
     "$_MDM_EXPECTED_OUTPUT/policy.json" 2>/dev/null || true)"
@@ -8465,7 +8521,7 @@ MD
   _mdm_cleanup_renderer_snapshot >/dev/null 2>&1 || true
   export KIT_MDM_EXPECTED_POLICY_SHA256="$_dry_cli_policy"
   _dry_cli_rc=0
-  _mdm_run_user_phase 501 "$(/usr/bin/id -un)" "$_dry_home" \
+  _mdm_run_user_phase "$_dry_runtime_uid" "$(/usr/bin/id -un)" "$_dry_home" \
     >/dev/null 2>&1 || _dry_cli_rc=$?
   _mdm_cleanup_dryrun_checkout
   _mdm_cleanup_expected_dir

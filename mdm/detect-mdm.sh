@@ -531,7 +531,8 @@ _mdm_detect_python_framework_tree_properties() { # <framework> <source|private>
     # keeps the fixed-layout fixture executable in the Linux test job; tests
     # separately inject an ACL failure through the root trust check below.
     _unsafe="$(LC_ALL=C /usr/bin/find -P "$_root" -xdev \
-      \( ! -user "$_owner" -o -perm -0020 -o -perm -0002 \
+      \( ! -user "$_owner" \
+        -o \( ! -type l \( -perm -0020 -o -perm -0002 \) \) \
         -o ! \( -type d -o -type f -o -type l \) \
         "${_link_test[@]}" \) -print -quit 2>/dev/null)" \
       || return 1

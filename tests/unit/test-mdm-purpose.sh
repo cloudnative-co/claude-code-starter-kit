@@ -82,6 +82,16 @@ _purpose_python="$("$_purpose_python_cmd" -c \
   'import os, sys; print(os.path.realpath(sys.executable))')"
 MDM_SYSTEM_PYTHON_OVERRIDE="$_purpose_python"
 export MDM_SYSTEM_PYTHON_OVERRIDE
+# The product entry point is macOS-only, while this source-only purpose suite
+# also runs in Linux CI. Normalize GNU uname's arm64 spelling through the
+# existing test seam without widening the production platform contract.
+unset MDM_NODE_ARCH_OVERRIDE
+_purpose_node_arch="$(_mdm_node_runtime_arch 2>/dev/null || true)"
+if [[ -z "$_purpose_node_arch" ]]; then
+  case "$(/usr/bin/uname -m 2>/dev/null || true)" in
+    aarch64) _purpose_node_arch=arm64 ;;
+  esac
+fi
 
 # Keep the production checkout, fixed-SHA, clean-env, and setup argv flow.
 # Only OS/root-only facilities are replaced by deterministic local adapters.
@@ -190,6 +200,8 @@ _purpose_write_receipt() { # <profile> <language> <policy-sha>
 _purpose_detect() { # <commit> <policy-sha>
   PROJECT_DIR="$PROJECT_DIR" PURPOSE_JQ="$(command -v jq)" \
     PURPOSE_RECEIPTS="$_purpose_receipts" PURPOSE_USER="$_purpose_user" \
+    PURPOSE_HOME="$_purpose_home" PURPOSE_UID="$_purpose_uid" \
+    PURPOSE_GENERATED_UID="$_purpose_generated_uid" \
     PURPOSE_COMMIT="$1" PURPOSE_POLICY="$2" \
     "$BASH" --noprofile --norc -c '
       MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/detect-mdm.sh"
@@ -207,6 +219,10 @@ _purpose_detect() { # <commit> <policy-sha>
         _MDM_DETECT_VERIFIED_KIT_VERSION=0.73.0
       }
       export MDM_RECEIPT_DIR_OVERRIDE="$PURPOSE_RECEIPTS"
+      export MDM_DETECT_CANONICAL_USER_OVERRIDE="$PURPOSE_USER"
+      export MDM_DETECT_EXPECTED_UID_OVERRIDE="$PURPOSE_UID"
+      export MDM_DETECT_GENERATED_UID_OVERRIDE="$PURPOSE_GENERATED_UID"
+      export MDM_DETECT_HOME_OVERRIDE="$PURPOSE_HOME"
       export MDM_EUID_OVERRIDE=0
       mdm_detect_main --user "$PURPOSE_USER" \
         --expected-commit "$PURPOSE_COMMIT" \
@@ -670,6 +686,7 @@ _purpose_full_install() {
     PURPOSE_USER="$_purpose_user" PURPOSE_UID="$_purpose_uid" \
     PURPOSE_GENERATED_UID="$_purpose_generated_uid" \
     PURPOSE_PYTHON="$_purpose_python" PURPOSE_TOOL_BIN="$_purpose_full_tool_bin" \
+    PURPOSE_NODE_ARCH="$_purpose_node_arch" \
     PURPOSE_FAIL_AFTER_DEPLOY="${PURPOSE_FAIL_AFTER_DEPLOY:-false}" \
     "$BASH" --noprofile --norc -c '
       set -euo pipefail
@@ -699,6 +716,7 @@ _purpose_full_install() {
       export MDM_AUTH_PRIVACY_UID_OVERRIDE=99999
       export MDM_AUTH_READONLY_OWNER_TEST=1
       export MDM_SYSTEM_PYTHON_OVERRIDE="$PURPOSE_PYTHON"
+      export MDM_NODE_ARCH_OVERRIDE="$PURPOSE_NODE_ARCH"
       export MDM_SYSTEM_RCPT_DIR_OVERRIDE="$PURPOSE_RECEIPTS"
       case "$(/usr/bin/uname -s)" in
         Darwin) export TMPDIR=/private/tmp ;;
@@ -707,6 +725,7 @@ _purpose_full_install() {
       export MDM_DSCL_UID_OVERRIDE="$PURPOSE_UID"
       export MDM_DSCL_HOME_OVERRIDE="$PURPOSE_HOME"
       export MDM_SEARCH_UID_OVERRIDE="$PURPOSE_UID"
+      export MDM_CANONICAL_USER_OVERRIDE="$PURPOSE_USER"
       export MDM_DSCL_GENERATED_UID_OVERRIDE="$PURPOSE_GENERATED_UID"
       export MDM_SEARCH_GENERATED_UID_OVERRIDE="$PURPOSE_GENERATED_UID"
       export MDM_CONFIG_SKIP_OWNER_CHECK=1 MDM_LOG_SKIP_OWNER_CHECK=1
@@ -755,6 +774,7 @@ _purpose_full_detect() { # <policy-sha>
       export MDM_RECEIPT_DIR_OVERRIDE="$PURPOSE_RECEIPTS"
       export MDM_DETECT_TRUST_BASE_OVERRIDE="$PURPOSE_TRUST"
       export MDM_DETECT_EXPECTED_OWNER_OVERRIDE="$PURPOSE_USER"
+      export MDM_DETECT_CANONICAL_USER_OVERRIDE="$PURPOSE_USER"
       export MDM_DETECT_HOME_OVERRIDE="$PURPOSE_HOME"
       export MDM_DETECT_EXPECTED_UID_OVERRIDE="$PURPOSE_UID"
       export MDM_DETECT_GENERATED_UID_OVERRIDE="$PURPOSE_GENERATED_UID"

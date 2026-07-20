@@ -100,6 +100,22 @@ _ext_residue_count() {
 }
 
 (
+  _identity_file="$(mktemp "$MDM_TEST_TMP_ROOT/external-identity.XXXXXX")"
+  _identity_empty="$(_mdm_external_transaction_journal_inode_identity \
+    "$_identity_file")"
+  printf 'filled\n' > "$_identity_file"
+  _identity_filled="$(_mdm_external_transaction_journal_inode_identity \
+    "$_identity_file")"
+  if [[ -n "$_identity_empty" \
+    && "$_identity_empty" == "$_identity_filled" ]]; then
+    pass "external transaction: journal identity is stable across first write"
+  else
+    fail "external transaction: journal identity changed across first write"
+  fi
+  /bin/rm -f "$_identity_file"
+)
+
+(
   _ext_fixture_init inventory node_runtime safety_net ghostty
   _auto="$(_mdm_external_transaction_paths "$_ext_home" "$_ext_uid")"
   KIT_MDM_PREREQ_MODE=fail

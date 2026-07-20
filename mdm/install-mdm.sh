@@ -654,7 +654,11 @@ _mdm_timeout_group_quiesced() { # <process-group-id>; every live member stopped
 _mdm_timeout_stop_group() { # <process-group-id>
   local _pgid="$1" _ticks=0 _state=0
   [[ "$_pgid" =~ ^[1-9][0-9]*$ ]] || return 1
-  _mdm_timeout_group_live "$_pgid" || { _state=$?; [[ "$_state" -eq 1 ]]; return; }
+  _mdm_timeout_group_live "$_pgid" || _state=$?
+  if [[ "$_state" -ne 0 ]]; then
+    [[ "$_state" -eq 1 ]] && return 0
+    return 1
+  fi
   # Give the group leader the graceful TERM window first.  Broadcasting TERM
   # to every member lets a TERM-ignoring shell survive a killed child long
   # enough to emit asynchronous "Killed: 9" diagnostics on the caller's
@@ -4860,7 +4864,7 @@ _mdm_auth_entry_list() { # <tree> <output-var>
   umask "$_old_umask"
   _MDM_AUTH_ENTRY_LIST="$_output"
   _MDM_AUTH_ENTRY_LIST_OWNER_UID="$_runtime_uid"
-  _identity="$(_mdm_stat_identity "$_output" || true)"
+  _identity="$(LC_ALL=C _mdm_stat_identity "$_output" || true)"
   if [[ ! -f "$_output" || -L "$_output" \
     || "$(_mdm_stat_uid "$_output" || true)" != "$_runtime_uid" ]]; then
     /bin/rm -f "$_output"
@@ -4869,7 +4873,7 @@ _mdm_auth_entry_list() { # <tree> <output-var>
     return 1
   fi
   case "$_identity" in
-    *:Regular\ File:*|*:regular\ file:*) : ;;
+    *:Regular\ File:*|*:regular\ file:*|*:regular\ empty\ file:*) : ;;
     *)
       /bin/rm -f "$_output"
       _MDM_AUTH_ENTRY_LIST=""
@@ -9124,10 +9128,17 @@ _mdm_external_transaction_paths() { # <home> <uid>
 }
 
 _mdm_external_transaction_journal_inode_identity() { # <journal>
+  local _identity
   if _mdm_is_darwin; then
-    /usr/bin/stat -f '%d:%i:%HT' "$1" 2>/dev/null
+    LC_ALL=C /usr/bin/stat -f '%d:%i:%HT' "$1" 2>/dev/null
   else
-    /usr/bin/stat -c '%d:%i:%F' "$1" 2>/dev/null
+    _identity="$(LC_ALL=C /usr/bin/stat -c '%d:%i:%F' "$1" \
+      2>/dev/null)" || return 1
+    case "$_identity" in
+      *:regular\ empty\ file)
+        _identity="${_identity%:regular empty file}:regular file" ;;
+    esac
+    printf '%s\n' "$_identity"
   fi
 }
 
@@ -12728,7 +12739,7 @@ _mdm_deployment_digest() ( # <manifest-snapshot> <claude-dir> <snapshot-dir> <ta
   local _count _expected_count _mode_count _index=0 _file _relative _snap_file _canonical
   local _expected_relative _expected_file _expected_live_mode _expected_snap_mode _extra _mode_line
   local _live_copy _snap_copy _live_hash _snap_hash _live_mode _snap_mode _input _digest
-  local _live_size _snap_size _aggregate=0 _workspace _live_managed _snap_managed _expected_managed
+  local _live_size _snap_size _aggregate=0 _workspace="" _live_managed _snap_managed _expected_managed
   local _absent_count _expected_absent_count _absent_index=0 _absent_relative _expected_absent
   _mdm_cleanup_attest_workspace() {
     local _base
