@@ -2894,9 +2894,10 @@ _mdm_snapshot_bound_file() { # <source> <snapshot> <receipt|manifest|managed|hea
   esac
   [[ "$_size" =~ ^[0-9]+$ && "$_size" -le "$_limit" ]] || return 1
   [[ "$_label" != head || "$_size" == 41 ]] || return 1
+  [[ "$_label" != head || "$_expected_uid" =~ ^[0-9]+$ ]] || return 1
   if [[ "$_label" == managed || "$_label" == cli || "$_label" == receipt \
-    || "$_label" == manifest || "$_label" == history ]] \
-    || [[ "$_label" == head && -n "$_expected_uid" ]]; then
+    || "$_label" == manifest || "$_label" == history \
+    || "$_label" == head ]]; then
     _strict_bind=1
   fi
   if [[ "$_strict_bind" -eq 1 ]]; then

@@ -4528,6 +4528,28 @@ rm "$_mdm_detect_install/.gitattributes"
   fi
 )
 
+_mdm_detect_head_source="$_mdm_detect_tmp/head-uid-contract"
+_mdm_detect_head_copy="$_mdm_detect_private_base/head-uid-contract-copy"
+printf '%040d\n' 1 > "$_mdm_detect_head_source"
+_mdm_detect_head_uid="$(_mdm_stat_uid "$_mdm_detect_head_source")"
+_mdm_detect_head_wrong_uid=$((_mdm_detect_head_uid + 1))
+if _mdm_snapshot_bound_file "$_mdm_detect_head_source" \
+    "$_mdm_detect_head_copy" head \
+  || _mdm_snapshot_bound_file "$_mdm_detect_head_source" \
+    "$_mdm_detect_head_copy" head invalid \
+  || _mdm_snapshot_bound_file "$_mdm_detect_head_source" \
+    "$_mdm_detect_head_copy" head "$_mdm_detect_head_wrong_uid" \
+  || ! _mdm_snapshot_bound_file "$_mdm_detect_head_source" \
+    "$_mdm_detect_head_copy" head "$_mdm_detect_head_uid" \
+  || ! /usr/bin/cmp -s "$_mdm_detect_head_source" "$_mdm_detect_head_copy"; then
+  fail "mdm-detect: HEAD snapshot UID binding is not fail-closed"
+else
+  pass "mdm-detect: HEAD snapshot requires an exact numeric owner UID"
+fi
+rm -f "$_mdm_detect_head_source" "$_mdm_detect_head_copy"
+unset _mdm_detect_head_source _mdm_detect_head_copy _mdm_detect_head_uid
+unset _mdm_detect_head_wrong_uid
+
 _mdm_detect_large="$_mdm_detect_tmp/oversized-json"
 _mdm_detect_small_timeout="$(_mdm_snapshot_timeout_for_size 1024)"
 _mdm_detect_cli_timeout="$(_mdm_snapshot_timeout_for_size 255852544)"
