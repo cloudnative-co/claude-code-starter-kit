@@ -87,6 +87,12 @@
 			"marketplace": "anthropic-agent-skills",
 			"description": "Creative, technical, and enterprise skill examples from Anthropic",
 			"profiles": ["full"]
+		},
+		{
+			"name": "claude-security",
+			"marketplace": "claude-plugins-official",
+			"description": "Multi-agent deep vulnerability scan with independently verified findings and patches",
+			"profiles": ["full"]
 		}
 	]
 }

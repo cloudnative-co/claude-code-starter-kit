@@ -258,6 +258,11 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCo
 2. If using a new marketplace, add its GitHub repo to `marketplaces` mapping in the same file
 3. Verify JSON: `jq . config/plugins.json`
 4. If the plugin name already exists in another marketplace, `_plugin_has_collision()` will auto-detect and the wizard will show `[marketplace]` suffix; `_compute_selected_plugins()` will produce `name@marketplace` in the CSV
+5. Update the hardcoded plugin counts and lists no test enforces: `README.md` (profile table, plugin section heading, plugin table row) and `README.en.md` (feature bullet, profile table)
+6. Adding to `standard` also has to clear the `standard_count -le 5` cap in `tests/unit/test-context-budget.sh`; `full`-only entries need no test change
+7. Update `CHANGELOG.md` — a changed default plugin set is user-visible behavior, so bump minor
+8. Existing installs never pick up a new catalog entry: update restores `SELECTED_PLUGINS` from the manifest, and plugins are outside feature recommendation. State the manual `/plugin install <name>@<marketplace>` step in CHANGELOG/README rather than assuming reach
+9. MDM is unaffected — managed mode forces `SELECTED_PLUGINS=""` and `mdm/render-expected.py` never reads `config/plugins.json`. Enabling plugins *under* MDM would be a different change: `claude plugin install` writes `enabledPlugins` into the byte-attested `settings.json`
 
 ## Notable Features
 

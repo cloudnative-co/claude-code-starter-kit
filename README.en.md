@@ -56,7 +56,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
 - **11 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
-- **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
+- **15 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp, claude-security
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
 - **Non-interactive mode** for CI/automation
@@ -169,7 +169,7 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 |---|---|---|---|---|---|---|---|---|
 | Minimal | Yes | Yes | - | - | - | - | - | - |
 | Standard (Recommended) | Yes | Yes | Yes | Yes | Core | 5 | Optional | - |
-| Full | Yes | Yes | Yes | Yes | All | 14 | Yes | macOS only |
+| Full | Yes | Yes | Yes | Yes | All | 15 | Yes | macOS only |
 
 - **Minimal**: Lightweight start with just agents and rules
 - **Standard**: Best for most teams. Includes commands, skills, and core hooks
