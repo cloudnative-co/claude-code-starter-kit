@@ -466,4 +466,144 @@ else
   fail "uninstall: TERM interrupted release or lost its signal status"
 fi
 
+# ── security-guidance plugin data ─────────────────────────────────────────
+#
+# The plugin the kit installs for standard/full writes a Python virtualenv and
+# per-session state into $CLAUDE_DIR/security. That path is inside the kit's
+# cleanup jurisdiction but was never offered for removal, so it survived
+# uninstall. It is prompted rather than unconditional: the plugin itself stays
+# installed and would silently re-download the venv from PyPI.
+
+_ut_extract_fn "$PROJECT_DIR/uninstall.sh" "_kit_installed_plugin" \
+  > "$_ut_tmp/kit_installed_plugin.sh"
+
+_ut_plugin_match() { # <csv> <name> -> prints yes/no
+  bash -c '
+    set -euo pipefail
+    source "$1"
+    if _kit_installed_plugin "$2" "$3"; then printf "yes"; else printf "no"; fi
+  ' _ "$_ut_tmp/kit_installed_plugin.sh" "$1" "$2" 2>&1
+}
+
+if [[ "$(_ut_plugin_match "security-guidance,commit-commands" "security-guidance")" == "yes" ]] \
+  && [[ "$(_ut_plugin_match "commit-commands,security-guidance" "security-guidance")" == "yes" ]] \
+  && [[ "$(_ut_plugin_match "security-guidance@claude-plugins-official,code-review" "security-guidance")" == "yes" ]]; then
+  pass "uninstall: _kit_installed_plugin matches bare and name@marketplace entries"
+else
+  fail "uninstall: _kit_installed_plugin should match bare and name@marketplace entries"
+fi
+
+# Prefix collisions and an empty manifest field must not match, so the kit
+# never offers to delete data it did not cause.
+if [[ "$(_ut_plugin_match "security-guidance-extra,code-review" "security-guidance")" == "no" ]] \
+  && [[ "$(_ut_plugin_match "xsecurity-guidance" "security-guidance")" == "no" ]] \
+  && [[ "$(_ut_plugin_match "" "security-guidance")" == "no" ]] \
+  && [[ "$(_ut_plugin_match "commit-commands,code-review" "security-guidance")" == "no" ]]; then
+  pass "uninstall: _kit_installed_plugin rejects prefix collisions and an empty plugin list"
+else
+  fail "uninstall: _kit_installed_plugin should reject prefix collisions and an empty plugin list"
+fi
+
+# End-to-end: <answers> drive the main confirm plus the plugin-data prompt.
+_ut_plugin_case() { # <name> <plugins-csv> <answers> <output>
+  local case_home="$_ut_tmp/plugin-$1" plugins="$2" answers="$3" output="$4" rc=0
+  mkdir -p "$case_home/.claude/security/agent-sdk-venv"
+  printf 'venv payload\n' > "$case_home/.claude/security/agent-sdk-venv/pyvenv.cfg"
+  printf '{"session":1}\n' > "$case_home/.claude/security/security_warnings_state_x.json"
+  printf '{"managed":true}\n' > "$case_home/.claude/settings.json"
+  jq -n --arg settings "$case_home/.claude/settings.json" --arg plugins "$plugins" \
+    '{version:"2", profile:"standard", language:"en", timestamp:"test",
+      plugins:$plugins, files:[$settings], cleanup_paths:[]}' \
+    > "$case_home/.claude/.starter-kit-manifest.json"
+  printf '%b' "$answers" | HOME="$case_home" \
+    STARTER_KIT_DIR="$case_home/nonexistent-kit" \
+    PATH="$_ut_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    bash "$PROJECT_DIR/uninstall.sh" > "$output" 2>&1 || rc=$?
+  return "$rc"
+}
+
+_ut_sg_removed_out="$_ut_tmp/sg-removed.out"
+_ut_sg_removed_rc=0
+_ut_plugin_case removed "security-guidance,commit-commands" 'y\ny\n' \
+  "$_ut_sg_removed_out" || _ut_sg_removed_rc=$?
+if [[ "$_ut_sg_removed_rc" -eq 0 ]] \
+  && [[ ! -d "$_ut_tmp/plugin-removed/.claude/security" ]] \
+  && grep -q 'Removed local data from the security-guidance plugin' "$_ut_sg_removed_out"; then
+  pass "uninstall: security-guidance data is removed when the user accepts"
+else
+  fail "uninstall: security-guidance data should be removed on accept (rc=$_ut_sg_removed_rc)"
+fi
+
+_ut_sg_kept_out="$_ut_tmp/sg-kept.out"
+_ut_sg_kept_rc=0
+_ut_plugin_case kept "security-guidance" 'y\nn\n' \
+  "$_ut_sg_kept_out" || _ut_sg_kept_rc=$?
+if [[ "$_ut_sg_kept_rc" -eq 0 ]] \
+  && [[ -f "$_ut_tmp/plugin-kept/.claude/security/agent-sdk-venv/pyvenv.cfg" ]] \
+  && grep -q 'Kept local data from the security-guidance plugin' "$_ut_sg_kept_out"; then
+  pass "uninstall: security-guidance data survives when the user declines"
+else
+  fail "uninstall: security-guidance data should survive a declined prompt (rc=$_ut_sg_kept_rc)"
+fi
+
+# EOF on the prompt (piped/automated run) must default to keeping the data.
+_ut_sg_eof_out="$_ut_tmp/sg-eof.out"
+_ut_sg_eof_rc=0
+_ut_plugin_case eof "security-guidance" 'y\n' \
+  "$_ut_sg_eof_out" || _ut_sg_eof_rc=$?
+if [[ "$_ut_sg_eof_rc" -eq 0 ]] \
+  && [[ -f "$_ut_tmp/plugin-eof/.claude/security/agent-sdk-venv/pyvenv.cfg" ]]; then
+  pass "uninstall: security-guidance data is kept when the prompt hits EOF"
+else
+  fail "uninstall: security-guidance data should be kept on EOF (rc=$_ut_sg_eof_rc)"
+fi
+
+# The kit must not offer to delete a directory it never caused.
+_ut_sg_foreign_out="$_ut_tmp/sg-foreign.out"
+_ut_sg_foreign_rc=0
+_ut_plugin_case foreign "commit-commands,code-review" 'y\ny\n' \
+  "$_ut_sg_foreign_out" || _ut_sg_foreign_rc=$?
+if [[ "$_ut_sg_foreign_rc" -eq 0 ]] \
+  && [[ -f "$_ut_tmp/plugin-foreign/.claude/security/agent-sdk-venv/pyvenv.cfg" ]] \
+  && ! grep -q 'security-guidance plugin' "$_ut_sg_foreign_out"; then
+  pass "uninstall: security-guidance data is untouched when the kit did not install the plugin"
+else
+  fail "uninstall: security-guidance data must not be offered when the kit did not install it (rc=$_ut_sg_foreign_rc)"
+fi
+
+# A symlinked data dir must never be offered: unlinking it would report a
+# removal while leaving the referent — and its bytes — fully intact.
+_ut_sg_link_home="$_ut_tmp/plugin-symlink"
+_ut_sg_link_referent="$_ut_tmp/plugin-symlink-referent"
+_ut_sg_link_out="$_ut_tmp/sg-symlink.out"
+mkdir -p "$_ut_sg_link_home/.claude" "$_ut_sg_link_referent"
+printf 'external venv\n' > "$_ut_sg_link_referent/pyvenv.cfg"
+ln -s "$_ut_sg_link_referent" "$_ut_sg_link_home/.claude/security"
+printf '{"managed":true}\n' > "$_ut_sg_link_home/.claude/settings.json"
+jq -n --arg settings "$_ut_sg_link_home/.claude/settings.json" \
+  '{version:"2", profile:"standard", language:"en", timestamp:"test",
+    plugins:"security-guidance", files:[$settings], cleanup_paths:[]}' \
+  > "$_ut_sg_link_home/.claude/.starter-kit-manifest.json"
+_ut_sg_link_rc=0
+printf 'y\ny\n' | HOME="$_ut_sg_link_home" \
+  STARTER_KIT_DIR="$_ut_sg_link_home/nonexistent-kit" \
+  PATH="$_ut_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  bash "$PROJECT_DIR/uninstall.sh" > "$_ut_sg_link_out" 2>&1 || _ut_sg_link_rc=$?
+if [[ "$_ut_sg_link_rc" -eq 0 ]] \
+  && [[ -L "$_ut_sg_link_home/.claude/security" ]] \
+  && grep -qx 'external venv' "$_ut_sg_link_referent/pyvenv.cfg" \
+  && ! grep -q 'security-guidance plugin' "$_ut_sg_link_out"; then
+  pass "uninstall: symlinked security-guidance data dir is never offered or unlinked"
+else
+  fail "uninstall: symlinked security-guidance data dir must be left alone (rc=$_ut_sg_link_rc)"
+fi
+
+# The prompt must not become an unconditional cleanup_paths entry: those are
+# deleted without asking, and the plugin outlives this uninstall.
+if ! grep -A 20 'cleanup_paths_json()' "$PROJECT_DIR/lib/deploy.sh" | grep -q '/security"'; then
+  pass "uninstall: plugin data dir stays out of cleanup_paths_json (prompted, not unconditional)"
+else
+  fail "uninstall: plugin data dir must not be added to cleanup_paths_json (it deletes unconditionally)"
+fi
+
 rm -rf "$_ut_tmp"

@@ -81,6 +81,20 @@ _json_cleanup_paths() {
   fi
 }
 
+_kit_installed_plugin() {
+  # Usage: _kit_installed_plugin <csv> <name>
+  # The manifest stores SELECTED_PLUGINS as a comma-joined list whose entries
+  # may carry an "@marketplace" suffix (wizard/registry.sh:_compute_selected_plugins).
+  # Match whole entries only, so "security-guidance" never matches
+  # "security-guidance-extra".
+  local _csv="$1" _name="$2"
+  [[ -n "$_csv" && -n "$_name" ]] || return 1
+  case ",${_csv}," in
+    *",${_name},"*|*",${_name}@"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 _json_file_count() {
   # Usage: _json_file_count <file>
   local file="$1"
@@ -605,6 +619,12 @@ _load_strings() {
       STR_CODEX_MCP_REMOVE_ASK="legacy Codex MCP サーバーを削除しますか？ [y/N] "
       STR_CODEX_MCP_REMOVED="Codex MCP サーバーを削除しました"
       STR_CODEX_MCP_REMOVE_FAILED="Codex MCP サーバーの削除に失敗しました。手動で実行してください:"
+      STR_PLUGIN_DATA_FOUND="security-guidance プラグインのローカルデータが残っています: %s (%s)"
+      STR_PLUGIN_DATA_NOTE="  Python 仮想環境とセッション状態のキャッシュです。プラグインを使い続ける場合、次回実行時に再作成されます（PyPI から再ダウンロード）。"
+      STR_PLUGIN_DATA_REMOVE_ASK="これも削除しますか？ [y/N] "
+      STR_PLUGIN_DATA_REMOVED="security-guidance プラグインのローカルデータを削除しました"
+      STR_PLUGIN_DATA_REMOVE_FAILED="ローカルデータの削除に失敗しました。手動で実行してください:"
+      STR_PLUGIN_DATA_KEPT="security-guidance プラグインのローカルデータを残しました: %s"
       STR_SAFETY_NET_REMOVE_ASK="cc-safety-net (npm) も削除しますか？他の AI CLI でも使用中なら残してください [y/N] "
       STR_SAFETY_NET_REMOVED="cc-safety-net を削除しました"
       STR_SAFETY_NET_REMOVE_FAILED="cc-safety-net の削除に失敗しました。手動で実行してください:"
@@ -635,6 +655,12 @@ _load_strings() {
       STR_CODEX_MCP_REMOVE_ASK="Remove legacy Codex MCP server? [y/N] "
       STR_CODEX_MCP_REMOVED="Codex MCP server removed"
       STR_CODEX_MCP_REMOVE_FAILED="Failed to remove Codex MCP server. Remove it manually:"
+      STR_PLUGIN_DATA_FOUND="Local data from the security-guidance plugin remains: %s (%s)"
+      STR_PLUGIN_DATA_NOTE="  A Python virtualenv plus cached session state. If you keep using the plugin it is rebuilt on next run (re-downloaded from PyPI)."
+      STR_PLUGIN_DATA_REMOVE_ASK="Remove it as well? [y/N] "
+      STR_PLUGIN_DATA_REMOVED="Removed local data from the security-guidance plugin"
+      STR_PLUGIN_DATA_REMOVE_FAILED="Failed to remove the local data. Remove it manually:"
+      STR_PLUGIN_DATA_KEPT="Kept local data from the security-guidance plugin: %s"
       STR_SAFETY_NET_REMOVE_ASK="Also remove cc-safety-net (npm)? Keep it if other AI CLIs use it [y/N] "
       STR_SAFETY_NET_REMOVED="cc-safety-net removed"
       STR_SAFETY_NET_REMOVE_FAILED="Failed to remove cc-safety-net. Remove it manually:"
@@ -672,6 +698,9 @@ fi
 file_count="$(_json_file_count "$MANIFEST")"
 profile="$(_json_get "$MANIFEST" "profile")"
 timestamp="$(_json_get "$MANIFEST" "timestamp")"
+# Read the installed-plugin list up front: the manifest is deleted further
+# below, but the plugin-data cleanup at the end of this script needs it.
+kit_plugins="$(_json_get "$MANIFEST" "plugins" || true)"
 [[ -z "$profile" ]] && profile="unknown"
 [[ -z "$timestamp" ]] && timestamp="unknown"
 
@@ -967,6 +996,60 @@ if command -v npm &>/dev/null && npm list -g cc-safety-net &>/dev/null; then
         warn "$STR_SAFETY_NET_REMOVE_FAILED"
         info "  npm uninstall -g cc-safety-net"
       fi
+      ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------
+# security-guidance plugin data (installed by the kit for standard/full)
+#
+# The plugin writes a Python virtualenv (hundreds of MB) plus one state file
+# per session into <config dir>/security. That path sits under $CLAUDE_DIR, so
+# it is ours to offer — but it is deliberately NOT in cleanup_paths_json():
+# entries there are deleted unconditionally, while the plugin itself survives
+# this uninstall (the kit never uninstalls config/plugins.json plugins).
+# Silently deleting a still-installed plugin's cache would force a surprise
+# PyPI re-download, so prompt instead — same treatment as cc-safety-net above.
+#
+# Removal is deliberately kept out of _remove_cleanup_path(): that helper flips
+# _uninstall_cleanup_failed, which is only read before the manifest is deleted
+# (far earlier than this block) and which must stay scoped to kit-managed
+# files. Declining or failing this optional removal is not an incomplete
+# uninstall.
+#
+# Only the default location is handled. The plugin also honors
+# SECURITY_WARNINGS_STATE_DIR and CLAUDE_CONFIG_DIR, but the kit hardcodes
+# CLAUDE_DIR="$HOME/.claude" and _safe_cleanup_path rejects anything outside it.
+# ---------------------------------------------------------------------------
+# A symlinked data dir is skipped rather than unlinked: `rm -rf` would drop
+# only the link and report a removal that left the referent untouched. Same
+# boundary rule the tracked-file and runtime removers follow.
+_plugin_data_dir="$CLAUDE_DIR/security"
+if [[ -d "$_plugin_data_dir" ]] && [[ ! -L "$_plugin_data_dir" ]] \
+  && _kit_installed_plugin "$kit_plugins" "security-guidance"; then
+  _plugin_data_size="$(du -sh "$_plugin_data_dir" 2>/dev/null | cut -f1 || true)"
+  [[ -z "$_plugin_data_size" ]] && _plugin_data_size="?"
+  printf "\n"
+  # shellcheck disable=SC2059
+  info "$(printf "$STR_PLUGIN_DATA_FOUND" "$_plugin_data_dir" "$_plugin_data_size")"
+  info "$STR_PLUGIN_DATA_NOTE"
+  # EOF-tolerant read: piped/automated runs default to keeping the data
+  read -r -p "$STR_PLUGIN_DATA_REMOVE_ASK" _plugin_data_confirm || _plugin_data_confirm="n"
+  case "$_plugin_data_confirm" in
+    y|Y|yes|YES)
+      if _safe_cleanup_path "$_plugin_data_dir"; then
+        rm -rf "$_plugin_data_dir" 2>/dev/null || true
+      fi
+      if [[ -d "$_plugin_data_dir" ]]; then
+        warn "$STR_PLUGIN_DATA_REMOVE_FAILED"
+        info "  rm -rf \"$_plugin_data_dir\""
+      else
+        ok "$STR_PLUGIN_DATA_REMOVED"
+      fi
+      ;;
+    *)
+      # shellcheck disable=SC2059
+      info "$(printf "$STR_PLUGIN_DATA_KEPT" "$_plugin_data_dir")"
       ;;
   esac
 fi

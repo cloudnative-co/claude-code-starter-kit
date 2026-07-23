@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.73.1] - 2026-07-23
+
+### Fixed
+- **アンインストール時に security-guidance プラグインのローカルデータが残る問題を修正**: キットが standard / full で導入する `security-guidance` プラグインは、Python 仮想環境（`agent-sdk-venv`、数百 MB）とセッションごとの state ファイルを `~/.claude/security/` に作成する。このパスは `$CLAUDE_DIR` 配下＝キットの削除権限内にあるにもかかわらず、`cleanup_paths_json()` にも `uninstall.sh` にも一切記載がなく、アンインストール後も丸ごと残っていた（実機で 260 MB / state ファイル 865 個を確認）。`uninstall.sh` に削除確認のプロンプトを追加し、サイズを表示したうえでユーザーの選択で削除できるようにした。無条件削除の `cleanup_paths` には**入れていない**: キットは `config/plugins.json` 由来のプラグイン本体をアンインストールしないため、まだ有効なプラグインのキャッシュを黙って消すと次回実行時に PyPI からの再ダウンロードが発生するため。既定は「残す」で、パイプ実行など `read` が EOF になる経路でも削除しない。マニフェストの `plugins` に `security-guidance` が記録されている場合のみ確認するので、キットが導入していないデータには触れない。プラグイン側が対応する `SECURITY_WARNINGS_STATE_DIR` / `CLAUDE_CONFIG_DIR` による移動先は対象外（キットは `CLAUDE_DIR="$HOME/.claude"` 固定で、`_safe_cleanup_path` がその外側を機械的に拒否する）
+
 ## [0.73.0] - 2026-07-19
 
 MDM（Jamf / Intune / Workspace ONE / Ivanti 等）から macOS 13.5 以上の管理端末へ Claude Code CLI とキットをゼロタッチ配布するサイレントインストール機能を追加。Xcode Command Line Tools は MDM baseline として事前配布する構成が既定。Windows MDM は本リリースの対象外。

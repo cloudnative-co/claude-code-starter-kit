@@ -456,6 +456,8 @@ cd claude-code-starter-kit
 
 Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manifest.json`) are removed. User-added files are preserved.
 
+Some things the kit installed are offered rather than removed automatically, because they may outlive the kit: the Claude Code CLI, the Codex plugin, `cc-safety-net`, and the local data the `security-guidance` plugin keeps in `~/.claude/security/` (a Python virtualenv of several hundred MB plus cached session state). Each is a separate prompt that defaults to keeping it.
+
 ## Development
 
 Shell scripts are statically analyzed with [ShellCheck](https://www.shellcheck.net/). It runs automatically via GitHub Actions on PRs. To run locally:
