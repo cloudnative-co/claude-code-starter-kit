@@ -85,14 +85,26 @@ _kit_installed_plugin() {
   # Usage: _kit_installed_plugin <csv> <name>
   # The manifest stores SELECTED_PLUGINS as a comma-joined list whose entries
   # may carry an "@marketplace" suffix (wizard/registry.sh:_compute_selected_plugins).
-  # Match whole entries only, so "security-guidance" never matches
-  # "security-guidance-extra".
-  local _csv="$1" _name="$2"
+  # Compare whole elements, exactly: "security-guidance" must not match
+  # "security-guidance-extra", and malformed entries from a corrupted or
+  # hand-edited manifest ("name@", "name@mp extra") must not count as
+  # installed — this function gates an offer to delete data, so mistakes
+  # fail toward not offering. A here-string loop (not `for` over an unquoted
+  # expansion) so entries are never glob-expanded; Bash 3.2 compatible.
+  local _csv="$1" _name="$2" _entry _mp
   [[ -n "$_csv" && -n "$_name" ]] || return 1
-  case ",${_csv}," in
-    *",${_name},"*|*",${_name}@"*) return 0 ;;
-    *) return 1 ;;
-  esac
+  while IFS= read -r _entry; do
+    [[ "$_entry" == "$_name" ]] && return 0
+    case "$_entry" in
+      "${_name}@"*)
+        _mp="${_entry#"${_name}@"}"
+        if [[ -n "$_mp" ]] && [[ "$_mp" != *[[:space:]]* ]]; then
+          return 0
+        fi
+        ;;
+    esac
+  done <<< "${_csv//,/$'\n'}"
+  return 1
 }
 
 _json_file_count() {
@@ -700,7 +712,14 @@ profile="$(_json_get "$MANIFEST" "profile")"
 timestamp="$(_json_get "$MANIFEST" "timestamp")"
 # Read the installed-plugin list up front: the manifest is deleted further
 # below, but the plugin-data cleanup at the end of this script needs it.
-kit_plugins="$(_json_get "$MANIFEST" "plugins" || true)"
+# jq only, never the grep/sed fallback: on minified JSON the fallback's greedy
+# sed can return a *different* field's value, and this value gates an offer to
+# delete data. Without jq the prompt is simply never made (fail closed).
+if command -v jq &>/dev/null; then
+  kit_plugins="$(_json_get "$MANIFEST" "plugins" || true)"
+else
+  kit_plugins=""
+fi
 [[ -z "$profile" ]] && profile="unknown"
 [[ -z "$timestamp" ]] && timestamp="unknown"
 
