@@ -529,14 +529,15 @@ else
 fi
 
 # End-to-end: <answers> drive the main confirm plus the plugin-data prompt.
-_ut_plugin_case() { # <name> <plugins-csv> <answers> <output>
-  local case_home="$_ut_tmp/plugin-$1" plugins="$2" answers="$3" output="$4" rc=0
+_ut_plugin_case() { # <name> <plugins-csv> <answers> <output> [profile]
+  local case_home="$_ut_tmp/plugin-$1" plugins="$2" answers="$3" output="$4" profile="${5:-standard}" rc=0
   mkdir -p "$case_home/.claude/security/agent-sdk-venv"
   printf 'venv payload\n' > "$case_home/.claude/security/agent-sdk-venv/pyvenv.cfg"
   printf '{"session":1}\n' > "$case_home/.claude/security/security_warnings_state_x.json"
   printf '{"managed":true}\n' > "$case_home/.claude/settings.json"
   jq -n --arg settings "$case_home/.claude/settings.json" --arg plugins "$plugins" \
-    '{version:"2", profile:"standard", language:"en", timestamp:"test",
+    --arg profile "$profile" \
+    '{version:"2", profile:$profile, language:"en", timestamp:"test",
       plugins:$plugins, files:[$settings], cleanup_paths:[]}' \
     > "$case_home/.claude/.starter-kit-manifest.json"
   printf '%b' "$answers" | HOME="$case_home" \
@@ -584,11 +585,14 @@ else
   fail "uninstall: security-guidance data should be kept on EOF (rc=$_ut_sg_eof_rc)"
 fi
 
-# The kit must not offer to delete a directory it never caused.
+# The kit must not offer to delete a directory it never caused: a minimal
+# profile that never had security-guidance as a default and does not list it is
+# not the kit's data, so it is left untouched even if a security dir happens to
+# exist.
 _ut_sg_foreign_out="$_ut_tmp/sg-foreign.out"
 _ut_sg_foreign_rc=0
 _ut_plugin_case foreign "commit-commands,code-review" 'y\ny\n' \
-  "$_ut_sg_foreign_out" || _ut_sg_foreign_rc=$?
+  "$_ut_sg_foreign_out" minimal || _ut_sg_foreign_rc=$?
 if [[ "$_ut_sg_foreign_rc" -eq 0 ]] \
   && [[ -f "$_ut_tmp/plugin-foreign/.claude/security/agent-sdk-venv/pyvenv.cfg" ]] \
   && [[ -f "$_ut_tmp/plugin-foreign/.claude/security/security_warnings_state_x.json" ]] \
@@ -596,6 +600,21 @@ if [[ "$_ut_sg_foreign_rc" -eq 0 ]] \
   pass "uninstall: security-guidance data is untouched when the kit did not install the plugin"
 else
   fail "uninstall: security-guidance data must not be offered when the kit did not install it (rc=$_ut_sg_foreign_rc)"
+fi
+
+# Ownership is judged by install history, not the current selection: on a
+# standard/full profile the plugin is a default, so its data is still offered
+# after a later reconfigure removed it from the manifest's plugin list.
+_ut_sg_desel_out="$_ut_tmp/sg-deselected.out"
+_ut_sg_desel_rc=0
+_ut_plugin_case deselected "commit-commands,code-review" 'y\ny\n' \
+  "$_ut_sg_desel_out" standard || _ut_sg_desel_rc=$?
+if [[ "$_ut_sg_desel_rc" -eq 0 ]] \
+  && [[ ! -d "$_ut_tmp/plugin-deselected/.claude/security" ]] \
+  && grep -q 'Removed local data from the security-guidance plugin' "$_ut_sg_desel_out"; then
+  pass "uninstall: a deselected standard/full default still has its data offered"
+else
+  fail "uninstall: a deselected standard/full default should still be offered (rc=$_ut_sg_desel_rc)"
 fi
 
 # A symlinked data dir must never be offered: unlinking it would report a
@@ -625,6 +644,55 @@ else
   fail "uninstall: symlinked security-guidance data dir must be left alone (rc=$_ut_sg_link_rc)"
 fi
 
+# The prompt-window race: ~/.claude is a real dir at the early "unsafe managed
+# root" guard (so the uninstall proceeds) but is swapped to a symlink before the
+# removal fires. The full script cannot reproduce that swap deterministically —
+# and with ~/.claude already a link it bails at the root guard before this block
+# — so unit-test _remove_security_data_dir directly with a symlinked CLAUDE_DIR:
+# it must re-verify at removal time, refuse, and never follow the link to delete
+# an external <target>/security. (Regression: the old textual _safe_cleanup_path
+# + absolute `rm -rf "$CLAUDE_DIR/security"` followed the symlinked parent.)
+_ut_rsd_victim="$_ut_tmp/rsd-victim"
+_ut_rsd_link="$_ut_tmp/rsd-link"
+mkdir -p "$_ut_rsd_victim/security/agent-sdk-venv"
+printf 'external venv\n' > "$_ut_rsd_victim/security/agent-sdk-venv/pyvenv.cfg"
+ln -s "$_ut_rsd_victim" "$_ut_rsd_link"
+_ut_extract_fn "$PROJECT_DIR/uninstall.sh" "_remove_security_data_dir" \
+  > "$_ut_tmp/rsd.sh"
+_ut_rsd_rc=0
+(
+  # shellcheck source=/dev/null
+  source "$_ut_tmp/rsd.sh"
+  # shellcheck disable=SC2034 # consumed by the sourced _remove_security_data_dir
+  CLAUDE_DIR="$_ut_rsd_link"
+  _remove_security_data_dir
+) || _ut_rsd_rc=$?
+if [[ "$_ut_rsd_rc" -ne 0 ]] \
+  && [[ -f "$_ut_rsd_victim/security/agent-sdk-venv/pyvenv.cfg" ]] \
+  && grep -qx 'external venv' "$_ut_rsd_victim/security/agent-sdk-venv/pyvenv.cfg"; then
+  pass "uninstall: _remove_security_data_dir refuses a symlinked CLAUDE_DIR (prompt-window race guard)"
+else
+  fail "uninstall: _remove_security_data_dir must not follow a symlinked parent (rc=$_ut_rsd_rc)"
+fi
+
+# ...and on a real CLAUDE_DIR it removes the leaf and reports success.
+_ut_rsd_real="$_ut_tmp/rsd-real"
+mkdir -p "$_ut_rsd_real/security/agent-sdk-venv"
+printf 'kit venv\n' > "$_ut_rsd_real/security/agent-sdk-venv/pyvenv.cfg"
+_ut_rsd_real_rc=0
+(
+  # shellcheck source=/dev/null
+  source "$_ut_tmp/rsd.sh"
+  # shellcheck disable=SC2034 # consumed by the sourced _remove_security_data_dir
+  CLAUDE_DIR="$_ut_rsd_real"
+  _remove_security_data_dir
+) || _ut_rsd_real_rc=$?
+if [[ "$_ut_rsd_real_rc" -eq 0 ]] && [[ ! -e "$_ut_rsd_real/security" ]]; then
+  pass "uninstall: _remove_security_data_dir removes the data on a real CLAUDE_DIR"
+else
+  fail "uninstall: _remove_security_data_dir should remove ./security on a real dir (rc=$_ut_rsd_real_rc)"
+fi
+
 # Without jq the plugin-data prompt must not appear at all: _json_get's
 # grep/sed fallback is greedy and, on minified JSON, can return a *different*
 # field's value — this manifest makes the fallback yield "security-guidance"
@@ -635,6 +703,17 @@ _ut_sg_nojq_bin="$_ut_tmp/nojq-bin"
 _ut_sg_nojq_out="$_ut_tmp/sg-nojq.out"
 mkdir -p "$_ut_sg_nojq_home/.claude/security/agent-sdk-venv" "$_ut_sg_nojq_bin"
 printf 'venv payload\n' > "$_ut_sg_nojq_home/.claude/security/agent-sdk-venv/pyvenv.cfg"
+# Build a genuinely jq-free PATH: /usr/bin ships a real jq, so prepending a dir
+# does not hide it. Symlink every tool from the standard bin dirs except jq (and
+# npm, whose fake exit-1 shim is written below), then point PATH at only this
+# farm so `command -v jq` actually fails inside uninstall.sh.
+for _ut_nojq_tool in /usr/bin/* /bin/* /usr/sbin/* /sbin/*; do
+  [[ -e "$_ut_nojq_tool" ]] || continue
+  _ut_nojq_base="$(basename "$_ut_nojq_tool")"
+  [[ "$_ut_nojq_base" == "jq" || "$_ut_nojq_base" == "npm" ]] && continue
+  [[ -e "$_ut_sg_nojq_bin/$_ut_nojq_base" ]] \
+    || ln -s "$_ut_nojq_tool" "$_ut_sg_nojq_bin/$_ut_nojq_base" 2>/dev/null || true
+done
 printf '#!/bin/sh\nexit 1\n' > "$_ut_sg_nojq_bin/npm"
 chmod +x "$_ut_sg_nojq_bin/npm"
 printf '%s' '{"version":"2","profile":"standard","language":"en","timestamp":"test","plugins":"commit-commands","note":"security-guidance","files":[],"cleanup_paths":[]}' \
@@ -642,7 +721,7 @@ printf '%s' '{"version":"2","profile":"standard","language":"en","timestamp":"te
 _ut_sg_nojq_rc=0
 printf 'y\ny\n' | HOME="$_ut_sg_nojq_home" \
   STARTER_KIT_DIR="$_ut_sg_nojq_home/nonexistent-kit" \
-  PATH="$_ut_sg_nojq_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  PATH="$_ut_sg_nojq_bin" \
   bash "$PROJECT_DIR/uninstall.sh" > "$_ut_sg_nojq_out" 2>&1 || _ut_sg_nojq_rc=$?
 if [[ -f "$_ut_sg_nojq_home/.claude/security/agent-sdk-venv/pyvenv.cfg" ]] \
   && ! grep -q 'security-guidance plugin' "$_ut_sg_nojq_out"; then

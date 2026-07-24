@@ -107,6 +107,30 @@ _kit_installed_plugin() {
   return 1
 }
 
+_kit_installed_security_guidance() {
+  # Usage: _kit_installed_security_guidance <plugins-csv> <profile>
+  # security-guidance is a standard/full default the kit installs. Its data dir
+  # is ours to offer even after a later reconfigure removed it from the current
+  # selection: the manifest's plugin list would no longer name it, but a
+  # standard/full profile still attests the kit installed it. Judging by that
+  # install history (current selection OR the installing profile) rather than the
+  # current selection alone keeps the offer from disappearing when the plugin is
+  # deselected while its data remains. A minimal/custom install that never had it
+  # as a default is not offered — matching "the kit installed this" and failing
+  # toward not touching data the kit did not create.
+  local _csv="$1" _profile="$2"
+  _kit_installed_plugin "$_csv" "security-guidance" && return 0
+  # The profile branch must fail closed exactly like the plugin-list branch: the
+  # caller only populates the plugin CSV when jq read the manifest, and _json_get's
+  # grep/sed fallback can misread a minified profile field. Without jq, do not
+  # trust the profile — no offer.
+  command -v jq &>/dev/null || return 1
+  case "$_profile" in
+    standard|full) return 0 ;;
+  esac
+  return 1
+}
+
 _json_file_count() {
   # Usage: _json_file_count <file>
   local file="$1"
@@ -497,6 +521,32 @@ _remove_wce_runtime_path() {
     rmdir ./web-content-extraction 2>/dev/null || true
   ) || rc=$?
   [[ "$rc" -eq 0 ]]
+}
+
+_remove_security_data_dir() {
+  # Remove ~/.claude/security bound to the verified physical CLAUDE_DIR inode,
+  # the same way _remove_wce_runtime_path handles runtime leaves — rather than
+  # the earlier "textual _safe_cleanup_path + absolute rm -rf". The removal
+  # prompt can block for an unbounded time, so re-verify here at removal time
+  # instead of trusting the -d/-L check made before it: if the parent ~/.claude
+  # is swapped to a symlink in the interim, cd -P resolves to a different
+  # physical path than the one captured up front and is rejected before any rm,
+  # so an external <target>/security is never followed and deleted. A final-leaf
+  # symlink is skipped (never unlinked-and-reported-as-removed).
+  # Returns 0 = removed or already absent, 1 = unsafe/failed.
+  [[ -e "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]] || return 0
+  if [[ ! -d "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]]; then
+    return 1
+  fi
+  local root_physical=""
+  root_physical="$(cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P)" || return 1
+  (
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
+    [[ -e security || -L security ]] || exit 0
+    [[ -d security && ! -L security ]] || exit 1
+    rm -rf ./security 2>/dev/null || exit 1
+  )
 }
 
 _remove_cleanup_path() {
@@ -1038,14 +1088,19 @@ fi
 #
 # Only the default location is handled. The plugin also honors
 # SECURITY_WARNINGS_STATE_DIR and CLAUDE_CONFIG_DIR, but the kit hardcodes
-# CLAUDE_DIR="$HOME/.claude" and _safe_cleanup_path rejects anything outside it.
+# CLAUDE_DIR="$HOME/.claude" and the removal is bound to that verified inode.
 # ---------------------------------------------------------------------------
-# A symlinked data dir is skipped rather than unlinked: `rm -rf` would drop
-# only the link and report a removal that left the referent untouched. Same
-# boundary rule the tracked-file and runtime removers follow.
+# Detection uses install history, not the current selection: the data is offered
+# on a standard/full install whose manifest no longer lists the plugin (a later
+# reconfigure deselected it while its data remained), not only when it is still
+# selected. Removal goes through _remove_security_data_dir(), which descends the
+# verified physical ~/.claude inode one real component at a time and skips a
+# symlinked parent or leaf — the same boundary rule the tracked-file and runtime
+# removers follow, so a parent swapped to a symlink during the (unbounded) prompt
+# cannot redirect the rm at an external <target>/security.
 _plugin_data_dir="$CLAUDE_DIR/security"
 if [[ -d "$_plugin_data_dir" ]] && [[ ! -L "$_plugin_data_dir" ]] \
-  && _kit_installed_plugin "$kit_plugins" "security-guidance"; then
+  && _kit_installed_security_guidance "$kit_plugins" "$profile"; then
   _plugin_data_size="$(du -sh "$_plugin_data_dir" 2>/dev/null | cut -f1 || true)"
   [[ -z "$_plugin_data_size" ]] && _plugin_data_size="?"
   printf "\n"
@@ -1056,14 +1111,17 @@ if [[ -d "$_plugin_data_dir" ]] && [[ ! -L "$_plugin_data_dir" ]] \
   read -r -p "$STR_PLUGIN_DATA_REMOVE_ASK" _plugin_data_confirm || _plugin_data_confirm="n"
   case "$_plugin_data_confirm" in
     y|Y|yes|YES)
-      if _safe_cleanup_path "$_plugin_data_dir"; then
-        rm -rf "$_plugin_data_dir" 2>/dev/null || true
-      fi
-      if [[ -d "$_plugin_data_dir" ]]; then
-        warn "$STR_PLUGIN_DATA_REMOVE_FAILED"
-        info "  rm -rf \"$_plugin_data_dir\""
-      else
+      if _remove_security_data_dir; then
         ok "$STR_PLUGIN_DATA_REMOVED"
+      else
+        warn "$STR_PLUGIN_DATA_REMOVE_FAILED"
+        # Only suggest a manual rm when the path is still genuinely safe (a real
+        # ~/.claude with a real security dir). If removal was refused because the
+        # parent turned into a symlink, do not point rm at a symlinked path.
+        if [[ -d "$CLAUDE_DIR" && ! -L "$CLAUDE_DIR" ]] \
+          && [[ -d "$_plugin_data_dir" && ! -L "$_plugin_data_dir" ]]; then
+          info "  rm -rf \"$_plugin_data_dir\""
+        fi
       fi
       ;;
     *)
