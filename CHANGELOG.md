@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.75.1] - 2026-07-25
+
+### Fixed
+- **アンインストール時に security-guidance プラグインのローカルデータが残る問題を修正**: キットが standard / full で導入する `security-guidance` プラグインは、Python 仮想環境（`agent-sdk-venv`、数百 MB）とセッションごとの state ファイルを `~/.claude/security/` に作成する。このパスは `$CLAUDE_DIR` 配下＝キットの削除権限内にあるにもかかわらず、`cleanup_paths_json()` にも `uninstall.sh` にも一切記載がなく、アンインストール後も丸ごと残っていた（実機で 260 MB / state ファイル 865 個を確認）。`uninstall.sh` に削除確認のプロンプトを追加し、サイズを表示したうえでユーザーの選択で削除できるようにした。無条件削除の `cleanup_paths` には**入れていない**: キットは `config/plugins.json` 由来のプラグイン本体をアンインストールしないため、まだ有効なプラグインのキャッシュを黙って消すと次回実行時に PyPI からの再ダウンロードが発生するため。既定は「残す」で、パイプ実行など `read` が EOF になる経路でも削除しない。
+  - **削除は検証済みの物理 inode に束縛する**: 確認プロンプトは無制限に待つため、承諾後に親 `~/.claude` が symlink に差し替えられる競合があった。削除を `_remove_wce_runtime_path` と同型の `_remove_security_data_dir()` に置き換え、`cd -P` で `~/.claude` を 1 要素ずつ辿って `pwd -P` を捕捉済みの物理パスと突き合わせてから cwd 相対で削除する。親が symlink に差し替わると物理パスが一致せず削除前に拒否されるため、外部の `<target>/security` を辿って消すことはない（末端が symlink の場合も辿らずスキップ）。従来の文字列判定 `_safe_cleanup_path` + 絶対パス `rm -rf` はこの経路では使わない。
+  - **所有判定は現在の選択ではなく導入履歴で行う**: 従来はマニフェストの現 `plugins`（＝現在の `SELECTED_PLUGINS`）に `security-guidance` がある場合のみ確認していたため、キット導入後に選択から外した環境ではデータが残っていても確認が出なかった。`security-guidance` は standard / full の既定プラグインなので、現在選択されている **または** マニフェストの profile が standard / full のときに確認するよう変更し、後から選択解除してもデータが孤立しないようにした（minimal / custom で既定に無い環境は対象外＝キットが導入していないデータには触れない）。
+  - プラグイン側が対応する `SECURITY_WARNINGS_STATE_DIR` / `CLAUDE_CONFIG_DIR` による移動先は対象外（キットは `CLAUDE_DIR="$HOME/.claude"` 固定で、削除は検証済み inode の外へ出ない）。
+
 ## [0.73.0] - 2026-07-19
 
 MDM（Jamf / Intune / Workspace ONE / Ivanti 等）から macOS 13.5 以上の管理端末へ Claude Code CLI とキットをゼロタッチ配布するサイレントインストール機能を追加。Xcode Command Line Tools は MDM baseline として事前配布する構成が既定。Windows MDM は本リリースの対象外。

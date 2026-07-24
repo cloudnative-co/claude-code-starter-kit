@@ -960,6 +960,8 @@ cd claude-code-starter-kit
 > 自分で手動追加したファイルはそのまま残ります。
 > 削除対象は `~/.claude/.starter-kit-manifest.json` で管理されています。
 
+キットが導入したもののうち、キットより長く使う可能性があるものは自動削除せず個別に確認します（既定はすべて「残す」）。対象は Claude Code CLI、Codex プラグイン、`cc-safety-net`、そして `security-guidance` プラグインが `~/.claude/security/` に作るローカルデータ（数百 MB の Python 仮想環境とセッション状態のキャッシュ）です。
+
 ---
 
 ## ❓ FAQ
