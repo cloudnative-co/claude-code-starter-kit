@@ -106,7 +106,7 @@
 {
   test_name="setup-refactor: plugin install block is a callable function using exact matching"
   if grep -q '^install_selected_plugins()' "$PROJECT_DIR/setup.sh" \
-    && grep -q '_claude_plugin_list_has "$installed_plugins" "$p_name"' "$PROJECT_DIR/setup.sh" \
+    && grep -q '_claude_plugin_list_has "$installed_plugins" "$p"' "$PROJECT_DIR/setup.sh" \
     && ! grep -q '_installed_plugins.*grep' "$PROJECT_DIR/setup.sh"; then
     pass "$test_name"
   else
@@ -932,6 +932,55 @@ _isp_run_case() {
     && grep -qF "Skipping plugin install" "$_ISP_DIR/out.log" \
     && grep -qF "/install codex" "$_ISP_DIR/out.log" \
     && [[ ! -s "$_ISP_DIR/calls.log" ]] \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+# ── marketplace identity is preserved end-to-end (F12) ──────────────────────
+{
+  test_name="install_selected_plugins: qualified entry keeps @marketplace through to install argv"
+  if _isp_run_case "document-skills@anthropic-agent-skills" "" 0 true \
+    && grep -qx "plugin marketplace add anthropics/skills" "$_ISP_DIR/calls.log" \
+    && grep -qx "plugin install document-skills@anthropic-agent-skills --scope user" "$_ISP_DIR/calls.log" \
+    && ! grep -qx "plugin install document-skills --scope user" "$_ISP_DIR/calls.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: same name from another marketplace is not mistaken for installed"
+  if _isp_run_case "document-skills@anthropic-agent-skills" "  ❯ document-skills@some-other-marketplace" 0 true \
+    && ! grep -qF "Already installed:" "$_ISP_DIR/out.log" \
+    && grep -qx "plugin install document-skills@anthropic-agent-skills --scope user" "$_ISP_DIR/calls.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: bare name still installs without an @marketplace suffix (backward compat)"
+  if _isp_run_case "codex" "" 0 true \
+    && grep -qx "plugin install codex --scope user" "$_ISP_DIR/calls.log" \
+    && ! grep -qF "plugin install codex@" "$_ISP_DIR/calls.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: no-CLI hint keeps the @marketplace suffix"
+  if _isp_run_case "document-skills@anthropic-agent-skills" "" 0 false \
+    && grep -qF "/install document-skills@anthropic-agent-skills" "$_ISP_DIR/out.log" \
     && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
     pass "$test_name"
   else

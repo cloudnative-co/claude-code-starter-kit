@@ -122,8 +122,52 @@ _profile_default_plugins() {
 }
 
 # ---------------------------------------------------------------------------
+# Canonical spelling for comparing plugin entries. A bare name and
+# "name@claude-plugins-official" are the same plugin, so both collapse to the
+# bare name; non-official entries keep their "@marketplace" suffix.
+#
+# This is what lets a legacy bare-official entry stored in SELECTED/KNOWN/
+# DISMISSED still match a default that became "name@claude-plugins-official"
+# once the name started colliding across marketplaces (and vice-versa) — the
+# spellings differ but the plugin is the same, so it must not be re-offered.
+# It is pure string work: no PLUGIN_* arrays, so it is safe inside the
+# command-substitution call sites that never populate them.
+#
+# Usage: _canonical_plugin_entry <entry> -> prints canonical entry
+# ---------------------------------------------------------------------------
+_canonical_plugin_entry() {
+  local entry="$1"
+  case "$entry" in
+    *@claude-plugins-official) printf '%s' "${entry%@claude-plugins-official}" ;;
+    *) printf '%s' "$entry" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Canonicalize every element of a plugin CSV. Usage: _canonical_plugin_csv <csv>
+# ---------------------------------------------------------------------------
+_canonical_plugin_csv() {
+  local csv="${1:-}" out=() e
+  [[ -n "$csv" ]] || return 0
+  local IFS=,
+  # shellcheck disable=SC2206 # deliberate word-split on the CSV separator
+  local parts=($csv)
+  unset IFS
+  for e in "${parts[@]}"; do
+    [[ -n "$e" ]] || continue
+    out+=("$(_canonical_plugin_entry "$e")")
+  done
+  [[ "${#out[@]}" -eq 0 ]] && return 0
+  local IFS=,
+  printf '%s' "${out[*]}"
+}
+
+# ---------------------------------------------------------------------------
 # Newcomers: profile defaults minus what is already selected, already declined,
 # or already known.
+#
+# Comparison is done on canonical spellings so a stored bare-official entry and
+# a now-qualified default (or the reverse) are recognized as the same plugin.
 #
 # When KNOWN_PLUGINS is unset the install predates this mechanism. That is the
 # one-time catch-up: every profile default the user does not already have is
@@ -135,17 +179,24 @@ _profile_default_plugins() {
 # ---------------------------------------------------------------------------
 _compute_new_plugins() {
   local defaults="$1"
-  local out=() entry
+  local out=() entry canon
   [[ -n "$defaults" ]] || return 0
+  local _sel _dis _kno
+  _sel="$(_canonical_plugin_csv "${SELECTED_PLUGINS:-}")"
+  _dis="$(_canonical_plugin_csv "${DISMISSED_PLUGINS:-}")"
+  _kno="$(_canonical_plugin_csv "${KNOWN_PLUGINS:-}")"
   local IFS=,
   # shellcheck disable=SC2206 # deliberate word-split on the CSV separator
   local entries=($defaults)
   unset IFS
   for entry in "${entries[@]}"; do
     [[ -n "$entry" ]] || continue
-    _plugin_csv_has "${SELECTED_PLUGINS:-}" "$entry" && continue
-    _plugin_csv_has "${DISMISSED_PLUGINS:-}" "$entry" && continue
-    _plugin_csv_has "${KNOWN_PLUGINS:-}" "$entry" && continue
+    canon="$(_canonical_plugin_entry "$entry")"
+    _plugin_csv_has "$_sel" "$canon" && continue
+    _plugin_csv_has "$_dis" "$canon" && continue
+    _plugin_csv_has "$_kno" "$canon" && continue
+    # Emit the default's own spelling, not the canonical one, so the offer and
+    # the install use the fully qualified identity the catalog defines.
     out+=("$entry")
   done
   [[ "${#out[@]}" -eq 0 ]] && return 0
@@ -218,6 +269,26 @@ _write_pending_plugins() {
 }
 
 # ---------------------------------------------------------------------------
+# Write the SessionStart notification only when its reader is actually deployed.
+#
+# The reader (features/feature-recommendation/scripts/check-pending.sh and its
+# SessionStart hook) ships only when ENABLE_FEATURE_RECOMMENDATION is on, and
+# plugin adoption deliberately rides on that same reader. With it off, a pending
+# file is an orphan nobody reads, so skip the write. The marker is left where it
+# is either way, so the offer still resurfaces at the next interactive update.
+#
+# The value is normally "true"/"false" (profile conf or normalized saved conf);
+# an unset/empty value defaults to writing, matching the standard/full default.
+#
+# Usage: _notify_pending_plugins <claude_dir> <plugins-csv>
+# ---------------------------------------------------------------------------
+_notify_pending_plugins() {
+  local claude_dir="$1" plugins_csv="$2"
+  [[ "${ENABLE_FEATURE_RECOMMENDATION:-true}" == "true" ]] || return 0
+  _write_pending_plugins "$claude_dir" "$plugins_csv" || true
+}
+
+# ---------------------------------------------------------------------------
 # Detect plugins added to the catalog since the user was last asked, and either
 # offer them (interactive) or record a notification (non-interactive).
 #
@@ -250,7 +321,7 @@ _detect_and_offer_new_plugins() {
   # consume the offer and the next interactive update would find nothing to ask.
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]] \
     || [[ ! -r "${_TTY_INPUT:-/dev/tty}" ]]; then
-    _write_pending_plugins "$claude_dir" "$newcomers" || true
+    _notify_pending_plugins "$claude_dir" "$newcomers"
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
       local _dr_entry
       local IFS=,
@@ -259,8 +330,10 @@ _detect_and_offer_new_plugins() {
       unset IFS
       for _dr_entry in "${_dr_entries[@]}"; do
         [[ -n "$_dr_entry" ]] || continue
+        # Keep the fully qualified identity: the real install (setup.sh) resolves
+        # a specific marketplace only from a "name@marketplace" argument.
         _dryrun_log "EXTERNAL" "Plugin (new, would prompt)" \
-          "claude plugin install ${_dr_entry%%@*}"
+          "claude plugin install ${_dr_entry}"
       done
     fi
     return 0
@@ -269,9 +342,13 @@ _detect_and_offer_new_plugins() {
   local _rc=0
   _offer_new_plugins_interactive "$newcomers" || _rc=$?
   if [[ "$_rc" -eq 2 ]]; then
-    # The terminal went away mid-prompt. Some newcomers are unanswered, so the
-    # marker must not advance; leave a notification and ask again next time.
-    _write_pending_plugins "$claude_dir" "$newcomers" || true
+    # The terminal went away mid-prompt. Entries answered before it vanished are
+    # already recorded in SELECTED_PLUGINS / DISMISSED_PLUGINS, so recompute the
+    # still-unanswered set rather than re-notifying about answered ones. The
+    # marker must not advance while anything is still outstanding.
+    local remaining
+    remaining="$(_compute_new_plugins "$defaults")" || remaining="$newcomers"
+    _notify_pending_plugins "$claude_dir" "$remaining"
     return 0
   fi
   [[ "$_rc" -eq 0 ]] || return "$_rc"
@@ -308,7 +385,7 @@ _offer_new_plugins_interactive() {
   for entry in "${entries[@]}"; do
     [[ -n "$entry" ]] || continue
     local desc
-    desc="$(_plugin_description "${entry%%@*}")"
+    desc="$(_plugin_description "$entry")"
     printf "  %s%s%s%s\n" "${BOLD:-}" "$entry" "${NC:-}" "${desc:+ — $desc}"
     # shellcheck disable=SC2059 # STR_* carries the %s placeholder
     if ! read -r -p "$(printf "${STR_NEW_PLUGINS_ASK:-Add %s? [y/N]}" "$entry") " \
@@ -330,17 +407,26 @@ _offer_new_plugins_interactive() {
 }
 
 # ---------------------------------------------------------------------------
-# Description for a bare plugin name, read from the catalog. Best effort: an
-# empty result just means the line is printed without one.
+# Description for a plugin entry, read from the catalog. Accepts a bare name or
+# a "name@marketplace" entry and selects on both name and marketplace, so a
+# name that collides across marketplaces resolves to the right description. A
+# bare name defaults to the official marketplace. Best effort: an empty result
+# just means the line is printed without one.
 #
-# Usage: _plugin_description <bare-name>
+# Usage: _plugin_description <name | name@marketplace>
 # ---------------------------------------------------------------------------
 _plugin_description() {
-  local name="$1" dir
+  local entry="$1" name mp dir
+  name="${entry%%@*}"
+  if [[ "$entry" == *"@"* ]]; then
+    mp="${entry#*@}"
+  else
+    mp="claude-plugins-official"
+  fi
   dir="$(_project_dir)"
   [[ -f "$dir/config/plugins.json" ]] || return 0
   command -v jq &>/dev/null || return 0
-  jq -r --arg n "$name" \
-    'first(.plugins[] | select(.name == $n) | .description) // ""' \
+  jq -r --arg n "$name" --arg mp "$mp" \
+    'first(.plugins[] | select(.name == $n and ((.marketplace // "claude-plugins-official") == $mp)) | .description) // ""' \
     "$dir/config/plugins.json" 2>/dev/null || true
 }

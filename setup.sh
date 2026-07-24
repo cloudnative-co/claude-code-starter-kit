@@ -651,6 +651,17 @@ else
   _setup_deploy_fresh
   _rc=$?
   [[ "$_rc" -eq 0 ]] || return "$_rc"
+
+  # Record the profile's current default plugin set as already-known, so the
+  # first update after this install does not mistake a fresh install for one
+  # that predates the adoption mechanism and re-offer defaults the user
+  # explicitly deselected here. Only standard/full have defaults; minimal/custom
+  # yield an empty set, which save_config skips — correctly leaving KNOWN_PLUGINS
+  # absent to mean "nothing to catch up on". This runs on the fresh path only:
+  # the update path restores KNOWN_PLUGINS from the conf (or leaves it absent for
+  # the one-time catch-up), and must not have it stamped here.
+  # shellcheck disable=SC2034 # KNOWN_PLUGINS is persisted by save_config()
+  KNOWN_PLUGINS="$(_profile_default_plugins "${PROFILE:-standard}" 2>/dev/null || printf '')"
 fi
 }
 
@@ -1294,7 +1305,9 @@ install_selected_plugins() {
     local p p_name
     for p in "${plugins[@]}"; do
       p_name="${p%%@*}"
-      [[ -n "$p_name" ]] && printf "  /install %s\n" "$p_name"
+      # Keep the @marketplace suffix: /install resolves a specific marketplace
+      # only from a "name@marketplace" argument.
+      [[ -n "$p_name" ]] && printf "  /install %s\n" "$p"
     done
     return 0
   fi
@@ -1307,7 +1320,9 @@ install_selected_plugins() {
     local p p_name
     for p in "${plugins[@]}"; do
       p_name="${p%%@*}"
-      if [[ -n "$p_name" ]] && ! _claude_plugin_list_has "$installed_plugins" "$p_name"; then
+      # Match on the full "name@marketplace" identity so a same-named plugin
+      # from a different marketplace is not mistaken for this one.
+      if [[ -n "$p_name" ]] && ! _claude_plugin_list_has "$installed_plugins" "$p"; then
         need_install=true
         break
       fi
@@ -1333,26 +1348,29 @@ install_selected_plugins() {
     info "$STR_DEPLOY_PLUGINS_INSTALLING"
   fi
 
+  # Install/update using the full "name@marketplace" identity so the CLI
+  # resolves the marketplace the user actually accepted. p_name is kept only to
+  # skip empty entries; bare names pass through unchanged ($p == $p_name).
   local p p_name plugin_output
   for p in "${plugins[@]}"; do
     p_name="${p%%@*}"
     [[ -z "$p_name" ]] && continue
     if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
       plugin_output=""
-      if _run_capture plugin_output claude plugin install "$p_name" --scope user; then
-        ok "${STR_DEPLOY_PLUGINS_UPDATED:-Updated} $p_name"
+      if _run_capture plugin_output claude plugin install "$p" --scope user; then
+        ok "${STR_DEPLOY_PLUGINS_UPDATED:-Updated} $p"
       else
-        warn "$STR_DEPLOY_PLUGINS_FAILED $p_name"
+        warn "$STR_DEPLOY_PLUGINS_FAILED $p"
         [[ -n "$plugin_output" ]] && info "  $plugin_output"
       fi
-    elif _claude_plugin_list_has "$installed_plugins" "$p_name"; then
-      ok "$STR_DEPLOY_PLUGINS_ALREADY $p_name"
+    elif _claude_plugin_list_has "$installed_plugins" "$p"; then
+      ok "$STR_DEPLOY_PLUGINS_ALREADY $p"
     else
       plugin_output=""
-      if _run_capture plugin_output claude plugin install "$p_name" --scope user; then
-        ok "$STR_DEPLOY_PLUGINS_INSTALLED $p_name"
+      if _run_capture plugin_output claude plugin install "$p" --scope user; then
+        ok "$STR_DEPLOY_PLUGINS_INSTALLED $p"
       else
-        warn "$STR_DEPLOY_PLUGINS_FAILED $p_name"
+        warn "$STR_DEPLOY_PLUGINS_FAILED $p"
         [[ -n "$plugin_output" ]] && info "  $plugin_output"
       fi
     fi
@@ -1455,7 +1473,8 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
     IFS=',' read -r -a _dr_plugins < <(printf '%s\n' "$SELECTED_PLUGINS")
     for _dr_p in "${_dr_plugins[@]}"; do
       _dr_name="${_dr_p%%@*}"
-      [[ -n "$_dr_name" ]] && _dryrun_log "EXTERNAL" "Plugin" "claude plugin install $_dr_name"
+      # Log the full "name@marketplace" identity actually passed to install.
+      [[ -n "$_dr_name" ]] && _dryrun_log "EXTERNAL" "Plugin" "claude plugin install $_dr_p"
     done
   fi
   if is_true "${ENABLE_CODEX_PLUGIN:-false}"; then

@@ -64,6 +64,16 @@ _detect_and_write_pending_features() {
     return 0
   fi
 
+  # The SessionStart reader (check-pending.sh) and its hook ship only when
+  # ENABLE_FEATURE_RECOMMENDATION is on. With it off, a pending file is an orphan
+  # nobody reads, so clear any stale one and write nothing. (An unset/empty value
+  # defaults to writing, matching standard's default and keeping the isolated
+  # unit harness — which blanks all flags — exercising the write path.)
+  if [[ "${ENABLE_FEATURE_RECOMMENDATION:-true}" != "true" ]]; then
+    rm -f "$pending_file"
+    return 0
+  fi
+
   # Load profile defaults (if profile conf exists)
   local profile_conf="$PROJECT_DIR/profiles/${PROFILE:-standard}.conf"
   local _is_custom_profile=false

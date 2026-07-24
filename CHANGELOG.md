@@ -14,6 +14,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   - **状態はマニフェストではなく `~/.claude-starter-kit.conf` に置く**: MDM はマニフェストを「キー完全一致集合 + バイト単位の完全一致 + SHA256」の 3 層で検証しており、キーを 1 つ追加するだけで MDM のインストール自体がハード失敗する。`save_config` は `if ! _deploy_mdm_managed` の内側でしか呼ばれないため、conf に置くことで MDM のマニフェストは完全に不変のままとなる。
   - SessionStart の通知は既存の `.starter-kit-pending-features.json` に `plugins` キーとして相乗りする（新規ファイルを作らないので後始末の経路は増えない）。ただし検出関数は分離した — 既存の機能通知は full プロファイルで早期 return してこのファイルを削除するが、full こそ全カタログが既定でありプラグインの新規追加が最も効く層のため。
 
+### Fixed
+- **`/update-kit` がプラグインの新規提示に対応（マージブロッカー）**: 通知が案内する `/update-kit` は `.features` しか処理しておらず、プラグインだけが残った pending では提示されないまま `pending-features.json` を削除しうる経路があった（Claude Code の Bash ツールには制御端末が無く `setup.sh` 側は対話提示できないため、この経路が唯一の対話導線になる）。`commands/update-kit.md` を `.plugins` の提示・`SELECTED_PLUGINS`／`DISMISSED_PLUGINS` 更新・`/reload-plugins` 案内に対応させ、ファイル削除は features / plugins の**双方が空のときだけ**に修正した。（レビュー指摘 F7）
+- **プロンプト途中で端末が切れても回答済みを再通知しない**: 複数プラグインの提示中に EOF が起きると、既に回答済みのものまで含めて元の一覧を通知に書き戻していた。EOF 時に未回答集合を再計算するようにした（回答は既に `SELECTED_PLUGINS`／`DISMISSED_PLUGINS` に記録済み）。（F8）
+- **名前衝突が起きても既知プラグインを再提示しない**: 公式マーケットプレイスのみだった名前が別マーケットプレイスにも現れて衝突すると、既定表記が `name@claude-plugins-official` に変わり、`KNOWN_PLUGINS` に bare 名で記録済みのものが「新規」と誤検出されていた。比較を正規化（公式は bare 名に畳む）して解消した。（F9）
+- **新規インストールの初回アップデートで既定プラグインを誤提示しない**: fresh/reconfigure で `KNOWN_PLUGINS` を初期化していなかったため、fresh ウィザードで既定プラグインを明示的に外すと、初回アップデートで「機構導入前の旧環境」と誤判定して再提示していた。fresh の確定時にその時点のプロファイル既定集合を `KNOWN_PLUGINS` として記録するようにした。（F10）
+- **通知の読み手が無いときは pending を書かない**: `ENABLE_FEATURE_RECOMMENDATION=false` の環境では SessionStart の読み手（`check-pending.sh`）が配備されないのに pending を書いており、誰も読まない孤児ファイルになっていた。プラグイン側・機能側の両方の書き込みをこのフラグでゲートした（記録は前進させないので、次の対話的アップデートで必ず提示される）。（F11）
+- **導入時にマーケットプレイスの指定を落とさない**: `claude plugin install` は特定マーケットプレイスを選ぶのに `name@marketplace` 記法しか持たない（bare 名だと先に登録されたマーケットプレイスが黙って優先される）。hint／導入済み判定／install の argv／dry-run ログのすべてで完全修飾名を保持するようにし、`_claude_plugin_list_has`（`lib/codex-setup.sh` と `uninstall.sh` の両コピー）を marketplace 対応にした。bare 名は従来どおり動作する。（F12）
+
 ### Notes
 - 新しい設定キー `KNOWN_PLUGINS` / `DISMISSED_PLUGINS` は `_CONFIG_EMPTY_ALLOWED_KEYS` に**入れていない**。空値が書き出されないことで「conf にキーが無い＝追い付き未実施」という意味が保たれる。ここに追加すると初回の非対話アップデートで `KNOWN_PLUGINS=""` が書かれ、既存環境の一度きりの提示が静かに失われる（回帰テストで固定）。
 - MDM 配布経路は従来どおり影響を受けない。MDM 管理モードでは `SELECTED_PLUGINS` が空に強制され、`UPDATE_MODE` も false のため検出自体に到達しない。

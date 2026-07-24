@@ -275,5 +275,83 @@ else
   fail "plugin-adoption: adding these keys to the manifest breaks MDM installs"
 fi
 
+# ── mid-prompt EOF re-notifies only the unanswered plugins (F8) ─────────────
+#
+# The user answers the first newcomer, then the terminal EOFs on the second.
+# The answered one is already in SELECTED_PLUGINS, so the notification left
+# behind must list only what is still unanswered — not re-surface an answer.
+# A process-substitution fd reproduces "answered then EOF": a plain file would
+# reopen on every read and never reach EOF.
+_pa_out="$(_pa_run '
+  _MERGE_INTERACTIVE="true"
+  PROFILE="full"
+  SELECTED_PLUGINS="alpha"
+  exec 9< <(printf "y\n")
+  _TTY_INPUT="/dev/fd/9"
+  mkdir -p "'"$_pa_tmp"'/home_f8"
+  _detect_and_offer_new_plugins "'"$_pa_tmp"'/home_f8" >/dev/null 2>&1
+  printf "pending=[%s] selected=[%s]" \
+    "$(jq -r "(.plugins // []) | join(\",\")" "'"$_pa_tmp"'/home_f8/.starter-kit-pending-features.json" 2>/dev/null)" \
+    "$SELECTED_PLUGINS"')"
+if [[ "$_pa_out" == "pending=[gamma@other-mp] selected=[alpha,beta]" ]]; then
+  pass "plugin-adoption: a mid-prompt EOF re-notifies only the still-unanswered plugins"
+else
+  fail "plugin-adoption: EOF after one answer must drop the answered plugin from the notification (got '$_pa_out')"
+fi
+
+# ── the notification is gated on its reader being deployed (F11) ─────────────
+#
+# ENABLE_FEATURE_RECOMMENDATION gates the SessionStart reader; with it off the
+# pending file is an orphan nobody reads, so the writer skips it — but the
+# marker must still not advance, so the offer resurfaces next interactive update.
+_pa_out="$(_pa_run '
+  _MERGE_INTERACTIVE="false"
+  ENABLE_FEATURE_RECOMMENDATION="false"
+  SELECTED_PLUGINS="alpha"
+  mkdir -p "'"$_pa_tmp"'/home_f11"
+  _detect_and_offer_new_plugins "'"$_pa_tmp"'/home_f11" >/dev/null 2>&1
+  f="skipped"; [[ -f "'"$_pa_tmp"'/home_f11/.starter-kit-pending-features.json" ]] && f="written"
+  printf "file=%s known=[%s]" "$f" "$KNOWN_PLUGINS"')"
+if [[ "$_pa_out" == "file=skipped known=[]" ]]; then
+  pass "plugin-adoption: a disabled recommendation reader skips the orphan notification but keeps the offer"
+else
+  fail "plugin-adoption: FR=false must skip the pending write and not advance the marker (got '$_pa_out')"
+fi
+
+# ...and with the reader enabled the notification is written as before.
+_pa_out="$(_pa_run '
+  _MERGE_INTERACTIVE="false"
+  ENABLE_FEATURE_RECOMMENDATION="true"
+  SELECTED_PLUGINS="alpha"
+  mkdir -p "'"$_pa_tmp"'/home_f11b"
+  _detect_and_offer_new_plugins "'"$_pa_tmp"'/home_f11b" >/dev/null 2>&1
+  [[ -f "'"$_pa_tmp"'/home_f11b/.starter-kit-pending-features.json" ]] && printf "written" || printf "skipped"')"
+if [[ "$_pa_out" == "written" ]]; then
+  pass "plugin-adoption: the notification is written when the recommendation reader is enabled"
+else
+  fail "plugin-adoption: FR=true must still write the pending notification (got '$_pa_out')"
+fi
+
+# ── a legacy bare-official entry survives the name starting to collide (F9) ──
+#
+# This test swaps in a collision catalog, so it must be LAST — later assertions
+# would see the wrong plugin set. If a name that was official-only (stored bare)
+# later also appears in another marketplace, its default spelling becomes
+# name@claude-plugins-official; canonicalization must still treat the stored
+# bare entry as the same plugin so it is not re-offered.
+_pa_load '{"marketplaces":{"claude-plugins-official":"a/b","other-mp":"c/d"},"plugins":[
+  {"name":"alpha","marketplace":"claude-plugins-official","profiles":["standard"]},
+  {"name":"alpha","marketplace":"other-mp","profiles":["standard"]}
+]}'
+_pa_out="$(_pa_run '
+  SELECTED_PLUGINS="alpha"
+  KNOWN_PLUGINS="alpha"
+  _compute_new_plugins "$(_profile_default_plugins standard)"')"
+if [[ "$_pa_out" == "alpha@other-mp" ]]; then
+  pass "plugin-adoption: a legacy bare-official entry is not re-offered once its name collides"
+else
+  fail "plugin-adoption: canonicalization should offer only alpha@other-mp (got '$_pa_out')"
+fi
+
 rm -rf "$_pa_tmp"
 unset _pa_tmp _pa_out _pa_catalog
