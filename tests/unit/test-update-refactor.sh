@@ -112,7 +112,9 @@ source "$PROJECT_DIR/lib/update.sh"
       backup_existing() { return 0; }
       _snapshot_exists() { return 0; }
       _validate_dismissed_features() { return 0; }
+      _validate_plugin_csv() { return 0; }
       _detect_and_write_pending_features() { return 0; }
+      _detect_and_offer_new_plugins() { return 0; }
       _check_major_upgrade() { return 0; }
       section() { return 0; }
       _update_phase_settings() {

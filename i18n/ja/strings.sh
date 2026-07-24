@@ -151,6 +151,11 @@ STR_DEPLOY_PLUGINS_FAILED="プラグインのインストールに失敗："
 STR_DEPLOY_PLUGINS_MARKETPLACE_FAILED="プラグインマーケットプレイスの追加に失敗："
 STR_DEPLOY_PLUGINS_SKIP="プラグインのインストールをスキップ（Claude Code CLI が利用不可）"
 
+# Update: plugins added to the catalog since the user was last asked
+STR_NEW_PLUGINS_FOUND="前回のセットアップ以降に追加されたプラグインがあります："
+STR_NEW_PLUGINS_ASK="%s を追加しますか？ [y/N]"
+STR_NEW_PLUGINS_ADDED="追加します: %s"
+
 # Post-deploy: CLI install
 STR_CLI_INSTALLING="Claude Code CLI をインストール中..."
 STR_CLI_INSTALLED="Claude Code CLI をインストールしました"

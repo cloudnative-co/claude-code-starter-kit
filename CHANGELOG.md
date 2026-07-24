@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.75.0] - 2026-07-24
+
+### Added
+- **アップデートでカタログに追加されたプラグインを取り込めるようにした**: これまで `setup.sh --update`（`/update-kit`・ワンライナー再実行を含む）は `SELECTED_PLUGINS` をマニフェストからそのまま復元するだけで、`config/plugins.json` に後から追加されたプラグインが既存インストールへ一切届かなかった。この復元は「ユーザーが明示的に外した選択を上書きしない」ための意図的な仕様なので、その原則を保ったまま**プロファイル既定の新規追加分だけを提示する**機構を追加した。対話的なアップデートでは 1 件ずつ確認（既定は「いいえ」）し、承諾したものだけを導入する。非対話（auto-update フック・CI・dry-run）や端末が読めない場合は**何も導入せず SessionStart の通知のみ**を残す。
+  - **記録はユーザーが実際に答えられたときだけ前進する**: `ENABLE_AUTO_UPDATE` は standard / full で既定有効であり、その auto-update フックは `setup.sh --update --non-interactive` を実行する。ここで既知カタログを前進させると提示がバックグラウンドで消費され、後から手動アップデートしても差分が空になり二度と尋ねられない。非対話では記録を進めないことで、次の対話的アップデートで必ず提示されるようにしている。
+  - **一度きりの追い付き**: 本機構より前に導入された環境には `KNOWN_PLUGINS` が存在しない。この不在を「追い付きが必要」の目印として扱い、プロファイル既定のうち未導入のものを一度だけ提示する。これが、既に配布済みだったプラグイン（`claude-security` など）が既存ユーザーへ届く唯一の経路になる。辞退した内容は `DISMISSED_PLUGINS` に記録され、同じ問いが繰り返されることはない。
+  - **比較の単位はカタログ全体ではなくプロファイル既定集合**: 既存プラグインの `profiles` に新しいプロファイルが追加された場合も、そのプロファイルにとっては新規として検出される。エントリの表記は `_compute_selected_plugins` と同じ規則で修飾するため（名前衝突時・非公式マーケットプレイス時は `name@marketplace`）、`document-skills` のような既存の修飾済みエントリが毎回「新規」と誤検出されることはない。
+  - **状態はマニフェストではなく `~/.claude-starter-kit.conf` に置く**: MDM はマニフェストを「キー完全一致集合 + バイト単位の完全一致 + SHA256」の 3 層で検証しており、キーを 1 つ追加するだけで MDM のインストール自体がハード失敗する。`save_config` は `if ! _deploy_mdm_managed` の内側でしか呼ばれないため、conf に置くことで MDM のマニフェストは完全に不変のままとなる。
+  - SessionStart の通知は既存の `.starter-kit-pending-features.json` に `plugins` キーとして相乗りする（新規ファイルを作らないので後始末の経路は増えない）。ただし検出関数は分離した — 既存の機能通知は full プロファイルで早期 return してこのファイルを削除するが、full こそ全カタログが既定でありプラグインの新規追加が最も効く層のため。
+
+### Fixed
+- **`/update-kit` がプラグインの新規提示に対応（マージブロッカー）**: 通知が案内する `/update-kit` は `.features` しか処理しておらず、プラグインだけが残った pending では提示されないまま `pending-features.json` を削除しうる経路があった（Claude Code の Bash ツールには制御端末が無く `setup.sh` 側は対話提示できないため、この経路が唯一の対話導線になる）。`commands/update-kit.md` を `.plugins` の提示・`SELECTED_PLUGINS`／`DISMISSED_PLUGINS` 更新・`/reload-plugins` 案内に対応させ、ファイル削除は features / plugins の**双方が空のときだけ**に修正した。（レビュー指摘 F7）
+- **プロンプト途中で端末が切れても回答済みを再通知しない**: 複数プラグインの提示中に EOF が起きると、既に回答済みのものまで含めて元の一覧を通知に書き戻していた。EOF 時に未回答集合を再計算するようにした（回答は既に `SELECTED_PLUGINS`／`DISMISSED_PLUGINS` に記録済み）。（F8）
+- **名前衝突が起きても既知プラグインを再提示しない**: 公式マーケットプレイスのみだった名前が別マーケットプレイスにも現れて衝突すると、既定表記が `name@claude-plugins-official` に変わり、`KNOWN_PLUGINS` に bare 名で記録済みのものが「新規」と誤検出されていた。比較を正規化（公式は bare 名に畳む）して解消した。（F9）
+- **新規インストールの初回アップデートで既定プラグインを誤提示しない**: fresh/reconfigure で `KNOWN_PLUGINS` を初期化していなかったため、fresh ウィザードで既定プラグインを明示的に外すと、初回アップデートで「機構導入前の旧環境」と誤判定して再提示していた。fresh の確定時にその時点のプロファイル既定集合を `KNOWN_PLUGINS` として記録するようにした。（F10）
+- **通知の読み手が無いときは pending を書かない**: `ENABLE_FEATURE_RECOMMENDATION=false` の環境では SessionStart の読み手（`check-pending.sh`）が配備されないのに pending を書いており、誰も読まない孤児ファイルになっていた。プラグイン側・機能側の両方の書き込みをこのフラグでゲートした（記録は前進させないので、次の対話的アップデートで必ず提示される）。（F11）
+- **導入時にマーケットプレイスの指定を落とさない**: `claude plugin install` は特定マーケットプレイスを選ぶのに `name@marketplace` 記法しか持たない（bare 名だと先に登録されたマーケットプレイスが黙って優先される）。hint／導入済み判定／install の argv／dry-run ログのすべてで完全修飾名を保持するようにし、`_claude_plugin_list_has`（`lib/codex-setup.sh` と `uninstall.sh` の両コピー）を marketplace 対応にした。bare 名は従来どおり動作する。（F12）
+
+### Notes
+- 新しい設定キー `KNOWN_PLUGINS` / `DISMISSED_PLUGINS` は `_CONFIG_EMPTY_ALLOWED_KEYS` に**入れていない**。空値が書き出されないことで「conf にキーが無い＝追い付き未実施」という意味が保たれる。ここに追加すると初回の非対話アップデートで `KNOWN_PLUGINS=""` が書かれ、既存環境の一度きりの提示が静かに失われる（回帰テストで固定）。
+- MDM 配布経路は従来どおり影響を受けない。MDM 管理モードでは `SELECTED_PLUGINS` が空に強制され、`UPDATE_MODE` も false のため検出自体に到達しない。
+
 ## [0.73.0] - 2026-07-19
 
 MDM（Jamf / Intune / Workspace ONE / Ivanti 等）から macOS 13.5 以上の管理端末へ Claude Code CLI とキットをゼロタッチ配布するサイレントインストール機能を追加。Xcode Command Line Tools は MDM baseline として事前配布する構成が既定。Windows MDM は本リリースの対象外。

@@ -234,6 +234,67 @@ test_update_feature_toggle() {
   teardown_test_env
 }
 
+# --- update-adopts-new-catalog-plugin (F10 + F13) ---
+#
+# End-to-end through the real setup.sh and the real config/plugins.json:
+#   F10: a fresh install stamps the profile's default plugin set into
+#        KNOWN_PLUGINS, so a default the user deselected here is not treated as
+#        a newcomer and re-offered on the first update.
+#   F13: a plugin the install has not seen (simulated by dropping it from
+#        KNOWN_PLUGINS) is detected on update and recorded for the user.
+# The last full-only catalog entry stands in for "the newly catalogued plugin"
+# (after #152 merges this generalizes to claude-security, the 15th full plugin).
+test_update_adopts_new_catalog_plugin() {
+  setup_test_env
+  local conf="$HOME/.claude-starter-kit.conf"
+  local pending="$CLAUDE_DIR/.starter-kit-pending-features.json"
+  local q='def q: if (.marketplace // "claude-plugins-official")=="claude-plugins-official" then .name else .name+"@"+.marketplace end;'
+  local victim old_set
+  victim="$(jq -r "$q"' [.plugins[] | select(.profiles | index("full"))] | .[-1] | q' "$PROJECT_DIR/config/plugins.json")"
+  old_set="$(jq -r "$q"' ([.plugins[] | select(.profiles | index("full"))] | .[-1] | q) as $v | [.plugins[] | select(.profiles | index("full")) | q] | map(select(. != $v)) | join(",")' "$PROJECT_DIR/config/plugins.json")"
+
+  # 1. Fresh full install with the victim explicitly deselected.
+  run_setup --profile=full --fonts=false --ghostty=false --codex-plugin=false \
+    --plugins="$old_set" >/dev/null 2>&1
+
+  # F10: the fresh install must record the profile defaults (incl. victim).
+  local known
+  known="$(grep '^KNOWN_PLUGINS=' "$conf" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
+
+  # 2. Non-interactive update must NOT re-offer the deselected default.
+  run_setup_update --profile=full >/dev/null 2>&1
+  local reoffered=no
+  if [[ -f "$pending" ]] \
+    && jq -e --arg v "$victim" '(.plugins // []) | index($v)' "$pending" >/dev/null 2>&1; then
+    reoffered=yes
+  fi
+  local f10_ok=no
+  [[ ",$known," == *",$victim,"* ]] && [[ "$reoffered" == "no" ]] && f10_ok=yes
+
+  # 3. Simulate the victim being catalogued after the user was last asked: drop
+  #    it from KNOWN_PLUGINS (SELECTED already lacks it), then update again.
+  local tmpconf
+  tmpconf="$(mktemp)"
+  grep -v '^KNOWN_PLUGINS=' "$conf" > "$tmpconf" 2>/dev/null || true
+  printf 'KNOWN_PLUGINS="%s"\n' "$old_set" >> "$tmpconf"
+  mv "$tmpconf" "$conf"
+
+  run_setup_update --profile=full >/dev/null 2>&1
+  local f13_ok=no
+  if [[ -f "$pending" ]] \
+    && jq -e --arg v "$victim" '(.plugins // []) | index($v)' "$pending" >/dev/null 2>&1; then
+    f13_ok=yes
+  fi
+
+  if [[ "$f10_ok" == "yes" ]] && [[ "$f13_ok" == "yes" ]]; then
+    pass "update-adopts-new-catalog-plugin"
+  else
+    fail "update-adopts-new-catalog-plugin (f10=$f10_ok f13=$f13_ok victim=$victim known=[$known])"
+  fi
+
+  teardown_test_env
+}
+
 # --- 7. claudemd-migration ---
 test_claudemd_migration() {
   setup_test_env
@@ -1100,6 +1161,7 @@ run_scenario update test_update_progress_output
 run_scenario update test_auto_update_session_hooks
 run_scenario update test_auto_update_legacy_claude_fallback
 run_scenario update test_update_kit_command_paths
+run_scenario update test_update_adopts_new_catalog_plugin
 
 # update-merge: 3-way merge decisions, CLAUDE.md sections, snapshot handling
 run_scenario update-merge test_update_kit_changed

@@ -878,6 +878,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--non-interactive` は CI/自動デプロイ向けです。既存ユーザーには対話モードを推奨します。
 > - update 実行前には `~/.claude.backup.<タイムスタンプ>` に自動バックアップが作成されます。
 > - `setup.sh --update` / `/update-kit` では `Step N/M` の進捗表示が出ます。`settings.json` のマージのような長い処理でも途中経過が分かるようになっています。
+> - **新しく追加されたプラグインの取り込み**: キットに後から追加されたプラグインのうち、お使いのプロファイルで既定のものは、対話的なアップデート時に 1 件ずつ確認します（既定は「いいえ」で、承諾したものだけ導入されます）。過去に自分で外したプラグインが勝手に戻ることはありません。自動更新（auto-update）や `--non-interactive` では**何も導入せず**、次のセッション開始時に「新しいプラグインが利用可能です」と通知するだけです。辞退した内容は記録され、同じ確認は繰り返されません。
 >
 > **ドライラン（事前プレビュー）**:
 > - `/update-kit-dry-run` または `bash setup.sh --update --dry-run` で、update が何をするか事前に確認できます。ファイルの作成・変更・削除・スキップの一覧、settings.json の diff、外部操作（plugins 等）を `[WOULD RUN]` として表示します。

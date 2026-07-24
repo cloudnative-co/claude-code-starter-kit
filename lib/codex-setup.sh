@@ -51,8 +51,12 @@ _claude_plugin_list_has() {
       if (candidate !~ /^[A-Za-z0-9_]/ && n >= 2) {
         candidate = parts[2]
       }
-      sub(/@.*/, "", candidate)
-      if (candidate == name) { found = 1 }
+      if (name ~ /@/) {
+        if (candidate == name) { found = 1 }
+      } else {
+        sub(/@.*/, "", candidate)
+        if (candidate == name) { found = 1 }
+      }
     }
     END { exit found ? 0 : 1 }
   '
