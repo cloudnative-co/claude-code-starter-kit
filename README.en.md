@@ -65,6 +65,8 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 
 Missing or unsupported prerequisites are installed or upgraded automatically when possible: `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, Node.js `22.19+`, `tmux`, and `gh`. On macOS, the kit also detects the system Bash 3.2 limitation, installs Bash 4+ when needed, and re-execs automatically. If automatic installation fails, setup exits with an error and shows the manual commands.
 
+> **`claude-security` plugin (Full profile only)**: manual-launch only via `/claude-security` — no resident hook scans on your behalf. It requires Claude Code `v2.1.154+` on a paid plan (on Pro, enable **Dynamic workflows** from the `/config` row) and `python3` `3.9.6+` on your `PATH`; the kit verifies neither, so a successful Full install does not guarantee the plugin runs. Scan output lands in `CLAUDE-SECURITY-<timestamp>/` at the root of the scanned repo — outside `~/.claude`, so `uninstall.sh` never removes it and you delete it yourself. It is not auto-added to existing installs: run `/plugin install claude-security@claude-plugins-official` then `/reload-plugins`. See the Japanese README for the full operational notes (cost/consent prompt, coverage limits, deny-rule scope).
+
 ### Claude Account (Paid)
 
 **Claude Code requires a paid Anthropic account.** It does not work with free plans.
