@@ -116,6 +116,8 @@ setup_source_stage2() {
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/recommendation.sh"
 # shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/plugin-adoption.sh"
+# shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/progress.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/template.sh"
@@ -612,6 +614,16 @@ if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
   _rc=$?
   [[ "$_rc" -eq 0 ]] || return "$_rc"
 
+  # Plugin CSVs get the same treatment, minus the migration marker: KNOWN_PLUGINS
+  # must stay absent on installs that predate this mechanism, since that absence
+  # is what earns them the one-time catch-up offer.
+  _validate_plugin_csv KNOWN_PLUGINS
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
+  _validate_plugin_csv DISMISSED_PLUGINS
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
+
   # Update mode: run update with merge logic
   # Keep this as a simple command. Placing a function call on the left side of
   # `||` disables errexit throughout its dynamic call tree in Bash.
@@ -621,6 +633,13 @@ if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
 
   # Detect new features and write pending notification (non-fatal)
   _detect_and_write_pending_features "$CLAUDE_DIR" || true
+
+  # Offer plugins catalogued since the user was last asked (non-fatal).
+  # Must run after the feature detection above: that one deletes the pending
+  # file outright on the full profile, and plugin newcomers still matter there.
+  # Appending to SELECTED_PLUGINS here is enough — write_manifest, save_config,
+  # the dry-run plugin log, and install_selected_plugins all read it later.
+  _detect_and_offer_new_plugins "$CLAUDE_DIR" || true
 
   maybe_install_web_content_deps
   _rc=$?

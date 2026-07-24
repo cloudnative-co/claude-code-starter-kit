@@ -355,6 +355,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--non-interactive` is intended for CI/automation. Interactive mode is recommended for existing users.
 > - A backup is automatically created at `~/.claude.backup.<timestamp>` before every update or first install with existing files.
 > - `setup.sh --update` and `/update-kit` now show `Step N/M` progress so long-running phases such as settings merges no longer look stalled.
+> - **Plugins added after you installed**: an interactive update asks about each one that is a default for your profile, one at a time, defaulting to no — nothing is installed without an explicit yes, and a plugin you previously deselected is never silently restored. Auto-update and `--non-interactive` runs install nothing and only leave a "new plugins available" notice for your next session. Declines are remembered, so you are not asked twice.
 > - **Dirty check**: If the kit repo has local changes, update is blocked with a `git stash` hint (applies to auto-update, install.sh, and /update-kit).
 > - **Auto-update**: SessionStart and SessionEnd hooks now check on every session boundary and run asynchronously. `~/.claude/.starter-kit-update.lock` prevents overlapping updates.
 > - **Recovery**: If an update fails, backup path and restore commands are shown. The latest backup path is saved in `~/.claude/.starter-kit-last-backup`.

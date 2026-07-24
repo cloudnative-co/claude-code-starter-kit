@@ -460,8 +460,10 @@
     backup_existing() { return 0; }
     _snapshot_exists() { return 0; }
     _validate_dismissed_features() { return 0; }
+    _validate_plugin_csv() { return 0; }
     run_update() { return 0; }
     _detect_and_write_pending_features() { return 0; }
+    _detect_and_offer_new_plugins() { return 0; }
     maybe_install_web_content_deps() { return 23; }
     CLAUDE_DIR="$_fail_mode_tmp/claude"
     UPDATE_MODE=true

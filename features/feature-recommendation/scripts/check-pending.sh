@@ -23,8 +23,17 @@ jq empty "$PENDING_FILE" 2>/dev/null || exit 0
 FEATURES=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && FEATURES+=("$line")
-done < <(jq -r '.features[]' "$PENDING_FILE" 2>/dev/null)
-[[ ${#FEATURES[@]} -gt 0 ]] || exit 0
+done < <(jq -r '.features[]? // empty' "$PENDING_FILE" 2>/dev/null)
+
+# Plugins catalogued since the user was last asked. Written by a separate
+# detector, so the file may carry plugins with no features (the full profile
+# has no pending features by definition) or features with no plugins.
+PLUGINS=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && PLUGINS+=("$line")
+done < <(jq -r '.plugins[]? // empty' "$PENDING_FILE" 2>/dev/null)
+
+[[ ${#FEATURES[@]} -gt 0 || ${#PLUGINS[@]} -gt 0 ]] || exit 0
 
 # ---------------------------------------------------------------------------
 # Resolve kit repo path (same assumption as auto-update.sh)
@@ -82,6 +91,43 @@ fi
 count=${#FEATURES[@]}
 MAX_DISPLAY=3
 
+_print_pending_plugins() {
+  local idx=0 p total=${#PLUGINS[@]}
+  [[ $total -gt 0 ]] || return 0
+  if [[ "$LANGUAGE" == "ja" ]]; then
+    if [[ $total -eq 1 ]]; then
+      printf '[Starter Kit] 新しいプラグインが利用可能です:\n'
+    else
+      printf '[Starter Kit] %d 件の新しいプラグインが利用可能です:\n' "$total"
+    fi
+  else
+    if [[ $total -eq 1 ]]; then
+      printf '[Starter Kit] New plugin available:\n'
+    else
+      printf '[Starter Kit] %d new plugins available:\n' "$total"
+    fi
+  fi
+  for p in "${PLUGINS[@]}"; do
+    if [[ $idx -lt $MAX_DISPLAY ]]; then
+      printf '  - %s\n' "$(_sanitize_display "$p")"
+    fi
+    idx=$((idx + 1))
+  done
+  if [[ "$LANGUAGE" == "ja" ]]; then
+    [[ $total -gt $MAX_DISPLAY ]] && printf '  ...他 %d 件\n' $((total - MAX_DISPLAY))
+    printf '  このセッションで /update-kit と入力すると、追加するか選べます。\n'
+  else
+    [[ $total -gt $MAX_DISPLAY ]] && printf '  ...and %d more\n' $((total - MAX_DISPLAY))
+    printf '  Type /update-kit in this session to choose which to add.\n'
+  fi
+  return 0
+}
+
+if [[ $count -eq 0 ]]; then
+  _print_pending_plugins
+  exit 0
+fi
+
 if [[ "$LANGUAGE" == "ja" ]]; then
   if [[ $count -eq 1 ]]; then
     printf '[Starter Kit] 新機能が利用可能です:\n'
@@ -119,3 +165,5 @@ else
   fi
   printf '  Type /update-kit in this session to choose which features to enable or skip.\n'
 fi
+
+_print_pending_plugins

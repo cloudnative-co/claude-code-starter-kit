@@ -258,6 +258,7 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCo
 2. If using a new marketplace, add its GitHub repo to `marketplaces` mapping in the same file
 3. Verify JSON: `jq . config/plugins.json`
 4. If the plugin name already exists in another marketplace, `_plugin_has_collision()` will auto-detect and the wizard will show `[marketplace]` suffix; `_compute_selected_plugins()` will produce `name@marketplace` in the CSV
+5. A catalog entry reaches existing installs through `lib/plugin-adoption.sh`: an interactive update offers each profile default they lack (default no), while non-interactive runs only notify. Its state (`KNOWN_PLUGINS`, `DISMISSED_PLUGINS`) lives in the conf, never the manifest — MDM validates the manifest by exact key set AND byte-exact JSON AND SHA256, so a new manifest key fails MDM installs outright. Keep `KNOWN_PLUGINS` out of `_CONFIG_EMPTY_ALLOWED_KEYS`: its absence is what earns an older install the one-time catch-up
 
 ## Notable Features
 

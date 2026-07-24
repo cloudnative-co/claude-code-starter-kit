@@ -52,6 +52,13 @@ ENABLE_FEATURE_RECOMMENDATION="${ENABLE_FEATURE_RECOMMENDATION:-}"
 
 DISMISSED_FEATURES="${DISMISSED_FEATURES:-}"
 
+# Plugins the user was last offered, and the ones they declined. Deliberately
+# absent from _CONFIG_EMPTY_ALLOWED_KEYS: an empty value is never written back,
+# so "KNOWN_PLUGINS missing from the conf" keeps its meaning of "this install
+# predates the mechanism and is owed a one-time catch-up".
+KNOWN_PLUGINS="${KNOWN_PLUGINS:-}"
+DISMISSED_PLUGINS="${DISMISSED_PLUGINS:-}"
+
 SELECTED_PLUGINS="${SELECTED_PLUGINS:-}"
 WIZARD_RESULT="${WIZARD_RESULT:-}"
 
