@@ -56,7 +56,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
 - **11 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
-- **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
+- **15 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp, claude-security
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
 - **Non-interactive mode** for CI/automation
@@ -64,6 +64,8 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 ## Prerequisites
 
 Missing or unsupported prerequisites are installed or upgraded automatically when possible: `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, Node.js `22.19+`, `tmux`, and `gh`. On macOS, the kit also detects the system Bash 3.2 limitation, installs Bash 4+ when needed, and re-execs automatically. If automatic installation fails, setup exits with an error and shows the manual commands.
+
+> **`claude-security` plugin (Full profile only)**: manual-launch only via `/claude-security` — no resident hook scans on your behalf. It requires Claude Code `v2.1.154+` on a paid plan (on Pro, enable **Dynamic workflows** from the `/config` row) and `python3` `3.9.6+` on your `PATH`; the kit verifies neither, so a successful Full install does not guarantee the plugin runs. Scan output lands in `CLAUDE-SECURITY-<timestamp>/` at the root of the scanned repo — outside `~/.claude`, so `uninstall.sh` never removes it and you delete it yourself. It is not auto-added to existing installs: run `/plugin install claude-security@claude-plugins-official` then `/reload-plugins`. See the Japanese README for the full operational notes (cost/consent prompt, coverage limits, deny-rule scope).
 
 ### Claude Account (Paid)
 
@@ -169,7 +171,7 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 |---|---|---|---|---|---|---|---|---|
 | Minimal | Yes | Yes | - | - | - | - | - | - |
 | Standard (Recommended) | Yes | Yes | Yes | Yes | Core | 5 | Optional | - |
-| Full | Yes | Yes | Yes | Yes | All | 14 | Yes | macOS only |
+| Full | Yes | Yes | Yes | Yes | All | 15 | Yes | macOS only |
 
 - **Minimal**: Lightweight start with just agents and rules
 - **Standard**: Best for most teams. Includes commands, skills, and core hooks

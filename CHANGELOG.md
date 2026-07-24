@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.74.0] - 2026-07-24
+
+### Added
+- **Full プロファイルに `claude-security` プラグインを追加（プラグイン 14 個 → 15 個）**: Anthropic 公式のマルチエージェント深掘り脆弱性スキャン。`/claude-security` の手動起動でリポジトリ全体・ブランチ差分・単一コミットをスキャンし、候補ごとに 3 つの独立した反証エージェント（到達可能性 / 影響 / 緩和策）が投票して 2/3 以上で採用されたものだけをレポートする。検証の集計と confidence の上限はモデルではなくプラグイン側の Python スクリプトが計算する。確定した指摘はパッチファイルとして生成でき、適用は常に利用者の操作に委ねられる。既に Standard / Full で配布している `security-guidance`（編集・コミット時に自動発火）とは層が異なり、公式ドキュメントでも別レイヤーとして整理されているため併存させる。Standard に入れない理由は、オーケストレータが Opus・最高 effort 固定で並列エージェント数も多く実行コストが大きいこと、および「常時コンテキスト負荷の大きいものは Full 限定」という既存方針（#90）との整合。
+- **README にセキュリティ機能の使い分けと `claude-security` の運用注意を追記**: 常時ガードレール（rules/permissions/safety-net）／自動レビュー（security-guidance）／単発レビュー（Claude Code 組み込みの `/security-review`）／深掘りスキャン（claude-security）の 4 層と、それぞれの動き方・対象プロファイルを表で整理した。あわせて、手動起動のみで常駐しないこと、Claude Code `v2.1.154` 以上と有料プラン（Pro は `/config` で Dynamic workflows の有効化）が必要でキットは版もプランも検証しないこと、`python3` 3.9.6 以上が必要でキットの前提ツール確認の対象外であること、スキャン結果 `CLAUDE-SECURITY-<タイムスタンプ>/` がスキャン対象リポジトリ直下に出力され `uninstall.sh` の削除対象外（`~/.claude` の外）であること、実行前にトークン消費の確認が入り依頼文に明示的なコスト受諾がない限り非対話では何も生成せず停止すること（受諾があれば非対話でも開始されうる。CI 利用は保証外・非推奨）、候補 400 件・検証パネル 45 件という上限と結果の非決定性があるため SAST や依存関係スキャンの代替ではないこと、起動のたびに auto mode を勧める固定文言が出ること、キットの deny ルールによりファイル名が `.env` / `secrets/` / `*secret*` / `*credential*` に一致するファイルは Read が拒否されること（Bash 側の deny は `.env` 系のみ。いずれもファイル名ベースの制限であり内容ベースの保護ではない）を明記した。
+
+### Notes
+- **既存インストールには自動適用されない**: アップデート経路（`/update-kit`・`setup.sh --update`・ワンライナー再実行）では `SELECTED_PLUGINS` がマニフェストから復元されるため、カタログに追加された新しいプラグインは取り込まれない（`wizard/wizard.sh` の `_restore_config_from_manifest` と `wizard/steps.sh` の再計算条件による仕様）。プラグインは feature recommendation の通知対象でもないため、既に Full でインストール済みの利用者は Claude Code 上で `/plugin install claude-security@claude-plugins-official` を実行し、続けて `/reload-plugins`（または再起動）で同一セッションに反映する必要がある。README と本エントリに明記した。
+- **MDM 配布経路への影響なし**: MDM 管理モードでは `SELECTED_PLUGINS` が空に強制され `install_selected_plugins()` がスキップされる。`mdm/render-expected.py` は `config/plugins.json` を読まず、期待状態・`policy.json`・`required_components` のいずれにもプラグインは現れない。カタログにエントリを追加した checkout と追加していない checkout で期待状態のレンダリング結果が完全一致することを実測で確認済み。
+
 ## [0.73.0] - 2026-07-19
 
 MDM（Jamf / Intune / Workspace ONE / Ivanti 等）から macOS 13.5 以上の管理端末へ Claude Code CLI とキットをゼロタッチ配布するサイレントインストール機能を追加。Xcode Command Line Tools は MDM baseline として事前配布する構成が既定。Windows MDM は本リリースの対象外。
