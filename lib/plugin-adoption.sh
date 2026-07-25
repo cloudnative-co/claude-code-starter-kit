@@ -147,13 +147,14 @@ _canonical_plugin_entry() {
 # Canonicalize every element of a plugin CSV. Usage: _canonical_plugin_csv <csv>
 # ---------------------------------------------------------------------------
 _canonical_plugin_csv() {
-  local csv="${1:-}" out=() e
+  local csv="${1:-}" out=() e parts=()
   [[ -n "$csv" ]] || return 0
-  local IFS=,
-  # shellcheck disable=SC2206 # deliberate word-split on the CSV separator
-  local parts=($csv)
-  unset IFS
-  for e in "${parts[@]}"; do
+  # read -a, not an unquoted array assignment: the latter also globs, and this
+  # is the one call site fed a value the kit never validates (SELECTED_PLUGINS
+  # comes back from the manifest / a hand-editable conf unsanitized), so a "*"
+  # in it would expand against the working directory instead of comparing.
+  IFS=',' read -r -a parts < <(printf '%s\n' "$csv")
+  for e in "${parts[@]+"${parts[@]}"}"; do
     [[ -n "$e" ]] || continue
     out+=("$(_canonical_plugin_entry "$e")")
   done
@@ -181,15 +182,12 @@ _compute_new_plugins() {
   local defaults="$1"
   local out=() entry canon
   [[ -n "$defaults" ]] || return 0
-  local _sel _dis _kno
+  local _sel _dis _kno entries=()
   _sel="$(_canonical_plugin_csv "${SELECTED_PLUGINS:-}")"
   _dis="$(_canonical_plugin_csv "${DISMISSED_PLUGINS:-}")"
   _kno="$(_canonical_plugin_csv "${KNOWN_PLUGINS:-}")"
-  local IFS=,
-  # shellcheck disable=SC2206 # deliberate word-split on the CSV separator
-  local entries=($defaults)
-  unset IFS
-  for entry in "${entries[@]}"; do
+  IFS=',' read -r -a entries < <(printf '%s\n' "$defaults")
+  for entry in "${entries[@]+"${entries[@]}"}"; do
     [[ -n "$entry" ]] || continue
     canon="$(_canonical_plugin_entry "$entry")"
     _plugin_csv_has "$_sel" "$canon" && continue
@@ -323,12 +321,9 @@ _detect_and_offer_new_plugins() {
     || [[ ! -r "${_TTY_INPUT:-/dev/tty}" ]]; then
     _notify_pending_plugins "$claude_dir" "$newcomers"
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
-      local _dr_entry
-      local IFS=,
-      # shellcheck disable=SC2206 # deliberate word-split on the CSV separator
-      local _dr_entries=($newcomers)
-      unset IFS
-      for _dr_entry in "${_dr_entries[@]}"; do
+      local _dr_entry _dr_entries=()
+      IFS=',' read -r -a _dr_entries < <(printf '%s\n' "$newcomers")
+      for _dr_entry in "${_dr_entries[@]+"${_dr_entries[@]}"}"; do
         [[ -n "$_dr_entry" ]] || continue
         # Keep the fully qualified identity: the real install (setup.sh) resolves
         # a specific marketplace only from a "name@marketplace" argument.
@@ -373,16 +368,13 @@ _detect_and_offer_new_plugins() {
 # Returns: 0 = every entry answered, 2 = terminal unavailable
 # ---------------------------------------------------------------------------
 _offer_new_plugins_interactive() {
-  local csv="$1" entry reply
-  local IFS=,
-  # shellcheck disable=SC2206 # deliberate word-split on the CSV separator
-  local entries=($csv)
-  unset IFS
+  local csv="$1" entry reply entries=()
+  IFS=',' read -r -a entries < <(printf '%s\n' "$csv")
 
   printf "\n"
   info "${STR_NEW_PLUGINS_FOUND:-Plugins added since your last setup:}"
 
-  for entry in "${entries[@]}"; do
+  for entry in "${entries[@]+"${entries[@]}"}"; do
     [[ -n "$entry" ]] || continue
     local desc
     desc="$(_plugin_description "$entry")"

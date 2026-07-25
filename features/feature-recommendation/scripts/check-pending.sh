@@ -38,8 +38,75 @@ done < <(jq -r '.plugins[]? // empty' "$PENDING_FILE" 2>/dev/null)
 # ---------------------------------------------------------------------------
 # Resolve kit repo path (same assumption as auto-update.sh)
 # ---------------------------------------------------------------------------
-KIT_REPO="${HOME}/.claude-starter-kit"
+# Overridable like auto-update.sh's KIT_DIR, so a checkout that is not at the
+# default path still resolves. This matters more now than it used to: the gate
+# below fails closed, so an unresolved checkout means silence rather than a
+# degraded notice.
+KIT_REPO="${KIT_REPO:-${HOME}/.claude-starter-kit}"
 [[ -d "$KIT_REPO/features" ]] || KIT_REPO=""
+
+# ---------------------------------------------------------------------------
+# Catalog gate — nothing is displayed unless the kit still ships it.
+#
+# This script's stdout is injected into the Claude Code session context by the
+# SessionStart hook, and the pending file is an ordinary file under ~/.claude.
+# Without this gate, whatever can write that file chooses text that lands in
+# front of the model. Treat every name as a lookup key into the kit's own
+# catalog, never as free text: an entry that resolves is printed, an entry that
+# does not is dropped silently.
+#
+# Fail closed. With no readable catalog a real entry cannot be told apart from
+# an injected one, and the notification only ever says "run /update-kit", which
+# needs that same checkout anyway — so staying quiet costs nothing.
+# ---------------------------------------------------------------------------
+PLUGIN_CATALOG=""
+if [[ -n "$KIT_REPO" ]] && [[ -f "$KIT_REPO/config/plugins.json" ]]; then
+  # Both spellings the writer can emit (see _qualified_plugin_entry): always the
+  # fully qualified one, plus the bare name when the marketplace is official.
+  PLUGIN_CATALOG="$(jq -r '
+    .plugins[]?
+    | (.marketplace // "claude-plugins-official") as $mp
+    | (.name + "@" + $mp),
+      (if $mp == "claude-plugins-official" then .name else empty end)
+  ' "$KIT_REPO/config/plugins.json" 2>/dev/null || true)"
+fi
+
+_feature_is_catalogued() {
+  # Reject anything that is not a plain directory name before it is ever used
+  # as a path component.
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+  [[ -n "$KIT_REPO" ]] || return 1
+  [[ -f "$KIT_REPO/features/$1/feature.json" ]]
+}
+
+_plugin_is_catalogued() {
+  [[ -n "$PLUGIN_CATALOG" ]] || return 1
+  # Whole-line membership. The quoted "$1" is literal, so a glob in the pending
+  # file matches nothing rather than everything.
+  case $'\n'"$PLUGIN_CATALOG"$'\n' in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+  esac
+  return 1
+}
+
+_KEPT=()
+for _entry in "${FEATURES[@]+"${FEATURES[@]}"}"; do
+  if _feature_is_catalogued "$_entry"; then
+    _KEPT[${#_KEPT[@]}]="$_entry"
+  fi
+done
+FEATURES=("${_KEPT[@]+"${_KEPT[@]}"}")
+
+_KEPT=()
+for _entry in "${PLUGINS[@]+"${PLUGINS[@]}"}"; do
+  if _plugin_is_catalogued "$_entry"; then
+    _KEPT[${#_KEPT[@]}]="$_entry"
+  fi
+done
+PLUGINS=("${_KEPT[@]+"${_KEPT[@]}"}")
+
+# Everything pending was unrecognized: say nothing.
+[[ ${#FEATURES[@]} -gt 0 || ${#PLUGINS[@]} -gt 0 ]] || exit 0
 
 # ---------------------------------------------------------------------------
 # Sanitize display strings (strip ANSI escapes first, then non-printable chars)
@@ -51,7 +118,8 @@ _sanitize_display() {
 
 # ---------------------------------------------------------------------------
 # Resolve displayName and description from feature.json
-# Falls back to titlecased feature name if kit repo unavailable
+# The catalog gate above guarantees the file exists; the titlecase fallback now
+# only covers a feature.json whose displayName is empty.
 # ---------------------------------------------------------------------------
 _resolve_feature_info() {
   local name="$1"

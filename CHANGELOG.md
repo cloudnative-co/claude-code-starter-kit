@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.75.0] - 2026-07-24
+## [0.75.0] - 2026-07-26
 
 ### Added
 - **アップデートでカタログに追加されたプラグインを取り込めるようにした**: これまで `setup.sh --update`（`/update-kit`・ワンライナー再実行を含む）は `SELECTED_PLUGINS` をマニフェストからそのまま復元するだけで、`config/plugins.json` に後から追加されたプラグインが既存インストールへ一切届かなかった。この復元は「ユーザーが明示的に外した選択を上書きしない」ための意図的な仕様なので、その原則を保ったまま**プロファイル既定の新規追加分だけを提示する**機構を追加した。対話的なアップデートでは 1 件ずつ確認（既定は「いいえ」）し、承諾したものだけを導入する。非対話（auto-update フック・CI・dry-run）や端末が読めない場合は**何も導入せず SessionStart の通知のみ**を残す。
@@ -21,6 +21,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **新規インストールの初回アップデートで既定プラグインを誤提示しない**: fresh/reconfigure で `KNOWN_PLUGINS` を初期化していなかったため、fresh ウィザードで既定プラグインを明示的に外すと、初回アップデートで「機構導入前の旧環境」と誤判定して再提示していた。fresh の確定時にその時点のプロファイル既定集合を `KNOWN_PLUGINS` として記録するようにした。（F10）
 - **通知の読み手が無いときは pending を書かない**: `ENABLE_FEATURE_RECOMMENDATION=false` の環境では SessionStart の読み手（`check-pending.sh`）が配備されないのに pending を書いており、誰も読まない孤児ファイルになっていた。プラグイン側・機能側の両方の書き込みをこのフラグでゲートした（記録は前進させないので、次の対話的アップデートで必ず提示される）。（F11）
 - **導入時にマーケットプレイスの指定を落とさない**: `claude plugin install` は特定マーケットプレイスを選ぶのに `name@marketplace` 記法しか持たない（bare 名だと先に登録されたマーケットプレイスが黙って優先される）。hint／導入済み判定／install の argv／dry-run ログのすべてで完全修飾名を保持するようにし、`_claude_plugin_list_has`（`lib/codex-setup.sh` と `uninstall.sh` の両コピー）を marketplace 対応にした。bare 名は従来どおり動作する。（F12）
+
+### Security
+- **SessionStart の通知はキットのカタログに載っているものしか表示しない**: `check-pending.sh` の標準出力は SessionStart フックとして Claude Code のセッションコンテキストへ投入されるが、その入力である `.starter-kit-pending-features.json` は `~/.claude` 配下のただのファイルだった。名前を検証せずに表示していたため、このファイルを書ける経路があれば任意の文字列をモデルの目の前に置ける（プロンプトインジェクションの面）。機能名は `features/<name>/feature.json` の実在で、プラグイン名は `config/plugins.json` のエントリとの完全一致で照合し、解決しないものは黙って捨てるようにした。件数表示も絞り込み後の集合を数える。カタログが読めない場合は fail-closed（何も表示しない）— 通知の内容は「`/update-kit` を実行せよ」だけであり、その `/update-kit` 自体が同じチェックアウトを必要とするため失うものが無い。機能名はパス要素として使われるため、平坦なディレクトリ名以外（`/` や `..` を含むもの）は読み取りを試みる前に拒否する。プラグイン側の照合は完全一致行比較なので、`*` のようなグロブは全件ではなく 0 件に一致する。あわせて、チェックアウト位置を `auto-update.sh` の `KIT_DIR` と同じ規約で `KIT_REPO` から上書きできるようにした（既定は従来どおり `~/.claude-starter-kit`）。fail-closed は「解決できないチェックアウト＝通知なし」を意味するため、既定以外の場所にクローンしている場合はこの環境変数で解決させる。
+- **`/update-kit` も pending のエントリをカタログ照合してから conf に書く**: `commands/update-kit.md` の手順は pending のプラグイン名をそのまま `SELECTED_PLUGINS` へ書き、その値が `claude plugin install`（＝サードパーティコードの導入）へ渡る。カタログに一致しないエントリは提示せず conf にも書かないこと、末尾でユーザーに一度だけ報告することを明文化した。機能側も同様に `feature.json` が無ければスキップする。
+- **プラグイン CSV の分割でグロブ展開しないようにした**: `lib/plugin-adoption.sh` の CSV 分割はクォート無しの配列代入だったためパス名展開の対象で、`SELECTED_PLUGINS` に `*` が入っていると作業ディレクトリのファイル名へ展開され、プラグイン名ではなくファイル名同士を比較していた。`SELECTED_PLUGINS` はこの経路で唯一キットが検証しない入力（マニフェストから jq で無検証に復元され、conf のサニタイズは書き込み時のみ）なので、4 箇所すべてを `IFS=',' read -r -a` へ置き換えた。実害はコード実行ではなく集合比較の誤り（提示の取りこぼし・重複提示）。
 
 ### Notes
 - 新しい設定キー `KNOWN_PLUGINS` / `DISMISSED_PLUGINS` は `_CONFIG_EMPTY_ALLOWED_KEYS` に**入れていない**。空値が書き出されないことで「conf にキーが無い＝追い付き未実施」という意味が保たれる。ここに追加すると初回の非対話アップデートで `KNOWN_PLUGINS=""` が書かれ、既存環境の一度きりの提示が静かに失われる（回帰テストで固定）。

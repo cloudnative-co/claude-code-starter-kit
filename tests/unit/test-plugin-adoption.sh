@@ -353,5 +353,40 @@ else
   fail "plugin-adoption: canonicalization should offer only alpha@other-mp (got '$_pa_out')"
 fi
 
+# ── the CSV split must not glob ────────────────────────────────────────────
+#
+# SELECTED_PLUGINS is the one input on this path the kit never validates: it
+# comes back from the manifest (jq, unchecked) and from a conf that is only
+# sanitized on write, so a glob can be sitting in it. Splitting it with an
+# unquoted array assignment expands that glob against the working directory,
+# and the comparison then runs against filenames instead of plugin names.
+mkdir -p "$_pa_tmp/globdir"
+: > "$_pa_tmp/globdir/alpha"
+: > "$_pa_tmp/globdir/gamma@other-mp"
+_pa_load "$_pa_catalog"
+
+_pa_out="$(_pa_run '
+  cd "'"$_pa_tmp"'/globdir" || exit 1
+  SELECTED_PLUGINS="*"
+  _canonical_plugin_csv "$SELECTED_PLUGINS"')"
+if [[ "$_pa_out" == "*" ]]; then
+  pass "plugin-adoption: a glob in the CSV stays a literal instead of expanding"
+else
+  fail "plugin-adoption: CSV split expanded a glob against the cwd (got '$_pa_out')"
+fi
+
+# The consequence that actually bites: with the cwd holding files named after
+# the catalogue, every default looks "already selected" and the user is never
+# offered anything.
+_pa_out="$(_pa_run '
+  cd "'"$_pa_tmp"'/globdir" || exit 1
+  SELECTED_PLUGINS="*"
+  _compute_new_plugins "$(_profile_default_plugins standard)"')"
+if [[ "$_pa_out" == "alpha,gamma@other-mp" ]]; then
+  pass "plugin-adoption: glob expansion cannot silently suppress the offer"
+else
+  fail "plugin-adoption: expected both defaults offered, got '$_pa_out'"
+fi
+
 rm -rf "$_pa_tmp"
 unset _pa_tmp _pa_out _pa_catalog
