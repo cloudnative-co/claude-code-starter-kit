@@ -77,6 +77,19 @@ Missing or unsupported prerequisites are installed or upgraded automatically whe
 > - The kit's filename-based deny rules are guardrails, not a confidentiality boundary. Remove credentials from the scan copy rather than relying on deny rules to keep them out of model context.
 > - Existing installs do not receive the plugin automatically: run `/plugin install claude-security@claude-plugins-official`, then `/reload-plugins` or restart Claude Code.
 
+#### Security layers
+
+The kit's security capabilities cover four different layers; they complement rather than replace one another.
+
+| Layer | Component | Activation | Profile |
+|---|---|---|---|
+| Always-on guardrails | `rules/security.md` + `config/permissions.json` (all profiles) + safety-net (Standard / Full) | Always | All (safety-net: Standard / Full) |
+| Automatic review | **security-guidance** plugin | On edits, turn completion, and commits | Standard / Full |
+| One-off review | Claude Code's built-in `/security-review` | Manual, for the current branch diff | Not managed by the kit |
+| Deep scan | **claude-security** plugin | Manual, with `/claude-security` | Full |
+
+`agents/security-reviewer.md` and `skills/security-review/` provide review checklists; they are not separate detection engines.
+
 ### Claude Account (Paid)
 
 **Claude Code requires a paid Anthropic account.** It does not work with free plans.
