@@ -342,5 +342,7 @@ fi
 
 rm -f "$_rec_pending"
 unset _rec_pending _rec_mode
+# shellcheck disable=SC2034 # Later sourced tests read this shared global.
 PROFILE="minimal"
+# shellcheck disable=SC2034 # Later sourced tests read this shared global.
 ENABLE_FEATURE_RECOMMENDATION=""
