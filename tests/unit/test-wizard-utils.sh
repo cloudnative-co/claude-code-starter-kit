@@ -325,6 +325,134 @@ fi
 rm -rf "$_tmp_home"
 export HOME="$_orig_home"
 
+# ── update runtime config binding ─────────────────────────────────────────
+
+_binding_orig_home="$HOME"
+_binding_orig_project="$PROJECT_DIR"
+_binding_orig_wizard_config="$WIZARD_CONFIG_FILE"
+_binding_tmp="$(mktemp -d)"
+export HOME="$_binding_tmp/home"
+mkdir -p "$HOME/.claude" "$_binding_tmp/キット+checkout" "$_binding_tmp/設定+files"
+PROJECT_DIR="$_binding_tmp/キット+checkout"
+_binding_repo="$(builtin cd -P "$PROJECT_DIR" && pwd -P)"
+_binding_config="$(builtin cd -P "$_binding_tmp/設定+files" && pwd -P)/利用者+設定.conf"
+_binding_manifest="$HOME/.claude/.starter-kit-manifest.json"
+
+printf 'KIT_REPO="%s"\nPROFILE="standard"\n' "$_binding_repo" \
+  > "$_binding_config"
+jq -n --arg repo "$_binding_repo" --arg config "$_binding_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+if _restore_manifest_runtime_config_binding \
+  && assert_equals "$_binding_config" "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: update restores UTF-8 plus-sign manifest config binding"
+else
+  fail "wizard: valid manifest runtime binding was not restored"
+fi
+
+# A non-empty CLI-selected config is authoritative even when the manifest
+# binding is incomplete; manifest adoption is attempted only for an empty path.
+printf '%s\n' '{"version":2,"kit_repo":"/partial"}' > "$_binding_manifest"
+WIZARD_CONFIG_FILE="$_binding_tmp/explicit.conf"
+if _restore_manifest_runtime_config_binding \
+  && assert_equals "$_binding_tmp/explicit.conf" "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: explicit config takes precedence over manifest binding"
+else
+  fail "wizard: manifest binding replaced or rejected explicit config"
+fi
+
+# Manifests without either runtime field predate binding and retain the
+# historical default config lookup.
+printf '%s\n' '{"version":1,"profile":"standard"}' > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+if _restore_manifest_runtime_config_binding && assert_empty "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: legacy manifest keeps default update config"
+else
+  fail "wizard: legacy manifest unexpectedly selected a runtime config"
+fi
+
+# Partial and malformed bindings must abort before setup can save into the
+# default config path.
+_binding_default="$HOME/.claude-starter-kit.conf"
+printf '%s\n' 'sentinel' > "$_binding_default"
+printf '%s\n' '{"version":2,"kit_repo":"/partial"}' > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+if ! _restore_manifest_runtime_config_binding \
+  && assert_empty "$WIZARD_CONFIG_FILE" \
+  && [[ "$(< "$_binding_default")" == "sentinel" ]]; then
+  pass "wizard: partial runtime binding fails before default config mutation"
+else
+  fail "wizard: partial runtime binding fell through to default config"
+fi
+
+printf '%s\n' '{not-json' > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+if ! _restore_manifest_runtime_config_binding && assert_empty "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: malformed runtime manifest fails closed"
+else
+  fail "wizard: malformed runtime manifest was accepted"
+fi
+
+# Neither manifest nor bound config may be a symlink or another leaf type.
+jq -n --arg repo "$_binding_repo" --arg config "$_binding_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_binding_tmp/manifest.real"
+rm -f "$_binding_manifest"
+ln -s "$_binding_tmp/manifest.real" "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+_binding_leaf_types_ok=true
+_restore_manifest_runtime_config_binding && _binding_leaf_types_ok=false
+rm -f "$_binding_manifest"
+mkdir "$_binding_manifest"
+_restore_manifest_runtime_config_binding && _binding_leaf_types_ok=false
+rmdir "$_binding_manifest"
+cp "$_binding_tmp/manifest.real" "$_binding_manifest"
+mv "$_binding_config" "$_binding_config.real"
+ln -s "$_binding_config.real" "$_binding_config"
+_restore_manifest_runtime_config_binding && _binding_leaf_types_ok=false
+rm -f "$_binding_config"
+mkdir "$_binding_config"
+_restore_manifest_runtime_config_binding && _binding_leaf_types_ok=false
+rmdir "$_binding_config"
+mv "$_binding_config.real" "$_binding_config"
+if [[ "$_binding_leaf_types_ok" == "true" ]] && assert_empty "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: manifest and config symlink or special leaves fail closed"
+else
+  fail "wizard: unsafe manifest or config leaf type was accepted"
+fi
+
+# The pair is a single runtime identity: both the current checkout and the
+# exact single KIT_REPO declaration in the config must agree with it.
+printf 'KIT_REPO="%s"\n' "$_binding_repo" > "$_binding_config"
+jq -n --arg repo "$_binding_tmp/other" --arg config "$_binding_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+_binding_identity_ok=true
+_restore_manifest_runtime_config_binding && _binding_identity_ok=false
+jq -n --arg repo "$_binding_repo" --arg config "$_binding_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_binding_manifest"
+printf '%s\n' 'KIT_REPO="/different"' > "$_binding_config"
+_restore_manifest_runtime_config_binding && _binding_identity_ok=false
+printf 'KIT_REPO="%s"\nKIT_REPO="%s"\n' "$_binding_repo" "$_binding_repo" \
+  > "$_binding_config"
+_restore_manifest_runtime_config_binding && _binding_identity_ok=false
+if [[ "$_binding_identity_ok" == "true" ]] && assert_empty "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: mismatched or ambiguous runtime identity fails closed"
+else
+  fail "wizard: mismatched or duplicate KIT_REPO binding was accepted"
+fi
+
+rm -rf "$_binding_tmp"
+export HOME="$_binding_orig_home"
+PROJECT_DIR="$_binding_orig_project"
+WIZARD_CONFIG_FILE="$_binding_orig_wizard_config"
+unset _binding_orig_home _binding_orig_project _binding_orig_wizard_config
+unset _binding_tmp _binding_repo _binding_config _binding_manifest _binding_default
+unset _binding_leaf_types_ok _binding_identity_ok
+
 # ── formatter hook normalization ──────────────────────────────────────────
 
 ENABLE_PRETTIER_HOOKS="true"

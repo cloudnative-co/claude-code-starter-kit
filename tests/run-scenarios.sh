@@ -200,6 +200,55 @@ test_auto_update_legacy_claude_fallback() {
   teardown_test_env
 }
 
+# --- 4d. auto-update-preserves-custom-config-binding ---
+test_auto_update_preserves_custom_config_binding() {
+  setup_test_env
+  local custom_dir="$HOME/設定+custom"
+  local custom_config="$custom_dir/wizard+設定.conf"
+  local custom_physical default_config manifest config_tmp
+  local rc=0
+  default_config="$HOME/.claude-starter-kit.conf"
+  manifest="$CLAUDE_DIR/.starter-kit-manifest.json"
+  mkdir -p "$custom_dir"
+  custom_physical="$(cd -P "$custom_dir" && pwd -P)/${custom_config##*/}"
+
+  run_setup --profile=minimal --config="$custom_config" >/dev/null 2>&1 || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    fail "auto-update-preserves-custom-config-binding (setup failed)"
+    teardown_test_env
+    return
+  fi
+
+  # Prove that the argument-free update reads and rewrites the manifest-bound
+  # config rather than falling back to the default path.
+  config_tmp="$custom_config.tmp"
+  awk '
+    /^COMMIT_ATTRIBUTION=/ { print "COMMIT_ATTRIBUTION=\"true\""; next }
+    { print }
+  ' "$custom_config" > "$config_tmp" && mv "$config_tmp" "$custom_config"
+  printf '%s\n' '# custom-config-update-probe' >> "$custom_config"
+
+  rc=0
+  run_setup_update >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && jq -e --arg config "$custom_physical" '
+      .config_file == $config
+      and .profile == "minimal"
+      and .commit_attribution == "true"
+    ' "$manifest" >/dev/null 2>&1 \
+    && assert_file_contains "$custom_config" 'PROFILE="minimal"' \
+    && assert_file_contains "$custom_config" 'COMMIT_ATTRIBUTION="true"' \
+    && assert_file_not_contains "$custom_config" '# custom-config-update-probe' \
+    && assert_file_not_exists "$default_config"; then
+    pass "auto-update-preserves-custom-config-binding"
+  else
+    fail "auto-update-preserves-custom-config-binding"
+  fi
+
+  teardown_test_env
+}
+
 # --- 5. update-user-changed ---
 test_update_user_changed() {
   setup_test_env
@@ -1477,6 +1526,7 @@ run_scenario update test_update_partial_failure_recovery
 run_scenario update test_update_progress_output
 run_scenario update test_auto_update_session_hooks
 run_scenario update test_auto_update_legacy_claude_fallback
+run_scenario update test_auto_update_preserves_custom_config_binding
 run_scenario update test_update_kit_command_paths
 run_scenario update test_update_kit_repo_resolution
 run_scenario update test_update_kit_pending_finalize_safe

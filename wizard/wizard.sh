@@ -389,13 +389,13 @@ save_config() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# Restore configuration from manifest (for update mode)
-# ---------------------------------------------------------------------------
+# shellcheck source=wizard/runtime-binding.sh
+. "$(_wizard_dir)/runtime-binding.sh"
+
 _restore_config_from_manifest() {
   local manifest="$HOME/.claude/.starter-kit-manifest.json"
   [[ -f "$manifest" ]] || return 1
-
+  _restore_manifest_runtime_config_binding || return 1
   local config_file current_settings
   local manifest_commit_attribution manifest_new_init manifest_codex_plugin
   local saved_has_commit_attribution="false" saved_has_new_init="false" saved_has_codex_plugin="false"
