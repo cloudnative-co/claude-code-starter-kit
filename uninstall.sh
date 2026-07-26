@@ -543,10 +543,286 @@ _remove_wce_runtime_path() {
   [[ "$rc" -eq 0 ]]
 }
 
+_security_plugin_owned_file_name() { # <basename>
+  local name="$1"
+  case "$name" in
+    agent-sdk-venv.cooldown|agent-sdk-venv.building|log.txt|log.txt.1|.sdk_bootstrap_spawned)
+      return 0
+      ;;
+    security_warnings_state_*.json|security_warnings_state_*.lock)
+      [[ "$name" =~ ^security_warnings_state_[A-Za-z0-9._-]{1,128}\.(json|lock)$ ]]
+      return
+      ;;
+    .agentic_unavailable_notice_v*)
+      [[ "$name" =~ ^\.agentic_unavailable_notice_v[0-9]+$ ]]
+      return
+      ;;
+  esac
+  return 1
+}
+
+_rename_exact_bound() { # <source> <destination> <source-dev:ino>
+  # Callers place the destination in an atomically reserved private directory.
+  # rename(2) can replace a destination raced into that directory, but it can
+  # never follow it or turn a directory destination into mv-style nesting.
+  local source="$1" destination="$2" expected_identity="$3"
+  command -v node >/dev/null 2>&1 || return 1
+  [[ "$(_plugin_provenance_stat identity "$source")" \
+    == "$expected_identity" ]] || return 1
+  node -e '
+    const fs = require("fs");
+    const [source, destination] = process.argv.slice(1);
+    const identity = (value) => `${value.dev}:${value.ino}`;
+    let before;
+    try {
+      before = fs.lstatSync(source, {bigint: true});
+      fs.lstatSync(destination, {bigint: true});
+      process.exit(1);
+    } catch (error) {
+      if (before === undefined || error.code !== "ENOENT") process.exit(1);
+    }
+    try {
+      fs.renameSync(source, destination);
+      const after = fs.lstatSync(destination, {bigint: true});
+      if (identity(after) !== identity(before)) process.exit(1);
+      try {
+        fs.lstatSync(source, {bigint: true});
+        process.exit(1);
+      } catch (error) {
+        if (error.code !== "ENOENT") process.exit(1);
+      }
+    } catch (_) {
+      process.exit(1);
+    }
+  ' "$source" "$destination" >/dev/null 2>&1 || return 1
+  [[ ! -e "$source" && ! -L "$source" ]] || return 1
+  [[ "$(_plugin_provenance_stat identity "$destination")" \
+    == "$expected_identity" ]]
+}
+
+_private_directory_binding_from_cwd() { # <relative-dir> <parent-physical> <parent-dev:ino> <expected-device>
+  local directory="$1" parent_physical="$2" parent_identity="$3"
+  local expected_device="$4"
+  (
+    local directory_identity mode uid physical
+    [[ "$(pwd -P)" == "$parent_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$parent_identity" ]] \
+      || exit 1
+    [[ -d "$directory" && ! -L "$directory" ]] || exit 1
+    mode="$(_plugin_provenance_stat mode "$directory")" || exit 1
+    uid="$(_plugin_provenance_stat uid "$directory")" || exit 1
+    directory_identity="$(_plugin_provenance_stat identity "$directory")" \
+      || exit 1
+    [[ "$mode" == "700" && "$uid" == "$(id -u)" ]] || exit 1
+    [[ "${directory_identity%%:*}" == "$expected_device" ]] || exit 1
+    cd -P "$directory" 2>/dev/null || exit 1
+    physical="$(pwd -P)" || exit 1
+    [[ "$physical" == "$parent_physical/${directory#./}" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" \
+      == "$directory_identity" ]] || exit 1
+    printf '%s\n' "$directory_identity"
+  )
+}
+
+_provenance_retire_state_valid() { # <file> <expected-device>
+  local file="$1" expected_device="$2" identity mode links uid size
+  [[ -f "$file" && ! -L "$file" ]] || return 1
+  identity="$(_plugin_provenance_stat identity "$file")" || return 1
+  mode="$(_plugin_provenance_stat mode "$file")" || return 1
+  links="$(_plugin_provenance_stat links "$file")" || return 1
+  uid="$(_plugin_provenance_stat uid "$file")" || return 1
+  size="$(_plugin_provenance_stat size "$file")" || return 1
+  [[ "${identity%%:*}" == "$expected_device" \
+    && "$mode" == "600" && "$links" == "1" \
+    && "$uid" == "$(id -u)" && "$size" == "0" ]]
+}
+
+_create_provenance_retire_state() { # <pending|complete> <private-dev:ino> <expected-device>
+  local state="$1" directory_identity="$2" expected_device="$3"
+  case "$state" in pending|complete) ;; *) return 1 ;; esac
+  command -v node >/dev/null 2>&1 || return 1
+  [[ "$(_plugin_provenance_stat identity .)" == "$directory_identity" ]] \
+    || return 1
+  node -e '
+    const fs = require("fs");
+    const name = process.argv[1];
+    const c = fs.constants;
+    const flags = c.O_WRONLY | c.O_CREAT | c.O_EXCL | (c.O_NOFOLLOW || 0);
+    let fd;
+    try {
+      fd = fs.openSync(name, flags, 0o600);
+      fs.fchmodSync(fd, 0o600);
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+    } catch (_) {
+      if (fd !== undefined) try { fs.closeSync(fd); } catch (_) {}
+      process.exit(1);
+    }
+  ' "./$state" >/dev/null 2>&1 || return 1
+  _provenance_retire_state_valid "./$state" "$expected_device"
+}
+
+_recover_provenance_retirement_bound() { # <physical-root> <dev:ino>
+  local root_physical="$1" root_identity="$2"
+  local retire_dir="./.starter-kit-plugin-provenance-retire"
+  (
+    local directory_identity root_device entry name
+    local has_pending=false has_complete=false has_payload=false
+    local marker="./$_PLUGIN_PROVENANCE_BASENAME" payload_signature payload_identity
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] \
+      || exit 1
+    [[ -e "$retire_dir" || -L "$retire_dir" ]] || exit 0
+    root_device="${root_identity%%:*}"
+    directory_identity="$(_private_directory_binding_from_cwd \
+      "$retire_dir" "$root_physical" "$root_identity" "$root_device")" \
+      || exit 1
+    cd -P "$retire_dir" 2>/dev/null || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" \
+      == "$directory_identity" ]] || exit 1
+
+    # Validate the complete journal shape before removing or restoring anything.
+    for entry in ./* ./.[!.]* ./..?*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      name="${entry#./}"
+      case "$name" in
+        pending)
+          [[ "$has_pending" == "false" ]] || exit 1
+          _provenance_retire_state_valid "$entry" "$root_device" || exit 1
+          has_pending=true
+          ;;
+        complete)
+          [[ "$has_complete" == "false" ]] || exit 1
+          _provenance_retire_state_valid "$entry" "$root_device" || exit 1
+          has_complete=true
+          ;;
+        payload)
+          [[ "$has_payload" == "false" ]] || exit 1
+          payload_signature="$(_plugin_provenance_file_signature "$entry")" \
+            || exit 1
+          payload_identity="$(_plugin_provenance_stat identity "$entry")" \
+            || exit 1
+          [[ "${payload_identity%%:*}" == "$root_device" ]] || exit 1
+          has_payload=true
+          ;;
+        *) exit 1 ;;
+      esac
+    done
+    [[ "$has_pending" != "true" || "$has_complete" != "true" ]] || exit 1
+
+    if [[ "$has_pending" == "true" ]]; then
+      if [[ "$has_payload" == "true" \
+        && ! -e "../$_PLUGIN_PROVENANCE_BASENAME" \
+        && ! -L "../$_PLUGIN_PROVENANCE_BASENAME" ]]; then
+        _rename_exact_bound \
+          ./payload "../$_PLUGIN_PROVENANCE_BASENAME" "$payload_identity" \
+          || exit 1
+        [[ "$(_plugin_provenance_file_signature \
+          "../$_PLUGIN_PROVENANCE_BASENAME")" == "$payload_signature" ]] \
+          || exit 1
+        has_payload=false
+      elif [[ "$has_payload" != "true" \
+        && ( -e "../$_PLUGIN_PROVENANCE_BASENAME" \
+          || -L "../$_PLUGIN_PROVENANCE_BASENAME" ) ]]; then
+        : # The process stopped after writing pending but before staging.
+      else
+        exit 1
+      fi
+      rm -f ./pending 2>/dev/null || exit 1
+      [[ ! -e ./pending && ! -L ./pending ]] || exit 1
+    elif [[ "$has_complete" == "true" ]]; then
+      [[ ! -e "../$_PLUGIN_PROVENANCE_BASENAME" \
+        && ! -L "../$_PLUGIN_PROVENANCE_BASENAME" ]] || exit 1
+      if [[ "$has_payload" == "true" ]]; then
+        rm -f ./payload 2>/dev/null || exit 1
+        [[ ! -e ./payload && ! -L ./payload ]] || exit 1
+      fi
+      rm -f ./complete 2>/dev/null || exit 1
+      [[ ! -e ./complete && ! -L ./complete ]] || exit 1
+    else
+      # Empty is either pre-journal creation or terminal cleanup residue.
+      [[ "$has_payload" != "true" ]] || exit 1
+    fi
+
+    cd -P .. 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] \
+      || exit 1
+    [[ "$(_plugin_provenance_stat identity "$retire_dir")" \
+      == "$directory_identity" ]] || exit 1
+    rmdir "$retire_dir" 2>/dev/null || exit 1
+    _plugin_provenance_binding_matches \
+      "$CLAUDE_DIR" "$root_physical" "$root_identity"
+  )
+}
+
+_remove_security_tree_one_filesystem() { # <cwd-relative-dir> <dev:ino>
+  local tree="$1" expected_identity="$2"
+  (
+    local entry
+    [[ -d "$tree" && ! -L "$tree" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity "$tree")" \
+      == "$expected_identity" ]] || exit 1
+    cd -P "$tree" 2>/dev/null || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$expected_identity" ]] \
+      || exit 1
+
+    # Both BSD and GNU find support -xdev. Never let a disposable virtualenv
+    # turn an independently mounted tree below it into deletion authority.
+    find . -xdev -mindepth 1 ! -type d -exec rm -f {} \; 2>/dev/null \
+      || exit 1
+    find . -xdev -depth -mindepth 1 -type d -exec rmdir {} \; 2>/dev/null \
+      || exit 1
+    for entry in ./* ./.[!.]* ./..?*; do
+      [[ -e "$entry" || -L "$entry" ]] && exit 1
+    done
+
+    cd -P .. 2>/dev/null || exit 1
+    [[ -d "$tree" && ! -L "$tree" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity "$tree")" \
+      == "$expected_identity" ]] || exit 1
+    rmdir "$tree" 2>/dev/null || exit 1
+  )
+}
+
+_security_data_cleanup_postcondition() { # <physical-root> <dev:ino> <security-dev:ino>
+  local root_physical="$1" root_identity="$2" leaf_identity="$3"
+  (
+    local current_physical entry name
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
+    if [[ ! -e ./security && ! -L ./security ]]; then
+      _plugin_provenance_binding_matches \
+        "$CLAUDE_DIR" "$root_physical" "$root_identity"
+      exit
+    fi
+    [[ -d ./security && ! -L ./security ]] || exit 1
+    cd -P ./security 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical/security" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$leaf_identity" ]] || exit 1
+    for name in agent-sdk-venv agent-sdk-libs; do
+      [[ ! -e "./$name" && ! -L "./$name" ]] || exit 1
+    done
+    for entry in ./* ./.[!.]* ./..?*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      name="${entry#./}"
+      _security_plugin_owned_file_name "$name" || continue
+      [[ ! -f "$entry" || -L "$entry" ]] || exit 1
+    done
+    _plugin_provenance_binding_matches \
+      "$CLAUDE_DIR" "$root_physical" "$root_identity"
+  )
+}
+
 _security_data_size_bound() { # <physical-root> <dev:ino>
   local root_physical="$1" root_identity="$2" size=""
   (
-    local leaf_identity current_physical
+    local leaf_identity current_physical entry name has_owned=false
+    local venv_identity="-" libs_identity="-"
     cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
     [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
     [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
@@ -557,23 +833,60 @@ _security_data_size_bound() { # <physical-root> <dev:ino>
     [[ "$current_physical" == "$root_physical/security" ]] || exit 2
     leaf_identity="$(_plugin_provenance_stat identity .)" || exit 2
     [[ "${leaf_identity%%:*}" == "${root_identity%%:*}" ]] || exit 2
+
+    if [[ -d ./agent-sdk-venv && ! -L ./agent-sdk-venv ]]; then
+      venv_identity="$(_plugin_provenance_stat identity ./agent-sdk-venv)" \
+        || exit 2
+      [[ "${venv_identity%%:*}" == "${root_identity%%:*}" ]] || exit 2
+      has_owned=true
+    elif [[ -e ./agent-sdk-venv || -L ./agent-sdk-venv ]]; then
+      venv_identity="!"
+    fi
+    if [[ -d ./agent-sdk-libs && ! -L ./agent-sdk-libs ]]; then
+      libs_identity="$(_plugin_provenance_stat identity ./agent-sdk-libs)" \
+        || exit 2
+      [[ "${libs_identity%%:*}" == "${root_identity%%:*}" ]] || exit 2
+      has_owned=true
+    elif [[ -e ./agent-sdk-libs || -L ./agent-sdk-libs ]]; then
+      libs_identity="!"
+    fi
+    for entry in ./* ./.[!.]* ./..?*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      name="${entry#./}"
+      _security_plugin_owned_file_name "$name" || continue
+      [[ -f "$entry" && ! -L "$entry" ]] || continue
+      has_owned=true
+    done
+    [[ "$has_owned" == "true" ]] || exit 0
+
     size="$(du -shx . 2>/dev/null | cut -f1 || true)"
     [[ -n "$size" ]] || size="?"
+    if [[ "$venv_identity" != "-" && "$venv_identity" != "!" ]]; then
+      [[ "$(_plugin_provenance_stat identity ./agent-sdk-venv)" \
+        == "$venv_identity" ]] || exit 1
+    fi
+    if [[ "$libs_identity" != "-" && "$libs_identity" != "!" ]]; then
+      [[ "$(_plugin_provenance_stat identity ./agent-sdk-libs)" \
+        == "$libs_identity" ]] || exit 1
+    fi
     [[ "$(_plugin_provenance_stat identity .)" == "$leaf_identity" ]] || exit 1
     _plugin_provenance_binding_matches \
       "$CLAUDE_DIR" "$root_physical" "$root_identity" || exit 1
-    printf '%s\t%s\n' "$size" "$leaf_identity"
+    printf '%s\t%s\t%s\t%s\n' \
+      "$size" "$leaf_identity" "$venv_identity" "$libs_identity"
   )
 }
 
-_remove_security_data_dir() { # <physical-root> <dev:ino> <security-dev:ino>
+_remove_security_data_dir() { # <physical-root> <dev:ino> <security-dev:ino> <venv-dev:ino|state> <libs-dev:ino|state>
   # The binding is captured before any uninstall prompt. Re-check both the
   # physical HOME-derived path and its device/inode immediately before the
   # cwd-relative removal, so either a symlink or a replacement real directory
   # at ~/.claude is rejected.
   local root_physical="$1" root_identity="$2" leaf_identity="$3"
+  local venv_identity="$4" libs_identity="$5"
   (
-    local current_physical
+    local current_physical entry name expected_identity quarantine suffix
+    local quarantine_identity root_device rename_rc
     cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
     [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
     [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
@@ -586,19 +899,227 @@ _remove_security_data_dir() { # <physical-root> <dev:ino> <security-dev:ino>
     [[ "${leaf_identity%%:*}" == "${root_identity%%:*}" ]] || exit 1
     _plugin_provenance_binding_matches \
       "$CLAUDE_DIR" "$root_physical" "$root_identity" || exit 1
-    find . -xdev -mindepth 1 ! -type d -exec rm -f {} \; 2>/dev/null \
-      || exit 1
-    find . -xdev -depth -mindepth 1 -type d -exec rmdir {} \; 2>/dev/null \
-      || exit 1
+
+    # Only the two recursive trees created by security-guidance are eligible.
+    # Rename the prompt-bound inode before deletion, then verify the renamed
+    # inode so a directory substituted while the prompt was open is retained.
+    for name in agent-sdk-venv agent-sdk-libs; do
+      if [[ "$name" == "agent-sdk-venv" ]]; then
+        expected_identity="$venv_identity"
+      else
+        expected_identity="$libs_identity"
+      fi
+      if [[ "$expected_identity" == "-" ]]; then
+        [[ ! -e "./$name" && ! -L "./$name" ]] || exit 1
+        continue
+      fi
+      [[ "$expected_identity" != "!" ]] || continue
+      [[ -d "./$name" && ! -L "./$name" ]] || exit 1
+      [[ "$(_plugin_provenance_stat identity "./$name")" \
+        == "$expected_identity" ]] || exit 1
+      quarantine=""
+      for suffix in 0 1 2 3 4 5 6 7 8 9; do
+        entry="./.starter-kit-security-cleanup-${name}.$$.$suffix"
+        if (umask 077; mkdir "$entry") 2>/dev/null; then
+          quarantine="$entry"
+          break
+        fi
+      done
+      [[ -n "$quarantine" ]] || exit 1
+      root_device="${root_identity%%:*}"
+      quarantine_identity="$(_private_directory_binding_from_cwd \
+        "$quarantine" "$current_physical" "$leaf_identity" "$root_device")" \
+        || exit 1
+      cd -P "$quarantine" 2>/dev/null || exit 1
+      [[ "$(_plugin_provenance_stat identity .)" \
+        == "$quarantine_identity" ]] || exit 1
+      rename_rc=0
+      _rename_exact_bound "../$name" ./payload "$expected_identity" \
+        || rename_rc=$?
+      if [[ "$rename_rc" -ne 0 ]] \
+        || [[ "$(_plugin_provenance_stat identity ./payload 2>/dev/null || true)" \
+          != "$expected_identity" ]]; then
+        if [[ -e ./payload || -L ./payload ]]; then
+          if [[ ! -e "../$name" && ! -L "../$name" ]]; then
+            _rename_exact_bound ./payload "../$name" "$expected_identity" \
+              >/dev/null 2>&1 || true
+          fi
+        fi
+        cd -P .. 2>/dev/null || exit 1
+        rmdir "$quarantine" 2>/dev/null || true
+        exit 1
+      fi
+      if ! _remove_security_tree_one_filesystem ./payload "$expected_identity"; then
+        if [[ -e ./payload || -L ./payload ]]; then
+          if [[ ! -e "../$name" && ! -L "../$name" ]]; then
+            _rename_exact_bound ./payload "../$name" "$expected_identity" \
+              >/dev/null 2>&1 || true
+          fi
+        fi
+        cd -P .. 2>/dev/null || exit 1
+        rmdir "$quarantine" 2>/dev/null || true
+        exit 1
+      fi
+      [[ "$(_plugin_provenance_stat identity .)" \
+        == "$quarantine_identity" ]] || exit 1
+      cd -P .. 2>/dev/null || exit 1
+      [[ "$(pwd -P)" == "$current_physical" ]] || exit 1
+      [[ "$(_plugin_provenance_stat identity "$quarantine")" \
+        == "$quarantine_identity" ]] || exit 1
+      rmdir "$quarantine" 2>/dev/null || exit 1
+    done
+
+    # Session state, bootstrap sentinels, and bounded logs are top-level
+    # regular files. Unknown files, directories, links, and special inodes are
+    # deliberately outside the plugin-owned cleanup namespace.
+    for entry in ./* ./.[!.]* ./..?*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      name="${entry#./}"
+      _security_plugin_owned_file_name "$name" || continue
+      [[ -f "$entry" && ! -L "$entry" ]] || continue
+      rm -f "$entry" 2>/dev/null || exit 1
+    done
+
     cd -P .. 2>/dev/null || exit 1
     [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
     [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
     [[ -d ./security && ! -L ./security ]] || exit 1
     [[ "$(_plugin_provenance_stat identity ./security)" == "$leaf_identity" ]] \
       || exit 1
-    rmdir ./security 2>/dev/null || exit 1
+    # Unknown/user-owned entries keep the shared security directory alive.
+    # It is removed only when selective plugin cleanup left it empty.
+    rmdir ./security 2>/dev/null || true
+    _security_data_cleanup_postcondition \
+      "$root_physical" "$root_identity" "$leaf_identity" || exit 1
+  )
+}
+
+_retire_manifest_and_provenance_bound() { # <physical-root> <dev:ino> <marker-signature> <check-security> <security-dev:ino>
+  local root_physical="$1" root_identity="$2" expected_signature="$3"
+  local check_security="$4" security_identity="$5"
+  (
+    local marker="./$_PLUGIN_PROVENANCE_BASENAME"
+    local retire_dir="./.starter-kit-plugin-provenance-retire"
+    local marker_identity="" directory_identity="" state_identity=""
+    local lock_binding="" lock_token="" lock_identity="" release_rc=0
+    local root_device="${root_identity%%:*}" lock_held=false
+
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
+    [[ ! -e "$retire_dir" && ! -L "$retire_dir" ]] || exit 1
+    if [[ "$check_security" == "true" ]]; then
+      _security_data_cleanup_postcondition \
+        "$root_physical" "$root_identity" "$security_identity" || exit 1
+    fi
+    [[ "$(_plugin_provenance_file_signature "$marker")" \
+      == "$expected_signature" ]] || exit 1
+    marker_identity="$(_plugin_provenance_stat identity "$marker")" || exit 1
+
+    _retire_provenance_on_signal() {
+      local signal_status="$1"
+      if [[ "$lock_held" == "true" ]]; then
+        _plugin_provenance_lock_release_bound \
+          "$CLAUDE_DIR" "$root_physical" "$root_identity" \
+          "$lock_token" "$lock_identity" >/dev/null 2>&1 || true
+      fi
+      exit "$signal_status"
+    }
+    trap '_retire_provenance_on_signal 129' HUP
+    trap '_retire_provenance_on_signal 130' INT
+    trap '_retire_provenance_on_signal 143' TERM
+
+    lock_binding="$(_plugin_provenance_lock_acquire_bound \
+      "$CLAUDE_DIR" "$root_physical" "$root_identity")" || exit 1
+    lock_token="${lock_binding%$'\t'*}"
+    lock_identity="${lock_binding##*$'\t'}"
+    lock_held=true
+    # The lock is only a concurrency fence. It must be fully retired before a
+    # durable journal, the canonical marker, or the manifest is changed. A
+    # failed release therefore leaves both authorities untouched and retryable.
+    [[ "$(_plugin_provenance_file_signature "$marker")" \
+      == "$expected_signature" ]] || { release_rc=1; }
+    [[ "$(_plugin_provenance_stat identity "$marker" 2>/dev/null || true)" \
+      == "$marker_identity" ]] || { release_rc=1; }
+    _plugin_provenance_lock_release_bound \
+      "$CLAUDE_DIR" "$root_physical" "$root_identity" \
+      "$lock_token" "$lock_identity" || release_rc=$?
+    [[ "$release_rc" -eq 0 ]] || exit 4
+    lock_held=false
+
+    [[ "$(_plugin_provenance_file_signature "$marker")" \
+      == "$expected_signature" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity "$marker")" \
+      == "$marker_identity" ]] || exit 1
     _plugin_provenance_binding_matches \
       "$CLAUDE_DIR" "$root_physical" "$root_identity" || exit 1
+    if [[ "$check_security" == "true" ]]; then
+      _security_data_cleanup_postcondition \
+        "$root_physical" "$root_identity" "$security_identity" || exit 1
+    fi
+
+    (umask 077; mkdir "$retire_dir") 2>/dev/null || exit 1
+    directory_identity="$(_private_directory_binding_from_cwd \
+      "$retire_dir" "$root_physical" "$root_identity" "$root_device")" \
+      || exit 1
+    cd -P "$retire_dir" 2>/dev/null || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" \
+      == "$directory_identity" ]] || exit 1
+    _create_provenance_retire_state pending \
+      "$directory_identity" "$root_device" || exit 1
+    if ! _rename_exact_bound \
+        "../$_PLUGIN_PROVENANCE_BASENAME" ./payload "$marker_identity" \
+      || [[ "$(_plugin_provenance_file_signature ./payload \
+        2>/dev/null || true)" != "$expected_signature" ]] \
+      || [[ -e "../$_PLUGIN_PROVENANCE_BASENAME" \
+        || -L "../$_PLUGIN_PROVENANCE_BASENAME" ]]; then
+      exit 1
+    fi
+    _plugin_provenance_binding_matches \
+      "$CLAUDE_DIR" "$root_physical" "$root_identity" || exit 1
+    if [[ "$check_security" == "true" ]]; then
+      # The installed plugin can recreate a known leaf after cleanup. Do not
+      # retire its authority until the postcondition also holds after staging.
+      if ! _security_data_cleanup_postcondition \
+          "$root_physical" "$root_identity" "$security_identity"; then
+        _rename_exact_bound \
+          ./payload "../$_PLUGIN_PROVENANCE_BASENAME" "$marker_identity" \
+          >/dev/null 2>&1 || true
+        if [[ "$(_plugin_provenance_file_signature \
+            "../$_PLUGIN_PROVENANCE_BASENAME" 2>/dev/null || true)" \
+            == "$expected_signature" ]]; then
+          rm -f ./pending 2>/dev/null || true
+          cd -P .. 2>/dev/null || exit 1
+          rmdir "$retire_dir" 2>/dev/null || true
+        fi
+        exit 1
+      fi
+    fi
+    [[ ! -e "../$_PLUGIN_PROVENANCE_BASENAME" \
+      && ! -L "../$_PLUGIN_PROVENANCE_BASENAME" ]] || exit 1
+
+    state_identity="$(_plugin_provenance_stat identity ./pending)" || exit 1
+    _rename_exact_bound ./pending ./complete "$state_identity" || exit 1
+    _provenance_retire_state_valid ./complete "$root_device" || exit 1
+    # `complete` is the linearization point. Recovery may now finish terminal
+    # retirement, but must never restore deletion authority to the canonical
+    # marker path.
+    rm -f ./payload 2>/dev/null || exit 5
+    [[ ! -e ./payload && ! -L ./payload ]] || exit 5
+    rm -f ./complete 2>/dev/null || exit 5
+    [[ ! -e ./complete && ! -L ./complete ]] || exit 5
+    cd -P .. 2>/dev/null || exit 5
+    [[ "$(pwd -P)" == "$root_physical" ]] || exit 5
+    [[ "$(_plugin_provenance_stat identity "$retire_dir")" \
+      == "$directory_identity" ]] || exit 5
+    rmdir "$retire_dir" 2>/dev/null || exit 5
+    trap - HUP INT TERM
+
+    if _remove_tracked_file "$MANIFEST" \
+      || [[ ! -e "$MANIFEST" && ! -L "$MANIFEST" ]]; then
+      exit 0
+    fi
+    exit 6
   )
 }
 
@@ -917,6 +1438,11 @@ if [[ "$_uninstall_root_physical" != "$_uninstall_home_physical/.claude" ]]; the
   warn "Unsafe managed root; uninstall made no changes: $CLAUDE_DIR"
   exit 1
 fi
+if ! _recover_provenance_retirement_bound \
+    "$_uninstall_root_physical" "$_uninstall_root_identity"; then
+  warn "Unsafe plugin provenance retirement journal; uninstall made no changes"
+  exit 1
+fi
 if _plugin_provenance_validate_bound "$CLAUDE_DIR" \
     "$_uninstall_root_physical" "$_uninstall_root_identity"; then
   _uninstall_provenance_signature="$(_plugin_provenance_signature_bound \
@@ -925,16 +1451,32 @@ if _plugin_provenance_validate_bound "$CLAUDE_DIR" \
       warn "Unsafe plugin provenance; uninstall made no changes"
       exit 1
     }
-  _uninstall_provenance_valid=true
-  if _plugin_provenance_contains_bound "$CLAUDE_DIR" \
-      "$_uninstall_root_physical" "$_uninstall_root_identity" \
-      "security-guidance@claude-plugins-official"; then
-    _uninstall_provenance_security=true
+  if [[ -n "$_uninstall_provenance_signature" ]]; then
+    _uninstall_provenance_valid=true
+    # A same-attempt verified install has already satisfied the strict plugin
+    # list postcondition and is deletion authority even if its final marker
+    # commit needs retry. A plain pending install intent is never authority.
+    for _uninstall_provenance_field in \
+      installed_by_kit verified_commit_by_kit; do
+      _uninstall_provenance_contains_rc=0
+      _plugin_provenance_field_contains_bound "$CLAUDE_DIR" \
+        "$_uninstall_root_physical" "$_uninstall_root_identity" \
+        "security-guidance@claude-plugins-official" \
+        "$_uninstall_provenance_field" \
+        || _uninstall_provenance_contains_rc=$?
+      case "$_uninstall_provenance_contains_rc" in
+        0) _uninstall_provenance_security=true; break ;;
+        3) ;;
+        *)
+          warn "Unsafe plugin provenance; uninstall made no changes"
+          exit 1
+          ;;
+      esac
+    done
   fi
 elif [[ -e "$CLAUDE_DIR/$_PLUGIN_PROVENANCE_BASENAME" \
   || -L "$CLAUDE_DIR/$_PLUGIN_PROVENANCE_BASENAME" ]]; then
-  warn "Unsafe plugin provenance; uninstall made no changes"
-  exit 1
+  warn "Unsafe plugin provenance; optional plugin-data cleanup skipped"
 fi
 
 # shellcheck disable=SC2059
@@ -1055,28 +1597,33 @@ if [[ "$_uninstall_cleanup_failed" == "true" ]]; then
 fi
 
 # A valid durable marker, not the mutable profile/manifest selection, grants
-# authority to offer removal of security-guidance's local data. Both optional
-# data removal and marker cleanup use the root binding captured before the
-# confirmation prompt. Any root replacement aborts and retains both marker and
-# manifest for an explicit retry.
+# authority to offer removal of security-guidance's local data. An invalid or
+# changed marker only disables this optional cleanup; root/leaf failures after
+# explicit consent still retain the manifest and marker for a safe retry.
+_plugin_data_cleanup_confirmed=false
+_plugin_data_cleanup_identity=""
 if [[ "$_uninstall_provenance_valid" == "true" ]]; then
   if [[ "$(_plugin_provenance_signature_bound "$CLAUDE_DIR" \
       "$_uninstall_root_physical" "$_uninstall_root_identity" 2>/dev/null || true)" \
     != "$_uninstall_provenance_signature" ]]; then
-    warn "Unsafe plugin provenance; plugin data and provenance kept for retry"
+    warn "Unsafe plugin provenance; manifest and provenance kept for retry"
     exit 1
   fi
-  if [[ "$_uninstall_provenance_security" == "true" ]]; then
+  if [[ "$_uninstall_provenance_valid" == "true" \
+    && "$_uninstall_provenance_security" == "true" ]]; then
     _plugin_data_probe=""
     _plugin_data_size=""
     _plugin_data_identity=""
+    _plugin_data_venv_identity="-"
+    _plugin_data_libs_identity="-"
     _plugin_data_status=0
     _plugin_data_probe="$(_security_data_size_bound \
       "$_uninstall_root_physical" "$_uninstall_root_identity")" \
       || _plugin_data_status=$?
     if [[ "$_plugin_data_status" -eq 0 && -n "$_plugin_data_probe" ]]; then
-      _plugin_data_size="${_plugin_data_probe%$'\t'*}"
-      _plugin_data_identity="${_plugin_data_probe##*$'\t'}"
+      IFS=$'\t' read -r _plugin_data_size _plugin_data_identity \
+        _plugin_data_venv_identity _plugin_data_libs_identity \
+        <<< "$_plugin_data_probe"
     fi
     if [[ "$_plugin_data_status" -eq 1 ]]; then
       warn "Unsafe managed root; plugin provenance kept for retry: $CLAUDE_DIR"
@@ -1100,7 +1647,10 @@ if [[ "$_uninstall_provenance_valid" == "true" ]]; then
             exit 1
           elif _remove_security_data_dir \
               "$_uninstall_root_physical" "$_uninstall_root_identity" \
-              "$_plugin_data_identity"; then
+              "$_plugin_data_identity" "$_plugin_data_venv_identity" \
+              "$_plugin_data_libs_identity"; then
+            _plugin_data_cleanup_confirmed=true
+            _plugin_data_cleanup_identity="$_plugin_data_identity"
             ok "$STR_PLUGIN_DATA_REMOVED"
           else
             warn "$STR_PLUGIN_DATA_REMOVE_FAILED"
@@ -1115,16 +1665,35 @@ if [[ "$_uninstall_provenance_valid" == "true" ]]; then
       esac
     fi
   fi
-
-  if ! _plugin_provenance_remove_bound "$CLAUDE_DIR" \
-      "$_uninstall_root_physical" "$_uninstall_root_identity" \
-      "$_uninstall_provenance_signature"; then
-    warn "Unsafe managed root; plugin provenance kept for retry: $CLAUDE_DIR"
-    exit 1
-  fi
 fi
 
-if ! _remove_tracked_file "$MANIFEST"; then
+if [[ "$_uninstall_provenance_valid" == "true" ]]; then
+  _uninstall_retire_rc=0
+  _retire_manifest_and_provenance_bound \
+    "$_uninstall_root_physical" "$_uninstall_root_identity" \
+    "$_uninstall_provenance_signature" \
+    "$_plugin_data_cleanup_confirmed" "$_plugin_data_cleanup_identity" \
+    || _uninstall_retire_rc=$?
+  case "$_uninstall_retire_rc" in
+    0) ;;
+    4)
+      warn "Failed to release plugin provenance lock before retirement; manifest and provenance kept for retry"
+      exit 1
+      ;;
+    5)
+      warn "Plugin provenance retirement committed; manifest kept for recovery retry"
+      exit 1
+      ;;
+    6)
+      warn "Plugin provenance retired; manifest kept for retry: $MANIFEST"
+      exit 1
+      ;;
+    *)
+      warn "Unsafe managed root; manifest and plugin provenance kept for retry: $CLAUDE_DIR"
+      exit 1
+      ;;
+  esac
+elif ! _remove_tracked_file "$MANIFEST"; then
   warn "Unsafe managed root; manifest kept for retry: $MANIFEST"
   exit 1
 fi
