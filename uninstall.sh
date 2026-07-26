@@ -6,6 +6,22 @@ set -euo pipefail
 CLAUDE_DIR="$HOME/.claude"
 MANIFEST="$CLAUDE_DIR/.starter-kit-manifest.json"
 
+_uninstall_source_dir="${BASH_SOURCE[0]:-.}"
+case "$_uninstall_source_dir" in
+  */*) _uninstall_source_dir="${_uninstall_source_dir%/*}" ;;
+  *) _uninstall_source_dir="." ;;
+esac
+_uninstall_source_dir="$(cd -P "$_uninstall_source_dir" 2>/dev/null && pwd -P)" \
+  || _uninstall_source_dir=""
+_PLUGIN_PROVENANCE_HELPERS_LOADED=false
+if [[ -n "$_uninstall_source_dir" \
+  && -f "$_uninstall_source_dir/lib/plugin-provenance.sh" \
+  && ! -L "$_uninstall_source_dir/lib/plugin-provenance.sh" ]]; then
+  # shellcheck source=lib/plugin-provenance.sh
+  . "$_uninstall_source_dir/lib/plugin-provenance.sh"
+  _PLUGIN_PROVENANCE_HELPERS_LOADED=true
+fi
+
 # Ensure ~/.local/bin is in PATH (jq may have been installed there)
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -81,56 +97,6 @@ _json_cleanup_paths() {
   fi
 }
 
-_kit_installed_plugin() {
-  # Usage: _kit_installed_plugin <csv> <name>
-  # The manifest stores SELECTED_PLUGINS as a comma-joined list whose entries
-  # may carry an "@marketplace" suffix (wizard/registry.sh:_compute_selected_plugins).
-  # Compare whole elements, exactly: "security-guidance" must not match
-  # "security-guidance-extra", and malformed entries from a corrupted or
-  # hand-edited manifest ("name@", "name@mp extra") must not count as
-  # installed — this function gates an offer to delete data, so mistakes
-  # fail toward not offering. A here-string loop (not `for` over an unquoted
-  # expansion) so entries are never glob-expanded; Bash 3.2 compatible.
-  local _csv="$1" _name="$2" _entry _mp
-  [[ -n "$_csv" && -n "$_name" ]] || return 1
-  while IFS= read -r _entry; do
-    [[ "$_entry" == "$_name" ]] && return 0
-    case "$_entry" in
-      "${_name}@"*)
-        _mp="${_entry#"${_name}@"}"
-        if [[ -n "$_mp" ]] && [[ "$_mp" != *[[:space:]]* ]]; then
-          return 0
-        fi
-        ;;
-    esac
-  done <<< "${_csv//,/$'\n'}"
-  return 1
-}
-
-_kit_installed_security_guidance() {
-  # Usage: _kit_installed_security_guidance <plugins-csv> <profile>
-  # security-guidance is a standard/full default the kit installs. Its data dir
-  # is ours to offer even after a later reconfigure removed it from the current
-  # selection: the manifest's plugin list would no longer name it, but a
-  # standard/full profile still attests the kit installed it. Judging by that
-  # install history (current selection OR the installing profile) rather than the
-  # current selection alone keeps the offer from disappearing when the plugin is
-  # deselected while its data remains. A minimal/custom install that never had it
-  # as a default is not offered — matching "the kit installed this" and failing
-  # toward not touching data the kit did not create.
-  local _csv="$1" _profile="$2"
-  _kit_installed_plugin "$_csv" "security-guidance" && return 0
-  # The profile branch must fail closed exactly like the plugin-list branch: the
-  # caller only populates the plugin CSV when jq read the manifest, and _json_get's
-  # grep/sed fallback can misread a minified profile field. Without jq, do not
-  # trust the profile — no offer.
-  command -v jq &>/dev/null || return 1
-  case "$_profile" in
-    standard|full) return 0 ;;
-  esac
-  return 1
-}
-
 _json_file_count() {
   # Usage: _json_file_count <file>
   local file="$1"
@@ -153,7 +119,7 @@ _safe_cleanup_path() {
 _remove_tracked_file() {
   # Return 0=handled, 2=absent, 1=unsafe/failed. Operations stay bound to the
   # verified parent inode; final-leaf symlinks are unlinked, never followed.
-  local path="$1" relative root_physical current_physical expected_physical
+  local path="$1" relative root_physical root_identity current_physical expected_physical
   local component leaf managed_tmp="" rc=0 index
   local -a components=()
 
@@ -166,9 +132,9 @@ _remove_tracked_file() {
     *//*|*/./*|*/../*) return 1 ;;
   esac
 
-  [[ -e "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]] || return 2
-  [[ -d "$CLAUDE_DIR" && ! -L "$CLAUDE_DIR" ]] || return 1
-  root_physical="$(cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P)" || return 1
+  root_physical="${_uninstall_root_physical:-}"
+  root_identity="${_uninstall_root_identity:-}"
+  [[ -n "$root_physical" && -n "$root_identity" ]] || return 1
 
   IFS='/' read -r -a components < <(printf '%s\n' "$relative")
   [[ "${#components[@]}" -gt 0 ]] || return 1
@@ -179,6 +145,7 @@ _remove_tracked_file() {
     cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
     current_physical="$(pwd -P)" || exit 1
     [[ "$current_physical" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
     expected_physical="$root_physical"
 
     for ((index = 0; index < ${#components[@]} - 1; index++)); do
@@ -218,9 +185,19 @@ _remove_tracked_file() {
 }
 
 _managed_root_physical() {
-  [[ -e "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]] || return 0
-  [[ -d "$CLAUDE_DIR" && ! -L "$CLAUDE_DIR" ]] || return 1
-  cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P
+  local expected_physical="${_uninstall_root_physical:-}"
+  local expected_identity="${_uninstall_root_identity:-}"
+  [[ -n "$expected_physical" && -n "$expected_identity" ]] || return 1
+  _plugin_provenance_binding_matches \
+    "$CLAUDE_DIR" "$expected_physical" "$expected_identity" || return 1
+  printf '%s\n' "$expected_physical"
+}
+
+_uninstall_root_matches() {
+  [[ -n "${_uninstall_root_physical:-}" \
+    && -n "${_uninstall_root_identity:-}" ]] || return 1
+  _plugin_provenance_binding_matches "$CLAUDE_DIR" \
+    "$_uninstall_root_physical" "$_uninstall_root_identity"
 }
 
 _wce_uninstall_lock_token=""
@@ -250,25 +227,29 @@ _wce_uninstall_lock_owner_only() { # <lock-dir>
 }
 
 _wce_uninstall_lock_acquire() {
-  local skills="$CLAUDE_DIR/skills"
-  local skill="$skills/web-content-extraction"
-  local logs="$skill/logs"
-  local lock="$logs/.update.lock" now token acquire_pid
+  local now token acquire_pid
   local acquire_rc=0 wait_rc=0
-  [[ -e "$skills" || -L "$skills" ]] || return 0
-  [[ -d "$skills" && ! -L "$skills" ]] || return 1
-  [[ -e "$skill" || -L "$skill" ]] || return 0
-  [[ -d "$skill" && ! -L "$skill" ]] || return 1
+  _uninstall_root_matches || return 1
   now="$(date +%s)" || return 1
   [[ "$now" =~ ^[0-9]+$ ]] || return 1
   token="starter-kit-uninstall-$$-${RANDOM}-$now"
   _WCE_UNINSTALL_ACQUIRE_WAITER_PID="$$"
   export _WCE_UNINSTALL_ACQUIRE_WAITER_PID
   (
+    local skills="./skills"
+    local skill="$skills/web-content-extraction"
+    local logs="$skill/logs"
+    local lock="$logs/.update.lock"
     trap '' HUP INT TERM
     : "$_WCE_UNINSTALL_ACQUIRE_WAITER_PID"
-    [[ -d "$skills" && ! -L "$skills" \
-      && -d "$skill" && ! -L "$skill" ]] || exit 1
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$_uninstall_root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" \
+      == "$_uninstall_root_identity" ]] || exit 1
+    [[ -e "$skills" || -L "$skills" ]] || exit 2
+    [[ -d "$skills" && ! -L "$skills" ]] || exit 1
+    [[ -e "$skill" || -L "$skill" ]] || exit 2
+    [[ -d "$skill" && ! -L "$skill" ]] || exit 1
     if [[ -e "$logs" || -L "$logs" ]]; then
       [[ -d "$logs" && ! -L "$logs" ]] || exit 1
     else
@@ -281,6 +262,10 @@ _wce_uninstall_lock_acquire() {
       rmdir "$lock" 2>/dev/null || true
       exit 1
     fi
+    _wce_uninstall_lock_owner_matches "$token" "$lock" || exit 1
+    _wce_uninstall_lock_owner_only "$lock" || exit 1
+    _plugin_provenance_binding_matches "$CLAUDE_DIR" \
+      "$_uninstall_root_physical" "$_uninstall_root_identity" || exit 1
   ) &
   acquire_pid=$!
   while true; do
@@ -291,45 +276,54 @@ _wce_uninstall_lock_acquire() {
       *) acquire_rc="$wait_rc"; break ;;
     esac
   done
+  [[ "$acquire_rc" -ne 2 ]] || return 0
   [[ "$acquire_rc" -eq 0 ]] || return 1
-  _wce_uninstall_lock_owner_matches "$token" "$lock" || return 1
-  _wce_uninstall_lock_owner_only "$lock" || return 1
+  _uninstall_root_matches || return 1
   _wce_uninstall_lock_token="$token"
   return 0
 }
 
 _wce_uninstall_lock_release() {
-  local skill="$CLAUDE_DIR/skills/web-content-extraction"
-  local logs="$skill/logs"
-  local lock="$logs/.update.lock"
-  local quarantine="${lock}.release-${_wce_uninstall_lock_token}"
   [[ -n "$_wce_uninstall_lock_token" ]] || return 0
-  [[ -d "$skill" && ! -L "$skill" && -d "$logs" && ! -L "$logs" ]] || return 1
+  (
+    local skill="./skills/web-content-extraction"
+    local logs="$skill/logs"
+    local lock="$logs/.update.lock"
+    local quarantine="${lock}.release-${_wce_uninstall_lock_token}"
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$_uninstall_root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" \
+      == "$_uninstall_root_identity" ]] || exit 1
+    [[ -d "$skill" && ! -L "$skill" && -d "$logs" && ! -L "$logs" ]] \
+      || exit 1
 
-  if [[ -e "$quarantine" || -L "$quarantine" ]]; then
-    _wce_uninstall_lock_owner_matches \
-      "$_wce_uninstall_lock_token" "$quarantine" || return 1
-    _wce_uninstall_lock_owner_only "$quarantine" || return 1
-  else
-    _wce_uninstall_lock_owner_matches \
-      "$_wce_uninstall_lock_token" "$lock" || return 1
-    _wce_uninstall_lock_owner_only "$lock" || return 1
-    mv "$lock" "$quarantine" || return 1
-  fi
-
-  if ! _wce_uninstall_lock_owner_matches \
-      "$_wce_uninstall_lock_token" "$quarantine" \
-    || ! _wce_uninstall_lock_owner_only "$quarantine"; then
-    if [[ ! -e "$lock" && ! -L "$lock" ]]; then
-      mv "$quarantine" "$lock" 2>/dev/null || true
+    if [[ -e "$quarantine" || -L "$quarantine" ]]; then
+      _wce_uninstall_lock_owner_matches \
+        "$_wce_uninstall_lock_token" "$quarantine" || exit 1
+      _wce_uninstall_lock_owner_only "$quarantine" || exit 1
+    else
+      _wce_uninstall_lock_owner_matches \
+        "$_wce_uninstall_lock_token" "$lock" || exit 1
+      _wce_uninstall_lock_owner_only "$lock" || exit 1
+      mv "$lock" "$quarantine" || exit 1
     fi
-    return 1
-  fi
-  if ! rm -f "$quarantine/owner"; then
-    [[ ! -e "$quarantine/owner" && ! -L "$quarantine/owner" ]] || return 1
-  fi
-  rmdir "$quarantine" || return 1
-  rmdir "$logs" "$skill" 2>/dev/null || true
+
+    if ! _wce_uninstall_lock_owner_matches \
+        "$_wce_uninstall_lock_token" "$quarantine" \
+      || ! _wce_uninstall_lock_owner_only "$quarantine"; then
+      if [[ ! -e "$lock" && ! -L "$lock" ]]; then
+        mv "$quarantine" "$lock" 2>/dev/null || true
+      fi
+      exit 1
+    fi
+    if ! rm -f "$quarantine/owner"; then
+      [[ ! -e "$quarantine/owner" && ! -L "$quarantine/owner" ]] || exit 1
+    fi
+    rmdir "$quarantine" || exit 1
+    rmdir "$logs" "$skill" 2>/dev/null || true
+    _plugin_provenance_binding_matches "$CLAUDE_DIR" \
+      "$_uninstall_root_physical" "$_uninstall_root_identity" || exit 1
+  )
 }
 
 _wce_uninstall_defer_signal() {
@@ -397,13 +391,15 @@ _wce_uninstall_finish() {
 }
 
 _remove_tool_count_files() {
-  local root_physical current_physical match rc=0
-  root_physical="$(_managed_root_physical)" || return 1
-  [[ -n "$root_physical" ]] || return 0
+  local root_physical="${_uninstall_root_physical:-}"
+  local root_identity="${_uninstall_root_identity:-}"
+  local current_physical match rc=0
+  [[ -n "$root_physical" && -n "$root_identity" ]] || return 1
   (
     cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
     current_physical="$(pwd -P)" || exit 1
     [[ "$current_physical" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
     [[ -e ./tmp || -L ./tmp ]] || exit 0
     [[ -d ./tmp && ! -L ./tmp ]] || exit 1
     cd -P ./tmp 2>/dev/null || exit 1
@@ -419,13 +415,15 @@ _remove_tool_count_files() {
 }
 
 _remove_empty_hook_dirs() {
-  local root_physical current_physical entry name contents rc=0
-  root_physical="$(_managed_root_physical)" || return 1
-  [[ -n "$root_physical" ]] || return 0
+  local root_physical="${_uninstall_root_physical:-}"
+  local root_identity="${_uninstall_root_identity:-}"
+  local current_physical entry name contents rc=0
+  [[ -n "$root_physical" && -n "$root_identity" ]] || return 1
   (
     cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
     current_physical="$(pwd -P)" || exit 1
     [[ "$current_physical" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
     [[ -e ./hooks || -L ./hooks ]] || exit 0
     [[ -d ./hooks && ! -L ./hooks ]] || exit 1
     cd -P ./hooks 2>/dev/null || exit 1
@@ -453,6 +451,29 @@ _remove_empty_hook_dirs() {
   [[ "$rc" -eq 0 ]]
 }
 
+_remove_empty_managed_dirs() {
+  local dir current_physical contents rc=0
+  (
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$_uninstall_root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" \
+      == "$_uninstall_root_identity" ]] || exit 1
+    for dir in agents rules commands skills memory; do
+      [[ -e "./$dir" || -L "./$dir" ]] || continue
+      [[ -d "./$dir" && ! -L "./$dir" ]] || continue
+      cd -P "./$dir" 2>/dev/null || exit 1
+      current_physical="$(pwd -P)" || exit 1
+      [[ "$current_physical" == "$_uninstall_root_physical/$dir" ]] || exit 1
+      contents="$(ls -A . 2>/dev/null)" || exit 1
+      cd -P .. 2>/dev/null || exit 1
+      [[ "$(pwd -P)" == "$_uninstall_root_physical" ]] || exit 1
+      [[ -n "$contents" ]] || rmdir "./$dir" 2>/dev/null || exit 1
+    done
+    _uninstall_root_matches || exit 1
+  ) || rc=$?
+  [[ "$rc" -eq 0 ]]
+}
+
 _remove_wce_runtime_path() {
   # Remove only kit-created runtime leaves. The sibling
   # .node-modules.pre-mdm.* namespace contains the original activation leaf
@@ -461,17 +482,15 @@ _remove_wce_runtime_path() {
   # there). It is deliberately never enumerated or traversed here. "all" is
   # used only to safely interpret the broad cleanup path emitted by older
   # manifests.
-  local requested="$1" root_physical="" current_physical="" rc=0
+  local requested="$1" root_physical="${_uninstall_root_physical:-}"
+  local root_identity="${_uninstall_root_identity:-}"
+  local current_physical="" rc=0
   case "$requested" in
     node_modules|logs|all) ;;
     *) return 1 ;;
   esac
 
-  [[ -e "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]] || return 0
-  if [[ ! -d "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]]; then
-    return 1
-  fi
-  root_physical="$(cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P)" || return 1
+  [[ -n "$root_physical" && -n "$root_identity" ]] || return 1
 
   # Descend one real component at a time and bind cleanup to the resulting
   # working-directory inode. A concurrently substituted symlink resolves to a
@@ -481,6 +500,7 @@ _remove_wce_runtime_path() {
     cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
     current_physical="$(pwd -P)" || exit 1
     [[ "$current_physical" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
 
     [[ -e skills || -L skills ]] || exit 0
     [[ -d skills && ! -L skills ]] || exit 1
@@ -523,29 +543,129 @@ _remove_wce_runtime_path() {
   [[ "$rc" -eq 0 ]]
 }
 
-_remove_security_data_dir() {
-  # Remove ~/.claude/security bound to the verified physical CLAUDE_DIR inode,
-  # the same way _remove_wce_runtime_path handles runtime leaves — rather than
-  # the earlier "textual _safe_cleanup_path + absolute rm -rf". The removal
-  # prompt can block for an unbounded time, so re-verify here at removal time
-  # instead of trusting the -d/-L check made before it: if the parent ~/.claude
-  # is swapped to a symlink in the interim, cd -P resolves to a different
-  # physical path than the one captured up front and is rejected before any rm,
-  # so an external <target>/security is never followed and deleted. A final-leaf
-  # symlink is skipped (never unlinked-and-reported-as-removed).
-  # Returns 0 = removed or already absent, 1 = unsafe/failed.
-  [[ -e "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]] || return 0
-  if [[ ! -d "$CLAUDE_DIR" || -L "$CLAUDE_DIR" ]]; then
-    return 1
-  fi
-  local root_physical=""
-  root_physical="$(cd -P "$CLAUDE_DIR" 2>/dev/null && pwd -P)" || return 1
+_security_data_size_bound() { # <physical-root> <dev:ino>
+  local root_physical="$1" root_identity="$2" size=""
   (
+    local leaf_identity current_physical
     cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
     [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
+    [[ -e security || -L security ]] || exit 0
+    [[ -d security && ! -L security ]] || exit 2
+    cd -P ./security 2>/dev/null || exit 2
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical/security" ]] || exit 2
+    leaf_identity="$(_plugin_provenance_stat identity .)" || exit 2
+    [[ "${leaf_identity%%:*}" == "${root_identity%%:*}" ]] || exit 2
+    size="$(du -shx . 2>/dev/null | cut -f1 || true)"
+    [[ -n "$size" ]] || size="?"
+    [[ "$(_plugin_provenance_stat identity .)" == "$leaf_identity" ]] || exit 1
+    _plugin_provenance_binding_matches \
+      "$CLAUDE_DIR" "$root_physical" "$root_identity" || exit 1
+    printf '%s\t%s\n' "$size" "$leaf_identity"
+  )
+}
+
+_remove_security_data_dir() { # <physical-root> <dev:ino> <security-dev:ino>
+  # The binding is captured before any uninstall prompt. Re-check both the
+  # physical HOME-derived path and its device/inode immediately before the
+  # cwd-relative removal, so either a symlink or a replacement real directory
+  # at ~/.claude is rejected.
+  local root_physical="$1" root_identity="$2" leaf_identity="$3"
+  (
+    local current_physical
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
     [[ -e security || -L security ]] || exit 0
     [[ -d security && ! -L security ]] || exit 1
-    rm -rf ./security 2>/dev/null || exit 1
+    cd -P ./security 2>/dev/null || exit 1
+    current_physical="$(pwd -P)" || exit 1
+    [[ "$current_physical" == "$root_physical/security" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$leaf_identity" ]] || exit 1
+    [[ "${leaf_identity%%:*}" == "${root_identity%%:*}" ]] || exit 1
+    _plugin_provenance_binding_matches \
+      "$CLAUDE_DIR" "$root_physical" "$root_identity" || exit 1
+    find . -xdev -mindepth 1 ! -type d -exec rm -f {} \; 2>/dev/null \
+      || exit 1
+    find . -xdev -depth -mindepth 1 -type d -exec rmdir {} \; 2>/dev/null \
+      || exit 1
+    cd -P .. 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$root_identity" ]] || exit 1
+    [[ -d ./security && ! -L ./security ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity ./security)" == "$leaf_identity" ]] \
+      || exit 1
+    rmdir ./security 2>/dev/null || exit 1
+    _plugin_provenance_binding_matches \
+      "$CLAUDE_DIR" "$root_physical" "$root_identity" || exit 1
+  )
+}
+
+_remove_cleanup_path_bound() { # <absolute path below CLAUDE_DIR>
+  local path="$1" relative component leaf current_physical expected_physical
+  local leaf_identity index rc=0
+  local -a components=()
+  case "$path" in
+    "$CLAUDE_DIR"/*) relative="${path#"$CLAUDE_DIR"/}" ;;
+    *) return 1 ;;
+  esac
+  [[ -n "$relative" ]] || return 1
+  case "/$relative/" in *//*|*/./*|*/../*) return 1 ;; esac
+  IFS='/' read -r -a components < <(printf '%s\n' "$relative")
+  leaf="${components[${#components[@]} - 1]}"
+  [[ -n "$leaf" ]] || return 1
+  (
+    cd -P "$CLAUDE_DIR" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$_uninstall_root_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" \
+      == "$_uninstall_root_identity" ]] || exit 1
+    expected_physical="$_uninstall_root_physical"
+    for ((index = 0; index < ${#components[@]} - 1; index++)); do
+      component="${components[$index]}"
+      [[ -e "./$component" || -L "./$component" ]] || exit 0
+      [[ -d "./$component" && ! -L "./$component" ]] || exit 1
+      cd -P "./$component" 2>/dev/null || exit 1
+      current_physical="$(pwd -P)" || exit 1
+      expected_physical="$expected_physical/$component"
+      [[ "$current_physical" == "$expected_physical" ]] || exit 1
+    done
+    [[ -e "./$leaf" || -L "./$leaf" ]] || exit 0
+    if [[ -L "./$leaf" || -f "./$leaf" ]]; then
+      rm -f "./$leaf" 2>/dev/null || exit 1
+      exit 0
+    fi
+    [[ -d "./$leaf" ]] || exit 1
+    leaf_identity="$(_plugin_provenance_stat identity "./$leaf")" || exit 1
+    [[ "${leaf_identity%%:*}" == "${_uninstall_root_identity%%:*}" ]] \
+      || exit 1
+    cd -P "./$leaf" 2>/dev/null || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" == "$leaf_identity" ]] || exit 1
+    find . -xdev -mindepth 1 ! -type d -exec rm -f {} \; 2>/dev/null \
+      || exit 1
+    find . -xdev -depth -mindepth 1 -type d -exec rmdir {} \; 2>/dev/null \
+      || exit 1
+    cd -P .. 2>/dev/null || exit 1
+    [[ -d "./$leaf" && ! -L "./$leaf" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity "./$leaf")" == "$leaf_identity" ]] \
+      || exit 1
+    rmdir "./$leaf" 2>/dev/null || exit 1
+    _uninstall_root_matches || exit 1
+  ) || rc=$?
+  [[ "$rc" -eq 0 ]]
+}
+
+_remove_saved_config_bound() {
+  (
+    cd -P "$HOME" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$_uninstall_home_physical" ]] || exit 1
+    [[ "$(_plugin_provenance_stat identity .)" \
+      == "$_uninstall_home_identity" ]] || exit 1
+    [[ -e ./.claude-starter-kit.conf || -L ./.claude-starter-kit.conf ]] \
+      || exit 0
+    [[ -f ./.claude-starter-kit.conf || -L ./.claude-starter-kit.conf ]] \
+      || exit 1
+    rm -f ./.claude-starter-kit.conf 2>/dev/null || exit 1
   )
 }
 
@@ -588,8 +708,10 @@ _remove_cleanup_path() {
     fi
     return 0
   fi
-  if _safe_cleanup_path "$path"; then
-    rm -rf "$path" 2>/dev/null || _uninstall_cleanup_failed=true
+  if [[ "$path" == "$HOME/.claude-starter-kit.conf" ]]; then
+    _remove_saved_config_bound || _uninstall_cleanup_failed=true
+  elif _safe_cleanup_path "$path"; then
+    _remove_cleanup_path_bound "$path" || _uninstall_cleanup_failed=true
   else
     warn "Skipping unsafe cleanup path: $path"
     _uninstall_cleanup_failed=true
@@ -760,18 +882,60 @@ fi
 file_count="$(_json_file_count "$MANIFEST")"
 profile="$(_json_get "$MANIFEST" "profile")"
 timestamp="$(_json_get "$MANIFEST" "timestamp")"
-# Read the installed-plugin list up front: the manifest is deleted further
-# below, but the plugin-data cleanup at the end of this script needs it.
-# jq only, never the grep/sed fallback: on minified JSON the fallback's greedy
-# sed can return a *different* field's value, and this value gates an offer to
-# delete data. Without jq the prompt is simply never made (fail closed).
-if command -v jq &>/dev/null; then
-  kit_plugins="$(_json_get "$MANIFEST" "plugins" || true)"
-else
-  kit_plugins=""
-fi
 [[ -z "$profile" ]] && profile="unknown"
 [[ -z "$timestamp" ]] && timestamp="unknown"
+
+# Bind the managed root before the first prompt. Provenance is deletion
+# authority only when the root is exactly the physical HOME-derived .claude
+# directory and the marker is a strict, mode-0600 version-1 document.
+_uninstall_root_physical=""
+_uninstall_root_identity=""
+_uninstall_provenance_valid=false
+_uninstall_provenance_security=false
+_uninstall_provenance_signature=""
+if [[ "$_PLUGIN_PROVENANCE_HELPERS_LOADED" != "true" ]]; then
+  warn "Plugin provenance helper unavailable; uninstall made no changes"
+  exit 1
+fi
+_uninstall_home_physical="$(cd -P "$HOME" 2>/dev/null && pwd -P)" || {
+  warn "Unsafe managed root; uninstall made no changes: $CLAUDE_DIR"
+  exit 1
+}
+_uninstall_home_identity="$(
+  cd -P "$HOME" 2>/dev/null && _plugin_provenance_stat identity .
+)" || {
+  warn "Unsafe managed root; uninstall made no changes: $CLAUDE_DIR"
+  exit 1
+}
+_uninstall_root_binding="$(_plugin_provenance_root_binding "$CLAUDE_DIR")" || {
+  warn "Unsafe managed root; uninstall made no changes: $CLAUDE_DIR"
+  exit 1
+}
+_uninstall_root_physical="${_uninstall_root_binding%$'\t'*}"
+_uninstall_root_identity="${_uninstall_root_binding##*$'\t'}"
+if [[ "$_uninstall_root_physical" != "$_uninstall_home_physical/.claude" ]]; then
+  warn "Unsafe managed root; uninstall made no changes: $CLAUDE_DIR"
+  exit 1
+fi
+if _plugin_provenance_validate_bound "$CLAUDE_DIR" \
+    "$_uninstall_root_physical" "$_uninstall_root_identity"; then
+  _uninstall_provenance_signature="$(_plugin_provenance_signature_bound \
+    "$CLAUDE_DIR" "$_uninstall_root_physical" "$_uninstall_root_identity")" \
+    || {
+      warn "Unsafe plugin provenance; uninstall made no changes"
+      exit 1
+    }
+  _uninstall_provenance_valid=true
+  if _plugin_provenance_contains_bound "$CLAUDE_DIR" \
+      "$_uninstall_root_physical" "$_uninstall_root_identity" \
+      "security-guidance@claude-plugins-official"; then
+    _uninstall_provenance_security=true
+  fi
+elif [[ -e "$CLAUDE_DIR/$_PLUGIN_PROVENANCE_BASENAME" \
+  || -L "$CLAUDE_DIR/$_PLUGIN_PROVENANCE_BASENAME" ]]; then
+  warn "Unsafe plugin provenance; uninstall made no changes"
+  exit 1
+fi
 
 # shellcheck disable=SC2059
 info "$(printf "$STR_FOUND_MANIFEST" "$timestamp" "$profile")"
@@ -787,7 +951,7 @@ case "$confirm" in
     exit 0
     ;;
 esac
-if ! ( _managed_root_physical >/dev/null ); then
+if ! _uninstall_root_matches; then
   warn "Unsafe managed root; uninstall made no changes: $CLAUDE_DIR"
   exit 1
 fi
@@ -834,8 +998,12 @@ done < <(_json_files "$MANIFEST")
 
 # Legacy cleanup for pre-manifest-v2 releases that deployed AGENTS.md.
 if [[ -f "$CLAUDE_DIR/AGENTS.md" ]]; then
-  rm -f "$CLAUDE_DIR/AGENTS.md"
-  removed=$((removed + 1))
+  if _remove_tracked_file "$CLAUDE_DIR/AGENTS.md"; then
+    removed=$((removed + 1))
+  else
+    warn "Skipping legacy AGENTS.md under an unsafe managed path"
+    _uninstall_cleanup_failed=true
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -875,13 +1043,8 @@ fi
 # ---------------------------------------------------------------------------
 # Clean up empty directories
 # ---------------------------------------------------------------------------
-for dir in agents rules commands skills memory; do
-  target="$CLAUDE_DIR/$dir"
-  if [[ -d "$target" && ! -L "$target" ]] \
-    && [[ -z "$(ls -A "$target" 2>/dev/null)" ]]; then
-    rmdir "$target" 2>/dev/null || true
-  fi
-done
+_remove_empty_managed_dirs \
+  || { warn "Keeping managed directories under an unsafe path"; _uninstall_cleanup_failed=true; }
 
 _remove_empty_hook_dirs \
   || { warn "Keeping hook directories under an unsafe path"; _uninstall_cleanup_failed=true; }
@@ -891,7 +1054,80 @@ if [[ "$_uninstall_cleanup_failed" == "true" ]]; then
   exit 1
 fi
 
-rm -f "$MANIFEST"
+# A valid durable marker, not the mutable profile/manifest selection, grants
+# authority to offer removal of security-guidance's local data. Both optional
+# data removal and marker cleanup use the root binding captured before the
+# confirmation prompt. Any root replacement aborts and retains both marker and
+# manifest for an explicit retry.
+if [[ "$_uninstall_provenance_valid" == "true" ]]; then
+  if [[ "$(_plugin_provenance_signature_bound "$CLAUDE_DIR" \
+      "$_uninstall_root_physical" "$_uninstall_root_identity" 2>/dev/null || true)" \
+    != "$_uninstall_provenance_signature" ]]; then
+    warn "Unsafe plugin provenance; plugin data and provenance kept for retry"
+    exit 1
+  fi
+  if [[ "$_uninstall_provenance_security" == "true" ]]; then
+    _plugin_data_probe=""
+    _plugin_data_size=""
+    _plugin_data_identity=""
+    _plugin_data_status=0
+    _plugin_data_probe="$(_security_data_size_bound \
+      "$_uninstall_root_physical" "$_uninstall_root_identity")" \
+      || _plugin_data_status=$?
+    if [[ "$_plugin_data_status" -eq 0 && -n "$_plugin_data_probe" ]]; then
+      _plugin_data_size="${_plugin_data_probe%$'\t'*}"
+      _plugin_data_identity="${_plugin_data_probe##*$'\t'}"
+    fi
+    if [[ "$_plugin_data_status" -eq 1 ]]; then
+      warn "Unsafe managed root; plugin provenance kept for retry: $CLAUDE_DIR"
+      exit 1
+    fi
+    if [[ "$_plugin_data_status" -eq 0 && -n "$_plugin_data_size" ]]; then
+      _plugin_data_dir="$CLAUDE_DIR/security"
+      printf "\n"
+      # shellcheck disable=SC2059
+      info "$(printf "$STR_PLUGIN_DATA_FOUND" "$_plugin_data_dir" "$_plugin_data_size")"
+      info "$STR_PLUGIN_DATA_NOTE"
+      read -r -p "$STR_PLUGIN_DATA_REMOVE_ASK" _plugin_data_confirm \
+        || _plugin_data_confirm="n"
+      case "$_plugin_data_confirm" in
+        y|Y|yes|YES)
+          if [[ "$(_plugin_provenance_signature_bound "$CLAUDE_DIR" \
+              "$_uninstall_root_physical" "$_uninstall_root_identity" \
+              2>/dev/null || true)" \
+              != "$_uninstall_provenance_signature" ]]; then
+            warn "Unsafe plugin provenance; plugin data and provenance kept for retry"
+            exit 1
+          elif _remove_security_data_dir \
+              "$_uninstall_root_physical" "$_uninstall_root_identity" \
+              "$_plugin_data_identity"; then
+            ok "$STR_PLUGIN_DATA_REMOVED"
+          else
+            warn "$STR_PLUGIN_DATA_REMOVE_FAILED"
+            warn "Unsafe managed root; plugin provenance kept for retry: $CLAUDE_DIR"
+            exit 1
+          fi
+          ;;
+        *)
+          # shellcheck disable=SC2059
+          info "$(printf "$STR_PLUGIN_DATA_KEPT" "$_plugin_data_dir")"
+          ;;
+      esac
+    fi
+  fi
+
+  if ! _plugin_provenance_remove_bound "$CLAUDE_DIR" \
+      "$_uninstall_root_physical" "$_uninstall_root_identity" \
+      "$_uninstall_provenance_signature"; then
+    warn "Unsafe managed root; plugin provenance kept for retry: $CLAUDE_DIR"
+    exit 1
+  fi
+fi
+
+if ! _remove_tracked_file "$MANIFEST"; then
+  warn "Unsafe managed root; manifest kept for retry: $MANIFEST"
+  exit 1
+fi
 
 [[ ! -f "$HOME/.claude-starter-kit.conf" ]] && ok "$STR_REMOVED_CONFIG"
 
@@ -987,7 +1223,7 @@ fi
 # ---------------------------------------------------------------------------
 if command -v claude &>/dev/null; then
   printf "\n"
-  read -r -p "$STR_CLI_UNINSTALL_ASK " cli_confirm
+  read -r -p "$STR_CLI_UNINSTALL_ASK " cli_confirm || cli_confirm="n"
   case "$cli_confirm" in
     y|Y|yes|YES)
       if [[ "$_IS_MSYS" == "true" ]]; then
@@ -1065,68 +1301,6 @@ if command -v npm &>/dev/null && npm list -g cc-safety-net &>/dev/null; then
         warn "$STR_SAFETY_NET_REMOVE_FAILED"
         info "  npm uninstall -g cc-safety-net"
       fi
-      ;;
-  esac
-fi
-
-# ---------------------------------------------------------------------------
-# security-guidance plugin data (installed by the kit for standard/full)
-#
-# The plugin writes a Python virtualenv (hundreds of MB) plus one state file
-# per session into <config dir>/security. That path sits under $CLAUDE_DIR, so
-# it is ours to offer — but it is deliberately NOT in cleanup_paths_json():
-# entries there are deleted unconditionally, while the plugin itself survives
-# this uninstall (the kit never uninstalls config/plugins.json plugins).
-# Silently deleting a still-installed plugin's cache would force a surprise
-# PyPI re-download, so prompt instead — same treatment as cc-safety-net above.
-#
-# Removal is deliberately kept out of _remove_cleanup_path(): that helper flips
-# _uninstall_cleanup_failed, which is only read before the manifest is deleted
-# (far earlier than this block) and which must stay scoped to kit-managed
-# files. Declining or failing this optional removal is not an incomplete
-# uninstall.
-#
-# Only the default location is handled. The plugin also honors
-# SECURITY_WARNINGS_STATE_DIR and CLAUDE_CONFIG_DIR, but the kit hardcodes
-# CLAUDE_DIR="$HOME/.claude" and the removal is bound to that verified inode.
-# ---------------------------------------------------------------------------
-# Detection uses install history, not the current selection: the data is offered
-# on a standard/full install whose manifest no longer lists the plugin (a later
-# reconfigure deselected it while its data remained), not only when it is still
-# selected. Removal goes through _remove_security_data_dir(), which descends the
-# verified physical ~/.claude inode one real component at a time and skips a
-# symlinked parent or leaf — the same boundary rule the tracked-file and runtime
-# removers follow, so a parent swapped to a symlink during the (unbounded) prompt
-# cannot redirect the rm at an external <target>/security.
-_plugin_data_dir="$CLAUDE_DIR/security"
-if [[ -d "$_plugin_data_dir" ]] && [[ ! -L "$_plugin_data_dir" ]] \
-  && _kit_installed_security_guidance "$kit_plugins" "$profile"; then
-  _plugin_data_size="$(du -sh "$_plugin_data_dir" 2>/dev/null | cut -f1 || true)"
-  [[ -z "$_plugin_data_size" ]] && _plugin_data_size="?"
-  printf "\n"
-  # shellcheck disable=SC2059
-  info "$(printf "$STR_PLUGIN_DATA_FOUND" "$_plugin_data_dir" "$_plugin_data_size")"
-  info "$STR_PLUGIN_DATA_NOTE"
-  # EOF-tolerant read: piped/automated runs default to keeping the data
-  read -r -p "$STR_PLUGIN_DATA_REMOVE_ASK" _plugin_data_confirm || _plugin_data_confirm="n"
-  case "$_plugin_data_confirm" in
-    y|Y|yes|YES)
-      if _remove_security_data_dir; then
-        ok "$STR_PLUGIN_DATA_REMOVED"
-      else
-        warn "$STR_PLUGIN_DATA_REMOVE_FAILED"
-        # Only suggest a manual rm when the path is still genuinely safe (a real
-        # ~/.claude with a real security dir). If removal was refused because the
-        # parent turned into a symlink, do not point rm at a symlinked path.
-        if [[ -d "$CLAUDE_DIR" && ! -L "$CLAUDE_DIR" ]] \
-          && [[ -d "$_plugin_data_dir" && ! -L "$_plugin_data_dir" ]]; then
-          info "  rm -rf \"$_plugin_data_dir\""
-        fi
-      fi
-      ;;
-    *)
-      # shellcheck disable=SC2059
-      info "$(printf "$STR_PLUGIN_DATA_KEPT" "$_plugin_data_dir")"
       ;;
   esac
 fi
