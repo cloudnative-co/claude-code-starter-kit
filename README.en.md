@@ -77,7 +77,7 @@ Missing or unsupported prerequisites are installed or upgraded automatically whe
 > - The kit's filename-based deny rules are guardrails, not a confidentiality boundary. Remove credentials from the scan copy rather than relying on deny rules to keep them out of model context.
 > - Existing installs do not receive the plugin automatically: run `/plugin install claude-security@claude-plugins-official`, then `/reload-plugins` or restart Claude Code.
 
-#### Security layers
+### Security layers
 
 The kit's security capabilities cover four different layers; they complement rather than replace one another.
 
