@@ -352,6 +352,10 @@ save_config() {
     # from an older config must never redirect the SessionStart notification.
     KIT_REPO="$PROJECT_DIR"
   fi
+  # Preserve path bytes; reject values the quoted one-line format cannot represent.
+  if [[ -n "${KIT_REPO:-}" ]] && { [[ "$KIT_REPO" != /* ]] || [[ "$KIT_REPO" == *\"* ]] || [[ "$KIT_REPO" == *[[:cntrl:]]* ]]; }; then
+    return 1
+  fi
   file_dir="$(dirname "$file")"
   tmp_file="$(mktemp "$file_dir/.starter-kit-conf.XXXXXX")" || return 1
   if ! {
@@ -367,7 +371,11 @@ save_config() {
         if [[ -z "$_val" ]] && [[ " $_CONFIG_EMPTY_ALLOWED_KEYS " != *" $_key "* ]]; then
           continue
         fi
-        printf '%s="%s"\n' "$_key" "$(_sanitize_config_value "$_val")"
+        if [[ "$_key" == "KIT_REPO" ]]; then
+          printf '%s="%s"\n' "$_key" "$_val"
+        else
+          printf '%s="%s"\n' "$_key" "$(_sanitize_config_value "$_val")"
+        fi
       fi
     done
   } > "$tmp_file"; then

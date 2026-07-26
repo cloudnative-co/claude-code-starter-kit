@@ -542,6 +542,7 @@ _CLI_OVERRIDES=()
 _SELECTED_PLUGINS_EXPLICIT="false"
 
 _kit_repo_conf_dir="$(mktemp -d)"
+_kit_repo_original_project="$PROJECT_DIR"
 KIT_REPO="/stale/checkout"
 save_config "$_kit_repo_conf_dir/config"
 if grep -Fqx "KIT_REPO=\"$PROJECT_DIR\"" "$_kit_repo_conf_dir/config"; then
@@ -549,8 +550,34 @@ if grep -Fqx "KIT_REPO=\"$PROJECT_DIR\"" "$_kit_repo_conf_dir/config"; then
 else
   fail "wizard: save_config retained stale KIT_REPO instead of PROJECT_DIR"
 fi
+
+PROJECT_DIR="$_kit_repo_conf_dir/キット+checkout"
+KIT_REPO="/stale/checkout"
+if save_config "$_kit_repo_conf_dir/config" \
+  && grep -Fqx "KIT_REPO=\"$PROJECT_DIR\"" "$_kit_repo_conf_dir/config"; then
+  _kit_repo_expected="$PROJECT_DIR"
+  KIT_REPO=""
+  _safe_source_config "$_kit_repo_conf_dir/config"
+  if [[ "$KIT_REPO" == "$_kit_repo_expected" ]]; then
+    pass "wizard: KIT_REPO preserves plus and non-ASCII pathname bytes"
+  else
+    fail "wizard: KIT_REPO did not round-trip custom checkout bytes"
+  fi
+else
+  fail "wizard: save_config rejected a valid custom checkout path"
+fi
+
+printf 'sentinel\n' > "$_kit_repo_conf_dir/config"
+PROJECT_DIR="$_kit_repo_conf_dir/invalid\"checkout"
+if ! save_config "$_kit_repo_conf_dir/config" \
+  && [[ "$(< "$_kit_repo_conf_dir/config")" == "sentinel" ]]; then
+  pass "wizard: unrepresentable KIT_REPO fails without replacing config"
+else
+  fail "wizard: unrepresentable KIT_REPO was mutated or replaced config"
+fi
+PROJECT_DIR="$_kit_repo_original_project"
 rm -rf "$_kit_repo_conf_dir"
-unset _kit_repo_conf_dir
+unset _kit_repo_conf_dir _kit_repo_original_project _kit_repo_expected
 
 _tmp_cfg="$(mktemp)"
 printf 'ENABLE_PRETTIER_HOOKS="true"\n' > "$_tmp_cfg"

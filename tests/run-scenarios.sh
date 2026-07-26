@@ -964,16 +964,20 @@ test_update_kit_command_paths() {
     in_code { print }
   ' "$PROJECT_DIR/commands/update-kit-dry-run.md")"
 
-  if grep -Fq 'config_file="$HOME/.claude-starter-kit.conf"' < <(printf '%s\n' "$update_cmd") \
+  if grep -Fq 'default_config_file="$HOME/.claude-starter-kit.conf"' < <(printf '%s\n' "$update_cmd") \
     && grep -Fq 'KIT_REPO="...' < <(printf '%s\n' "$update_cmd") \
     && grep -Fq 'repo_top="$(git -C "$kit_repo_physical" rev-parse --show-toplevel' < <(printf '%s\n' "$update_cmd") \
-    && grep -Fq '(cd "$kit_repo_physical" && bash setup.sh --update)' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'setup_args=(--update)' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'setup_args+=("--config=$config_file")' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'bash setup.sh "${setup_args[@]}"' < <(printf '%s\n' "$update_cmd") \
     && grep -Fq 'exact key in `_FEATURE_FLAGS`' < <(printf '%s\n' "$update_cmd") \
     && ! grep -Fq 'cd ~/.claude-starter-kit' < <(printf '%s\n' "$update_cmd") \
     && ! grep -Fq 'Read `~/.claude-starter-kit/' < <(printf '%s\n' "$update_cmd") \
     && ! grep -Fq 're-run in Step 9' < <(printf '%s\n' "$update_cmd") \
-    && grep -Fq 'config_file="$HOME/.claude-starter-kit.conf"' < <(printf '%s\n' "$dry_run_cmd") \
-    && grep -Fq '(cd "$kit_repo_physical" && bash setup.sh --update --dry-run)' < <(printf '%s\n' "$dry_run_cmd") \
+    && grep -Fq 'default_config_file="$HOME/.claude-starter-kit.conf"' < <(printf '%s\n' "$dry_run_cmd") \
+    && grep -Fq 'setup_args=(--update --dry-run)' < <(printf '%s\n' "$dry_run_cmd") \
+    && grep -Fq 'setup_args+=("--config=$config_file")' < <(printf '%s\n' "$dry_run_cmd") \
+    && grep -Fq 'bash setup.sh "${setup_args[@]}"' < <(printf '%s\n' "$dry_run_cmd") \
     && ! grep -Fq 'cd ~/.claude-starter-kit' < <(printf '%s\n' "$dry_run_cmd") \
     && [[ "$update_resolver" == "$dry_run_resolver" ]]; then
     pass "update-kit-command-paths"
@@ -987,7 +991,8 @@ test_update_kit_repo_resolution() {
   setup_test_env
   local command_file="$PROJECT_DIR/commands/update-kit.md"
   local config_file="$HOME/.claude-starter-kit.conf"
-  local custom_repo="$HOME/custom checkout"
+  local manifest_file="$HOME/.claude/.starter-kit-manifest.json"
+  local custom_repo="$HOME/キット+custom checkout"
   local default_repo="$HOME/.claude-starter-kit"
   local repo
   for repo in "$custom_repo" "$default_repo"; do
@@ -1015,6 +1020,36 @@ test_update_kit_repo_resolution() {
     && [[ "$custom_actual" == "$(cd "$custom_repo" && pwd -P)" ]]; then
     custom_ok=yes
   fi
+
+  local bound_config="$HOME/custom wizard.conf"
+  printf 'KIT_REPO="%s"\n' "$custom_repo" > "$bound_config"
+  mkdir -p "${manifest_file%/*}"
+  jq -n --arg repo "$custom_repo" --arg config "$bound_config" \
+    '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+    > "$manifest_file"
+  local bound_actual bound_rc=0
+  bound_actual="$(HOME="$HOME" bash -eu -c \
+    "${resolver_script}"$'\n''printf "%s|%s|%s" "$kit_repo_physical" "$config_file" "$manifest_bound"')" \
+    || bound_rc=$?
+  local bound_ok=no
+  if [[ $bound_rc -eq 0 ]] \
+    && [[ "$bound_actual" == "$(cd "$custom_repo" && pwd -P)|$bound_config|true" ]]; then
+    bound_ok=yes
+  fi
+
+  local fallback_manifest_ok=yes manifest_json manifest_actual manifest_rc
+  for manifest_json in '{"version":2}' '{"version":2,"mdm_managed":true}'; do
+    printf '%s\n' "$manifest_json" > "$manifest_file"
+    manifest_rc=0
+    manifest_actual="$(HOME="$HOME" bash -eu -c \
+      "${resolver_script}"$'\n''printf "%s|%s|%s" "$kit_repo_physical" "$config_file" "$manifest_bound"')" \
+      || manifest_rc=$?
+    if [[ $manifest_rc -ne 0 ]] \
+      || [[ "$manifest_actual" != "$(cd "$custom_repo" && pwd -P)|$config_file|false" ]]; then
+      fallback_manifest_ok=no
+    fi
+  done
+  rm -f "$manifest_file"
 
   rm -f "$config_file"
   local fallback_actual fallback_rc=0
@@ -1065,13 +1100,15 @@ test_update_kit_repo_resolution() {
   local incomplete_rc=0
   HOME="$HOME" bash -eu -c "$resolver_command" >/dev/null 2>&1 || incomplete_rc=$?
 
-  if [[ "$custom_ok" == "yes" && "$fallback_ok" == "yes" && "$legacy_ok" == "yes" ]] \
+  if [[ "$custom_ok" == "yes" && "$bound_ok" == "yes" ]] \
+    && [[ "$fallback_manifest_ok" == "yes" ]] \
+    && [[ "$fallback_ok" == "yes" && "$legacy_ok" == "yes" ]] \
     && [[ $relative_rc -ne 0 && $duplicate_rc -ne 0 ]] \
     && [[ $injection_rc -ne 0 && ! -e "$marker" ]] \
     && [[ $nongit_rc -ne 0 && $incomplete_rc -ne 0 ]]; then
     pass "update-kit-repo-resolution"
   else
-    fail "update-kit-repo-resolution (custom=$custom_ok fallback=$fallback_ok legacy=$legacy_ok relative=$relative_rc duplicate=$duplicate_rc injection=$injection_rc nongit=$nongit_rc incomplete=$incomplete_rc)"
+    fail "update-kit-repo-resolution (custom=$custom_ok bound=$bound_ok legacy-mdm=$fallback_manifest_ok fallback=$fallback_ok legacy=$legacy_ok relative=$relative_rc duplicate=$duplicate_rc injection=$injection_rc nongit=$nongit_rc incomplete=$incomplete_rc)"
   fi
 
   teardown_test_env
