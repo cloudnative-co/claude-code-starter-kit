@@ -1479,7 +1479,7 @@ _prov_run_case() { # <name> <selected> <list> <list-rc> <market-rc> <install-rc>
     0 0 0 true
   _case="$_PROV_DIR/state/success"
   _marker="$_case/home/.claude/.starter-kit-plugin-provenance.json"
-  _mode="$(stat -f '%Lp' "$_marker" 2>/dev/null || stat -c '%a' "$_marker")"
+  _mode="$(test_stat_mode "$_marker")"
   if grep -qx "plugin install security-guidance --scope user" \
       "$_case/calls.log" \
     && grep -qx "plugin install code-review@claude-plugins-official --scope user" \
