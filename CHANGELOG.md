@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.75.1] - 2026-07-26
+
+### Fixed
+- **アンインストール時に security-guidance のローカルデータを選択削除できるように修正**: キットが導入する `security-guidance` は、Python 仮想環境（`agent-sdk-venv` / `agent-sdk-libs`）、セッション state、ログ、bootstrap sentinel を既定で `~/.claude/security/` に作成する。アンインストール時にサイズと削除確認を表示し、承諾された場合だけこれら既知の plugin-owned leaf を削除する。プラグイン本体は残るため既定は「残す」で、`read` が EOF になる自動実行でも削除しない。無条件削除の `cleanup_paths` には含めない。
+  - **共有ディレクトリ全体を削除しない**: `~/.claude/security/` 配下でも、既知の名前に一致しないファイル・ディレクトリ・symlink・特殊 inode は保持する。選択削除後の `security` 自体は空の場合だけ取り除く。`SECURITY_WARNINGS_STATE_DIR` / `CLAUDE_CONFIG_DIR` で既定場所以外へ移されたデータは対象外。
+  - **削除権限を durable な導入元記録へ限定**: 厳格なローカル provenance marker 内で導入 intent と postcondition 検証済み state を分離し、trusted な導入前一覧で exact user-scope ID の不在を確認してから install が成功し、導入前の全 ID/scope entry を保持したまま対象 user-scope ID が追加された場合だけ削除権限にする。依存 plugin 等の追加 entry は許容するが、provenance には対象 ID だけを記録する。未検証の intent は権限にせず、アンインストールは exact な `security-guidance@claude-plugins-official` が確定済みまたは最終 commit 待ちの verified state にある場合だけ削除を提示する。fresh / update の別や旧 manifest の profile・plugin 一覧にかかわらず、導入前から存在したプラグインは暗黙に取り込まず、そのローカルデータには削除を提示しない。検証後の最終 marker commit が一時的に失敗した場合は、後続 setup が再 install せず commit だけを再試行する。
+  - **確認待ちをまたぐ inode 交換を拒否**: `~/.claude`、`security`、再帰削除する2つの SDK ディレクトリを物理 path と device/inode に束縛し、承諾後に再検証する。symlink 化や同じ文字列 path への別ディレクトリ差替えを検知した場合は削除せず、provenance marker と manifest を残して再試行可能にする。アンインストール終盤の marker と manifest の退役も一体化し、manifest の削除前に失敗した場合は marker を復元して両方を次回再試行用に保持する。
+
 ## [0.75.0] - 2026-07-26
 
 ### Added
