@@ -16,12 +16,16 @@
   test_name="context-budget: standard plugin default set is narrow"
   standard_plugins="$(jq -r '[.plugins[] | select(.profiles | index("standard")) | .name] | join(",")' "$PROJECT_DIR/config/plugins.json")"
   standard_count="$(jq '[.plugins[] | select(.profiles | index("standard"))] | length' "$PROJECT_DIR/config/plugins.json")"
-  if [[ "$standard_count" -le 5 ]] \
+  full_plugins="$(jq -r '[.plugins[] | select(.profiles | index("full")) | .name] | join(",")' "$PROJECT_DIR/config/plugins.json")"
+  full_count="$(jq '[.plugins[] | select(.profiles | index("full"))] | length' "$PROJECT_DIR/config/plugins.json")"
+  if [[ "$standard_count" -eq 5 ]] \
+    && [[ "$full_count" -eq 15 ]] \
     && [[ "$standard_plugins" == *"security-guidance"* ]] \
     && [[ "$standard_plugins" == *"commit-commands"* ]] \
     && [[ "$standard_plugins" != *"document-skills"* ]] \
     && [[ "$standard_plugins" != *"example-skills"* ]] \
-    && [[ "$standard_plugins" != *"superpowers"* ]]; then
+    && [[ "$standard_plugins" != *"superpowers"* ]] \
+    && [[ "$full_plugins" == *"claude-security"* ]]; then
     pass "$test_name"
   else
     fail "$test_name"
