@@ -56,7 +56,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
 - **11 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
-- **14 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp
+- **15 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp, claude-security
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
 - **Non-interactive mode** for CI/automation
@@ -64,6 +64,31 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 ## Prerequisites
 
 Missing or unsupported prerequisites are installed or upgraded automatically when possible: `git`, `jq`, `curl`, GNU `sed`, GNU `awk`, `bash 4+`, Node.js `22.19+`, `tmux`, and `gh`. On macOS, the kit also detects the system Bash 3.2 limitation, installs Bash 4+ when needed, and re-execs automatically. If automatic installation fails, setup exits with an error and shows the manual commands.
+
+> **Before using `claude-security` (Full profile only)**
+>
+> - Launch it manually with `/claude-security`; no resident hook scans on your behalf.
+> - It requires Claude Code `v2.1.154+` on a paid plan (on Pro, enable **Dynamic workflows** from `/config`) and `python3` `3.9.6+` on your `PATH`. The kit verifies neither, so a successful Full install does not guarantee the plugin runs.
+> - Output lands in `CLAUDE-SECURITY-<timestamp>/` at the scanned repository root. This is outside `~/.claude`, so `uninstall.sh` never removes it; delete it yourself when no longer needed.
+> - Runs require a token-cost confirmation. A non-interactive session without advance acknowledgement creates nothing, while an explicit acknowledgement in the request may let it start; CI use is unsupported and discouraged.
+> - Coverage is capped at 400 candidates and the top 45 validation-panel entries, and results are nondeterministic. This complements rather than replaces SAST and dependency scanning.
+> - The startup banner recommends `--permission-mode auto`. The kit's `disableBypassPermissionsMode` controls a different mode and does not block auto mode, so any permission expansion remains your decision.
+> - Scan only trusted repositories. The plugin runs inside the current Claude Code session and permissions, without isolating the target code. Patch validation may run the project's build or tests in a scratch clone; that protects the working tree but does not isolate host credentials, network access, or external side effects. For unknown code, remove credentials from a copy and run the whole session in a sandbox.
+> - The kit denies Read for filenames matching `.env`, `secrets/`, `*secret*`, or `*credential*`, while its Bash-side deny covers only `.env` patterns; commands that reference the other paths are not guaranteed to be blocked. These filename-based rules are guardrails, not a confidentiality boundary. Remove credentials from the scan copy rather than relying on deny rules to keep them out of model context.
+> - Existing Full installs receive the plugin only after consent. An interactive update asks with a default of no; auto-update and `--non-interactive` install nothing and leave a pending notice. Use `/update-kit` to dismiss it permanently, or install manually with `/plugin install claude-security@claude-plugins-official`. After installation, run `/reload-plugins` or restart Claude Code.
+
+### Security layers
+
+The kit's security capabilities cover four different layers; they complement rather than replace one another.
+
+| Layer | Component | Activation | Profile |
+|---|---|---|---|
+| Always-on guardrails | `rules/security.md` + `config/permissions.json` (all profiles) + safety-net (Standard / Full) | Always | All (safety-net: Standard / Full) |
+| Automatic review | **security-guidance** plugin | On edits, turn completion, and commits | Standard / Full |
+| One-off review | Claude Code's built-in `/security-review` | Manual, for the current branch diff | Not managed by the kit |
+| Deep scan | **claude-security** plugin | Manual, with `/claude-security` | Full |
+
+`agents/security-reviewer.md` and `skills/security-review/` provide review checklists; they are not separate detection engines.
 
 ### Claude Account (Paid)
 
@@ -169,7 +194,7 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 |---|---|---|---|---|---|---|---|---|
 | Minimal | Yes | Yes | - | - | - | - | - | - |
 | Standard (Recommended) | Yes | Yes | Yes | Yes | Core | 5 | Optional | - |
-| Full | Yes | Yes | Yes | Yes | All | 14 | Yes | macOS only |
+| Full | Yes | Yes | Yes | Yes | All | 15 | Yes | macOS only |
 
 - **Minimal**: Lightweight start with just agents and rules
 - **Standard**: Best for most teams. Includes commands, skills, and core hooks
@@ -355,6 +380,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--non-interactive` is intended for CI/automation. Interactive mode is recommended for existing users.
 > - A backup is automatically created at `~/.claude.backup.<timestamp>` before every update or first install with existing files.
 > - `setup.sh --update` and `/update-kit` now show `Step N/M` progress so long-running phases such as settings merges no longer look stalled.
+> - **Plugins added after you installed**: an interactive update asks about each one that is a default for your profile, one at a time, defaulting to no — nothing is installed without an explicit yes, and a plugin you previously deselected is never silently restored. Auto-update and `--non-interactive` runs install nothing and only leave a "new plugins available" notice for your next session. Declines are remembered, so you are not asked twice.
 > - **Dirty check**: If the kit repo has local changes, update is blocked with a `git stash` hint (applies to auto-update, install.sh, and /update-kit).
 > - **Auto-update**: SessionStart and SessionEnd hooks now check on every session boundary and run asynchronously. `~/.claude/.starter-kit-update.lock` prevents overlapping updates.
 > - **Recovery**: If an update fails, backup path and restore commands are shown. The latest backup path is saved in `~/.claude/.starter-kit-last-backup`.

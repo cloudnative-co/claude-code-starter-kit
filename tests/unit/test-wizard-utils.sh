@@ -122,6 +122,54 @@ else
 fi
 rm -f "$_tmp"
 
+# An explicit empty plugin selection is distinct from an unset value: profile
+# defaults must not repopulate it in non-interactive mode.
+_tmp="$(mktemp)"
+printf 'SELECTED_PLUGINS=""\nPROFILE="standard"\n' > "$_tmp"
+SELECTED_PLUGINS="preexisting"
+_SELECTED_PLUGINS_EXPLICIT="false"
+PROFILE=""
+_CLI_OVERRIDES=()
+load_config "$_tmp"
+_fill_noninteractive_defaults
+if assert_equals "" "$SELECTED_PLUGINS" \
+  && assert_equals "true" "$_SELECTED_PLUGINS_EXPLICIT"; then
+  pass "wizard: saved explicit empty plugins survive non-interactive defaults"
+else
+  fail "wizard: saved empty plugin selection was replaced by profile defaults"
+fi
+rm -f "$_tmp"
+
+# --plugins is a real CLI override, including its empty spelling, so config
+# loading later in argv order cannot replace it.
+_tmp="$(mktemp)"
+printf 'SELECTED_PLUGINS="security-guidance"\n' > "$_tmp"
+SELECTED_PLUGINS=""
+_SELECTED_PLUGINS_EXPLICIT="false"
+_CLI_OVERRIDES=()
+parse_cli_args --plugins= --config="$_tmp"
+if assert_equals "" "$SELECTED_PLUGINS" \
+  && [[ " ${_CLI_OVERRIDES[*]} " == *" SELECTED_PLUGINS "* ]]; then
+  pass "wizard: empty --plugins overrides a later config file"
+else
+  fail "wizard: empty --plugins was not retained as a CLI override"
+fi
+rm -f "$_tmp"
+
+# Reject control characters before the newline-delimited override transport.
+SELECTED_PLUGINS="security-guidance"
+_SELECTED_PLUGINS_EXPLICIT="false"
+_CLI_OVERRIDES=()
+parse_cli_args --plugins=$'security-guidance\nPATH=bad'
+if assert_equals "" "$SELECTED_PLUGINS" \
+  && assert_equals "true" "$_SELECTED_PLUGINS_EXPLICIT"; then
+  pass "wizard: invalid --plugins input fails closed before override capture"
+else
+  fail "wizard: invalid --plugins input reached override transport"
+fi
+_CLI_OVERRIDES=()
+_SELECTED_PLUGINS_EXPLICIT="false"
+
 # Test: ignores non-allowlisted keys
 _tmp="$(mktemp)"
 printf 'EVIL_KEY="malicious"\nLANGUAGE="ja"\n' > "$_tmp"
@@ -276,6 +324,134 @@ fi
 
 rm -rf "$_tmp_home"
 export HOME="$_orig_home"
+
+# ── update runtime config binding ─────────────────────────────────────────
+
+_binding_orig_home="$HOME"
+_binding_orig_project="$PROJECT_DIR"
+_binding_orig_wizard_config="$WIZARD_CONFIG_FILE"
+_binding_tmp="$(mktemp -d)"
+export HOME="$_binding_tmp/home"
+mkdir -p "$HOME/.claude" "$_binding_tmp/キット+checkout" "$_binding_tmp/設定+files"
+PROJECT_DIR="$_binding_tmp/キット+checkout"
+_binding_repo="$(builtin cd -P "$PROJECT_DIR" && pwd -P)"
+_binding_config="$(builtin cd -P "$_binding_tmp/設定+files" && pwd -P)/利用者+設定.conf"
+_binding_manifest="$HOME/.claude/.starter-kit-manifest.json"
+
+printf 'KIT_REPO="%s"\nPROFILE="standard"\n' "$_binding_repo" \
+  > "$_binding_config"
+jq -n --arg repo "$_binding_repo" --arg config "$_binding_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+if _restore_manifest_runtime_config_binding \
+  && assert_equals "$_binding_config" "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: update restores UTF-8 plus-sign manifest config binding"
+else
+  fail "wizard: valid manifest runtime binding was not restored"
+fi
+
+# A non-empty CLI-selected config is authoritative even when the manifest
+# binding is incomplete; manifest adoption is attempted only for an empty path.
+printf '%s\n' '{"version":2,"kit_repo":"/partial"}' > "$_binding_manifest"
+WIZARD_CONFIG_FILE="$_binding_tmp/explicit.conf"
+if _restore_manifest_runtime_config_binding \
+  && assert_equals "$_binding_tmp/explicit.conf" "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: explicit config takes precedence over manifest binding"
+else
+  fail "wizard: manifest binding replaced or rejected explicit config"
+fi
+
+# Manifests without either runtime field predate binding and retain the
+# historical default config lookup.
+printf '%s\n' '{"version":1,"profile":"standard"}' > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+if _restore_manifest_runtime_config_binding && assert_empty "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: legacy manifest keeps default update config"
+else
+  fail "wizard: legacy manifest unexpectedly selected a runtime config"
+fi
+
+# Partial and malformed bindings must abort before setup can save into the
+# default config path.
+_binding_default="$HOME/.claude-starter-kit.conf"
+printf '%s\n' 'sentinel' > "$_binding_default"
+printf '%s\n' '{"version":2,"kit_repo":"/partial"}' > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+if ! _restore_manifest_runtime_config_binding \
+  && assert_empty "$WIZARD_CONFIG_FILE" \
+  && [[ "$(< "$_binding_default")" == "sentinel" ]]; then
+  pass "wizard: partial runtime binding fails before default config mutation"
+else
+  fail "wizard: partial runtime binding fell through to default config"
+fi
+
+printf '%s\n' '{not-json' > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+if ! _restore_manifest_runtime_config_binding && assert_empty "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: malformed runtime manifest fails closed"
+else
+  fail "wizard: malformed runtime manifest was accepted"
+fi
+
+# Neither manifest nor bound config may be a symlink or another leaf type.
+jq -n --arg repo "$_binding_repo" --arg config "$_binding_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_binding_tmp/manifest.real"
+rm -f "$_binding_manifest"
+ln -s "$_binding_tmp/manifest.real" "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+_binding_leaf_types_ok=true
+_restore_manifest_runtime_config_binding && _binding_leaf_types_ok=false
+rm -f "$_binding_manifest"
+mkdir "$_binding_manifest"
+_restore_manifest_runtime_config_binding && _binding_leaf_types_ok=false
+rmdir "$_binding_manifest"
+cp "$_binding_tmp/manifest.real" "$_binding_manifest"
+mv "$_binding_config" "$_binding_config.real"
+ln -s "$_binding_config.real" "$_binding_config"
+_restore_manifest_runtime_config_binding && _binding_leaf_types_ok=false
+rm -f "$_binding_config"
+mkdir "$_binding_config"
+_restore_manifest_runtime_config_binding && _binding_leaf_types_ok=false
+rmdir "$_binding_config"
+mv "$_binding_config.real" "$_binding_config"
+if [[ "$_binding_leaf_types_ok" == "true" ]] && assert_empty "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: manifest and config symlink or special leaves fail closed"
+else
+  fail "wizard: unsafe manifest or config leaf type was accepted"
+fi
+
+# The pair is a single runtime identity: both the current checkout and the
+# exact single KIT_REPO declaration in the config must agree with it.
+printf 'KIT_REPO="%s"\n' "$_binding_repo" > "$_binding_config"
+jq -n --arg repo "$_binding_tmp/other" --arg config "$_binding_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_binding_manifest"
+WIZARD_CONFIG_FILE=""
+_binding_identity_ok=true
+_restore_manifest_runtime_config_binding && _binding_identity_ok=false
+jq -n --arg repo "$_binding_repo" --arg config "$_binding_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_binding_manifest"
+printf '%s\n' 'KIT_REPO="/different"' > "$_binding_config"
+_restore_manifest_runtime_config_binding && _binding_identity_ok=false
+printf 'KIT_REPO="%s"\nKIT_REPO="%s"\n' "$_binding_repo" "$_binding_repo" \
+  > "$_binding_config"
+_restore_manifest_runtime_config_binding && _binding_identity_ok=false
+if [[ "$_binding_identity_ok" == "true" ]] && assert_empty "$WIZARD_CONFIG_FILE"; then
+  pass "wizard: mismatched or ambiguous runtime identity fails closed"
+else
+  fail "wizard: mismatched or duplicate KIT_REPO binding was accepted"
+fi
+
+rm -rf "$_binding_tmp"
+export HOME="$_binding_orig_home"
+PROJECT_DIR="$_binding_orig_project"
+WIZARD_CONFIG_FILE="$_binding_orig_wizard_config"
+unset _binding_orig_home _binding_orig_project _binding_orig_wizard_config
+unset _binding_tmp _binding_repo _binding_config _binding_manifest _binding_default
+unset _binding_leaf_types_ok _binding_identity_ok
 
 # ── formatter hook normalization ──────────────────────────────────────────
 
@@ -459,6 +635,77 @@ if [[ "$_CONFIG_ALLOWED_KEYS" == LANGUAGE\ * ]] \
 else
   fail "wizard: generated config key lists lost expected order endpoints"
 fi
+
+SELECTED_PLUGINS="old-selection"
+KNOWN_PLUGINS="old-known"
+DISMISSED_PLUGINS="old-dismissed"
+_SELECTED_PLUGINS_EXPLICIT="true"
+_CLI_OVERRIDES=()
+_reset_user_choices
+if assert_empty "$SELECTED_PLUGINS" \
+  && assert_empty "$KNOWN_PLUGINS" \
+  && assert_empty "$DISMISSED_PLUGINS" \
+  && assert_equals "false" "$_SELECTED_PLUGINS_EXPLICIT"; then
+  pass "wizard: fresh reconfiguration resets all plugin adoption state"
+else
+  fail "wizard: fresh reconfiguration retained stale plugin state"
+fi
+
+# A CLI selection remains authoritative even when the saved-config prompt
+# chooses a fresh wizard pass; adoption history is still reset.
+_CLI_OVERRIDES=()
+parse_cli_args --plugins=
+KNOWN_PLUGINS="old-known"
+DISMISSED_PLUGINS="old-dismissed"
+_reset_user_choices
+if assert_empty "$SELECTED_PLUGINS" \
+  && assert_empty "$KNOWN_PLUGINS" \
+  && assert_empty "$DISMISSED_PLUGINS" \
+  && assert_equals "true" "$_SELECTED_PLUGINS_EXPLICIT"; then
+  pass "wizard: fresh reset preserves an explicit empty CLI selection only"
+else
+  fail "wizard: fresh reset lost the empty CLI override or retained history"
+fi
+_CLI_OVERRIDES=()
+_SELECTED_PLUGINS_EXPLICIT="false"
+
+_kit_repo_conf_dir="$(mktemp -d)"
+_kit_repo_original_project="$PROJECT_DIR"
+KIT_REPO="/stale/checkout"
+save_config "$_kit_repo_conf_dir/config"
+if grep -Fqx "KIT_REPO=\"$PROJECT_DIR\"" "$_kit_repo_conf_dir/config"; then
+  pass "wizard: save_config persists the actual checkout as KIT_REPO"
+else
+  fail "wizard: save_config retained stale KIT_REPO instead of PROJECT_DIR"
+fi
+
+PROJECT_DIR="$_kit_repo_conf_dir/キット+checkout"
+KIT_REPO="/stale/checkout"
+if save_config "$_kit_repo_conf_dir/config" \
+  && grep -Fqx "KIT_REPO=\"$PROJECT_DIR\"" "$_kit_repo_conf_dir/config"; then
+  _kit_repo_expected="$PROJECT_DIR"
+  KIT_REPO=""
+  _safe_source_config "$_kit_repo_conf_dir/config"
+  if [[ "$KIT_REPO" == "$_kit_repo_expected" ]]; then
+    pass "wizard: KIT_REPO preserves plus and non-ASCII pathname bytes"
+  else
+    fail "wizard: KIT_REPO did not round-trip custom checkout bytes"
+  fi
+else
+  fail "wizard: save_config rejected a valid custom checkout path"
+fi
+
+printf 'sentinel\n' > "$_kit_repo_conf_dir/config"
+PROJECT_DIR="$_kit_repo_conf_dir/invalid\"checkout"
+if ! save_config "$_kit_repo_conf_dir/config" \
+  && [[ "$(< "$_kit_repo_conf_dir/config")" == "sentinel" ]]; then
+  pass "wizard: unrepresentable KIT_REPO fails without replacing config"
+else
+  fail "wizard: unrepresentable KIT_REPO was mutated or replaced config"
+fi
+PROJECT_DIR="$_kit_repo_original_project"
+rm -rf "$_kit_repo_conf_dir"
+unset _kit_repo_conf_dir _kit_repo_original_project _kit_repo_expected
 
 _tmp_cfg="$(mktemp)"
 printf 'ENABLE_PRETTIER_HOOKS="true"\n' > "$_tmp_cfg"

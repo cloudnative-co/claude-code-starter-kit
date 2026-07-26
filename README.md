@@ -405,7 +405,7 @@ cd claude-code-starter-kit
 | コマンド（ショートカット） | - | ✅ | ✅ |
 | スキル（専門知識） | - | ✅ | ✅ |
 | フック（安全装置） | - | 主要 | 全部 |
-| プラグイン（拡張機能） | - | 5個 | 14個 |
+| プラグイン（拡張機能） | - | 5個 | 15個 |
 | フォント（IBM Plex Mono / HackGen NF） | - | ✅ | ✅ |
 | Codex Plugin（外部 AI 連携） | - | 任意 | ✅ |
 | Ghostty（ターミナル設定） | - | - | macOS のみ |
@@ -553,7 +553,7 @@ compact 実行（コンテキスト圧縮）
 
 > **全プロファイルでデフォルト無効（opt-in）です。** 現行の Claude Code はネイティブの checkpoint / rewind を備えており、通常はこのフックは不要です。圧縮前の状態を git 側にも残したい場合のみ、ウィザードのフック選択で有効化してください。過去に有効化した設定（保存済み config）はアップデートで上書きされません。
 
-### 🧩 プラグイン（14個・マルチマーケットプレイス対応）
+### 🧩 プラグイン（15個・マルチマーケットプレイス対応）
 
 プラグインは **Claude Code の機能を拡張するアドオン** です。
 Standard / Full プロファイルではおすすめのプラグインが自動でインストールされます。
@@ -574,6 +574,34 @@ Standard / Full プロファイルではおすすめのプラグインが自動�
 | **gopls-lsp** | Go 言語サーバー連携 | Full |
 | **pyright-lsp** | Python 言語サーバー連携 | Full |
 | **rust-analyzer-lsp** | Rust 言語サーバー連携 | Full |
+| **claude-security** 🆕 | マルチエージェントによる深掘り脆弱性スキャンとパッチ提案（`/claude-security` で手動起動） | Full |
+
+#### セキュリティ機能の使い分け
+
+このキットのセキュリティ関連は 4 層構成です。役割が違うので、どれか 1 つに絞る必要はありません。
+
+| 層 | 実体 | 動き方 | プロファイル |
+|---|---|---|---|
+| 常時ガードレール | `rules/security.md` + `config/permissions.json`（全プロファイル）+ safety-net（Standard / Full） | 常時 | 全部（safety-net は Standard / Full） |
+| 自動レビュー | **security-guidance** プラグイン | 自動（編集時・ターン終了時・コミット時） | Standard / Full |
+| 単発レビュー | Claude Code 組み込みの `/security-review` | 手動（現在のブランチの差分） | キット非管理 |
+| 深掘りスキャン | **claude-security** プラグイン | 手動（`/claude-security`） | Full |
+
+なお `agents/security-reviewer.md` と `skills/security-review/` は検出エンジンではなく、レビュー観点のチェックリストです。
+
+> **claude-security を使う前に**
+>
+> - **手動起動のみ**です。常駐せず、勝手にスキャンする hook はありません（同梱 hook はバナー表示専用の 1 本だけ）。
+> - **Claude Code `v2.1.154` 以上と有料プラン**が必要です。スキャンはエージェント編成に Dynamic workflows を使うためで、**Pro プランでは `/config` の「Dynamic workflows」行から手動で有効化**する必要があります（Dynamic workflows は有料プランで利用可）。キットは導入時に Claude CLI のバージョンやプランを確認しないため、Full プロファイルの導入自体が成功しても、要件を満たしていなければプラグインは動きません（`claude --version` で確認できます）。
+> - **`python3` 3.9.6 以上**が PATH 上に `python3` という名前で必要です（`python3 --version` で確認。プラグインは Python 標準ライブラリしか使わないため追加インストールは不要）。キットの前提ツール確認は `python3` を対象にしていないため、不足していても導入時には検出されません（macOS 標準の `/usr/bin/python3` は 3.9.6 でちょうど下限を満たします。`3.9.0`〜`3.9.5` は要件未達です）。
+> - **スキャン結果はスキャン対象リポジトリの直下**に `CLAUDE-SECURITY-<タイムスタンプ>/` として出力されます。`*` だけの `.gitignore` が同梱されるのでコミットには入りませんが、**キットの `uninstall.sh` の削除対象外**です（`~/.claude` の外にあるため）。不要になったら手動で削除してください。
+> - **実行前にトークン消費の確認が入ります。** 確認に答えられない非対話セッションでは、依頼文自体に「時間とトークンを大量に消費してよい」という明示的な受諾が含まれていない限り、何も生成せず停止します（受諾があれば非対話でも開始されえます）。CI での利用はプラグインとして保証されておらず、推奨しません。
+> - **「スキャン済み ＝ 安全」ではありません。** 候補は最大 400 件、検証パネルにかかるのは上位 45 件までという上限があり（切り捨てはレポートの Coverage 節に明記されます）、公式も結果が実行ごとに変わりうる（nondeterministic）と明記しています。SAST や依存関係スキャンの代替ではなく補完として使ってください。
+> - 起動のたびに `claude --permission-mode auto` を勧める固定文言が表示されます。キットの `disableBypassPermissionsMode` は別モード（`bypassPermissions`）を止める設定なので auto mode の利用自体は妨げませんが、権限を緩めるかどうかはご自身で判断してください。
+> - **信頼済みのリポジトリだけをスキャンしてください。** プラグインは現在の Claude Code セッションと権限の中で動作し、対象コードを別環境へ隔離しません。パッチ提案の検証では scratch clone 内で対象プロジェクトの build や test を実行する場合がありますが、scratch clone は作業ツリーを守るためのもので、ホストの資格情報・ネットワーク・外部副作用を隔離しません。未知・未審査のリポジトリは、資格情報や秘密を含まないコピーを用意し、Claude Code セッション全体を sandbox 内で実行してください。
+> - キットの deny ルールの都合で、**ファイル名が `.env` / `secrets/` / `*secret*` / `*credential*` に一致するファイル**は Read が拒否されます。Bash 側の deny は `.env` 系（`Bash(* .env*)`）のみで、`secrets/` 等を参照する Bash コマンドは設定としては拒否されません（Claude Code 本体のコマンド解析で止まる場合はありますが保証はありません）。いずれもファイル名ベースのガードレールで、機密保持の境界ではありません。スキャン用コピーから資格情報を除去し、deny だけでモデルの文脈への流入を防げるとは考えないでください。
+>
+> **既存の Full 環境では同意後に追加されます。** 対話的な update（`/update-kit`、`setup.sh --update`、ワンライナー再実行）は `claude-security` を既定「いいえ」で個別に確認し、明示的に承諾した場合だけ導入します。auto-update や `--non-interactive` は導入せず、次のセッションに pending 通知を残します。不要なら `/update-kit` で「今後追加しない」を選べます。手動の `/plugin install claude-security@claude-plugins-official` も任意の代替です。導入後は `/reload-plugins`（または Claude Code の再起動）が必要です。
 
 > **マルチマーケットプレイス**: プラグインは複数のマーケットプレイス（現在は `claude-plugins-official` と `anthropic-agent-skills`）から導入されます。
 > 同名のプラグインが複数のマーケットプレイスに存在する場合は、ウィザードで `[マーケットプレイス名]` のサフィックスが表示され、
@@ -878,6 +906,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--non-interactive` は CI/自動デプロイ向けです。既存ユーザーには対話モードを推奨します。
 > - update 実行前には `~/.claude.backup.<タイムスタンプ>` に自動バックアップが作成されます。
 > - `setup.sh --update` / `/update-kit` では `Step N/M` の進捗表示が出ます。`settings.json` のマージのような長い処理でも途中経過が分かるようになっています。
+> - **新しく追加されたプラグインの取り込み**: キットに後から追加されたプラグインのうち、お使いのプロファイルで既定のものは、対話的なアップデート時に 1 件ずつ確認します（既定は「いいえ」で、承諾したものだけ導入されます）。過去に自分で外したプラグインが勝手に戻ることはありません。自動更新（auto-update）や `--non-interactive` では**何も導入せず**、次のセッション開始時に「新しいプラグインが利用可能です」と通知するだけです。辞退した内容は記録され、同じ確認は繰り返されません。
 >
 > **ドライラン（事前プレビュー）**:
 > - `/update-kit-dry-run` または `bash setup.sh --update --dry-run` で、update が何をするか事前に確認できます。ファイルの作成・変更・削除・スキップの一覧、settings.json の diff、外部操作（plugins 等）を `[WOULD RUN]` として表示します。

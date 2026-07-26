@@ -12,6 +12,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   - **削除権限を durable な導入元記録へ限定**: 厳格なローカル provenance marker 内で導入 intent と postcondition 検証済み state を分離し、trusted な導入前一覧で exact user-scope ID の不在を確認してから install が成功し、導入前の全 ID/scope entry を保持したまま対象 user-scope ID が追加された場合だけ削除権限にする。依存 plugin 等の追加 entry は許容するが、provenance には対象 ID だけを記録する。未検証の intent は権限にせず、アンインストールは exact な `security-guidance@claude-plugins-official` が確定済みまたは最終 commit 待ちの verified state にある場合だけ削除を提示する。fresh / update の別や旧 manifest の profile・plugin 一覧にかかわらず、導入前から存在したプラグインは暗黙に取り込まず、そのローカルデータには削除を提示しない。検証後の最終 marker commit が一時的に失敗した場合は、後続 setup が再 install せず commit だけを再試行する。
   - **確認待ちをまたぐ inode 交換を拒否**: `~/.claude`、`security`、再帰削除する2つの SDK ディレクトリを物理 path と device/inode に束縛し、承諾後に再検証する。symlink 化や同じ文字列 path への別ディレクトリ差替えを検知した場合は削除せず、provenance marker と manifest を残して再試行可能にする。アンインストール終盤の marker と manifest の退役も一体化し、manifest の削除前に失敗した場合は marker を復元して両方を次回再試行用に保持する。
 
+## [0.75.0] - 2026-07-26
+
+### Added
+- **アップデートでカタログに追加されたプラグインを取り込めるようにした**: これまで `setup.sh --update`（`/update-kit`・ワンライナー再実行を含む）は `SELECTED_PLUGINS` をマニフェストからそのまま復元するだけで、`config/plugins.json` に後から追加されたプラグインが既存インストールへ一切届かなかった。この復元は「ユーザーが明示的に外した選択を上書きしない」ための意図的な仕様なので、その原則を保ったまま**プロファイル既定の新規追加分だけを提示する**機構を追加した。対話的なアップデートでは 1 件ずつ確認（既定は「いいえ」）し、承諾したものだけを導入する。非対話（auto-update フック・CI）や端末が読めない場合は**何も導入せず SessionStart の通知のみ**を残す。dry-run は外部操作を行わず、シミュレーション結果を終了時に破棄する。
+  - **記録はユーザーが実際に答えられたときだけ前進する**: `ENABLE_AUTO_UPDATE` は standard / full で既定有効であり、その auto-update フックは `setup.sh --update --non-interactive` を実行する。ここで既知カタログを前進させると提示がバックグラウンドで消費され、後から手動アップデートしても差分が空になり二度と尋ねられない。非対話では記録を進めないことで、次の対話的アップデートで必ず提示されるようにしている。
+  - **一度きりの追い付き**: 本機構より前に導入された環境には `KNOWN_PLUGINS` が存在しない。この不在を「追い付きが必要」の目印として扱い、プロファイル既定のうち未導入のものを一度だけ提示する。これが、既に配布済みだったプラグイン（`claude-security` など）が既存ユーザーへ届く唯一の経路になる。辞退した内容は `DISMISSED_PLUGINS` に記録され、同じ問いが繰り返されることはない。
+  - **比較の単位はカタログ全体ではなくプロファイル既定集合**: 既存プラグインの `profiles` に新しいプロファイルが追加された場合も、そのプロファイルにとっては新規として検出される。エントリの表記は `_compute_selected_plugins` と同じ規則で修飾するため（名前衝突時・非公式マーケットプレイス時は `name@marketplace`）、`document-skills` のような既存の修飾済みエントリが毎回「新規」と誤検出されることはない。
+  - **状態はマニフェストではなく `~/.claude-starter-kit.conf` に置く**: MDM はマニフェストを「キー完全一致集合 + バイト単位の完全一致 + SHA256」の 3 層で検証しており、キーを 1 つ追加するだけで MDM のインストール自体がハード失敗する。`save_config` は `if ! _deploy_mdm_managed` の内側でしか呼ばれないため、conf に置くことで MDM のマニフェストは完全に不変のままとなる。
+  - SessionStart の通知は既存の `.starter-kit-pending-features.json` に `plugins` キーとして相乗りする（新規ファイルを作らないので後始末の経路は増えない）。通常環境では feature recommendation を無効にしていても共有 reader だけを配備し、機能候補は生成せずプラグイン候補だけを通知できる。MDM は従来どおり明示フラグに従う。
+
+### Fixed
+- **`/update-kit` がプラグインの新規提示に対応（マージブロッカー）**: 通知が案内する `/update-kit` は `.features` しか処理しておらず、プラグインだけが残った pending では提示されないまま `pending-features.json` を削除しうる経路があった（Claude Code の Bash ツールには制御端末が無く `setup.sh` 側は対話提示できないため、この経路が唯一の対話導線になる）。`commands/update-kit.md` を `.plugins` の提示・`SELECTED_PLUGINS`／`DISMISSED_PLUGINS` 更新・`/reload-plugins` 案内に対応させ、ファイル削除は features / plugins の**双方が空のときだけ**に修正した。（レビュー指摘 F7）
+- **プロンプト途中で端末が切れても回答済みを再通知しない**: 複数プラグインの提示中に EOF が起きると、既に回答済みのものまで含めて元の一覧を通知に書き戻していた。EOF 時に未回答集合を再計算するようにした（回答は既に `SELECTED_PLUGINS`／`DISMISSED_PLUGINS` に記録済み）。（F8）
+- **名前衝突が起きても既知プラグインを再提示しない**: 公式マーケットプレイスのみだった名前が別マーケットプレイスにも現れて衝突すると、既定表記が `name@claude-plugins-official` に変わり、`KNOWN_PLUGINS` に bare 名で記録済みのものが「新規」と誤検出されていた。比較を正規化（公式は bare 名に畳む）して解消した。（F9）
+- **新規インストールの初回アップデートで既定プラグインを誤提示しない**: fresh/reconfigure で `KNOWN_PLUGINS` を初期化していなかったため、fresh ウィザードで既定プラグインを明示的に外すと、初回アップデートで「機構導入前の旧環境」と誤判定して再提示していた。fresh の確定時にその時点のプロファイル既定集合を `KNOWN_PLUGINS` として記録するようにした。（F10）
+- **feature recommendation を無効にしてもプラグイン通知を失わない**: 通常環境では共有 SessionStart reader を配備し、機能候補の生成だけを無効のまま保つことで、非対話 update が残したプラグイン候補を通知できるようにした。MDM の配備面は従来どおり明示フラグに従う。（F11）
+- **導入時にマーケットプレイスの指定を落とさない**: `claude plugin install` は特定マーケットプレイスを選ぶのに `name@marketplace` 記法しか持たない（bare 名だと先に登録されたマーケットプレイスが黙って優先される）。hint／導入済み判定／install の argv／dry-run ログのすべてで完全修飾名を保持するようにし、`_claude_plugin_list_has`（`lib/codex-setup.sh` と `uninstall.sh` の両コピー）を marketplace 対応にした。bare 名は従来どおり動作する。（F12）
+- **dry-run のプラグイン表示を実経路と一致させた**: fresh/reconfigure では導入済み一覧の取得に成功した場合だけその結果を信頼し、既に導入済みのプラグインを外部操作として表示しない。取得失敗時は部分出力を捨てて未導入扱いとし、update は従来どおり選択済み全件の更新を表示する。まだ同意されていない新規候補は pending 通知だけを示し、install の `[WOULD RUN]` には含めない。
+- **旧設定からのプラグイン承諾で既存選択を失わない**: `/update-kit` で `SELECTED_PLUGINS` 行が無い旧 conf を扱う場合は、現在の manifest に記録された選択を初期値として新しい行を作り、承諾した候補だけを追加する。既存選択を空集合で上書きしたり、承諾が再実行へ渡らなかったりしないことを update scenario で固定した。
+
+### Security
+- **SessionStart の通知はキットのカタログに載っているものしか表示しない**: `check-pending.sh` の標準出力は SessionStart フックとして Claude Code のセッションコンテキストへ投入されるが、その入力である `.starter-kit-pending-features.json` は `~/.claude` 配下のただのファイルだった。名前を検証せずに表示していたため、このファイルを書ける経路があれば任意の文字列をモデルの目の前に置ける（プロンプトインジェクションの面）。機能名は registry との一致で、プラグイン名は原子的に検証した `config/plugins.json` のエントリとの完全一致で照合し、解決しないものは黙って捨てるようにした。pending は通常ファイル・非 symlink・単一 JSON 文書・厳密 schema の場合だけ読み、件数表示も絞り込み後の集合を数える。カタログが読めない場合は fail-closed（何も表示しない）。チェックアウト位置は、セットアップ時に `KIT_REPO` として保存した実パスを優先し、既定配置は後方互換の fallback として使う。
+- **`/update-kit` も pending のエントリをカタログ照合してから conf に書く**: `commands/update-kit.md` の手順は pending のプラグイン名をそのまま `SELECTED_PLUGINS` へ書き、その値が `claude plugin install`（＝サードパーティコードの導入）へ渡る。カタログに一致しないエントリは提示せず conf にも書かないこと、末尾でユーザーに一度だけ報告することを明文化した。機能側も同様に `feature.json` が無ければスキップする。
+- **プラグイン CSV の分割でグロブ展開しないようにした**: `lib/plugin-adoption.sh` の CSV 分割はクォート無しの配列代入だったためパス名展開の対象で、`SELECTED_PLUGINS` に `*` が入っていると作業ディレクトリのファイル名へ展開され、プラグイン名ではなくファイル名同士を比較していた。`SELECTED_PLUGINS` はこの経路で唯一キットが検証しない入力（マニフェストから jq で無検証に復元され、conf のサニタイズは書き込み時のみ）なので、4 箇所すべてを `IFS=',' read -r -a` へ置き換えた。実害はコード実行ではなく集合比較の誤り（提示の取りこぼし・重複提示）。
+
+### Notes
+- 新しい設定キー `KNOWN_PLUGINS` / `DISMISSED_PLUGINS` は `_CONFIG_EMPTY_ALLOWED_KEYS` に**入れていない**。空値が書き出されないことで「conf にキーが無い＝追い付き未実施」という意味が保たれる。ここに追加すると初回の非対話アップデートで `KNOWN_PLUGINS=""` が書かれ、既存環境の一度きりの提示が静かに失われる（回帰テストで固定）。
+- MDM 配布経路は従来どおり影響を受けない。MDM 管理モードでは `SELECTED_PLUGINS` が空に強制され、`UPDATE_MODE` も false のため検出自体に到達しない。
+## [0.74.0] - 2026-07-26
+
+### Added
+- **Full プロファイルに `claude-security` プラグインを追加（プラグイン 14 個 → 15 個）**: Anthropic 公式のマルチエージェント深掘り脆弱性スキャン。`/claude-security` の手動起動でリポジトリ全体・ブランチ差分・単一コミットをスキャンし、候補ごとに 3 つの独立した反証エージェント（到達可能性 / 影響 / 緩和策）が投票して 2/3 以上で採用されたものだけをレポートする。検証の集計と confidence の上限はモデルではなくプラグイン側の Python スクリプトが計算する。確定した指摘はパッチファイルとして生成でき、適用は常に利用者の操作に委ねられる。既に Standard / Full で配布している `security-guidance`（編集・コミット時に自動発火）とは層が異なり、公式ドキュメントでも別レイヤーとして整理されているため併存させる。Standard に入れない理由は、オーケストレータが Opus・最高 effort 固定で並列エージェント数も多く実行コストが大きいこと、および「常時コンテキスト負荷の大きいものは Full 限定」という既存方針（#90）との整合。
+- **README にセキュリティ機能の使い分けと `claude-security` の運用注意を追記**: 常時ガードレール（rules/permissions/safety-net）／自動レビュー（security-guidance）／単発レビュー（Claude Code 組み込みの `/security-review`）／深掘りスキャン（claude-security）の 4 層と、それぞれの動き方・対象プロファイルを表で整理した。あわせて、手動起動のみで常駐しないこと、Claude Code `v2.1.154` 以上と有料プラン（Pro は `/config` で Dynamic workflows の有効化）が必要でキットは版もプランも検証しないこと、`python3` 3.9.6 以上が必要でキットの前提ツール確認の対象外であること、スキャン結果 `CLAUDE-SECURITY-<タイムスタンプ>/` がスキャン対象リポジトリ直下に出力され `uninstall.sh` の削除対象外（`~/.claude` の外）であること、実行前にトークン消費の確認が入り依頼文に明示的なコスト受諾がない限り非対話では何も生成せず停止すること（受諾があれば非対話でも開始されうる。CI 利用は保証外・非推奨）、候補 400 件・検証パネル 45 件という上限と結果の非決定性があるため SAST や依存関係スキャンの代替ではないこと、起動のたびに auto mode を勧める固定文言が出ること、スキャンが現在の Claude Code セッションと権限の中で実行され独立した隔離境界を持たず、パッチ検証では scratch clone 内で build/test を実行し得るため信頼済みリポジトリだけを対象にすること、未知のコードは資格情報を除いたコピーを sandbox 内で開くこと、キットの deny ルールは機密保持境界ではないことを明記した。
+
+### Notes
+- **0.74.0 単体では既存インストールへの追加は手動**: この版の時点では、既に Full で導入済みの環境は `/plugin install claude-security@claude-plugins-official` と `/reload-plugins`（または再起動）が必要だった。続く 0.75.0 では、対話 update が既定「いいえ」で個別に確認し、非対話 update は導入せず pending 通知を残す adoption 機構を追加した。`/update-kit` で「今後追加しない」を記録でき、手動 install は任意の代替として引き続き利用できる。
+- **MDM 配布経路への影響なし**: MDM 管理モードでは `SELECTED_PLUGINS` が空に強制され `install_selected_plugins()` がスキップされる。`mdm/render-expected.py` は `config/plugins.json` を読まず、期待状態・`policy.json`・`required_components` のいずれにもプラグインは現れない。カタログにエントリを追加した checkout と追加していない checkout で期待状態のレンダリング結果が完全一致することを実測で確認済み。
 ## [0.73.0] - 2026-07-19
 
 MDM（Jamf / Intune / Workspace ONE / Ivanti 等）から macOS 13.5 以上の管理端末へ Claude Code CLI とキットをゼロタッチ配布するサイレントインストール機能を追加。Xcode Command Line Tools は MDM baseline として事前配布する構成が既定。Windows MDM は本リリースの対象外。

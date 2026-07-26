@@ -213,10 +213,11 @@ _step_hooks() {
 }
 
 _step_plugins() {
-  _load_plugins
+  _load_plugins || return 1
   _init_plugins_for_profile "$PROFILE"
 
-  if [[ -n "$SELECTED_PLUGINS" ]]; then
+  if [[ -n "$SELECTED_PLUGINS" ]] \
+    || [[ "${_SELECTED_PLUGINS_EXPLICIT:-false}" == "true" ]]; then
     _apply_plugins_from_csv "$SELECTED_PLUGINS"
   fi
 
@@ -380,7 +381,8 @@ _fill_noninteractive_defaults() {
     ENABLE_WEB_CONTENT_UPDATE="false"
     ENABLE_CODEX_PLUGIN="false"
     SELECTED_PLUGINS=""
-  elif [[ -z "$SELECTED_PLUGINS" ]]; then
+  elif [[ -z "$SELECTED_PLUGINS" ]] \
+    && [[ "${_SELECTED_PLUGINS_EXPLICIT:-false}" != "true" ]]; then
     _load_plugins
     _rc=$?
     [[ "$_rc" -eq 0 ]] || return "$_rc"
@@ -388,6 +390,10 @@ _fill_noninteractive_defaults() {
     _rc=$?
     [[ "$_rc" -eq 0 ]] || return "$_rc"
     _compute_selected_plugins
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
+  else
+    _normalize_selected_plugins_for_catalog
     _rc=$?
     [[ "$_rc" -eq 0 ]] || return "$_rc"
   fi

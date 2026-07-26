@@ -113,4 +113,34 @@ else
   fail "features: missing scripts directories:$_missing_dirs"
 fi
 
+# The pending reader is shared with plugin adoption on normal installs, but an
+# MDM deployment remains an exact reflection of its feature flag.
+# shellcheck disable=SC2034 # read indirectly through _FEATURE_FLAGS
+ENABLE_FEATURE_RECOMMENDATION="false"
+KIT_MDM_MANAGED="false"
+if _feature_deploy_enabled feature-recommendation; then
+  pass "features: normal deploy keeps the shared pending reader when feature recommendations are off"
+else
+  fail "features: normal deploy dropped the plugin pending reader"
+fi
+
+# shellcheck disable=SC2034 # consumed indirectly by _feature_deploy_enabled
+KIT_MDM_MANAGED="true"
+if ! _feature_deploy_enabled feature-recommendation; then
+  pass "features: MDM keeps feature-recommendation deployment flag-driven"
+else
+  fail "features: MDM unexpectedly broadened its managed feature surface"
+fi
+_feature_gate_missing=""
+for _feature_gate_file in setup.sh lib/deploy.sh lib/update.sh; do
+  grep -q '_feature_deploy_enabled' "$PROJECT_DIR/$_feature_gate_file" \
+    || _feature_gate_missing="${_feature_gate_missing} $_feature_gate_file"
+done
+if assert_empty "$_feature_gate_missing"; then
+  pass "features: fresh, settings/manifest, and update paths share the effective deploy gate"
+else
+  fail "features: effective deploy gate missing from:${_feature_gate_missing}"
+fi
+unset _feature_gate_missing _feature_gate_file KIT_MDM_MANAGED
+
 unset is_true
