@@ -480,9 +480,7 @@ cd claude-code-starter-kit
 ./uninstall.sh
 ```
 
-Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manifest.json`) are removed automatically. User-added files are preserved.
-
-Some things the kit installed are offered rather than removed automatically, because they may outlive the kit: the Claude Code CLI, the Codex plugin, `cc-safety-net`, and local data under `~/.claude/security/` when the kit has a durable record of a verified `security-guidance` install. Regardless of fresh/update mode or legacy manifest selections, a plugin already present in the pre-install list is not adopted into this record, and its local data is not offered for cleanup. Each item is a separate prompt that defaults to keeping it. Accepting the local-data cleanup removes only known plugin-owned leaves such as its Python environments, session state, and logs; unknown files and directories in the shared location are preserved. Data moved elsewhere through environment-variable overrides is outside the cleanup scope.
+Only files deployed by the starter kit (tracked in `~/.claude/.starter-kit-manifest.json`) are removed. User-added files are preserved.
 
 ## Development
 

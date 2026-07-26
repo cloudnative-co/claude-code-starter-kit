@@ -139,8 +139,6 @@ setup_source_stage2() {
 . "$PROJECT_DIR/lib/fonts.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/codex-setup.sh"
-# shellcheck source=/dev/null
-. "$PROJECT_DIR/lib/plugin-provenance.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -1490,27 +1488,10 @@ install_selected_plugins() {
     return 0
   fi
 
-  local installed_plugins="" plugin_list_trusted=false need_install=false
-  if _read_claude_plugin_list installed_plugins \
-    && _plugin_provenance_list_exact_entries \
-      "$installed_plugins" >/dev/null; then
-    plugin_list_trusted=true
-  fi
-  if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  local installed_plugins="" need_install=false
+  _read_claude_plugin_list installed_plugins || true
+  if _plugin_install_plan_needs_work "$installed_plugins"; then
     need_install=true
-  elif [[ "$plugin_list_trusted" != "true" ]]; then
-    need_install=true
-  else
-    local p p_qualified
-    for p in "${_PLUGIN_INSTALL_ENTRIES[@]}"; do
-      p_qualified="$(_plugin_provenance_qualify "$p")" || continue
-      if _plugin_provenance_is_pending "$CLAUDE_DIR" "$p_qualified" \
-        || ! _plugin_provenance_list_has_exact \
-          "$installed_plugins" "$p_qualified"; then
-        need_install=true
-        break
-      fi
-    done
   fi
 
   local failed_repos=""
@@ -1529,153 +1510,40 @@ install_selected_plugins() {
       registered_repos="${registered_repos:+${registered_repos},}${mp_repo}"
     done
     info "$STR_DEPLOY_PLUGINS_INSTALLING"
-    installed_plugins=""
-    if ! _read_claude_plugin_list installed_plugins \
-      || ! _plugin_provenance_list_exact_entries \
-        "$installed_plugins" >/dev/null; then
-      warn "Could not refresh installed plugins after marketplace setup"
-      return 1
-    fi
-    plugin_list_trusted=true
   fi
 
-  local p p_name p_qualified plugin_output post_install_plugins
-  local was_absent provenance_pending provenance_verified provenance_installed
-  local plugin_setup_failed=false
+  # Install/update using the full "name@marketplace" identity so the CLI
+  # resolves the marketplace the user actually accepted. p_name is kept only to
+  # skip empty entries; bare names pass through unchanged ($p == $p_name).
+  local p p_name plugin_output
   for i in "${!_PLUGIN_INSTALL_ENTRIES[@]}"; do
     p="${_PLUGIN_INSTALL_ENTRIES[$i]}"
     mp_repo="${_PLUGIN_INSTALL_REPOS[$i]}"
+    p_name="${p%%@*}"
+    [[ -z "$p_name" ]] && continue
     if [[ ",$failed_repos," == *",$mp_repo,"* ]]; then
       continue
     fi
-    p_qualified="$(_plugin_provenance_qualify "$p")" || {
-      warn "$STR_DEPLOY_PLUGINS_FAILED $p"
-      continue
-    }
-    p_name="${p_qualified%%@*}"
-    was_absent=false
-    if [[ "$plugin_list_trusted" == "true" ]] \
-      && ! _plugin_provenance_list_has_exact \
-        "$installed_plugins" "$p_qualified"; then
-      was_absent=true
-    fi
-    provenance_pending=false
-    provenance_verified=false
-    provenance_installed=false
-    _plugin_provenance_is_pending "$CLAUDE_DIR" "$p_qualified" \
-      && provenance_pending=true
-    _plugin_provenance_is_verified "$CLAUDE_DIR" "$p_qualified" \
-      && provenance_verified=true
-    _plugin_provenance_is_installed_by_kit "$CLAUDE_DIR" "$p_qualified" \
-      && provenance_installed=true
-
-    # Only a postcondition verified in the same earlier attempt can be
-    # committed on a later run without installing again.
-    if [[ "$provenance_verified" == "true" ]]; then
-      if _plugin_provenance_record "$CLAUDE_DIR" "$p_qualified"; then
-        provenance_verified=false
-        provenance_installed=true
-        if [[ "$plugin_list_trusted" == "true" ]] \
-          && _plugin_provenance_list_has_exact \
-            "$installed_plugins" "$p_qualified"; then
-          continue
-        fi
-      else
-        warn "Could not record starter-kit plugin ownership: $p_qualified"
-        plugin_setup_failed=true
-        continue
-      fi
-    fi
-
-    # Pending intent alone does not prove installation. Preserve a plugin that
-    # appeared between attempts as pre-existing and cancel only the stale intent.
-    if [[ "$provenance_pending" == "true" ]]; then
-      if [[ "$plugin_list_trusted" != "true" ]]; then
-        warn "Could not resume starter-kit plugin install safely: $p_qualified"
-        plugin_setup_failed=true
-        continue
-      fi
-      if _plugin_provenance_list_has_exact \
-          "$installed_plugins" "$p_qualified"; then
-        if _plugin_provenance_cancel_pending \
-            "$CLAUDE_DIR" "$p_qualified"; then
-          provenance_pending=false
-        else
-          warn "Could not cancel stale starter-kit plugin intent: $p_qualified"
-          plugin_setup_failed=true
-          continue
-        fi
-      fi
-    fi
-
-    # Record intent only after an exact, trusted user-scope list proves absence.
-    if [[ "$was_absent" == "true" \
-      && "$provenance_pending" != "true" \
-      && "$provenance_installed" != "true" ]]; then
-      if _plugin_provenance_prepare "$CLAUDE_DIR" "$p_qualified"; then
-        provenance_pending=true
-      else
-        warn "Could not prepare starter-kit plugin ownership: $p_qualified"
-        plugin_setup_failed=true
-        continue
-      fi
-    fi
-
-    if [[ "${UPDATE_MODE:-false}" != "true" \
-      && "$provenance_pending" != "true" \
-      && "$plugin_list_trusted" == "true" ]] \
-      && _plugin_provenance_list_has_exact \
-        "$installed_plugins" "$p_qualified"; then
-      ok "$STR_DEPLOY_PLUGINS_ALREADY $p"
-      continue
-    fi
-
-    plugin_output=""
-    if _run_capture plugin_output \
-        claude plugin install "$p" --scope user; then
-      post_install_plugins=""
-      if ! _read_claude_plugin_list post_install_plugins; then
-        warn "Could not verify installed plugin exactly: $p_qualified"
-        plugin_setup_failed=true
-        continue
-      fi
-      if [[ "$plugin_list_trusted" != "true" ]] \
-        || ! _plugin_provenance_install_postcondition \
-          "$installed_plugins" "$post_install_plugins" "$p_qualified"; then
-        warn "Could not verify installed plugin exactly: $p_qualified"
-        plugin_setup_failed=true
-        continue
-      fi
-      installed_plugins="$post_install_plugins"
-      plugin_list_trusted=true
-      if [[ "$provenance_pending" == "true" ]] \
-        && ! _plugin_provenance_verify "$CLAUDE_DIR" "$p_qualified"; then
-          warn "Could not persist verified plugin install: $p_qualified"
-          plugin_setup_failed=true
-          continue
-      fi
-      if [[ "$provenance_pending" == "true" ]]; then
-        provenance_pending=false
-        provenance_verified=true
-      fi
-      if [[ "$provenance_verified" == "true" ]] \
-        && ! _plugin_provenance_record "$CLAUDE_DIR" "$p_qualified"; then
-          warn "Could not record starter-kit plugin ownership: $p_qualified"
-          plugin_setup_failed=true
-          continue
-      fi
-      if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+    if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+      plugin_output=""
+      if _run_capture plugin_output claude plugin install "$p" --scope user; then
         ok "${STR_DEPLOY_PLUGINS_UPDATED:-Updated} $p"
       else
-        ok "$STR_DEPLOY_PLUGINS_INSTALLED $p"
+        warn "$STR_DEPLOY_PLUGINS_FAILED $p"
+        [[ -n "$plugin_output" ]] && info "  $plugin_output"
       fi
+    elif _selected_plugin_list_has "$installed_plugins" "$p"; then
+      ok "$STR_DEPLOY_PLUGINS_ALREADY $p"
     else
-      warn "$STR_DEPLOY_PLUGINS_FAILED $p"
-      [[ -n "$plugin_output" ]] && info "  $plugin_output"
-      plugin_setup_failed=true
+      plugin_output=""
+      if _run_capture plugin_output claude plugin install "$p" --scope user; then
+        ok "$STR_DEPLOY_PLUGINS_INSTALLED $p"
+      else
+        warn "$STR_DEPLOY_PLUGINS_FAILED $p"
+        [[ -n "$plugin_output" ]] && info "  $plugin_output"
+      fi
     fi
   done
-  [[ "$plugin_setup_failed" != "true" ]]
 }
 
 print_final_message() {
