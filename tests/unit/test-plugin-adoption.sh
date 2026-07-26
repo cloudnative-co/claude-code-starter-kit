@@ -474,6 +474,19 @@ else
   fail "plugin-adoption: pending writer replaced or read a special file (got '$_pa_out')"
 fi
 
+# Persisted selections are an install allowlist, not an escape hatch around the
+# catalog. Keep entries that still exist and drop unknown legacy values before
+# anything reaches the external plugin installer.
+_pa_out="$(_pa_run '
+  SELECTED_PLUGINS="alpha,legacy-only"
+  _normalize_selected_plugins_for_catalog
+  printf "%s" "$SELECTED_PLUGINS"')"
+if [[ "$_pa_out" == "alpha" ]]; then
+  pass "plugin-adoption: catalog normalization keeps known entries and drops unknown ones"
+else
+  fail "plugin-adoption: catalog normalization did not enforce the allowlist (got '$_pa_out')"
+fi
+
 # ── a legacy bare-official entry survives the name starting to collide (F9) ──
 #
 # This test swaps in a collision catalog, so it must be LAST — later assertions
