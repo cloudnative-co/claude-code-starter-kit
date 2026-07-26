@@ -124,14 +124,13 @@ else
   fail "features: normal deploy dropped the plugin pending reader"
 fi
 
+# shellcheck disable=SC2034 # consumed indirectly by _feature_deploy_enabled
 KIT_MDM_MANAGED="true"
 if ! _feature_deploy_enabled feature-recommendation; then
   pass "features: MDM keeps feature-recommendation deployment flag-driven"
 else
   fail "features: MDM unexpectedly broadened its managed feature surface"
 fi
-KIT_MDM_MANAGED="false"
-
 _feature_gate_missing=""
 for _feature_gate_file in setup.sh lib/deploy.sh lib/update.sh; do
   grep -q '_feature_deploy_enabled' "$PROJECT_DIR/$_feature_gate_file" \

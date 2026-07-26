@@ -232,9 +232,9 @@ For each entry in the `plugins` array (one at a time). Entries are either a bare
 
 #### Step 6: Apply plugin choices
 
-Read `~/.claude-starter-kit.conf` with the Read tool, then use the Edit tool. **Preserve the exact `name@marketplace` spelling** in every CSV — dropping the suffix installs from the wrong marketplace and makes the offer reappear on the next update. **Do not touch `KNOWN_PLUGINS`**: the re-run in Step 8 advances it correctly, and hand-editing it can silently cancel a still-pending offer.
+Read `~/.claude-starter-kit.conf` with the Read tool, then use the Edit tool. If the file does not exist, create it and set mode `600`; never source or evaluate it. **Preserve the exact `name@marketplace` spelling** in every CSV — dropping the suffix installs from the wrong marketplace and makes the offer reappear on the next update. **Do not touch `KNOWN_PLUGINS`**: the re-run in Step 8 advances it correctly, and hand-editing it can silently cancel a still-pending offer.
 
-**追加する (choice 1)**: Find the `SELECTED_PLUGINS="..."` line. If the entry is already in the CSV, skip; otherwise append it with a comma separator (e.g., `""` → `"claude-security"`, `"a,b"` → `"a,b,claude-security"`). Replace the line.
+**追加する (choice 1)**: Find the `SELECTED_PLUGINS="..."` line. If the entry is already in the CSV, skip; otherwise append it with a comma separator (e.g., `""` → `"claude-security"`, `"a,b"` → `"a,b,claude-security"`). Replace the line. **If the `SELECTED_PLUGINS` line is absent**, initialize its CSV from the current `~/.claude/.starter-kit-manifest.json` `.plugins` string, then append the accepted entry and add the line to the conf. Validate that the manifest is an ordinary non-symlink JSON file and `.plugins` is a string; if it cannot supply the existing selection, stop and report the error rather than replacing it with an empty CSV. This preserves plugins selected before the conf key existed.
 
 **今はいい (choice 2)**: Do nothing. The plugin stays in the pending list for next session.
 

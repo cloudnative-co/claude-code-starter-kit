@@ -293,10 +293,41 @@ test_update_adopts_new_catalog_plugin() {
     f13_ok=yes
   fi
 
-  if [[ "$f10_ok" == "yes" ]] && [[ "$f13_ok" == "yes" ]]; then
+  # 4. Simulate /update-kit accepting the newcomer on an older conf that has
+  #    no SELECTED_PLUGINS line. The command contract initializes that line
+  #    from the current manifest before appending, so earlier choices survive.
+  local manifest="$CLAUDE_DIR/.starter-kit-manifest.json"
+  local manifest_selected accepted adopted
+  manifest_selected="$(jq -er '.plugins | select(type == "string")' "$manifest")"
+  accepted="$manifest_selected"
+  if [[ ",$accepted," != *",$victim,"* ]]; then
+    accepted="${accepted:+${accepted},}${victim}"
+  fi
+  tmpconf="$(mktemp "${conf}.XXXXXX")"
+  grep -v '^SELECTED_PLUGINS=' "$conf" > "$tmpconf" 2>/dev/null || true
+  printf 'SELECTED_PLUGINS="%s"\n' "$accepted" >> "$tmpconf"
+  chmod 600 "$tmpconf"
+  mv "$tmpconf" "$conf"
+
+  run_setup_update --profile=full >/dev/null 2>&1
+  adopted="$(jq -r '.plugins // ""' "$manifest")"
+  local f14_ok=no command_contract=no
+  if [[ "$adopted" == "$accepted" ]] \
+    && { [[ ! -f "$pending" ]] \
+      || ! jq -e --arg v "$victim" '(.plugins // []) | index($v)' \
+        "$pending" >/dev/null 2>&1; }; then
+    f14_ok=yes
+  fi
+  if grep -Fq 'If the `SELECTED_PLUGINS` line is absent' \
+    "$PROJECT_DIR/commands/update-kit.md"; then
+    command_contract=yes
+  fi
+
+  if [[ "$f10_ok" == "yes" ]] && [[ "$f13_ok" == "yes" ]] \
+    && [[ "$f14_ok" == "yes" ]] && [[ "$command_contract" == "yes" ]]; then
     pass "update-adopts-new-catalog-plugin"
   else
-    fail "update-adopts-new-catalog-plugin (f10=$f10_ok f13=$f13_ok victim=$victim known=[$known])"
+    fail "update-adopts-new-catalog-plugin (f10=$f10_ok f13=$f13_ok f14=$f14_ok contract=$command_contract victim=$victim known=[$known])"
   fi
 
   teardown_test_env

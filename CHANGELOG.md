@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **feature recommendation を無効にしてもプラグイン通知を失わない**: 通常環境では共有 SessionStart reader を配備し、機能候補の生成だけを無効のまま保つことで、非対話 update が残したプラグイン候補を通知できるようにした。MDM の配備面は従来どおり明示フラグに従う。（F11）
 - **導入時にマーケットプレイスの指定を落とさない**: `claude plugin install` は特定マーケットプレイスを選ぶのに `name@marketplace` 記法しか持たない（bare 名だと先に登録されたマーケットプレイスが黙って優先される）。hint／導入済み判定／install の argv／dry-run ログのすべてで完全修飾名を保持するようにし、`_claude_plugin_list_has`（`lib/codex-setup.sh` と `uninstall.sh` の両コピー）を marketplace 対応にした。bare 名は従来どおり動作する。（F12）
 - **dry-run のプラグイン表示を実経路と一致させた**: fresh/reconfigure では導入済み一覧の取得に成功した場合だけその結果を信頼し、既に導入済みのプラグインを外部操作として表示しない。取得失敗時は部分出力を捨てて未導入扱いとし、update は従来どおり選択済み全件の更新を表示する。まだ同意されていない新規候補は pending 通知だけを示し、install の `[WOULD RUN]` には含めない。
+- **旧設定からのプラグイン承諾で既存選択を失わない**: `/update-kit` で `SELECTED_PLUGINS` 行が無い旧 conf を扱う場合は、現在の manifest に記録された選択を初期値として新しい行を作り、承諾した候補だけを追加する。既存選択を空集合で上書きしたり、承諾が再実行へ渡らなかったりしないことを update scenario で固定した。
 
 ### Security
 - **SessionStart の通知はキットのカタログに載っているものしか表示しない**: `check-pending.sh` の標準出力は SessionStart フックとして Claude Code のセッションコンテキストへ投入されるが、その入力である `.starter-kit-pending-features.json` は `~/.claude` 配下のただのファイルだった。名前を検証せずに表示していたため、このファイルを書ける経路があれば任意の文字列をモデルの目の前に置ける（プロンプトインジェクションの面）。機能名は registry との一致で、プラグイン名は原子的に検証した `config/plugins.json` のエントリとの完全一致で照合し、解決しないものは黙って捨てるようにした。pending は通常ファイル・非 symlink・単一 JSON 文書・厳密 schema の場合だけ読み、件数表示も絞り込み後の集合を数える。カタログが読めない場合は fail-closed（何も表示しない）。チェックアウト位置は、セットアップ時に `KIT_REPO` として保存した実パスを優先し、既定配置は後方互換の fallback として使う。
