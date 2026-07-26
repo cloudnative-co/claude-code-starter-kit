@@ -74,7 +74,7 @@ Missing or unsupported prerequisites are installed or upgraded automatically whe
 > - Coverage is capped at 400 candidates and the top 45 validation-panel entries, and results are nondeterministic. This complements rather than replaces SAST and dependency scanning.
 > - The startup banner recommends `--permission-mode auto`. The kit's `disableBypassPermissionsMode` controls a different mode and does not block auto mode, so any permission expansion remains your decision.
 > - Scan only trusted repositories. The plugin runs inside the current Claude Code session and permissions, without isolating the target code. Patch validation may run the project's build or tests in a scratch clone; that protects the working tree but does not isolate host credentials, network access, or external side effects. For unknown code, remove credentials from a copy and run the whole session in a sandbox.
-> - The kit's filename-based deny rules are guardrails, not a confidentiality boundary. Remove credentials from the scan copy rather than relying on deny rules to keep them out of model context.
+> - The kit denies Read for filenames matching `.env`, `secrets/`, `*secret*`, or `*credential*`, while its Bash-side deny covers only `.env` patterns; commands that reference the other paths are not guaranteed to be blocked. These filename-based rules are guardrails, not a confidentiality boundary. Remove credentials from the scan copy rather than relying on deny rules to keep them out of model context.
 > - Existing installs do not receive the plugin automatically: run `/plugin install claude-security@claude-plugins-official`, then `/reload-plugins` or restart Claude Code.
 
 ### Security layers
