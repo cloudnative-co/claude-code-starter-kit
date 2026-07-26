@@ -76,6 +76,49 @@ else
   fail "check-pending: qualified non-official plugin missing (got '$_cp_out')"
 fi
 
+# The complete pending document is schema-checked before either array is read.
+# Wrong top-level/field/element types and symlinks all produce no context.
+for _cp_invalid in \
+  '{"features":[' \
+  '[]' \
+  '{"features":"doc-size-guard"}' \
+  '{"plugins":[{"name":"claude-security"}]}' \
+  '{"features":["doc-size-guard"],"plugins":[7]}'; do
+  _cp_setup "$_cp_invalid"
+  _cp_rc=0
+  _cp_out="$(_cp_run)" || _cp_rc=$?
+  if [[ -n "$_cp_out" || "$_cp_rc" -ne 0 ]]; then
+    break
+  fi
+done
+if [[ -z "$_cp_out" && "$_cp_rc" -eq 0 ]]; then
+  pass "check-pending: invalid shared-document schema is silent and non-blocking"
+else
+  fail "check-pending: invalid pending schema returned rc=$_cp_rc/output='$_cp_out'"
+fi
+
+_cp_setup '{"plugins":["claude-security"]}'
+mv "$_cp_home/.claude/.starter-kit-pending-features.json" "$_cp_tmp/pending-target"
+ln -s "$_cp_tmp/pending-target" "$_cp_home/.claude/.starter-kit-pending-features.json"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: pending symlink is ignored"
+else
+  fail "check-pending: pending reader followed a symlink (got '$_cp_out')"
+fi
+
+_cp_setup '{"plugins":["claude-security"]}'
+rm -f "$_cp_home/.claude/.starter-kit-pending-features.json"
+mkfifo "$_cp_home/.claude/.starter-kit-pending-features.json"
+_cp_rc=0
+_cp_out="$(_cp_run)" || _cp_rc=$?
+if [[ -z "$_cp_out" && "$_cp_rc" -eq 0 ]] \
+  && [[ -p "$_cp_home/.claude/.starter-kit-pending-features.json" ]]; then
+  pass "check-pending: special pending file is silent and non-blocking"
+else
+  fail "check-pending: special pending file was read or returned rc=$_cp_rc"
+fi
+
 # ── injected entries never reach the session context ───────────────────────
 #
 # The payload below is what makes this a security gate rather than a tidiness
@@ -189,6 +232,19 @@ fi
 
 _cp_setup '{"version":1,"plugins":["claude-security"]}'
 printf '%s' '{"marketplaces":{"claude-plugins-official":"a/b"},
+  "plugins":[
+    {"name":"claude-security","marketplace":"claude-plugins-official"},
+    {"name":"rogue","marketplace":false}
+  ]}' > "$_cp_home/.claude-starter-kit/config/plugins.json"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: explicit false marketplace invalidates the plugin catalog"
+else
+  fail "check-pending: false marketplace defaulted to official (got '$_cp_out')"
+fi
+
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+printf '%s' '{"marketplaces":{"claude-plugins-official":"a/b"},
   "plugins":[{"name":"claude-security","marketplace":"claude-plugins-official"}]' \
   > "$_cp_home/.claude-starter-kit/config/plugins.json"
 _cp_out="$(_cp_run)"
@@ -291,5 +347,5 @@ fi
 
 rm -rf "$_cp_tmp"
 unset _cp_script _cp_tmp _cp_home _cp_out _cp_rc _cp_bash _cp_path
-unset _cp_feature _cp_custom_repo _cp_strict_repo
+unset _cp_feature _cp_custom_repo _cp_strict_repo _cp_invalid
 unset -f _cp_setup _cp_run

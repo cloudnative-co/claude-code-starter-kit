@@ -193,6 +193,46 @@ EOF
 }
 
 {
+  test_name="deploy: normal settings keep plugin pending SessionStart reader when feature recommendations are off"
+  if (
+    for _feat in "${_FEATURE_ORDER[@]}"; do
+      _flag="${_FEATURE_FLAGS[$_feat]}"
+      printf -v "$_flag" '%s' "false"
+    done
+    KIT_MDM_MANAGED=false
+    _build_tmp="$(mktemp -d)"
+    build_settings_file "$_build_tmp/settings.json" >/dev/null 2>&1
+    jq -e 'any(.hooks.SessionStart[]?.hooks[]?.command?;
+      contains("feature-recommendation/check-pending.sh"))' \
+      "$_build_tmp/settings.json" >/dev/null
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="deploy: MDM settings still omit disabled feature recommendation reader"
+  if (
+    for _feat in "${_FEATURE_ORDER[@]}"; do
+      _flag="${_FEATURE_FLAGS[$_feat]}"
+      printf -v "$_flag" '%s' "false"
+    done
+    KIT_MDM_MANAGED=true
+    _build_tmp="$(mktemp -d)"
+    build_settings_file "$_build_tmp/settings.json" >/dev/null 2>&1
+    ! jq -e 'any(.hooks.SessionStart[]?.hooks[]?.command?;
+      contains("feature-recommendation/check-pending.sh"))' \
+      "$_build_tmp/settings.json" >/dev/null
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
   test_name="deploy: _build_settings_safe propagates invalid bootstrap input"
   if (
     _build_tmp="$(mktemp -d)"

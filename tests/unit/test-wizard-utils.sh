@@ -122,6 +122,54 @@ else
 fi
 rm -f "$_tmp"
 
+# An explicit empty plugin selection is distinct from an unset value: profile
+# defaults must not repopulate it in non-interactive mode.
+_tmp="$(mktemp)"
+printf 'SELECTED_PLUGINS=""\nPROFILE="standard"\n' > "$_tmp"
+SELECTED_PLUGINS="preexisting"
+_SELECTED_PLUGINS_EXPLICIT="false"
+PROFILE=""
+_CLI_OVERRIDES=()
+load_config "$_tmp"
+_fill_noninteractive_defaults
+if assert_equals "" "$SELECTED_PLUGINS" \
+  && assert_equals "true" "$_SELECTED_PLUGINS_EXPLICIT"; then
+  pass "wizard: saved explicit empty plugins survive non-interactive defaults"
+else
+  fail "wizard: saved empty plugin selection was replaced by profile defaults"
+fi
+rm -f "$_tmp"
+
+# --plugins is a real CLI override, including its empty spelling, so config
+# loading later in argv order cannot replace it.
+_tmp="$(mktemp)"
+printf 'SELECTED_PLUGINS="security-guidance"\n' > "$_tmp"
+SELECTED_PLUGINS=""
+_SELECTED_PLUGINS_EXPLICIT="false"
+_CLI_OVERRIDES=()
+parse_cli_args --plugins= --config="$_tmp"
+if assert_equals "" "$SELECTED_PLUGINS" \
+  && [[ " ${_CLI_OVERRIDES[*]} " == *" SELECTED_PLUGINS "* ]]; then
+  pass "wizard: empty --plugins overrides a later config file"
+else
+  fail "wizard: empty --plugins was not retained as a CLI override"
+fi
+rm -f "$_tmp"
+
+# Reject control characters before the newline-delimited override transport.
+SELECTED_PLUGINS="security-guidance"
+_SELECTED_PLUGINS_EXPLICIT="false"
+_CLI_OVERRIDES=()
+parse_cli_args --plugins=$'security-guidance\nPATH=bad'
+if assert_equals "" "$SELECTED_PLUGINS" \
+  && assert_equals "true" "$_SELECTED_PLUGINS_EXPLICIT"; then
+  pass "wizard: invalid --plugins input fails closed before override capture"
+else
+  fail "wizard: invalid --plugins input reached override transport"
+fi
+_CLI_OVERRIDES=()
+_SELECTED_PLUGINS_EXPLICIT="false"
+
 # Test: ignores non-allowlisted keys
 _tmp="$(mktemp)"
 printf 'EVIL_KEY="malicious"\nLANGUAGE="ja"\n' > "$_tmp"
@@ -459,6 +507,50 @@ if [[ "$_CONFIG_ALLOWED_KEYS" == LANGUAGE\ * ]] \
 else
   fail "wizard: generated config key lists lost expected order endpoints"
 fi
+
+SELECTED_PLUGINS="old-selection"
+KNOWN_PLUGINS="old-known"
+DISMISSED_PLUGINS="old-dismissed"
+_SELECTED_PLUGINS_EXPLICIT="true"
+_CLI_OVERRIDES=()
+_reset_user_choices
+if assert_empty "$SELECTED_PLUGINS" \
+  && assert_empty "$KNOWN_PLUGINS" \
+  && assert_empty "$DISMISSED_PLUGINS" \
+  && assert_equals "false" "$_SELECTED_PLUGINS_EXPLICIT"; then
+  pass "wizard: fresh reconfiguration resets all plugin adoption state"
+else
+  fail "wizard: fresh reconfiguration retained stale plugin state"
+fi
+
+# A CLI selection remains authoritative even when the saved-config prompt
+# chooses a fresh wizard pass; adoption history is still reset.
+_CLI_OVERRIDES=()
+parse_cli_args --plugins=
+KNOWN_PLUGINS="old-known"
+DISMISSED_PLUGINS="old-dismissed"
+_reset_user_choices
+if assert_empty "$SELECTED_PLUGINS" \
+  && assert_empty "$KNOWN_PLUGINS" \
+  && assert_empty "$DISMISSED_PLUGINS" \
+  && assert_equals "true" "$_SELECTED_PLUGINS_EXPLICIT"; then
+  pass "wizard: fresh reset preserves an explicit empty CLI selection only"
+else
+  fail "wizard: fresh reset lost the empty CLI override or retained history"
+fi
+_CLI_OVERRIDES=()
+_SELECTED_PLUGINS_EXPLICIT="false"
+
+_kit_repo_conf_dir="$(mktemp -d)"
+KIT_REPO="/stale/checkout"
+save_config "$_kit_repo_conf_dir/config"
+if grep -Fqx "KIT_REPO=\"$PROJECT_DIR\"" "$_kit_repo_conf_dir/config"; then
+  pass "wizard: save_config persists the actual checkout as KIT_REPO"
+else
+  fail "wizard: save_config retained stale KIT_REPO instead of PROJECT_DIR"
+fi
+rm -rf "$_kit_repo_conf_dir"
+unset _kit_repo_conf_dir
 
 _tmp_cfg="$(mktemp)"
 printf 'ENABLE_PRETTIER_HOOKS="true"\n' > "$_tmp_cfg"

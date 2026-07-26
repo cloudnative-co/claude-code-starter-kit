@@ -9,7 +9,7 @@
 #
 # Requires: ENABLE_* globals. is_true is provided later by lib/deploy.sh.
 # Sets globals: _FEATURE_FLAGS[], _FEATURE_HAS_SCRIPTS[], _FEATURE_ORDER[]
-# Exports: (associative arrays only, no functions)
+# Exports: _feature_deploy_enabled plus the registries below
 # Dry-run: transparent (data-only, no side effects)
 set -euo pipefail
 
@@ -65,6 +65,27 @@ declare -g -a _FEATURE_ORDER=(
 # kept as a separate registry for script-only special cases).
 # ---------------------------------------------------------------------------
 declare -g -a _FEATURE_SCRIPT_ORDER=("${_FEATURE_ORDER[@]}")
+
+# Whether a feature's runtime fragment/script belongs in the deployed state.
+# Plugin adoption shares the feature-recommendation SessionStart reader, so a
+# normal install always carries that small reader even when generation of
+# feature recommendations is disabled. MDM remains an exact policy deployment
+# and therefore follows ENABLE_FEATURE_RECOMMENDATION as before.
+_feature_deploy_enabled() { # <feature-name>
+  local feature="$1" flag="${_FEATURE_FLAGS[$1]:-}" value
+  [[ -n "$flag" ]] || return 1
+  if [[ "$feature" == "feature-recommendation" ]]; then
+    case "${KIT_MDM_MANAGED:-false}" in
+      1|[tT][rR][uU][eE]|[yY][eE][sS]|[yY]|[oO][nN]) ;;
+      *) return 0 ;;
+    esac
+  fi
+  value="${!flag:-false}"
+  case "$value" in
+    1|[tT][rR][uU][eE]|[yY][eE][sS]|[yY]|[oO][nN]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # ---------------------------------------------------------------------------
 # Special-case features (not in _FEATURE_ORDER, handled individually):

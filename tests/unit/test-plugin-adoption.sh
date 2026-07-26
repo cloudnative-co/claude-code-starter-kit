@@ -29,6 +29,8 @@ _pa_run() { # <shell snippet> -> prints snippet output
     # shellcheck source=/dev/null
     source "'"$PROJECT_DIR"'/wizard/registry.sh" 2>/dev/null || true
     # shellcheck source=/dev/null
+    source "'"$PROJECT_DIR"'/lib/features.sh"
+    # shellcheck source=/dev/null
     source "'"$PROJECT_DIR"'/lib/plugin-adoption.sh"
     PLUGIN_NAMES=(); PLUGIN_PROFILES=(); PLUGIN_SELECTED=(); PLUGIN_MARKETPLACES=()
     SELECTED_PLUGINS=""; KNOWN_PLUGINS=""; DISMISSED_PLUGINS=""; PROFILE="standard"
@@ -36,10 +38,23 @@ _pa_run() { # <shell snippet> -> prints snippet output
   ' 2>&1
 }
 
+_pa_registry_state() {
+  _pa_run '
+    PLUGIN_NAMES=(stale)
+    PLUGIN_PROFILES=(stale)
+    PLUGIN_SELECTED=(true)
+    PLUGIN_MARKETPLACES=(stale)
+    rc=0
+    _load_plugins || rc=$?
+    printf "rc=%s names=%s profiles=%s selected=%s marketplaces=%s" "$rc" \
+      "${#PLUGIN_NAMES[@]}" "${#PLUGIN_PROFILES[@]}" \
+      "${#PLUGIN_SELECTED[@]}" "${#PLUGIN_MARKETPLACES[@]}"'
+}
+
 _pa_catalog='{"marketplaces":{"claude-plugins-official":"a/b","other-mp":"c/d"},"plugins":[
-  {"name":"alpha","marketplace":"claude-plugins-official","profiles":["standard","full"]},
-  {"name":"beta","marketplace":"claude-plugins-official","profiles":["full"]},
-  {"name":"gamma","marketplace":"other-mp","profiles":["standard","full"]}
+  {"name":"alpha","marketplace":"claude-plugins-official","description":"alpha","profiles":["standard","full"]},
+  {"name":"beta","marketplace":"claude-plugins-official","description":"beta","profiles":["full"]},
+  {"name":"gamma","marketplace":"other-mp","description":"gamma","profiles":["standard","full"]}
 ]}'
 _pa_load "$_pa_catalog"
 
@@ -108,6 +123,26 @@ if [[ "$_pa_out" == "beta" ]]; then
   pass "plugin-adoption: a plugin newly added to the profile is detected"
 else
   fail "plugin-adoption: beta should be detected after joining the profile (got '$_pa_out')"
+fi
+
+# The known marker is historical state, not merely the current profile's
+# defaults. Narrowing full -> standard and widening again must not re-offer a
+# full-only plugin that was already answered.
+_pa_out="$(_pa_run '
+  SELECTED_PLUGINS="alpha,beta,gamma@other-mp"
+  KNOWN_PLUGINS="alpha,beta,gamma@other-mp"
+  ENABLE_FEATURE_RECOMMENDATION="true"
+  _MERGE_INTERACTIVE="false"
+  mkdir -p "'"$_pa_tmp"'/home-profile-roundtrip"
+  PROFILE="standard"
+  _detect_and_offer_new_plugins "'"$_pa_tmp"'/home-profile-roundtrip" >/dev/null 2>&1
+  PROFILE="full"
+  printf "known=[%s] newcomers=[%s]" "$KNOWN_PLUGINS" \
+    "$(_compute_new_plugins "$(_profile_default_plugins full)")"')"
+if [[ "$_pa_out" == "known=[alpha,beta,gamma@other-mp] newcomers=[]" ]]; then
+  pass "plugin-adoption: KNOWN_PLUGINS is a monotonic union across profile changes"
+else
+  fail "plugin-adoption: profile narrowing must not forget prior known plugins (got '$_pa_out')"
 fi
 
 # ── the marker must not advance when nobody could answer ───────────────────
@@ -301,9 +336,9 @@ fi
 
 # ── the notification is gated on its reader being deployed (F11) ─────────────
 #
-# ENABLE_FEATURE_RECOMMENDATION gates the SessionStart reader; with it off the
-# pending file is an orphan nobody reads, so the writer skips it — but the
-# marker must still not advance, so the offer resurfaces next interactive update.
+# Feature recommendation generation can be off while plugin adoption still
+# uses the independently deployed SessionStart reader. The notification must
+# be written, while the marker still waits for an actual answer.
 _pa_out="$(_pa_run '
   _MERGE_INTERACTIVE="false"
   ENABLE_FEATURE_RECOMMENDATION="false"
@@ -312,10 +347,32 @@ _pa_out="$(_pa_run '
   _detect_and_offer_new_plugins "'"$_pa_tmp"'/home_f11" >/dev/null 2>&1
   f="skipped"; [[ -f "'"$_pa_tmp"'/home_f11/.starter-kit-pending-features.json" ]] && f="written"
   printf "file=%s known=[%s]" "$f" "$KNOWN_PLUGINS"')"
-if [[ "$_pa_out" == "file=skipped known=[]" ]]; then
-  pass "plugin-adoption: a disabled recommendation reader skips the orphan notification but keeps the offer"
+if [[ "$_pa_out" == "file=written known=[]" ]]; then
+  pass "plugin-adoption: plugin notification survives feature recommendation being off"
 else
-  fail "plugin-adoption: FR=false must skip the pending write and not advance the marker (got '$_pa_out')"
+  fail "plugin-adoption: FR=false must write plugin pending without advancing the marker (got '$_pa_out')"
+fi
+
+# The plugin writer replaces only its own stale payload, preserving features,
+# and still leaves the marker untouched until the user answers.
+_pa_out="$(_pa_run '
+  _MERGE_INTERACTIVE="false"
+  ENABLE_FEATURE_RECOMMENDATION="false"
+  SELECTED_PLUGINS="alpha"
+  KNOWN_PLUGINS="alpha"
+  mkdir -p "'"$_pa_tmp"'/home_f11_stale"
+  printf "%s\n" '\''{"version":1,"features":["keep-me"],"plugins":["stale"]}'\'' \
+    > "'"$_pa_tmp"'/home_f11_stale/.starter-kit-pending-features.json"
+  _detect_and_offer_new_plugins "'"$_pa_tmp"'/home_f11_stale" >/dev/null 2>&1
+  printf "known=[%s] features=[%s] plugins=[%s]" "$KNOWN_PLUGINS" \
+    "$(jq -r "(.features // []) | join(\",\")" "'"$_pa_tmp"'/home_f11_stale/.starter-kit-pending-features.json")" \
+    "$(jq -r "has(\"plugins\")" "'"$_pa_tmp"'/home_f11_stale/.starter-kit-pending-features.json")"')"
+if [[ "$_pa_out" == "known=[alpha] features=[keep-me] plugins=[true]" ]] \
+  && [[ "$(jq -r '(.plugins // []) | join(",")' \
+    "$_pa_tmp/home_f11_stale/.starter-kit-pending-features.json")" == "gamma@other-mp" ]]; then
+  pass "plugin-adoption: plugin pending replacement preserves feature payload and marker"
+else
+  fail "plugin-adoption: plugin pending replacement was not scoped (got '$_pa_out')"
 fi
 
 # ...and with the reader enabled the notification is written as before.
@@ -332,6 +389,69 @@ else
   fail "plugin-adoption: FR=true must still write the pending notification (got '$_pa_out')"
 fi
 
+# A valid shared sibling survives a plugin update, but malformed content is
+# never merged back into a model-visible notification or overwritten. Special
+# files are likewise left untouched.
+_pa_out="$(_pa_run '
+  mkdir -p "'"$_pa_tmp"'/home_pending_schema"
+  printf "%s\n" '\''{"features":["keep"],"plugins":[7]}'\'' \
+    > "'"$_pa_tmp"'/home_pending_schema/.starter-kit-pending-features.json"
+  before="$(cksum "'"$_pa_tmp"'/home_pending_schema/.starter-kit-pending-features.json")"
+  rc=0
+  _write_pending_plugins "'"$_pa_tmp"'/home_pending_schema" "alpha" || rc=$?
+  after="$(cksum "'"$_pa_tmp"'/home_pending_schema/.starter-kit-pending-features.json")"
+  printf "rc=%s same=%s" "$rc" "$([[ "$before" == "$after" ]] && printf yes || printf no)"')"
+if [[ "$_pa_out" == 'rc=1 same=yes' ]]; then
+  pass "plugin-adoption: malformed pending schema fails closed without modification"
+else
+  fail "plugin-adoption: malformed pending file was modified (got '$_pa_out')"
+fi
+
+_pa_out="$(_pa_run '
+  mkdir -p "'"$_pa_tmp"'/home_pending_malformed"
+  printf "%s" '\''{"features":["truncated"]'\'' \
+    > "'"$_pa_tmp"'/home_pending_malformed/.starter-kit-pending-features.json"
+  before="$(cksum "'"$_pa_tmp"'/home_pending_malformed/.starter-kit-pending-features.json")"
+  rc=0
+  _write_pending_plugins "'"$_pa_tmp"'/home_pending_malformed" "alpha" || rc=$?
+  after="$(cksum "'"$_pa_tmp"'/home_pending_malformed/.starter-kit-pending-features.json")"
+  printf "rc=%s same=%s" "$rc" "$([[ "$before" == "$after" ]] && printf yes || printf no)"')"
+if [[ "$_pa_out" == 'rc=1 same=yes' ]]; then
+  pass "plugin-adoption: malformed pending JSON fails closed without modification"
+else
+  fail "plugin-adoption: malformed pending JSON was modified (got '$_pa_out')"
+fi
+
+_pa_out="$(_pa_run '
+  mkdir -p "'"$_pa_tmp"'/home_pending_link"
+  printf "%s\n" '\''{"sentinel":"unchanged"}'\'' \
+    > "'"$_pa_tmp"'/pending-link-target"
+  ln -s "'"$_pa_tmp"'/pending-link-target" \
+    "'"$_pa_tmp"'/home_pending_link/.starter-kit-pending-features.json"
+  rc=0
+  _write_pending_plugins "'"$_pa_tmp"'/home_pending_link" "alpha" || rc=$?
+  printf "rc=%s target=%s link=%s" "$rc" \
+    "$(jq -r .sentinel "'"$_pa_tmp"'/pending-link-target")" \
+    "$([[ -L "'"$_pa_tmp"'/home_pending_link/.starter-kit-pending-features.json" ]] && printf yes || printf no)"')"
+if [[ "$_pa_out" == "rc=1 target=unchanged link=yes" ]]; then
+  pass "plugin-adoption: pending writer refuses symlinks without touching their target"
+else
+  fail "plugin-adoption: pending writer followed or replaced a symlink (got '$_pa_out')"
+fi
+
+_pa_out="$(_pa_run '
+  mkdir -p "'"$_pa_tmp"'/home_pending_fifo"
+  mkfifo "'"$_pa_tmp"'/home_pending_fifo/.starter-kit-pending-features.json"
+  rc=0
+  _write_pending_plugins "'"$_pa_tmp"'/home_pending_fifo" "alpha" || rc=$?
+  printf "rc=%s fifo=%s" "$rc" \
+    "$([[ -p "'"$_pa_tmp"'/home_pending_fifo/.starter-kit-pending-features.json" ]] && printf yes || printf no)"')"
+if [[ "$_pa_out" == "rc=1 fifo=yes" ]]; then
+  pass "plugin-adoption: pending writer refuses special files without replacement"
+else
+  fail "plugin-adoption: pending writer replaced or read a special file (got '$_pa_out')"
+fi
+
 # ── a legacy bare-official entry survives the name starting to collide (F9) ──
 #
 # This test swaps in a collision catalog, so it must be LAST — later assertions
@@ -340,8 +460,8 @@ fi
 # name@claude-plugins-official; canonicalization must still treat the stored
 # bare entry as the same plugin so it is not re-offered.
 _pa_load '{"marketplaces":{"claude-plugins-official":"a/b","other-mp":"c/d"},"plugins":[
-  {"name":"alpha","marketplace":"claude-plugins-official","profiles":["standard"]},
-  {"name":"alpha","marketplace":"other-mp","profiles":["standard"]}
+  {"name":"alpha","marketplace":"claude-plugins-official","description":"official alpha","profiles":["standard"]},
+  {"name":"alpha","marketplace":"other-mp","description":"other alpha","profiles":["standard"]}
 ]}'
 _pa_out="$(_pa_run '
   SELECTED_PLUGINS="alpha"
@@ -351,6 +471,113 @@ if [[ "$_pa_out" == "alpha@other-mp" ]]; then
   pass "plugin-adoption: a legacy bare-official entry is not re-offered once its name collides"
 else
   fail "plugin-adoption: canonicalization should offer only alpha@other-mp (got '$_pa_out')"
+fi
+
+_pa_out="$(_pa_run '
+  SELECTED_PLUGINS="alpha"
+  _normalize_selected_plugins_for_catalog
+  printf "%s" "$SELECTED_PLUGINS"')"
+if [[ "$_pa_out" == "alpha@claude-plugins-official" ]]; then
+  pass "plugin-adoption: a legacy bare official selection is persisted fully-qualified after collision"
+else
+  fail "plugin-adoption: legacy official selection was not normalized (got '$_pa_out')"
+fi
+
+# A later invalid row must invalidate the complete catalog. The registry is an
+# install allowlist, so retaining the earlier valid row would be fail-open.
+_pa_load '{"marketplaces":{"claude-plugins-official":"a/b"},"plugins":[
+  {"name":"alpha","marketplace":"claude-plugins-official","description":"alpha","profiles":["standard"]},
+  {"name":"orphan","marketplace":"missing-mp","description":"orphan","profiles":["standard"]}
+]}'
+_pa_out="$(_pa_registry_state)"
+if [[ "$_pa_out" == "rc=1 names=0 profiles=0 selected=0 marketplaces=0" ]]; then
+  pass "plugin-adoption: malformed late catalog row leaves no partial allowlist"
+else
+  fail "plugin-adoption: catalog validation leaked an earlier row (got '$_pa_out')"
+fi
+
+# Invalid mappings are rejected even when no plugin currently references them;
+# otherwise a later catalog edit could turn an already-trusted partial mapping
+# into an install source.
+_pa_load '{"marketplaces":{"claude-plugins-official":"a/b","unused":7},"plugins":[
+  {"name":"alpha","marketplace":"claude-plugins-official","description":"alpha","profiles":["standard"]}
+]}'
+_pa_out="$(_pa_registry_state)"
+if [[ "$_pa_out" == "rc=1 names=0 profiles=0 selected=0 marketplaces=0" ]]; then
+  pass "plugin-adoption: invalid unused marketplace mapping invalidates the catalog"
+else
+  fail "plugin-adoption: invalid marketplace mapping left a partial catalog (got '$_pa_out')"
+fi
+
+_pa_load '{"marketplaces":{"claude-plugins-official":"a/b"},"plugins":[
+  {"name":"alpha","marketplace":"claude-plugins-official","description":"alpha","profiles":["standard"]},
+  {"name":"late","marketplace":"claude-plugins-official","description":"late","profiles":"standard"}
+]}'
+_pa_out="$(_pa_registry_state)"
+if [[ "$_pa_out" == "rc=1 names=0 profiles=0 selected=0 marketplaces=0" ]]; then
+  pass "plugin-adoption: late plugin schema error invalidates the complete catalog"
+else
+  fail "plugin-adoption: late plugin schema error leaked earlier rows (got '$_pa_out')"
+fi
+
+_pa_load '{"marketplaces":{"claude-plugins-official":"a/b"},"plugins":[
+  {"name":"alpha","marketplace":"claude-plugins-official","description":"alpha","profiles":["standard"]},
+  {"name":"late","marketplace":false,"description":"late","profiles":["standard"]}
+]}'
+_pa_out="$(_pa_run '
+  SELECTED_PLUGINS="alpha"
+  rc=0
+  _normalize_selected_plugins_for_catalog || rc=$?
+  printf "rc=%s selected=%s arrays=%s/%s/%s/%s" "$rc" "$SELECTED_PLUGINS" \
+    "${#PLUGIN_NAMES[@]}" "${#PLUGIN_PROFILES[@]}" \
+    "${#PLUGIN_SELECTED[@]}" "${#PLUGIN_MARKETPLACES[@]}"')"
+if [[ "$_pa_out" == "rc=1 selected=alpha arrays=0/0/0/0" ]]; then
+  pass "plugin-adoption: explicit false marketplace fails atomically without rewriting selection"
+else
+  fail "plugin-adoption: false marketplace defaulted to official or changed selection (got '$_pa_out')"
+fi
+
+_pa_out="$(_pa_run '
+  PLUGIN_NAMES=(stale); PLUGIN_PROFILES=(stale)
+  PLUGIN_SELECTED=(true); PLUGIN_MARKETPLACES=(stale)
+  _project_dir() { return 1; }
+  rc=0; _load_plugins || rc=$?
+  printf "rc=%s arrays=%s/%s/%s/%s" "$rc" \
+    "${#PLUGIN_NAMES[@]}" "${#PLUGIN_PROFILES[@]}" \
+    "${#PLUGIN_SELECTED[@]}" "${#PLUGIN_MARKETPLACES[@]}"')"
+if [[ "$_pa_out" == "rc=1 arrays=0/0/0/0" ]]; then
+  pass "plugin-adoption: project resolution failure clears all plugin arrays"
+else
+  fail "plugin-adoption: loader failure retained stale arrays (got '$_pa_out')"
+fi
+
+_pa_load ''
+_pa_out="$(_pa_registry_state)"
+if [[ "$_pa_out" == "rc=1 names=0 profiles=0 selected=0 marketplaces=0" ]]; then
+  pass "plugin-adoption: empty catalog file fails closed"
+else
+  fail "plugin-adoption: empty catalog file was accepted (got '$_pa_out')"
+fi
+
+_pa_load '{"marketplaces":{"claude-plugins-official":"a/b"},"plugins":[]}'
+_pa_out="$(_pa_registry_state)"
+if [[ "$_pa_out" == "rc=0 names=0 profiles=0 selected=0 marketplaces=0" ]]; then
+  pass "plugin-adoption: valid empty plugin catalog remains a successful empty set"
+else
+  fail "plugin-adoption: valid empty plugin catalog was rejected (got '$_pa_out')"
+fi
+
+_pa_load '{"marketplaces":{"claude-plugins-official":"a/b","other-mp":"c/d"},"plugins":[
+  {"name":"opt-in","marketplace":"other-mp","description":"opt in only","profiles":[]}
+]}'
+_pa_out="$(_pa_run '
+  _load_plugins
+  printf "name=%s profiles=[%s] marketplace=%s" \
+    "${PLUGIN_NAMES[0]}" "${PLUGIN_PROFILES[0]}" "${PLUGIN_MARKETPLACES[0]}"')"
+if [[ "$_pa_out" == "name=opt-in profiles=[] marketplace=other-mp" ]]; then
+  pass "plugin-adoption: empty profiles field does not shift marketplace metadata"
+else
+  fail "plugin-adoption: empty profiles corrupted plugin metadata (got '$_pa_out')"
 fi
 
 # ── the CSV split must not glob ────────────────────────────────────────────
@@ -390,3 +617,4 @@ fi
 
 rm -rf "$_pa_tmp"
 unset _pa_tmp _pa_out _pa_catalog
+unset -f _pa_registry_state

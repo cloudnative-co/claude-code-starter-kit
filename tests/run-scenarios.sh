@@ -37,7 +37,8 @@ run_scenario() {
 # --- 1. fresh-install-clean ---
 test_fresh_install_clean() {
   setup_test_env
-  local rc=0
+  local rc=0 pending_reader
+  pending_reader="$CLAUDE_DIR/hooks/feature-recommendation/check-pending.sh"
   run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
 
   if [[ $rc -eq 0 ]] \
@@ -46,6 +47,12 @@ test_fresh_install_clean() {
     && assert_file_exists "$CLAUDE_DIR/.starter-kit-manifest.json" \
     && assert_dir_exists "$CLAUDE_DIR/.starter-kit-snapshot" \
     && assert_file_exists "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" \
+    && assert_file_contains "$CLAUDE_DIR/settings.json" "feature-recommendation/check-pending.sh" \
+    && [[ -x "$pending_reader" ]] \
+    && assert_file_exists \
+      "$CLAUDE_DIR/.starter-kit-snapshot/hooks/feature-recommendation/check-pending.sh" \
+    && jq -e --arg reader "$pending_reader" '.files | index($reader) != null' \
+      "$CLAUDE_DIR/.starter-kit-manifest.json" >/dev/null 2>&1 \
     && assert_file_contains "$CLAUDE_DIR/CLAUDE.md" "BEGIN STARTER-KIT-MANAGED" \
     && assert_json_field "$CLAUDE_DIR/.starter-kit-manifest.json" '.version' "2"; then
     pass "fresh-install-clean"

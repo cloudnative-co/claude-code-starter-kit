@@ -863,8 +863,7 @@ collect_managed_target_files() {
   for _feat_name in "${_FEATURE_SCRIPT_ORDER[@]+"${_FEATURE_SCRIPT_ORDER[@]}"}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$_feat_name]+set}" ]] || continue
     if _deploy_mdm_managed; then
-      local _feat_flag="${_FEATURE_FLAGS[$_feat_name]:-}"
-      [[ -n "$_feat_flag" ]] && is_true "${!_feat_flag:-false}" || continue
+      _feature_deploy_enabled "$_feat_name" || continue
     fi
     _add_managed_tree_targets \
       "$PROJECT_DIR/features/$_feat_name/scripts" \
@@ -2008,7 +2007,7 @@ build_settings_file() {
       error "FATAL: _FEATURE_FLAGS[$name] is empty — registry inconsistency"
       return 1
     fi
-    is_true "${!flag:-false}" || continue
+    _feature_deploy_enabled "$name" || continue
     # web-content-update's hook targets a script inside the skill dir; only emit
     # it when the skill is actually installed (avoids a dangling SessionStart hook
     # if the flag is enabled via CLI/hand-edited config without INSTALL_SKILLS).

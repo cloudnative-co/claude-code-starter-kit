@@ -20,6 +20,7 @@ PROFILE="${PROFILE:-}"
 EDITOR_CHOICE="${EDITOR_CHOICE:-}"
 COMMIT_ATTRIBUTION="${COMMIT_ATTRIBUTION:-}"
 ENABLE_NEW_INIT="${ENABLE_NEW_INIT:-}"
+KIT_REPO="${KIT_REPO:-}"
 
 INSTALL_AGENTS="${INSTALL_AGENTS:-}"
 INSTALL_RULES="${INSTALL_RULES:-}"
@@ -60,6 +61,10 @@ KNOWN_PLUGINS="${KNOWN_PLUGINS:-}"
 DISMISSED_PLUGINS="${DISMISSED_PLUGINS:-}"
 
 SELECTED_PLUGINS="${SELECTED_PLUGINS:-}"
+# Distinguish an explicit empty selection from an unset value that should use
+# profile defaults. This is runtime state only; SELECTED_PLUGINS remains the
+# persisted setting.
+_SELECTED_PLUGINS_EXPLICIT="${_SELECTED_PLUGINS_EXPLICIT:-false}"
 WIZARD_RESULT="${WIZARD_RESULT:-}"
 
 WIZARD_NONINTERACTIVE="${WIZARD_NONINTERACTIVE:-false}"
@@ -235,6 +240,9 @@ load_profile_config() {
 load_config() {
   local file="${1:-$HOME/.claude-starter-kit.conf}"
   if [[ -f "$file" ]]; then
+    if grep -Eq '^[[:space:]]*SELECTED_PLUGINS=' "$file" 2>/dev/null; then
+      _SELECTED_PLUGINS_EXPLICIT="true"
+    fi
     _safe_source_config "$file"
     local prefer="biome"
     if grep -q '^ENABLE_PRETTIER_HOOKS=' "$file" 2>/dev/null \
@@ -338,6 +346,12 @@ _sanitize_config_value() {
 save_config() {
   local file="${1:-$HOME/.claude-starter-kit.conf}"
   local file_dir tmp_file
+  if [[ "$(_bool_normalize "${KIT_MDM_MANAGED:-false}")" != "true" ]] \
+    && [[ -n "${PROJECT_DIR:-}" ]]; then
+    # Persist the checkout that actually completed setup. A stale value loaded
+    # from an older config must never redirect the SessionStart notification.
+    KIT_REPO="$PROJECT_DIR"
+  fi
   file_dir="$(dirname "$file")"
   tmp_file="$(mktemp "$file_dir/.starter-kit-conf.XXXXXX")" || return 1
   if ! {
@@ -382,6 +396,7 @@ _restore_config_from_manifest() {
   LANGUAGE="$(jq -r '.language // "en"' "$manifest")"
   EDITOR_CHOICE="$(jq -r '.editor // "none"' "$manifest")"
   SELECTED_PLUGINS="$(jq -r '.plugins // ""' "$manifest")"
+  _SELECTED_PLUGINS_EXPLICIT="true"
   manifest_commit_attribution="$(jq -r '.commit_attribution // ""' "$manifest")"
   manifest_new_init="$(jq -r '.new_init // ""' "$manifest")"
   manifest_codex_plugin="$(jq -r '.codex_plugin // ""' "$manifest")"
@@ -448,7 +463,7 @@ _capture_cli_overrides() {
   local _var _val
   for _var in "${_CLI_OVERRIDES[@]+"${_CLI_OVERRIDES[@]}"}"; do
     _val="${!_var:-}"
-    if [[ -n "$_val" ]]; then
+    if [[ -n "$_val" ]] || [[ "$_var" == "SELECTED_PLUGINS" ]]; then
       _saved+=("${_var}=${_val}")
     fi
   done
@@ -465,6 +480,9 @@ _restore_cli_overrides() {
       # 不正なキー名で printf -v が失敗し set -e 即死するのを防ぐ（R3-M）
       [[ "$_restore_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
       printf -v "$_restore_key" '%s' "$_restore_val"
+      if [[ "$_restore_key" == "SELECTED_PLUGINS" ]]; then
+        _SELECTED_PLUGINS_EXPLICIT="true"
+      fi
     fi
   done
 }
@@ -486,6 +504,7 @@ _capture_mdm_env_overrides() {
   local _var _val
   for _var in "${_CONFIG_KEYS[@]+"${_CONFIG_KEYS[@]}"}"; do
     [[ -z "$_var" ]] && continue
+    [[ "$_var" == "KIT_REPO" ]] && continue
     _val="${!_var:-}"
     [[ -z "$_val" ]] && continue
     if [[ "$_val" =~ [[:cntrl:]] ]]; then
@@ -581,6 +600,11 @@ _load_config_preserving_cli_overrides() {
 
 # Clear all wizard-prompted choices so the interactive flow asks again.
 _reset_user_choices() {
+  local _saved_cli=() _override
+  while IFS= read -r _override; do
+    [[ -n "$_override" ]] && _saved_cli+=("$_override")
+  done < <(_capture_cli_overrides)
+
   LANGUAGE=""
   PROFILE=""
   EDITOR_CHOICE=""
@@ -589,6 +613,11 @@ _reset_user_choices() {
   ENABLE_CODEX_PLUGIN=""
   ENABLE_GHOSTTY_SETUP=""
   ENABLE_FONTS_SETUP=""
+  SELECTED_PLUGINS=""
+  KNOWN_PLUGINS=""
+  DISMISSED_PLUGINS=""
+  _SELECTED_PLUGINS_EXPLICIT="false"
+  _restore_cli_overrides "${_saved_cli[@]+"${_saved_cli[@]}"}"
 }
 
 # ---------------------------------------------------------------------------
@@ -677,6 +706,9 @@ run_wizard() {
     _normalize_codex_state
     _rc=$?
     [[ "$_rc" -eq 0 ]] || return "$_rc"
+    _normalize_selected_plugins_for_catalog
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
     WIZARD_RESULT="deploy"
     return 0
   fi
@@ -688,6 +720,9 @@ run_wizard() {
   _rc=$?
   [[ "$_rc" -eq 0 ]] || return "$_rc"
   _normalize_codex_state
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
+  _normalize_selected_plugins_for_catalog
   _rc=$?
   [[ "$_rc" -eq 0 ]] || return "$_rc"
 

@@ -31,6 +31,7 @@
 #                               _plugin_has_collision, PLUGIN_* arrays)
 #           wizard/wizard.sh   (KNOWN_PLUGINS, DISMISSED_PLUGINS,
 #                               SELECTED_PLUGINS, PROFILE, _MERGE_INTERACTIVE)
+#           lib/features.sh    (_feature_deploy_enabled)
 # Exports: _validate_plugin_csv, _plugin_csv_has, _plugin_csv_add,
 #          _profile_default_plugins, _compute_new_plugins,
 #          _write_pending_plugins, _detect_and_offer_new_plugins
@@ -76,6 +77,29 @@ _plugin_csv_add() {
     printf -v "$_var" '%s' "${_cur},${_entry}"
   fi
   return 0
+}
+
+# Union two plugin CSVs without losing entries learned under another profile.
+# Official bare and fully-qualified spellings compare as the same identity, but
+# the spelling already persisted on the left is retained.
+_plugin_csv_union() {
+  local left="${1:-}" right="${2:-}" csv entry canon
+  local out=() seen="" entries=()
+  for csv in "$left" "$right"; do
+    [[ -n "$csv" ]] || continue
+    entries=()
+    IFS=',' read -r -a entries < <(printf '%s\n' "$csv")
+    for entry in "${entries[@]+"${entries[@]}"}"; do
+      [[ -n "$entry" ]] || continue
+      canon="$(_canonical_plugin_entry "$entry")"
+      _plugin_csv_has "$seen" "$canon" && continue
+      seen="${seen:+${seen},}${canon}"
+      out+=("$entry")
+    done
+  done
+  [[ "${#out[@]}" -eq 0 ]] && return 0
+  local IFS=,
+  printf '%s' "${out[*]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -218,71 +242,89 @@ _compute_new_plugins() {
 _write_pending_plugins() {
   local claude_dir="$1" plugins_csv="$2"
   local pending_file="$claude_dir/.starter-kit-pending-features.json"
+  local pending_dir base='{}' tmp_pending=""
 
   command -v jq &>/dev/null || return 0
 
-  if [[ -z "$plugins_csv" ]]; then
-    # Nothing outstanding: drop a stale plugins list but keep any features.
-    [[ -f "$pending_file" ]] || return 0
-    local tmp_clear
-    tmp_clear="$(mktemp "${pending_file}.XXXXXX")" || return 1
-    if ! jq 'del(.plugins)' "$pending_file" > "$tmp_clear" 2>/dev/null; then
-      rm -f "$tmp_clear"
-      return 0
+  if [[ -e "$pending_file" || -L "$pending_file" ]]; then
+    # Never follow symlinks or read devices/FIFOs. Malformed ordinary files are
+    # also left byte-for-byte untouched rather than silently discarding a
+    # sibling payload owned by the feature recommendation writer.
+    [[ -f "$pending_file" && ! -L "$pending_file" ]] || return 1
+    if ! base="$(jq -cse '
+      if length == 1 and (.[0]
+        | type == "object"
+          and ((has("features") | not)
+            or (.features | type == "array" and all(.[]; type == "string")))
+          and ((has("plugins") | not)
+            or (.plugins | type == "array" and all(.[]; type == "string"))))
+      then .[0]
+      else error("invalid pending document")
+      end
+    ' "$pending_file" 2>/dev/null)"; then
+      return 1
     fi
-    # A file holding neither features nor plugins is noise — remove it.
-    if [[ "$(jq -r '((.features // []) | length) + ((.plugins // []) | length)' \
-      "$tmp_clear" 2>/dev/null || printf '0')" == "0" ]]; then
-      rm -f "$tmp_clear" "$pending_file"
-      return 0
-    fi
-    chmod 600 "$tmp_clear"
-    mv "$tmp_clear" "$pending_file"
-    return 0
   fi
 
-  local plugins_json
-  plugins_json="$(printf '%s' "$plugins_csv" | tr ',' '\n' | jq -R . | jq -s .)" || return 1
+  if [[ -z "$plugins_csv" ]]; then
+    # Nothing outstanding: drop a stale plugins list but keep any features.
+    [[ -e "$pending_file" ]] || return 0
+    # A file holding neither features nor plugins is noise — remove it.
+    if [[ "$(jq -r '(.features // []) | length' <<< "$base")" == "0" ]]; then
+      rm -f -- "$pending_file"
+      return 0
+    fi
+  fi
+
+  local plugins_json='[]'
+  if [[ -n "$plugins_csv" ]]; then
+    plugins_json="$(printf '%s' "$plugins_csv" | tr ',' '\n' | jq -R . | jq -s .)" \
+      || return 1
+  fi
+  jq -e 'type == "array" and all(.[]; type == "string")' \
+    >/dev/null 2>&1 <<< "$plugins_json" || return 1
 
   local kit_version=""
   kit_version="$(git -C "$PROJECT_DIR" describe --tags --abbrev=0 2>/dev/null \
     || printf 'unknown')"
 
-  local base='{}'
-  if [[ -f "$pending_file" ]]; then
-    base="$(jq -c . "$pending_file" 2>/dev/null || printf '{}')"
+  pending_dir="${pending_file%/*}"
+  tmp_pending="$(mktemp "$pending_dir/.starter-kit-pending-features.json.tmp.XXXXXX")" \
+    || return 1
+  if ! chmod 600 "$tmp_pending"; then
+    rm -f -- "$tmp_pending"
+    return 1
   fi
 
-  local tmp_pending
-  tmp_pending="$(mktemp "${pending_file}.XXXXXX")" || return 1
-  if ! jq -n --argjson base "$base" --argjson plugins "$plugins_json" \
+  if [[ "$plugins_json" == "[]" ]]; then
+    if ! jq -n --argjson base "$base" '$base | del(.plugins)' > "$tmp_pending"; then
+      rm -f -- "$tmp_pending"
+      return 1
+    fi
+  elif ! jq -n --argjson base "$base" --argjson plugins "$plugins_json" \
     --arg kit_version "$kit_version" \
     '$base + { version: 1, kit_version: $kit_version, plugins: $plugins }' \
     > "$tmp_pending"; then
-    rm -f "$tmp_pending"
+    rm -f -- "$tmp_pending"
     return 1
   fi
-  chmod 600 "$tmp_pending"
-  mv "$tmp_pending" "$pending_file"
+
+  if ! mv -- "$tmp_pending" "$pending_file"; then
+    rm -f -- "$tmp_pending"
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
-# Write the SessionStart notification only when its reader is actually deployed.
-#
-# The reader (features/feature-recommendation/scripts/check-pending.sh and its
-# SessionStart hook) ships only when ENABLE_FEATURE_RECOMMENDATION is on, and
-# plugin adoption deliberately rides on that same reader. With it off, a pending
-# file is an orphan nobody reads, so skip the write. The marker is left where it
-# is either way, so the offer still resurfaces at the next interactive update.
-#
-# The value is normally "true"/"false" (profile conf or normalized saved conf);
-# an unset/empty value defaults to writing, matching the standard/full default.
+# Write the SessionStart notification when the shared reader belongs in the
+# effective deployment. Normal installs carry it for plugin adoption; MDM keeps
+# the exact flag-driven feature surface.
 #
 # Usage: _notify_pending_plugins <claude_dir> <plugins-csv>
 # ---------------------------------------------------------------------------
 _notify_pending_plugins() {
   local claude_dir="$1" plugins_csv="$2"
-  [[ "${ENABLE_FEATURE_RECOMMENDATION:-true}" == "true" ]] || return 0
+  _feature_deploy_enabled feature-recommendation || return 0
   _write_pending_plugins "$claude_dir" "$plugins_csv" || true
 }
 
@@ -304,10 +346,15 @@ _detect_and_offer_new_plugins() {
   defaults="$(_profile_default_plugins "${PROFILE:-standard}")" || return 1
   newcomers="$(_compute_new_plugins "$defaults")" || return 1
 
+  if ! _feature_deploy_enabled feature-recommendation; then
+    _write_pending_plugins "$claude_dir" "" || true
+    return 0
+  fi
+
   if [[ -z "$newcomers" ]]; then
     # Everything catalogued has been answered: advance the marker so a later
     # profile change is measured from here, and clear any stale notification.
-    KNOWN_PLUGINS="$defaults"
+    KNOWN_PLUGINS="$(_plugin_csv_union "${KNOWN_PLUGINS:-}" "$defaults")"
     _write_pending_plugins "$claude_dir" "" || true
     return 0
   fi
@@ -320,16 +367,10 @@ _detect_and_offer_new_plugins() {
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]] \
     || [[ ! -r "${_TTY_INPUT:-/dev/tty}" ]]; then
     _notify_pending_plugins "$claude_dir" "$newcomers"
-    if [[ "${DRY_RUN:-false}" == "true" ]]; then
-      local _dr_entry _dr_entries=()
-      IFS=',' read -r -a _dr_entries < <(printf '%s\n' "$newcomers")
-      for _dr_entry in "${_dr_entries[@]+"${_dr_entries[@]}"}"; do
-        [[ -n "$_dr_entry" ]] || continue
-        # Keep the fully qualified identity: the real install (setup.sh) resolves
-        # a specific marketplace only from a "name@marketplace" argument.
-        _dryrun_log "EXTERNAL" "Plugin (new, would prompt)" \
-          "claude plugin install ${_dr_entry}"
-      done
+    if [[ "${DRY_RUN:-false}" == "true" ]] \
+      && declare -F _dryrun_log_plugin_operations >/dev/null 2>&1; then
+      _dryrun_log_plugin_operations "$newcomers" "Plugin (new, would prompt)" \
+        || return 1
     fi
     return 0
   fi
@@ -349,7 +390,7 @@ _detect_and_offer_new_plugins() {
   [[ "$_rc" -eq 0 ]] || return "$_rc"
 
   # Every newcomer now has an answer recorded, so the marker can advance.
-  KNOWN_PLUGINS="$defaults"
+  KNOWN_PLUGINS="$(_plugin_csv_union "${KNOWN_PLUGINS:-}" "$defaults")"
   _write_pending_plugins "$claude_dir" "" || true
   return 0
 }

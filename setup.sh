@@ -284,12 +284,11 @@ maybe_install_cc_safety_net() {
 # ---------------------------------------------------------------------------
 deploy_hook_scripts() {
   local mode="${1:-simple}"
-  local name flag _rc=0
+  local name _rc=0
   for name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$name]+set}" ]] || continue
 
-    flag="${_FEATURE_FLAGS[$name]}"
-    is_true "${!flag:-false}" || continue
+    _feature_deploy_enabled "$name" || continue
 
     local src="$PROJECT_DIR/features/$name/scripts"
     [[ -d "$src" ]] || continue
@@ -652,6 +651,12 @@ else
   _rc=$?
   [[ "$_rc" -eq 0 ]] || return "$_rc"
 
+  # A fresh/full reconfiguration starts a new adoption baseline. Record the
+  # profile's current defaults as known and discard declines inherited from a
+  # prior setup, so later updates compare only against choices made for this
+  # installation.
+  # shellcheck disable=SC2034 # persisted later by save_config()
+  DISMISSED_PLUGINS=""
   # Record the profile's current default plugin set as already-known, so the
   # first update after this install does not mistake a fresh install for one
   # that predates the adoption mechanism and re-offer defaults the user
@@ -1294,16 +1299,142 @@ install_claude_cli_if_needed() {
   fi
 }
 
+# Build a catalog-validated install plan. The output arrays deliberately carry
+# both the exact install identity and its registered marketplace repository so
+# real and dry-run paths cannot drift. Any unknown plugin/marketplace is
+# skipped at this final external-execution boundary.
+_PLUGIN_INSTALL_ENTRIES=()
+_PLUGIN_INSTALL_MARKETPLACES=()
+_PLUGIN_INSTALL_REPOS=()
+
+_validated_plugin_catalog_snapshot() { # <catalog-file>
+  jq -cse '
+    if length == 1 and (.[0] as $catalog
+      | ($catalog | type) == "object"
+      and (($catalog.marketplaces | type) == "object")
+      and all($catalog.marketplaces | to_entries[];
+        (.key | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+        and ((.value | type) == "string")
+        and ((.value | length) > 0))
+      and (($catalog.plugins | type) == "array")
+      and all($catalog.plugins[];
+        (type == "object")
+        and ((.name | type) == "string")
+        and (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+        and ((.description | type) == "string")
+        and ((.profiles | type) == "array")
+        and all(.profiles[];
+          (type == "string") and test("^(minimal|standard|full)$"))
+        and ((if has("marketplace") then .marketplace
+              else "claude-plugins-official" end) as $marketplace
+          | (($marketplace | type) == "string")
+          and ($marketplace | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+          and ($catalog.marketplaces | has($marketplace)))))
+    then .[0]
+    else error("invalid plugin catalog")
+    end
+  ' "$1" 2>/dev/null
+}
+
+_build_plugin_install_plan() { # <plugins-csv>
+  local csv="${1:-}" raw name mp record repo collision resolved catalog
+  local raw_entries=() seen_entries=""
+  _PLUGIN_INSTALL_ENTRIES=()
+  _PLUGIN_INSTALL_MARKETPLACES=()
+  _PLUGIN_INSTALL_REPOS=()
+  [[ -n "$csv" ]] || return 0
+  if ! catalog="$(_validated_plugin_catalog_snapshot \
+    "$PROJECT_DIR/config/plugins.json")"; then
+    warn "${STR_DEPLOY_PLUGINS_CATALOG_INVALID:-Skipping plugin install because config/plugins.json is invalid.}"
+    return 1
+  fi
+  IFS=',' read -r -a raw_entries < <(printf '%s\n' "$csv")
+  for raw in "${raw_entries[@]+"${raw_entries[@]}"}"; do
+    [[ -n "$raw" ]] || continue
+    name="${raw%%@*}"
+    if [[ "$raw" == *"@"* ]]; then
+      mp="${raw#*@}"
+    else
+      mp="claude-plugins-official"
+    fi
+    record="$(printf '%s' "$catalog" | jq -cer --arg n "$name" --arg mp "$mp" '
+      (.marketplaces[$mp] // empty) as $repo
+      | select(($repo | type) == "string" and ($repo | length) > 0)
+      | select(any(.plugins[];
+          .name == $n and ((if has("marketplace") then .marketplace
+            else "claude-plugins-official" end) == $mp)))
+      | {repo: $repo, collision: ([.plugins[] | select(.name == $n)
+          | if has("marketplace") then .marketplace
+            else "claude-plugins-official" end] | unique | length)}
+    ' 2>/dev/null || true)"
+    if [[ -z "$record" ]]; then
+      warn "${STR_DEPLOY_PLUGINS_UNKNOWN:-Skipping plugin outside the current catalog or marketplace mapping:} $raw"
+      continue
+    fi
+    repo="$(printf '%s' "$record" | jq -r '.repo')" || return 1
+    collision="$(printf '%s' "$record" | jq -r '.collision')" || return 1
+    resolved="$raw"
+    if [[ "$raw" != *"@"* ]] && [[ "${collision:-0}" -gt 1 ]]; then
+      resolved="${name}@claude-plugins-official"
+    fi
+    [[ ",$seen_entries," == *",$resolved,"* ]] && continue
+    seen_entries="${seen_entries:+${seen_entries},}${resolved}"
+    _PLUGIN_INSTALL_ENTRIES+=("$resolved")
+    _PLUGIN_INSTALL_MARKETPLACES+=("$mp")
+    _PLUGIN_INSTALL_REPOS+=("$repo")
+  done
+}
+
+# Marketplace-strict installed check for regular catalog plugins. The shared
+# Codex helper intentionally keeps its historical bare-name semantics, so a
+# regular bare target needs this stricter official-marketplace interpretation.
+_selected_plugin_list_has() { # <plugin-list> <resolved-target>
+  local list="$1" target="$2"
+  if [[ "$target" == *"@"* ]]; then
+    _claude_plugin_list_has "$list" "$target"
+    return
+  fi
+  printf '%s\n' "$list" | awk -v name="$target" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (line == "") next
+      n = split(line, parts, /[[:space:]]+/)
+      candidate = parts[1]
+      if (candidate !~ /^[A-Za-z0-9_]/ && n >= 2) candidate = parts[2]
+      if (candidate == name || candidate == name "@claude-plugins-official") found = 1
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+_dryrun_log_plugin_operations() { # <plugins-csv> [label]
+  local csv="${1:-}" label="${2:-Plugin}" i repo entry
+  local registered_repos=""
+  _build_plugin_install_plan "$csv" || return 1
+  for i in "${!_PLUGIN_INSTALL_ENTRIES[@]}"; do
+    repo="${_PLUGIN_INSTALL_REPOS[$i]}"
+    if [[ ",$registered_repos," != *",$repo,"* ]]; then
+      _dryrun_log "EXTERNAL" "$label marketplace" \
+        "claude plugin marketplace add $repo"
+      registered_repos="${registered_repos:+${registered_repos},}${repo}"
+    fi
+    entry="${_PLUGIN_INSTALL_ENTRIES[$i]}"
+    _dryrun_log "EXTERNAL" "$label" \
+      "claude plugin install $entry --scope user"
+  done
+}
+
 install_selected_plugins() {
   [[ -n "${SELECTED_PLUGINS:-}" ]] || return 0
   printf "\n"
-  local plugins
-  IFS=',' read -r -a plugins < <(printf '%s\n' "$SELECTED_PLUGINS")
+  _build_plugin_install_plan "$SELECTED_PLUGINS" || return 1
+  [[ "${#_PLUGIN_INSTALL_ENTRIES[@]}" -gt 0 ]] || return 0
   if ! command -v claude &>/dev/null; then
     warn "$STR_DEPLOY_PLUGINS_SKIP"
     info "$STR_DEPLOY_PLUGINS_HINT"
     local p p_name
-    for p in "${plugins[@]}"; do
+    for p in "${_PLUGIN_INSTALL_ENTRIES[@]}"; do
       p_name="${p%%@*}"
       # Keep the @marketplace suffix: /install resolves a specific marketplace
       # only from a "name@marketplace" argument.
@@ -1318,32 +1449,31 @@ install_selected_plugins() {
     need_install=true
   else
     local p p_name
-    for p in "${plugins[@]}"; do
+    for p in "${_PLUGIN_INSTALL_ENTRIES[@]}"; do
       p_name="${p%%@*}"
       # Match on the full "name@marketplace" identity so a same-named plugin
       # from a different marketplace is not mistaken for this one.
-      if [[ -n "$p_name" ]] && ! _claude_plugin_list_has "$installed_plugins" "$p"; then
+      if [[ -n "$p_name" ]] && ! _selected_plugin_list_has "$installed_plugins" "$p"; then
         need_install=true
         break
       fi
     done
   fi
 
+  local failed_repos=""
   if [[ "$need_install" == "true" ]]; then
-    local registered_mps="" p p_mp mp_repo mp_output
-    for p in "${plugins[@]}"; do
-      [[ -z "$p" ]] && continue
-      [[ "$p" == *"@"* ]] && p_mp="${p#*@}" || p_mp="claude-plugins-official"
-      [[ ",$registered_mps," == *",$p_mp,"* ]] && continue
-      mp_repo="$(jq -r --arg mp "$p_mp" '.marketplaces[$mp] // empty' "$PROJECT_DIR/config/plugins.json")"
-      if [[ -n "$mp_repo" ]]; then
-        mp_output=""
-        if ! _run_capture mp_output claude plugin marketplace add "$mp_repo"; then
-          warn "${STR_DEPLOY_PLUGINS_MARKETPLACE_FAILED:-Failed to add plugin marketplace} $p_mp"
-          [[ -n "$mp_output" ]] && info "  $mp_output"
-        fi
+    local registered_repos="" i p_mp mp_repo mp_output
+    for i in "${!_PLUGIN_INSTALL_ENTRIES[@]}"; do
+      p_mp="${_PLUGIN_INSTALL_MARKETPLACES[$i]}"
+      mp_repo="${_PLUGIN_INSTALL_REPOS[$i]}"
+      [[ ",$registered_repos," == *",$mp_repo,"* ]] && continue
+      mp_output=""
+      if ! _run_capture mp_output claude plugin marketplace add "$mp_repo"; then
+        warn "${STR_DEPLOY_PLUGINS_MARKETPLACE_FAILED:-Failed to add plugin marketplace} $p_mp"
+        [[ -n "$mp_output" ]] && info "  $mp_output"
+        failed_repos="${failed_repos:+${failed_repos},}${mp_repo}"
       fi
-      registered_mps="${registered_mps:+${registered_mps},}${p_mp}"
+      registered_repos="${registered_repos:+${registered_repos},}${mp_repo}"
     done
     info "$STR_DEPLOY_PLUGINS_INSTALLING"
   fi
@@ -1352,9 +1482,14 @@ install_selected_plugins() {
   # resolves the marketplace the user actually accepted. p_name is kept only to
   # skip empty entries; bare names pass through unchanged ($p == $p_name).
   local p p_name plugin_output
-  for p in "${plugins[@]}"; do
+  for i in "${!_PLUGIN_INSTALL_ENTRIES[@]}"; do
+    p="${_PLUGIN_INSTALL_ENTRIES[$i]}"
+    mp_repo="${_PLUGIN_INSTALL_REPOS[$i]}"
     p_name="${p%%@*}"
     [[ -z "$p_name" ]] && continue
+    if [[ ",$failed_repos," == *",$mp_repo,"* ]]; then
+      continue
+    fi
     if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
       plugin_output=""
       if _run_capture plugin_output claude plugin install "$p" --scope user; then
@@ -1363,7 +1498,7 @@ install_selected_plugins() {
         warn "$STR_DEPLOY_PLUGINS_FAILED $p"
         [[ -n "$plugin_output" ]] && info "  $plugin_output"
       fi
-    elif _claude_plugin_list_has "$installed_plugins" "$p"; then
+    elif _selected_plugin_list_has "$installed_plugins" "$p"; then
       ok "$STR_DEPLOY_PLUGINS_ALREADY $p"
     else
       plugin_output=""
@@ -1469,14 +1604,7 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
   if _need_claude_cli_install; then
     _dryrun_log "EXTERNAL" "Claude CLI" "$(_claude_cli_install_command)"
   fi
-  if [[ -n "${SELECTED_PLUGINS:-}" ]]; then
-    IFS=',' read -r -a _dr_plugins < <(printf '%s\n' "$SELECTED_PLUGINS")
-    for _dr_p in "${_dr_plugins[@]}"; do
-      _dr_name="${_dr_p%%@*}"
-      # Log the full "name@marketplace" identity actually passed to install.
-      [[ -n "$_dr_name" ]] && _dryrun_log "EXTERNAL" "Plugin" "claude plugin install $_dr_p"
-    done
-  fi
+  _dryrun_log_plugin_operations "${SELECTED_PLUGINS:-}" || return 1
   if is_true "${ENABLE_CODEX_PLUGIN:-false}"; then
     _dryrun_log "EXTERNAL" "Codex Plugin" "claude plugin marketplace add openai/codex-plugin-cc"
     _dryrun_log "EXTERNAL" "Codex Plugin" "claude plugin install codex --scope user"

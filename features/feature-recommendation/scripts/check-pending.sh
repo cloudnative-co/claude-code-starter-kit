@@ -13,17 +13,30 @@ set -euo pipefail
 CLAUDE_DIR="${HOME}/.claude"
 PENDING_FILE="$CLAUDE_DIR/.starter-kit-pending-features.json"
 
-# Exit silently if no pending features
-[[ -f "$PENDING_FILE" ]] || exit 0
+# Exit silently unless this is an ordinary file owned through its pathname.
+# Do not follow a symlink or block on a device/FIFO during SessionStart.
+[[ -f "$PENDING_FILE" && ! -L "$PENDING_FILE" ]] || exit 0
 
-# Validate JSON (exit silently on parse error)
-jq empty "$PENDING_FILE" 2>/dev/null || exit 0
+# Validate the complete shared document before enumerating either payload. A
+# scalar/object array entry must not be coerced into text and injected into the
+# session context, and one malformed sibling invalidates the whole document.
+PENDING_JSON="$(jq -cse '
+  if length == 1 and (.[0]
+    | type == "object"
+      and ((has("features") | not)
+        or (.features | type == "array" and all(.[]; type == "string")))
+      and ((has("plugins") | not)
+        or (.plugins | type == "array" and all(.[]; type == "string"))))
+  then .[0]
+  else error("invalid pending document")
+  end
+' "$PENDING_FILE" 2>/dev/null)" || exit 0
 
 # Read feature names (Bash 3.2 compatible - no mapfile)
 FEATURES=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && FEATURES+=("$line")
-done < <(jq -r '.features[]? // empty' "$PENDING_FILE" 2>/dev/null)
+done < <(printf '%s' "$PENDING_JSON" | jq -r '.features[]? // empty' 2>/dev/null)
 
 # Plugins catalogued since the user was last asked. Written by a separate
 # detector, so the file may carry plugins with no features (the full profile
@@ -31,7 +44,7 @@ done < <(jq -r '.features[]? // empty' "$PENDING_FILE" 2>/dev/null)
 PLUGINS=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && PLUGINS+=("$line")
-done < <(jq -r '.plugins[]? // empty' "$PENDING_FILE" 2>/dev/null)
+done < <(printf '%s' "$PENDING_JSON" | jq -r '.plugins[]? // empty' 2>/dev/null)
 
 [[ ${#FEATURES[@]} -gt 0 || ${#PLUGINS[@]} -gt 0 ]] || exit 0
 
@@ -150,30 +163,35 @@ if [[ -n "$KIT_REPO" ]]; then
   # Validate the complete catalog before deriving any accepted spelling. In
   # particular, every plugin marketplace must be registered by the top-level
   # mapping. A parse/schema/generation failure leaves the allowlist empty.
-  if jq -e '
-    . as $root
-    | (type == "object")
-      and ((.marketplaces | type) == "object")
-      and all(.marketplaces | to_entries[];
-        (.key | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
-        and ((.value | type) == "string")
-        and ((.value | length) > 0))
-      and ((.plugins | type) == "array")
-      and all(.plugins[];
-        (type == "object")
-        and ((.name | type) == "string")
-        and (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
-        and ((.marketplace // "claude-plugins-official") as $mp
-          | (($mp | type) == "string")
-          and ($mp | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
-          and ($root.marketplaces | has($mp))))
-  ' "$_plugin_file" >/dev/null 2>&1; then
-    if _plugin_catalog="$(jq -r '
+  if _plugin_catalog_json="$(jq -cse '
+    if length == 1 and (.[0] as $root
+      | ($root | type) == "object"
+        and (($root.marketplaces | type) == "object")
+        and all($root.marketplaces | to_entries[];
+          (.key | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+          and ((.value | type) == "string")
+          and ((.value | length) > 0))
+        and (($root.plugins | type) == "array")
+        and all($root.plugins[];
+          (type == "object")
+          and ((.name | type) == "string")
+          and (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+          and ((if has("marketplace") then .marketplace
+                else "claude-plugins-official" end) as $mp
+            | (($mp | type) == "string")
+            and ($mp | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+            and ($root.marketplaces | has($mp)))))
+    then .[0]
+    else error("invalid plugin catalog")
+    end
+  ' "$_plugin_file" 2>/dev/null)"; then
+    if _plugin_catalog="$(printf '%s' "$_plugin_catalog_json" | jq -r '
       .plugins[]
-      | (.marketplace // "claude-plugins-official") as $mp
+      | (if has("marketplace") then .marketplace
+         else "claude-plugins-official" end) as $mp
       | (.name + "@" + $mp),
         (if $mp == "claude-plugins-official" then .name else empty end)
-    ' "$_plugin_file" 2>/dev/null)"; then
+    ' 2>/dev/null)"; then
       PLUGIN_CATALOG="$_plugin_catalog"
     fi
   fi

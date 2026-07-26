@@ -11,7 +11,7 @@
 # here (and initialize the matching global in wizard.sh); the derived lists
 # below are generated automatically.
 _CONFIG_KEYS=(
-  LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT
+  LANGUAGE PROFILE EDITOR_CHOICE COMMIT_ATTRIBUTION ENABLE_NEW_INIT KIT_REPO
   ""
   INSTALL_AGENTS INSTALL_RULES INSTALL_COMMANDS INSTALL_SKILLS INSTALL_MEMORY
   ""
@@ -64,32 +64,72 @@ PLUGIN_SELECTED=()
 PLUGIN_MARKETPLACES=()
 
 _load_plugins() {
-  local dir
-  dir="$(_project_dir)"
-  local file="$dir/config/plugins.json"
+  local dir rows file
   PLUGIN_NAMES=()
   PLUGIN_PROFILES=()
   PLUGIN_SELECTED=()
   PLUGIN_MARKETPLACES=()
+  dir="$(_project_dir)" || return 1
+  file="$dir/config/plugins.json"
 
   if [[ ! -f "$file" ]] || ! command -v jq &>/dev/null; then
-    return
+    return 1
+  fi
+
+  # Validate the complete catalog before exposing any entry. Reading jq
+  # directly through process substitution would hide its exit status and could
+  # leave a partial allowlist when a later catalog row is malformed.
+  if ! rows="$(jq -rs '
+    if length == 1 then .[0] else error("invalid plugin catalog document") end
+    | . as $catalog
+    | if (
+        (type == "object")
+        and ((.marketplaces | type) == "object")
+        and all(.marketplaces | to_entries[];
+          (.key | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+          and ((.value | type) == "string")
+          and ((.value | length) > 0))
+        and ((.plugins | type) == "array")
+        and all(.plugins[];
+          (type == "object")
+          and ((.name | type) == "string")
+          and (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+          and ((.description | type) == "string")
+          and ((.profiles | type) == "array")
+          and all(.profiles[];
+            (type == "string")
+            and test("^(minimal|standard|full)$"))
+          and ((if has("marketplace") then .marketplace
+                else "claude-plugins-official" end) as $marketplace
+            | (($marketplace | type) == "string")
+            and ($marketplace | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+            and ($catalog.marketplaces | has($marketplace))))
+      ) then
+        .plugins[]
+        | [
+            .name,
+            (.profiles | join(",")),
+            (if has("marketplace") then .marketplace
+             else "claude-plugins-official" end)
+          ]
+        | join("\u001f")
+      else
+        error("invalid plugin catalog")
+      end
+  ' "$file" 2>/dev/null)"; then
+    return 1
   fi
 
   local name profiles_csv marketplace
-  while IFS=$'\t' read -r name profiles_csv marketplace; do
+  # Unit separator is non-whitespace IFS, so an intentionally empty profiles
+  # array retains its empty middle field rather than shifting the marketplace.
+  while IFS=$'\x1f' read -r name profiles_csv marketplace; do
     [[ -n "$name" ]] || continue
     PLUGIN_NAMES+=("$name")
     PLUGIN_PROFILES+=("$profiles_csv")
     PLUGIN_SELECTED+=("false")
     PLUGIN_MARKETPLACES+=("${marketplace:-claude-plugins-official}")
-  done < <(
-    jq -r '.plugins[] | [
-      .name,
-      (.profiles | join(",")),
-      (.marketplace // "claude-plugins-official")
-    ] | @tsv' "$file"
-  )
+  done < <(if [[ -n "$rows" ]]; then printf '%s\n' "$rows"; fi)
 }
 
 _plugin_has_collision() {
@@ -165,6 +205,17 @@ _compute_selected_plugins() {
     local IFS=,
     SELECTED_PLUGINS="${out[*]}"
   fi
+}
+
+# Re-resolve a persisted selection against the current catalog. This upgrades
+# legacy bare official entries to name@claude-plugins-official when a later
+# catalog adds a same-named plugin in another marketplace. Unknown entries are
+# dropped rather than handed to the external plugin installer.
+_normalize_selected_plugins_for_catalog() {
+  local csv="${SELECTED_PLUGINS:-}"
+  _load_plugins || return 1
+  _apply_plugins_from_csv "$csv"
+  _compute_selected_plugins
 }
 
 HOOK_KEYS=(
@@ -245,7 +296,7 @@ _register_hooks_cli_overrides() {
 }
 
 parse_cli_args() {
-  local arg
+  local arg plugins_arg
   while [[ "$#" -gt 0 ]]; do
     arg="$1"
     case "$arg" in
@@ -286,9 +337,17 @@ parse_cli_args() {
         _register_hooks_cli_overrides
         ;;
       --plugins=*)
-        _load_plugins
-        _apply_plugins_from_csv "${arg#*=}"
-        _compute_selected_plugins
+        # Capture raw input during the Bash 3.2-compatible bootstrap. Catalog
+        # resolution needs jq and therefore runs only after prerequisites.
+        plugins_arg="${arg#*=}"
+        if [[ "$plugins_arg" =~ ^[a-zA-Z0-9,@._-]*$ ]]; then
+          SELECTED_PLUGINS="$plugins_arg"
+        else
+          # Fail closed before the newline-based override transport sees it.
+          SELECTED_PLUGINS=""
+        fi
+        _SELECTED_PLUGINS_EXPLICIT="true"
+        _CLI_OVERRIDES+=("SELECTED_PLUGINS")
         ;;
       --config=*)
         WIZARD_CONFIG_FILE="${arg#*=}"
