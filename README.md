@@ -582,7 +582,7 @@ Standard / Full プロファイルではおすすめのプラグインが自動�
 
 | 層 | 実体 | 動き方 | プロファイル |
 |---|---|---|---|
-| 常時ガードレール | `rules/security.md` + `config/permissions.json` + safety-net | 常時 | 全部 |
+| 常時ガードレール | `rules/security.md` + `config/permissions.json`（全プロファイル）+ safety-net（Standard / Full） | 常時 | 全部（safety-net は Standard / Full） |
 | 自動レビュー | **security-guidance** プラグイン | 自動（編集時・ターン終了時・コミット時） | Standard / Full |
 | 単発レビュー | Claude Code 組み込みの `/security-review` | 手動（現在のブランチの差分） | キット非管理 |
 | 深掘りスキャン | **claude-security** プラグイン | 手動（`/claude-security`） | Full |
@@ -598,7 +598,8 @@ Standard / Full プロファイルではおすすめのプラグインが自動�
 > - **実行前にトークン消費の確認が入ります。** 確認に答えられない非対話セッションでは、依頼文自体に「時間とトークンを大量に消費してよい」という明示的な受諾が含まれていない限り、何も生成せず停止します（受諾があれば非対話でも開始されえます）。CI での利用はプラグインとして保証されておらず、推奨しません。
 > - **「スキャン済み ＝ 安全」ではありません。** 候補は最大 400 件、検証パネルにかかるのは上位 45 件までという上限があり（切り捨てはレポートの Coverage 節に明記されます）、公式も結果が実行ごとに変わりうる（nondeterministic）と明記しています。SAST や依存関係スキャンの代替ではなく補完として使ってください。
 > - 起動のたびに `claude --permission-mode auto` を勧める固定文言が表示されます。キットの `disableBypassPermissionsMode` は別モード（`bypassPermissions`）を止める設定なので auto mode の利用自体は妨げませんが、権限を緩めるかどうかはご自身で判断してください。
-> - キットの deny ルールの都合で、**ファイル名が `.env` / `secrets/` / `*secret*` / `*credential*` に一致するファイル**は Read が拒否されます。Bash 側の deny は `.env` 系（`Bash(* .env*)`）のみで、`secrets/` 等を参照する Bash コマンドは設定としては拒否されません（Claude Code 本体のコマンド解析で止まる場合はありますが保証はありません）。いずれもファイル名ベースの制限で内容ベースの保護ではなく、この範囲についてはスキャンの取りこぼしが起こりえます。
+> - **信頼済みのリポジトリだけをスキャンしてください。** プラグインは現在の Claude Code セッションと権限の中で動作し、対象コードを別環境へ隔離しません。パッチ提案の検証では scratch clone 内で対象プロジェクトの build や test を実行する場合がありますが、scratch clone は作業ツリーを守るためのもので、ホストの資格情報・ネットワーク・外部副作用を隔離しません。未知・未審査のリポジトリは、資格情報や秘密を含まないコピーを用意し、Claude Code セッション全体を sandbox 内で実行してください。
+> - キットの deny ルールの都合で、**ファイル名が `.env` / `secrets/` / `*secret*` / `*credential*` に一致するファイル**は Read が拒否されます。Bash 側の deny は `.env` 系（`Bash(* .env*)`）のみで、`secrets/` 等を参照する Bash コマンドは設定としては拒否されません（Claude Code 本体のコマンド解析で止まる場合はありますが保証はありません）。いずれもファイル名ベースのガードレールで、機密保持の境界ではありません。スキャン用コピーから資格情報を除去し、deny だけでモデルの文脈への流入を防げるとは考えないでください。
 >
 > **既存の環境には自動で追加されません。** アップデート（`/update-kit` や `setup.sh --update`、ワンライナーの再実行）では、導入済みプラグインの一覧がマニフェストから復元されるため、新しく追加されたプラグインは取り込まれません。すでに Full でインストール済みの方は、Claude Code 上で `/plugin install claude-security@claude-plugins-official` を実行し、続けて `/reload-plugins` を実行してください（または Claude Code を再起動）。install しただけでは同じセッションでは有効になりません。
 
