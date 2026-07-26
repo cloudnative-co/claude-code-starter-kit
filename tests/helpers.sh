@@ -52,6 +52,38 @@ if [[ "${1:-}" == "--version" ]]; then
   printf '%s\n' "${MOCK_CLAUDE_VERSION:-2.1.89 (Claude Code)}"
   exit 0
 fi
+
+plugin_state="${HOME}/.test-claude-plugins"
+if [[ "${1:-}" == "plugin" && "${2:-}" == "list" ]]; then
+  if [[ -s "$plugin_state" ]]; then
+    printf 'Installed plugins:\n'
+    while IFS= read -r plugin; do
+      [[ -n "$plugin" ]] || continue
+      printf '%s\nScope: user\n' "$plugin"
+    done < "$plugin_state"
+  else
+    printf 'No plugins installed. Use `claude plugin install` to install a plugin.\n'
+  fi
+  exit 0
+fi
+
+if [[ "${1:-}" == "plugin" && "${2:-}" == "marketplace" && "${3:-}" == "add" ]]; then
+  exit 0
+fi
+
+if [[ "${1:-}" == "plugin" && "${2:-}" == "install" ]]; then
+  plugin="${3:-}"
+  [[ -n "$plugin" ]] || exit 1
+  case "$plugin" in
+    *@*) ;;
+    *) plugin="${plugin}@claude-plugins-official" ;;
+  esac
+  if [[ ! -f "$plugin_state" ]] || ! grep -Fxq "$plugin" "$plugin_state"; then
+    printf '%s\n' "$plugin" >> "$plugin_state"
+  fi
+  exit 0
+fi
+
 exit 0
 EOF
   chmod +x "$_TEST_TMPDIR/.local/bin/claude"
