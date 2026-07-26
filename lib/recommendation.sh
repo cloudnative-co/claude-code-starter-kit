@@ -46,6 +46,83 @@ _add_dismissed_feature() {
 }
 
 # ---------------------------------------------------------------------------
+# Replace only the feature portion of the shared pending-notification file.
+#
+# The plugin adoption flow owns the sibling "plugins" key, so feature cleanup
+# must not unlink or overwrite the whole document while plugins are pending.
+# Existing documents are accepted only when they are regular, non-symlink JSON
+# objects with well-formed recommendation arrays. Invalid or special files are
+# left byte-for-byte untouched (fail closed).
+#
+# Usage: _write_pending_features <pending-file> <features-json> <kit-version>
+#        Pass [] to remove the features key.
+# ---------------------------------------------------------------------------
+_write_pending_features() {
+  local pending_file="$1" features_json="$2" kit_version="$3"
+  local pending_dir base='{}' tmp_pending=""
+
+  # Reject an invalid value produced by the caller before touching the file.
+  jq -e 'type == "array" and all(.[]; type == "string")' \
+    >/dev/null 2>&1 <<< "$features_json" || return 1
+
+  if [[ -e "$pending_file" || -L "$pending_file" ]]; then
+    # Do not follow symlinks or read from devices/FIFOs. Besides being unsafe,
+    # either would make an invalid notification capable of destroying itself.
+    [[ -f "$pending_file" && ! -L "$pending_file" ]] || return 1
+    if ! base="$(jq -ce '
+      select(
+        type == "object"
+        and ((has("features") | not)
+          or (.features | type == "array" and all(.[]; type == "string")))
+        and ((has("plugins") | not)
+          or (.plugins | type == "array" and all(.[]; type == "string")))
+      )
+    ' "$pending_file" 2>/dev/null)"; then
+      return 1
+    fi
+  fi
+
+  # With no feature recommendations, retain the shared file only while a
+  # plugin recommendation remains. Metadata follows the surviving payload.
+  if [[ "$features_json" == "[]" ]]; then
+    [[ -e "$pending_file" ]] || return 0
+    if [[ "$(jq -r '(.plugins // []) | length' <<< "$base")" == "0" ]]; then
+      rm -f -- "$pending_file"
+      return 0
+    fi
+  fi
+
+  pending_dir="${pending_file%/*}"
+  tmp_pending="$(mktemp "$pending_dir/.starter-kit-pending-features.json.tmp.XXXXXX")" \
+    || return 1
+  if ! chmod 600 "$tmp_pending"; then
+    rm -f -- "$tmp_pending"
+    return 1
+  fi
+
+  if [[ "$features_json" == "[]" ]]; then
+    if ! jq -n --argjson base "$base" '$base | del(.features)' > "$tmp_pending"; then
+      rm -f -- "$tmp_pending"
+      return 1
+    fi
+  elif ! jq -n --argjson base "$base" --argjson features "$features_json" \
+    --arg kit_version "$kit_version" \
+    '$base
+      | if has("version") then . else .version = 1 end
+      | if has("kit_version") then . else .kit_version = $kit_version end
+      | .features = $features' \
+    > "$tmp_pending"; then
+    rm -f -- "$tmp_pending"
+    return 1
+  fi
+
+  if ! mv -- "$tmp_pending" "$pending_file"; then
+    rm -f -- "$tmp_pending"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Detect new features and write pending-features.json for SessionStart notification.
 #
 # Called from setup.sh after run_update(), outside the update function with || true
@@ -60,17 +137,15 @@ _detect_and_write_pending_features() {
 
   # Full profile: all features auto-enabled, no pending needed
   if [[ "${PROFILE:-}" == "full" ]]; then
-    rm -f "$pending_file"
+    _write_pending_features "$pending_file" '[]' "" || return 1
     return 0
   fi
 
-  # The SessionStart reader (check-pending.sh) and its hook ship only when
-  # ENABLE_FEATURE_RECOMMENDATION is on. With it off, a pending file is an orphan
-  # nobody reads, so clear any stale one and write nothing. (An unset/empty value
-  # defaults to writing, matching standard's default and keeping the isolated
-  # unit harness — which blanks all flags — exercising the write path.)
+  # The shared SessionStart reader may still be deployed for plugin adoption,
+  # but this flag controls generation of feature recommendations themselves.
+  # Clear only the feature payload; _write_pending_features preserves plugins.
   if [[ "${ENABLE_FEATURE_RECOMMENDATION:-true}" != "true" ]]; then
-    rm -f "$pending_file"
+    _write_pending_features "$pending_file" '[]' "" || return 1
     return 0
   fi
 
@@ -113,7 +188,7 @@ _detect_and_write_pending_features() {
 
   # Write or clean up pending file
   if [[ ${#pending_names[@]} -eq 0 ]]; then
-    rm -f "$pending_file"
+    _write_pending_features "$pending_file" '[]' "" || return 1
     return 0
   fi
 
@@ -125,16 +200,5 @@ _detect_and_write_pending_features() {
   local kit_version=""
   kit_version="$(git -C "$PROJECT_DIR" describe --tags --abbrev=0 2>/dev/null || printf 'unknown')"
 
-  # Atomic write: mktemp + mv (cleanup on failure)
-  local tmp_pending
-  tmp_pending="$(mktemp "${pending_file}.XXXXXX")"
-  if ! jq -n --argjson features "$features_json" \
-    --arg kit_version "$kit_version" \
-    '{ version: 1, kit_version: $kit_version, features: $features }' \
-    > "$tmp_pending"; then
-    rm -f "$tmp_pending"
-    return 1
-  fi
-  chmod 600 "$tmp_pending"
-  mv "$tmp_pending" "$pending_file"
+  _write_pending_features "$pending_file" "$features_json" "$kit_version"
 }

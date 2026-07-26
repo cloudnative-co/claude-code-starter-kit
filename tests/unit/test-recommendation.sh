@@ -214,8 +214,133 @@ trap - EXIT
 
 if [[ "$_RF_RC" -eq 0 ]] \
   && assert_equals "$_rec_trap_before" "$_rec_trap_after" \
-  && assert_file_exists "$_rec_tmp/.starter-kit-pending-features.json"; then
+  && assert_file_exists "$_rec_tmp/.starter-kit-pending-features.json" \
+  && jq -e '.version == 1 and (.kit_version | type == "string")' \
+    "$_rec_tmp/.starter-kit-pending-features.json" >/dev/null 2>&1; then
   pass "recommendation: pending feature detection preserves existing EXIT trap"
 else
   fail "recommendation: pending feature detection should not replace EXIT trap"
 fi
+
+# ══════════════════════════════════════════════════════════════════════════
+# _detect_and_write_pending_features: shared pending document
+# ══════════════════════════════════════════════════════════════════════════
+
+_rec_pending="$_rec_tmp/.starter-kit-pending-features.json"
+
+# Full clears only its own key; plugin recommendations and unrelated metadata
+# still belong to the other writer/reader and must survive.
+printf '%s' '{"version":1,"kit_version":"old","features":["stale"],"plugins":["alpha"],"meta":{"keep":true}}' \
+  > "$_rec_pending"
+PROFILE="full"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+if [[ "$_RF_RC" -eq 0 ]] \
+  && jq -e 'has("features") | not' "$_rec_pending" >/dev/null 2>&1 \
+  && jq -e '.plugins == ["alpha"] and .meta.keep == true and .kit_version == "old"' \
+    "$_rec_pending" >/dev/null 2>&1; then
+  pass "recommendation: full profile clears only features from a mixed pending file"
+else
+  fail "recommendation: full profile must preserve pending plugins and metadata"
+fi
+
+# Turning the reader off has the same ownership rule: do not consume a plugin
+# offer that can become visible again if the reader is re-enabled.
+printf '%s' '{"features":["stale"],"plugins":["alpha"],"meta":"keep"}' > "$_rec_pending"
+PROFILE="minimal"
+ENABLE_FEATURE_RECOMMENDATION="false"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+if [[ "$_RF_RC" -eq 0 ]] \
+  && jq -e 'has("features") | not' "$_rec_pending" >/dev/null 2>&1 \
+  && jq -e '.plugins == ["alpha"] and .meta == "keep"' "$_rec_pending" >/dev/null 2>&1; then
+  pass "recommendation: disabled reader clears only features from a mixed pending file"
+else
+  fail "recommendation: disabled reader must preserve pending plugins"
+fi
+
+# The ordinary no-new-feature path must also retain plugins. Set every feature
+# flag non-empty so none qualifies as newly introduced.
+ENABLE_FEATURE_RECOMMENDATION="true"
+PROFILE="minimal"
+for _rec_feat in "${_FEATURE_ORDER[@]}"; do
+  _rec_flag="${_FEATURE_FLAGS[$_rec_feat]}"
+  printf -v "$_rec_flag" '%s' "true"
+done
+printf '%s' '{"features":["stale"],"plugins":["alpha"],"meta":7}' > "$_rec_pending"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+if [[ "$_RF_RC" -eq 0 ]] \
+  && jq -e 'has("features") | not' "$_rec_pending" >/dev/null 2>&1 \
+  && jq -e '.plugins == ["alpha"] and .meta == 7' "$_rec_pending" >/dev/null 2>&1; then
+  pass "recommendation: no-new-feature cleanup preserves pending plugins"
+else
+  fail "recommendation: no-new-feature cleanup must not consume plugins"
+fi
+
+# A feature write merges into the same document, retains the plugin payload and
+# metadata, replaces stale features, and leaves a private regular file.
+for _rec_feat in "${_FEATURE_ORDER[@]}"; do
+  _rec_flag="${_FEATURE_FLAGS[$_rec_feat]}"
+  printf -v "$_rec_flag" '%s' ""
+done
+printf '%s' '{"version":2,"kit_version":"old","features":["stale"],"plugins":["alpha"],"meta":{"keep":true}}' \
+  > "$_rec_pending"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+_rec_mode="$(test_stat_mode "$_rec_pending")"
+if [[ "$_RF_RC" -eq 0 ]] \
+  && jq -e '.features | length > 0 and index("stale") == null' "$_rec_pending" >/dev/null 2>&1 \
+  && jq -e '.plugins == ["alpha"] and .meta.keep == true
+    and .version == 2 and .kit_version == "old"' "$_rec_pending" >/dev/null 2>&1 \
+  && assert_equals "600" "$_rec_mode" \
+  && [[ -z "$(find "$_rec_tmp" -name '.starter-kit-pending-features.json.tmp.*' -print)" ]]; then
+  pass "recommendation: feature write atomically preserves plugins and metadata"
+else
+  fail "recommendation: feature write must merge the shared document with mode 0600"
+fi
+
+# Without either payload, the shared notification is just stale metadata and
+# can be removed.
+printf '%s' '{"features":["stale"],"meta":"obsolete"}' > "$_rec_pending"
+PROFILE="full"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+if [[ "$_RF_RC" -eq 0 ]] && [[ ! -e "$_rec_pending" ]]; then
+  pass "recommendation: empty shared payload removes the pending file"
+else
+  fail "recommendation: a pending file with neither payload should be removed"
+fi
+
+# Malformed JSON and invalid recommendation shapes are not repaired in place:
+# preserving the original lets a later trusted path diagnose/recover it.
+printf '%s' '{not-json' > "$_rec_pending"
+cp "$_rec_pending" "$_rec_tmp/malformed.before"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+if [[ "$_RF_RC" -ne 0 ]] && cmp -s "$_rec_pending" "$_rec_tmp/malformed.before"; then
+  pass "recommendation: malformed JSON fails closed without destroying the original"
+else
+  fail "recommendation: malformed pending JSON must remain untouched"
+fi
+
+printf '%s' '{"features":[],"plugins":"not-an-array","meta":"keep"}' > "$_rec_pending"
+cp "$_rec_pending" "$_rec_tmp/invalid-shape.before"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+if [[ "$_RF_RC" -ne 0 ]] && cmp -s "$_rec_pending" "$_rec_tmp/invalid-shape.before"; then
+  pass "recommendation: invalid pending shape fails closed"
+else
+  fail "recommendation: invalid pending arrays must remain untouched"
+fi
+
+# Never follow a pending-file symlink. The link and its target both survive.
+printf '%s' '{"features":["target"],"plugins":["alpha"]}' > "$_rec_tmp/symlink-target"
+rm -f "$_rec_pending"
+ln -s "$_rec_tmp/symlink-target" "$_rec_pending"
+cp "$_rec_tmp/symlink-target" "$_rec_tmp/symlink-target.before"
+run_func _detect_and_write_pending_features "$_rec_tmp"
+if [[ "$_RF_RC" -ne 0 ]] && [[ -L "$_rec_pending" ]] \
+  && cmp -s "$_rec_tmp/symlink-target" "$_rec_tmp/symlink-target.before"; then
+  pass "recommendation: special pending file fails closed without following it"
+else
+  fail "recommendation: a pending symlink and its target must remain untouched"
+fi
+
+rm -f "$_rec_pending"
+unset _rec_pending _rec_mode
+PROFILE="minimal"
+ENABLE_FEATURE_RECOMMENDATION=""
