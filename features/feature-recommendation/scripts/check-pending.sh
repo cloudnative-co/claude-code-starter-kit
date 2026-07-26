@@ -36,14 +36,69 @@ done < <(jq -r '.plugins[]? // empty' "$PENDING_FILE" 2>/dev/null)
 [[ ${#FEATURES[@]} -gt 0 || ${#PLUGINS[@]} -gt 0 ]] || exit 0
 
 # ---------------------------------------------------------------------------
-# Resolve kit repo path (same assumption as auto-update.sh)
+# Resolve kit repo path
 # ---------------------------------------------------------------------------
-# Overridable like auto-update.sh's KIT_DIR, so a checkout that is not at the
-# default path still resolves. This matters more now than it used to: the gate
-# below fails closed, so an unresolved checkout means silence rather than a
-# degraded notice.
-KIT_REPO="${KIT_REPO:-${HOME}/.claude-starter-kit}"
-[[ -d "$KIT_REPO/features" ]] || KIT_REPO=""
+# Prefer an explicit runtime override, then the checkout recorded in the
+# wizard config, and finally the legacy location. Config contents are parsed as
+# data; they are never sourced or evaluated.
+_KIT_REPO_OVERRIDE_SET=false
+_KIT_REPO_OVERRIDE=""
+if [[ ${KIT_REPO+x} ]]; then
+  _KIT_REPO_OVERRIDE_SET=true
+  _KIT_REPO_OVERRIDE="$KIT_REPO"
+fi
+
+_kit_repo_is_checkout() {
+  [[ -n "$1" ]] || return 1
+  [[ "$1" == /* ]] || return 1
+  [[ -d "$1/features" ]] || return 1
+  [[ -f "$1/lib/features.sh" ]] || return 1
+  [[ -f "$1/config/plugins.json" ]]
+}
+
+_config_kit_repo() {
+  local config_file="${HOME}/.claude-starter-kit.conf"
+  local line="" value="" matches=0
+  [[ -f "$config_file" ]] || return 1
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" =~ ^KIT_REPO=\"([^\"]+)\"$ ]]; then
+      matches=$((matches + 1))
+      value="${BASH_REMATCH[1]}"
+    elif [[ "$line" == KIT_REPO=* ]]; then
+      # A malformed or ambiguous declaration must not be partially accepted.
+      return 1
+    fi
+  done < "$config_file"
+
+  [[ $matches -eq 1 ]] || return 1
+  [[ "$value" == /* ]] || return 1
+  printf '%s' "$value"
+}
+
+_resolve_kit_repo() {
+  local candidate=""
+  if [[ "$_KIT_REPO_OVERRIDE_SET" == true ]] \
+    && _kit_repo_is_checkout "$_KIT_REPO_OVERRIDE"; then
+    printf '%s' "$_KIT_REPO_OVERRIDE"
+    return 0
+  fi
+
+  candidate="$(_config_kit_repo || true)"
+  if _kit_repo_is_checkout "$candidate"; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+
+  candidate="${HOME}/.claude-starter-kit"
+  if _kit_repo_is_checkout "$candidate"; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+KIT_REPO="$(_resolve_kit_repo || true)"
 
 # ---------------------------------------------------------------------------
 # Catalog gate — nothing is displayed unless the kit still ships it.
@@ -59,23 +114,88 @@ KIT_REPO="${KIT_REPO:-${HOME}/.claude-starter-kit}"
 # an injected one, and the notification only ever says "run /update-kit", which
 # needs that same checkout anyway — so staying quiet costs nothing.
 # ---------------------------------------------------------------------------
-PLUGIN_CATALOG=""
-if [[ -n "$KIT_REPO" ]] && [[ -f "$KIT_REPO/config/plugins.json" ]]; then
-  # Both spellings the writer can emit (see _qualified_plugin_entry): always the
-  # fully qualified one, plus the bare name when the marketplace is official.
-  PLUGIN_CATALOG="$(jq -r '
-    .plugins[]?
-    | (.marketplace // "claude-plugins-official") as $mp
-    | (.name + "@" + $mp),
-      (if $mp == "claude-plugins-official" then .name else empty end)
-  ' "$KIT_REPO/config/plugins.json" 2>/dev/null || true)"
+FEATURE_CATALOG=""
+if [[ -n "$KIT_REPO" ]]; then
+  # Parse only the declarative _FEATURE_FLAGS table. Do not source this Bash 4
+  # file from the Bash 3.2-compatible hook. Any malformed row invalidates the
+  # complete catalog, avoiding a partially trusted allowlist.
+  if _feature_catalog="$(awk '
+    BEGIN { inside = 0; found = 0; closed = 0; invalid = 0 }
+    /^[[:space:]]*declare[[:space:]]+-g[[:space:]]+-A[[:space:]]+_FEATURE_FLAGS=\([[:space:]]*$/ {
+      if (found) invalid = 1
+      inside = 1; found = 1; next
+    }
+    inside && /^[[:space:]]*\)[[:space:]]*$/ {
+      inside = 0; closed = 1; next
+    }
+    inside {
+      if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+      if ($0 !~ /^[[:space:]]*\[[A-Za-z0-9][A-Za-z0-9._-]*\]=[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) {
+        invalid = 1; next
+      }
+      entry = $0
+      sub(/^[[:space:]]*\[/, "", entry)
+      sub(/\]=[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/, "", entry)
+      print entry
+    }
+    END { if (!found || !closed || inside || invalid) exit 1 }
+  ' "$KIT_REPO/lib/features.sh" 2>/dev/null)"; then
+    FEATURE_CATALOG="$_feature_catalog"
+  fi
 fi
+
+PLUGIN_CATALOG=""
+if [[ -n "$KIT_REPO" ]]; then
+  _plugin_file="$KIT_REPO/config/plugins.json"
+  # Validate the complete catalog before deriving any accepted spelling. In
+  # particular, every plugin marketplace must be registered by the top-level
+  # mapping. A parse/schema/generation failure leaves the allowlist empty.
+  if jq -e '
+    . as $root
+    | (type == "object")
+      and ((.marketplaces | type) == "object")
+      and all(.marketplaces | to_entries[];
+        (.key | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+        and ((.value | type) == "string")
+        and ((.value | length) > 0))
+      and ((.plugins | type) == "array")
+      and all(.plugins[];
+        (type == "object")
+        and ((.name | type) == "string")
+        and (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+        and ((.marketplace // "claude-plugins-official") as $mp
+          | (($mp | type) == "string")
+          and ($mp | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
+          and ($root.marketplaces | has($mp))))
+  ' "$_plugin_file" >/dev/null 2>&1; then
+    if _plugin_catalog="$(jq -r '
+      .plugins[]
+      | (.marketplace // "claude-plugins-official") as $mp
+      | (.name + "@" + $mp),
+        (if $mp == "claude-plugins-official" then .name else empty end)
+    ' "$_plugin_file" 2>/dev/null)"; then
+      PLUGIN_CATALOG="$_plugin_catalog"
+    fi
+  fi
+fi
+
+_feature_is_registered() {
+  [[ -n "$FEATURE_CATALOG" ]] || return 1
+  case $'\n'"$FEATURE_CATALOG"$'\n' in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+  esac
+  return 1
+}
 
 _feature_is_catalogued() {
   # Reject anything that is not a plain directory name before it is ever used
   # as a path component.
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
   [[ -n "$KIT_REPO" ]] || return 1
+  case "$1" in
+    feature-recommendation|fonts|ghostty|codex-plugin) return 1 ;;
+  esac
+  _feature_is_registered "$1" || return 1
   [[ -f "$KIT_REPO/features/$1/feature.json" ]]
 }
 

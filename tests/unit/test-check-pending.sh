@@ -14,6 +14,10 @@
 _cp_script="$PROJECT_DIR/features/feature-recommendation/scripts/check-pending.sh"
 _cp_tmp="$(mktemp -d)"
 _cp_home="$_cp_tmp/home"
+# Exercise the macOS system shell (Bash 3.2) when present; on Linux /bin/bash
+# is still the canonical shell path used by the deployed hook.
+_cp_bash="/bin/bash"
+_cp_path="$PATH"
 
 # A fake HOME holding a kit checkout with exactly one feature and two catalogued
 # plugins (one official, one not — their accepted spellings differ).
@@ -23,8 +27,14 @@ _cp_setup() { # <pending-json> [--no-kit]
   if [[ "${2:-}" != "--no-kit" ]]; then
     mkdir -p "$_cp_home/.claude-starter-kit/features/doc-size-guard"
     mkdir -p "$_cp_home/.claude-starter-kit/config"
+    mkdir -p "$_cp_home/.claude-starter-kit/lib"
     printf '%s' '{"displayName":"Doc Size Guard","description":"size hygiene"}' \
       > "$_cp_home/.claude-starter-kit/features/doc-size-guard/feature.json"
+    printf '%s\n' \
+      'declare -g -A _FEATURE_FLAGS=(' \
+      '  [doc-size-guard]=ENABLE_DOC_SIZE_GUARD' \
+      '  [feature-recommendation]=ENABLE_FEATURE_RECOMMENDATION' \
+      ')' > "$_cp_home/.claude-starter-kit/lib/features.sh"
     printf '%s' '{"marketplaces":{"claude-plugins-official":"a/b","other-mp":"c/d"},
       "plugins":[
         {"name":"claude-security","marketplace":"claude-plugins-official","profiles":["full"]},
@@ -34,7 +44,10 @@ _cp_setup() { # <pending-json> [--no-kit]
   printf '%s' "$1" > "$_cp_home/.claude/.starter-kit-pending-features.json"
 }
 
-_cp_run() { HOME="$_cp_home" bash "$_cp_script" 2>/dev/null; }
+_cp_run() {
+  env -i HOME="$_cp_home" PATH="$_cp_path" \
+    "$_cp_bash" "$_cp_script" 2>/dev/null
+}
 
 # ── catalogued entries still reach the user ────────────────────────────────
 _cp_setup '{"version":1,"plugins":["claude-security"]}'
@@ -115,6 +128,76 @@ else
   fail "check-pending: bare non-official name survived the gate (got '$_cp_out')"
 fi
 
+# A feature.json alone is not a catalog entry. Only the central feature
+# registry can make a normal feature eligible for recommendation, and the
+# recommendation hook itself plus non-registry components are always excluded.
+_cp_setup '{"version":1,"features":["orphan","feature-recommendation","fonts","ghostty","codex-plugin"]}'
+for _cp_feature in orphan feature-recommendation fonts ghostty codex-plugin; do
+  mkdir -p "$_cp_home/.claude-starter-kit/features/$_cp_feature"
+  printf '{"displayName":"%s"}' "$_cp_feature" \
+    > "$_cp_home/.claude-starter-kit/features/$_cp_feature/feature.json"
+done
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: self, special, and unregistered feature directories are rejected"
+else
+  fail "check-pending: a non-recommendable feature survived the registry gate (got '$_cp_out')"
+fi
+
+# A registry parse failure must not retain entries parsed before the bad row.
+_cp_setup '{"version":1,"features":["doc-size-guard"]}'
+printf '%s\n' \
+  'declare -g -A _FEATURE_FLAGS=(' \
+  '  [doc-size-guard]=ENABLE_DOC_SIZE_GUARD' \
+  '  malformed-row' \
+  ')' > "$_cp_home/.claude-starter-kit/lib/features.sh"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: malformed feature registry fails closed without a partial allowlist"
+else
+  fail "check-pending: malformed registry retained a partial feature allowlist (got '$_cp_out')"
+fi
+
+# Every plugin marketplace must be registered by the catalog. One invalid
+# plugin invalidates the whole catalog rather than leaving earlier rows usable.
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+printf '%s' '{"marketplaces":{"claude-plugins-official":"a/b"},
+  "plugins":[
+    {"name":"claude-security","marketplace":"claude-plugins-official"},
+    {"name":"rogue","marketplace":"unregistered-mp"}
+  ]}' > "$_cp_home/.claude-starter-kit/config/plugins.json"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: unregistered marketplace invalidates the complete plugin allowlist"
+else
+  fail "check-pending: unregistered marketplace left a partial plugin allowlist (got '$_cp_out')"
+fi
+
+# Likewise, a schema error after a valid row must fail closed atomically.
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+printf '%s' '{"marketplaces":{"claude-plugins-official":"a/b"},
+  "plugins":[
+    {"name":"claude-security","marketplace":"claude-plugins-official"},
+    {"name":7,"marketplace":"claude-plugins-official"}
+  ]}' > "$_cp_home/.claude-starter-kit/config/plugins.json"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: plugin schema error fails closed without a partial allowlist"
+else
+  fail "check-pending: schema error retained a partial plugin allowlist (got '$_cp_out')"
+fi
+
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+printf '%s' '{"marketplaces":{"claude-plugins-official":"a/b"},
+  "plugins":[{"name":"claude-security","marketplace":"claude-plugins-official"}]' \
+  > "$_cp_home/.claude-starter-kit/config/plugins.json"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: malformed plugin JSON fails closed"
+else
+  fail "check-pending: malformed plugin JSON produced an allowlist (got '$_cp_out')"
+fi
+
 # ── mixed input: the real entry survives, the injected one does not ────────
 _cp_setup '{"version":1,"features":["doc-size-guard","evil-feature"],"plugins":["claude-security","evil-plugin"]}'
 _cp_out="$(_cp_run)"
@@ -148,16 +231,57 @@ fi
 # closed does not silence people who set the same override auto-update.sh uses.
 _cp_setup '{"version":1,"plugins":["claude-security"]}'
 mv "$_cp_home/.claude-starter-kit" "$_cp_tmp/elsewhere"
-_cp_out="$(HOME="$_cp_home" KIT_REPO="$_cp_tmp/elsewhere" bash "$_cp_script" 2>/dev/null)"
+_cp_out="$(env -i HOME="$_cp_home" PATH="$_cp_path" \
+  KIT_REPO="$_cp_tmp/elsewhere" "$_cp_bash" "$_cp_script" 2>/dev/null)"
 if [[ "$_cp_out" == *"claude-security"* ]]; then
   pass "check-pending: KIT_REPO override resolves a non-default checkout"
 else
   fail "check-pending: KIT_REPO override ignored (got '$_cp_out')"
 fi
 
+# Saved config makes custom installs discoverable without an environment
+# override. Exercise a whitespace-bearing absolute path in a clean environment.
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+_cp_custom_repo="$_cp_tmp/custom checkout"
+mv "$_cp_home/.claude-starter-kit" "$_cp_custom_repo"
+printf 'KIT_REPO="%s"\n' "$_cp_custom_repo" \
+  > "$_cp_home/.claude-starter-kit.conf"
+_cp_out="$(_cp_run)"
+if [[ "$_cp_out" == *"claude-security"* ]]; then
+  pass "check-pending: config resolves a custom checkout path under a clean environment"
+else
+  fail "check-pending: config custom checkout was not resolved (got '$_cp_out')"
+fi
+
+# Only the exact persisted key="value" form is accepted, and config paths must
+# be absolute. Both properties keep config parsing data-only and deterministic.
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+_cp_strict_repo="$_cp_tmp/strict config checkout"
+mv "$_cp_home/.claude-starter-kit" "$_cp_strict_repo"
+printf 'KIT_REPO=%s\n' "$_cp_strict_repo" \
+  > "$_cp_home/.claude-starter-kit.conf"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: unquoted config KIT_REPO is rejected"
+else
+  fail "check-pending: unquoted config KIT_REPO was accepted (got '$_cp_out')"
+fi
+
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+mv "$_cp_home/.claude-starter-kit" "$_cp_tmp/relative config checkout"
+printf '%s\n' 'KIT_REPO="relative config checkout"' \
+  > "$_cp_home/.claude-starter-kit.conf"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: relative config KIT_REPO is rejected"
+else
+  fail "check-pending: relative config KIT_REPO was accepted (got '$_cp_out')"
+fi
+
 # ── the hook must never break session start ───────────────────────────────
 _cp_setup '{"version":1,"plugins":["evil-plugin"]}'
-HOME="$_cp_home" bash "$_cp_script" >/dev/null 2>&1
+env -i HOME="$_cp_home" PATH="$_cp_path" \
+  "$_cp_bash" "$_cp_script" >/dev/null 2>&1
 _cp_rc=$?
 if [[ "$_cp_rc" -eq 0 ]]; then
   pass "check-pending: exits 0 even when every entry is dropped"
@@ -166,5 +290,6 @@ else
 fi
 
 rm -rf "$_cp_tmp"
-unset _cp_script _cp_tmp _cp_home _cp_out _cp_rc
+unset _cp_script _cp_tmp _cp_home _cp_out _cp_rc _cp_bash _cp_path
+unset _cp_feature _cp_custom_repo _cp_strict_repo
 unset -f _cp_setup _cp_run
