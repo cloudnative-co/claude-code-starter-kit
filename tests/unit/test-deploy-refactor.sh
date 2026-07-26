@@ -344,8 +344,11 @@ EOF
     KIT_MDM_POLICY_SHA256="$(printf 'a%.0s' {1..64})"
     export KIT_MDM_POLICY_SHA256
     write_manifest >/dev/null 2>&1 || exit 1
-    [[ "$(jq -r '.policy_sha256' \
-      "$CLAUDE_DIR/.starter-kit-manifest.json")" == "$KIT_MDM_POLICY_SHA256" ]]
+    jq -e --arg policy "$KIT_MDM_POLICY_SHA256" '
+      .policy_sha256 == $policy
+      and (has("kit_repo") | not)
+      and (has("config_file") | not)
+    ' "$CLAUDE_DIR/.starter-kit-manifest.json" >/dev/null
   ); then
     pass "$test_name"
   else
@@ -365,6 +368,40 @@ EOF
     write_manifest >/dev/null 2>&1 \
       && jq -e 'has("policy_sha256") | not' \
         "$CLAUDE_DIR/.starter-kit-manifest.json" >/dev/null
+  ); then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="deploy: non-MDM manifest records the active runtime binding"
+  if (
+    _manifest_tmp="$(mktemp -d)"
+    CLAUDE_DIR="$_manifest_tmp/.claude"
+    mkdir -p "$CLAUDE_DIR" "$_manifest_tmp/config dir"
+    printf 'PROFILE="standard"\n' > "$_manifest_tmp/config dir/custom.conf"
+    export KIT_MDM_MANAGED=false
+    managed_files_json() { printf '[]'; }
+    cleanup_paths_json() { printf '[]'; }
+    cd "$_manifest_tmp"
+    WIZARD_CONFIG_FILE="config dir/custom.conf"
+    write_manifest >/dev/null 2>&1 || exit 1
+    _expected_repo="$(builtin cd -P "$PROJECT_DIR" && pwd -P)"
+    _expected_config="$(builtin cd -P "$_manifest_tmp/config dir" && pwd -P)/custom.conf"
+    jq -e --arg repo "$_expected_repo" --arg config "$_expected_config" '
+      .mdm_managed == false
+      and .kit_repo == $repo
+      and .config_file == $config
+    ' "$CLAUDE_DIR/.starter-kit-manifest.json" >/dev/null || exit 1
+
+    _before="$(git hash-object -- "$CLAUDE_DIR/.starter-kit-manifest.json")"
+    ln -s "$_manifest_tmp/config dir/custom.conf" "$_manifest_tmp/config-link.conf"
+    # shellcheck disable=SC2034  # consumed by sourced write_manifest()
+    WIZARD_CONFIG_FILE="$_manifest_tmp/config-link.conf"
+    write_manifest >/dev/null 2>&1 && exit 1
+    [[ "$(git hash-object -- "$CLAUDE_DIR/.starter-kit-manifest.json")" == "$_before" ]]
   ); then
     pass "$test_name"
   else

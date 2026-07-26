@@ -56,6 +56,8 @@ done < <(printf '%s' "$PENDING_JSON" | jq -r '.plugins[]? // empty' 2>/dev/null)
 # data; they are never sourced or evaluated.
 _KIT_REPO_OVERRIDE_SET=false
 _KIT_REPO_OVERRIDE=""
+_ACTIVE_CONFIG_FILE=""
+_MANIFEST_BOUND=false
 if [[ ${KIT_REPO+x} ]]; then
   _KIT_REPO_OVERRIDE_SET=true
   _KIT_REPO_OVERRIDE="$KIT_REPO"
@@ -70,9 +72,9 @@ _kit_repo_is_checkout() {
 }
 
 _config_kit_repo() {
-  local config_file="${HOME}/.claude-starter-kit.conf"
+  local config_file="${1:-${HOME}/.claude-starter-kit.conf}"
   local line="" value="" matches=0
-  [[ -f "$config_file" ]] || return 1
+  [[ -f "$config_file" && ! -L "$config_file" ]] || return 1
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" =~ ^KIT_REPO=\"([^\"]+)\"$ ]]; then
@@ -89,29 +91,99 @@ _config_kit_repo() {
   printf '%s' "$value"
 }
 
+_load_manifest_binding() {
+  local manifest="$CLAUDE_DIR/.starter-kit-manifest.json"
+  local binding="" candidate=""
+  _MANIFEST_BINDING_STATE="legacy"
+  _MANIFEST_REPO=""
+  _MANIFEST_CONFIG=""
+
+  # Older and MDM-managed manifests do not carry a runtime binding. Preserve
+  # their legacy config/default-checkout lookup, but fail closed when a binding
+  # is present only partially or is otherwise malformed.
+  [[ -e "$manifest" || -L "$manifest" ]] || return 0
+  if [[ ! -f "$manifest" || -L "$manifest" ]]; then
+    _MANIFEST_BINDING_STATE="invalid"
+    return 0
+  fi
+
+  binding="$(jq -cse '
+    if length == 1 and (.[0] | type == "object") then
+      .[0]
+      | if (has("kit_repo") or has("config_file")) then
+          if (has("kit_repo") and has("config_file")
+            and (.mdm_managed == false)
+            and ((.kit_repo | type) == "string")
+            and ((.config_file | type) == "string")
+            and (.kit_repo | startswith("/"))
+            and (.config_file | startswith("/"))
+            and ((.kit_repo | test("[\\x00-\\x1f\\x7f]")) | not)
+            and ((.config_file | test("[\\x00-\\x1f\\x7f]")) | not))
+          then [.kit_repo, .config_file]
+          else error("invalid runtime binding")
+          end
+        else null
+        end
+    else error("invalid manifest")
+    end
+  ' "$manifest" 2>/dev/null)" || {
+    _MANIFEST_BINDING_STATE="invalid"
+    return 0
+  }
+
+  [[ "$binding" != "null" ]] || return 0
+  _MANIFEST_REPO="$(printf '%s' "$binding" | jq -r '.[0]' 2>/dev/null)" || {
+    _MANIFEST_BINDING_STATE="invalid"
+    return 0
+  }
+  _MANIFEST_CONFIG="$(printf '%s' "$binding" | jq -r '.[1]' 2>/dev/null)" || {
+    _MANIFEST_BINDING_STATE="invalid"
+    return 0
+  }
+
+  candidate="$(_config_kit_repo "$_MANIFEST_CONFIG" || true)"
+  if [[ "$candidate" != "$_MANIFEST_REPO" ]] \
+    || ! _kit_repo_is_checkout "$_MANIFEST_REPO"; then
+    _MANIFEST_BINDING_STATE="invalid"
+    return 0
+  fi
+  _MANIFEST_BINDING_STATE="valid"
+}
+
 _resolve_kit_repo() {
   local candidate=""
   if [[ "$_KIT_REPO_OVERRIDE_SET" == true ]] \
     && _kit_repo_is_checkout "$_KIT_REPO_OVERRIDE"; then
-    printf '%s' "$_KIT_REPO_OVERRIDE"
+    KIT_REPO="$_KIT_REPO_OVERRIDE"
     return 0
   fi
 
-  candidate="$(_config_kit_repo || true)"
+  _load_manifest_binding
+  if [[ "$_MANIFEST_BINDING_STATE" == "valid" ]]; then
+    KIT_REPO="$_MANIFEST_REPO"
+    _ACTIVE_CONFIG_FILE="$_MANIFEST_CONFIG"
+    _MANIFEST_BOUND=true
+    return 0
+  fi
+  [[ "$_MANIFEST_BINDING_STATE" != "invalid" ]] || return 1
+
+  candidate="$(_config_kit_repo "${HOME}/.claude-starter-kit.conf" || true)"
   if _kit_repo_is_checkout "$candidate"; then
-    printf '%s' "$candidate"
+    KIT_REPO="$candidate"
+    _ACTIVE_CONFIG_FILE="${HOME}/.claude-starter-kit.conf"
     return 0
   fi
 
   candidate="${HOME}/.claude-starter-kit"
   if _kit_repo_is_checkout "$candidate"; then
-    printf '%s' "$candidate"
+    KIT_REPO="$candidate"
     return 0
   fi
   return 1
 }
 
-KIT_REPO="$(_resolve_kit_repo || true)"
+KIT_REPO=""
+_resolve_kit_repo || true
 
 # ---------------------------------------------------------------------------
 # Catalog gate — nothing is displayed unless the kit still ships it.
@@ -285,8 +357,8 @@ _resolve_feature_info() {
 # Detect language from conf (lightweight grep, no full config parsing)
 # ---------------------------------------------------------------------------
 LANGUAGE="en"
-CONF_FILE="${HOME}/.claude-starter-kit.conf"
-if [[ -f "$CONF_FILE" ]]; then
+CONF_FILE="${_ACTIVE_CONFIG_FILE:-${HOME}/.claude-starter-kit.conf}"
+if [[ -f "$CONF_FILE" && ! -L "$CONF_FILE" ]]; then
   _lang_val="$(grep '^LANGUAGE=' "$CONF_FILE" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' || true)"
   [[ -n "$_lang_val" ]] && LANGUAGE="$_lang_val"
 fi
@@ -296,6 +368,44 @@ fi
 # ---------------------------------------------------------------------------
 count=${#FEATURES[@]}
 MAX_DISPLAY=3
+
+_update_command_is_available() {
+  local deployed="$CLAUDE_DIR/commands/update-kit.md"
+  local source="$KIT_REPO/commands/update-kit.md"
+  [[ -f "$deployed" && ! -L "$deployed" ]] || return 1
+  [[ -f "$source" && ! -L "$source" ]] || return 1
+  cmp -s "$source" "$deployed"
+}
+
+_print_update_hint() {
+  local subject="$1" command="bash setup.sh --update"
+  if _update_command_is_available; then
+    if [[ "$LANGUAGE" == "ja" ]]; then
+      if [[ "$subject" == "plugins" ]]; then
+        printf '  このセッションで /update-kit と入力すると、追加するか選べます。\n'
+      else
+        printf '  このセッションで /update-kit と入力すると、各機能の有効化・スキップを選べます。\n'
+      fi
+    elif [[ "$subject" == "plugins" ]]; then
+      printf '  Type /update-kit in this session to choose which to add.\n'
+    else
+      printf '  Type /update-kit in this session to choose which features to enable or skip.\n'
+    fi
+    return 0
+  fi
+
+  # SessionStart stdout becomes model context. Do not echo or later re-read
+  # manifest-controlled paths in an executable command; show a fixed safe
+  # example for the active config path instead.
+  if [[ "$_MANIFEST_BOUND" == true ]]; then
+    command="$command --config=/path/to/active.conf"
+  fi
+  if [[ "$LANGUAGE" == "ja" ]]; then
+    printf '  信頼済みの Starter Kit checkout で `%s` を実行してください。\n' "$command"
+  else
+    printf '  Run `%s` from the trusted Starter Kit checkout.\n' "$command"
+  fi
+}
 
 _print_pending_plugins() {
   local idx=0 p total=${#PLUGINS[@]}
@@ -321,11 +431,10 @@ _print_pending_plugins() {
   done
   if [[ "$LANGUAGE" == "ja" ]]; then
     [[ $total -gt $MAX_DISPLAY ]] && printf '  ...他 %d 件\n' $((total - MAX_DISPLAY))
-    printf '  このセッションで /update-kit と入力すると、追加するか選べます。\n'
   else
     [[ $total -gt $MAX_DISPLAY ]] && printf '  ...and %d more\n' $((total - MAX_DISPLAY))
-    printf '  Type /update-kit in this session to choose which to add.\n'
   fi
+  _print_update_hint "plugins"
   return 0
 }
 
@@ -351,7 +460,7 @@ if [[ "$LANGUAGE" == "ja" ]]; then
   if [[ $count -gt $MAX_DISPLAY ]]; then
     printf '  ...他 %d 件\n' $((count - MAX_DISPLAY))
   fi
-  printf '  このセッションで /update-kit と入力すると、各機能の有効化・スキップを選べます。\n'
+  _print_update_hint "features"
 else
   if [[ $count -eq 1 ]]; then
     printf '[Starter Kit] New feature available:\n'
@@ -369,7 +478,7 @@ else
   if [[ $count -gt $MAX_DISPLAY ]]; then
     printf '  ...and %d more\n' $((count - MAX_DISPLAY))
   fi
-  printf '  Type /update-kit in this session to choose which features to enable or skip.\n'
+  _print_update_hint "features"
 fi
 
 _print_pending_plugins

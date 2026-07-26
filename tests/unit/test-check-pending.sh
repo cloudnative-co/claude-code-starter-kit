@@ -26,6 +26,7 @@ _cp_setup() { # <pending-json> [--no-kit]
   mkdir -p "$_cp_home/.claude"
   if [[ "${2:-}" != "--no-kit" ]]; then
     mkdir -p "$_cp_home/.claude-starter-kit/features/doc-size-guard"
+    mkdir -p "$_cp_home/.claude-starter-kit/commands"
     mkdir -p "$_cp_home/.claude-starter-kit/config"
     mkdir -p "$_cp_home/.claude-starter-kit/lib"
     printf '%s' '{"displayName":"Doc Size Guard","description":"size hygiene"}' \
@@ -35,6 +36,8 @@ _cp_setup() { # <pending-json> [--no-kit]
       '  [doc-size-guard]=ENABLE_DOC_SIZE_GUARD' \
       '  [feature-recommendation]=ENABLE_FEATURE_RECOMMENDATION' \
       ')' > "$_cp_home/.claude-starter-kit/lib/features.sh"
+    printf '%s\n' '# update-kit command' \
+      > "$_cp_home/.claude-starter-kit/commands/update-kit.md"
     printf '%s' '{"marketplaces":{"claude-plugins-official":"a/b","other-mp":"c/d"},
       "plugins":[
         {"name":"claude-security","marketplace":"claude-plugins-official","profiles":["full"]},
@@ -309,6 +312,64 @@ else
   fail "check-pending: config custom checkout was not resolved (got '$_cp_out')"
 fi
 
+# A current manifest binds the deployed hook to both the checkout and the
+# exact --config file used for that install. This wins over the legacy default
+# config, while neither manifest-controlled path is echoed into session context.
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+_cp_bound_repo="$_cp_tmp/manifest checkout"
+_cp_bound_config="$_cp_tmp/custom wizard.conf"
+mv "$_cp_home/.claude-starter-kit" "$_cp_bound_repo"
+printf 'KIT_REPO="%s"\nLANGUAGE="en"\n' "$_cp_bound_repo" > "$_cp_bound_config"
+printf '%s\n' 'KIT_REPO="/does/not/exist"' > "$_cp_home/.claude-starter-kit.conf"
+jq -n --arg repo "$_cp_bound_repo" --arg config "$_cp_bound_config" \
+  '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+  > "$_cp_home/.claude/.starter-kit-manifest.json"
+_cp_out="$(_cp_run)"
+if [[ "$_cp_out" == *"claude-security"* ]] \
+  && [[ "$_cp_out" == *"bash setup.sh --update --config=/path/to/active.conf"* ]] \
+  && [[ "$_cp_out" != *"/update-kit"* ]] \
+  && [[ "$_cp_out" != *"$_cp_bound_repo"* ]] \
+  && [[ "$_cp_out" != *"$_cp_bound_config"* ]]; then
+  pass "check-pending: manifest binding resolves custom --config without echoing mutable paths"
+else
+  fail "check-pending: manifest binding or safe fallback hint was wrong (got '$_cp_out')"
+fi
+
+# A partial binding must not silently fall back to another checkout. The pair
+# is one runtime identity and is accepted only atomically.
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+printf '%s' '{"version":2,"kit_repo":"/tmp/incomplete"}' \
+  > "$_cp_home/.claude/.starter-kit-manifest.json"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: partial manifest runtime binding fails closed"
+else
+  fail "check-pending: partial manifest binding fell through (got '$_cp_out')"
+fi
+
+# /update-kit is advertised only when the command was actually deployed from
+# this checkout. INSTALL_COMMANDS=false leaves it absent, so the hook points to
+# the setup.sh update path instead of promising a nonexistent slash command.
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+_cp_out="$(_cp_run)"
+if [[ "$_cp_out" == *"bash setup.sh --update"* ]] \
+  && [[ "$_cp_out" != *"/update-kit"* ]]; then
+  pass "check-pending: missing deployed command uses setup.sh --update fallback"
+else
+  fail "check-pending: missing command advertised an unusable hint (got '$_cp_out')"
+fi
+
+mkdir -p "$_cp_home/.claude/commands"
+cp "$_cp_home/.claude-starter-kit/commands/update-kit.md" \
+  "$_cp_home/.claude/commands/update-kit.md"
+_cp_out="$(_cp_run)"
+if [[ "$_cp_out" == *"/update-kit"* ]] \
+  && [[ "$_cp_out" != *"bash setup.sh --update"* ]]; then
+  pass "check-pending: matching deployed command keeps the /update-kit hint"
+else
+  fail "check-pending: deployed command was not recognized (got '$_cp_out')"
+fi
+
 # Only the exact persisted key="value" form is accepted, and config paths must
 # be absolute. Both properties keep config parsing data-only and deterministic.
 _cp_setup '{"version":1,"plugins":["claude-security"]}'
@@ -348,4 +409,5 @@ fi
 rm -rf "$_cp_tmp"
 unset _cp_script _cp_tmp _cp_home _cp_out _cp_rc _cp_bash _cp_path
 unset _cp_feature _cp_custom_repo _cp_strict_repo _cp_invalid
+unset _cp_bound_repo _cp_bound_config
 unset -f _cp_setup _cp_run

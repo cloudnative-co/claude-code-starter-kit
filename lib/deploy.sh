@@ -2254,14 +2254,50 @@ _deploy_fresh_with_existing() {
 # ---------------------------------------------------------------------------
 # Manifest
 # ---------------------------------------------------------------------------
+_manifest_absolute_config_file() {
+  local requested="${1:-}" parent leaf parent_physical
+  [[ -n "$requested" ]] || return 1
+  [[ "$requested" != *[$'\001'-$'\037'$'\177']* ]] || return 1
+
+  case "$requested" in
+    /*) ;;
+    *) requested="$PWD/$requested" ;;
+  esac
+  parent="${requested%/*}"
+  leaf="${requested##*/}"
+  [[ -n "$parent" ]] || parent="/"
+  [[ -n "$leaf" && "$leaf" != "." && "$leaf" != ".." ]] \
+    || return 1
+  parent_physical="$(builtin cd -P "$parent" 2>/dev/null && pwd -P)" \
+    || return 1
+  [[ "$parent_physical" != *[$'\001'-$'\037'$'\177']* ]] || return 1
+  if [[ -e "$requested" || -L "$requested" ]]; then
+    [[ -f "$requested" && ! -L "$requested" ]] || return 1
+  fi
+  if [[ "$parent_physical" == "/" ]]; then
+    printf '/%s' "$leaf"
+  else
+    printf '%s/%s' "$parent_physical" "$leaf"
+  fi
+}
+
 write_manifest() {
   local manifest="$CLAUDE_DIR/.starter-kit-manifest.json"
   local mdm_managed=false
   local policy_sha256=""
+  local kit_repo=""
+  local config_file=""
   if _deploy_mdm_managed; then
     mdm_managed=true
     policy_sha256="${KIT_MDM_POLICY_SHA256:-}"
     [[ "$policy_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  else
+    kit_repo="$(builtin cd -P "${PROJECT_DIR:-}" 2>/dev/null && pwd -P)" \
+      || return 1
+    [[ "$kit_repo" == /* ]] || return 1
+    [[ "$kit_repo" != *[$'\001'-$'\037'$'\177']* ]] || return 1
+    config_file="$(_manifest_absolute_config_file \
+      "${WIZARD_CONFIG_FILE:-$HOME/.claude-starter-kit.conf}")" || return 1
   fi
   if [[ "$mdm_managed" != true && ( -e "$manifest" || -L "$manifest" ) ]]; then
     [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
@@ -2311,6 +2347,8 @@ write_manifest() {
     --argjson mdm_absent_files "$mdm_absent_files" \
     --argjson mdm_managed "$mdm_managed" \
     --arg policy_sha256 "$policy_sha256" \
+    --arg kit_repo "$kit_repo" \
+    --arg config_file "$config_file" \
     --arg snapshot_dir "$CLAUDE_DIR/.starter-kit-snapshot" \
     --arg claude_dir "$CLAUDE_DIR" \
     '({
@@ -2333,7 +2371,10 @@ write_manifest() {
       claude_dir: $claude_dir
     } + if $mdm_managed then {
       policy_sha256: $policy_sha256
-    } else {} end)' > "$manifest_out"; then
+    } else {
+      kit_repo: $kit_repo,
+      config_file: $config_file
+    } end)' > "$manifest_out"; then
     rm -f "$manifest_out"
     return 1
   fi
