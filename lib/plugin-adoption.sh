@@ -367,11 +367,6 @@ _detect_and_offer_new_plugins() {
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]] \
     || [[ ! -r "${_TTY_INPUT:-/dev/tty}" ]]; then
     _notify_pending_plugins "$claude_dir" "$newcomers"
-    if [[ "${DRY_RUN:-false}" == "true" ]] \
-      && declare -F _dryrun_log_plugin_operations >/dev/null 2>&1; then
-      _dryrun_log_plugin_operations "$newcomers" "Plugin (new, would prompt)" \
-        || return 1
-    fi
     return 0
   fi
 

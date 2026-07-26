@@ -172,6 +172,28 @@ else
   fail "plugin-adoption: non-interactive run should write the pending-plugins notification"
 fi
 
+# Dry-run is also notify-only. A newcomer has not been consented to, so it must
+# never appear in the external-operation preview even when that logger exists.
+_pa_out="$(_pa_run '
+  DRY_RUN="true"
+  _MERGE_INTERACTIVE="false"
+  SELECTED_PLUGINS="alpha"
+  mkdir -p "'"$_pa_tmp"'/home-dryrun-no-consent"
+  _dryrun_log_plugin_operations() {
+    : > "'"$_pa_tmp"'/newcomer-install-was-logged"
+  }
+  _detect_and_offer_new_plugins "'"$_pa_tmp"'/home-dryrun-no-consent" >/dev/null 2>&1
+  printf "logged=%s pending=%s selected=[%s]" \
+    "$([[ -e "'"$_pa_tmp"'/newcomer-install-was-logged" ]] && printf yes || printf no)" \
+    "$(jq -r "(.plugins // []) | join(\",\")" \
+      "'"$_pa_tmp"'/home-dryrun-no-consent/.starter-kit-pending-features.json")" \
+    "$SELECTED_PLUGINS"')"
+if [[ "$_pa_out" == "logged=no pending=gamma@other-mp selected=[alpha]" ]]; then
+  pass "plugin-adoption: dry-run does not preview installs for unconsented newcomers"
+else
+  fail "plugin-adoption: dry-run newcomer must remain notification-only (got '$_pa_out')"
+fi
+
 # An unreadable terminal is the same situation even when the merge flag says
 # interactive — a failed read is not a "no".
 _pa_out="$(_pa_run '

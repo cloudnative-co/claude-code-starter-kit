@@ -124,8 +124,9 @@ After a successful update (or if already up to date), check for pending feature 
 #### Step 1: Check for pending items
 
 Validate `~/.claude/.starter-kit-pending-features.json` before reading any
-entry. A symlink, non-regular file, zero-byte file, malformed JSON, non-object
-root, non-array `features` / `plugins`, or non-string array entry is invalid.
+entry. A symlink, non-regular file, zero-byte file, anything other than exactly
+one JSON document, a non-object root, non-array `features` / `plugins`, or a
+non-string array entry is invalid.
 On invalid input, preserve the file unchanged, stop pending processing, and
 report the error; never treat parse failure as an empty list.
 
@@ -133,12 +134,15 @@ report the error; never treat parse failure as an empty list.
 pending_file="$HOME/.claude/.starter-kit-pending-features.json"
 if [ -e "$pending_file" ] || [ -L "$pending_file" ]; then
   if [ -L "$pending_file" ] || [ ! -f "$pending_file" ] \
-    || ! jq -e '
-      type == "object"
-      and ((has("features") | not) or (.features | type == "array"))
-      and ((has("plugins") | not) or (.plugins | type == "array"))
-      and all(.features[]?; type == "string")
-      and all(.plugins[]?; type == "string")
+    || ! jq -e -s '
+      length == 1
+      and (.[0] |
+        type == "object"
+        and ((has("features") | not) or (.features | type == "array"))
+        and ((has("plugins") | not) or (.plugins | type == "array"))
+        and all(.features[]?; type == "string")
+        and all(.plugins[]?; type == "string")
+      )
     ' "$pending_file" >/dev/null; then
     printf '%s\n' "Invalid pending file; preserved unchanged: $pending_file" >&2
     exit 1
@@ -246,39 +250,52 @@ Remove every feature that was enabled or dismissed from `.features`, and every p
 # you skipped to the same select() filters.
 pending_file="$HOME/.claude/.starter-kit-pending-features.json"
 pending_dir="${pending_file%/*}"
-if [ -L "$pending_file" ] || [ ! -f "$pending_file" ] \
-  || ! jq -e '
-    type == "object"
-    and ((has("features") | not) or (.features | type == "array"))
-    and ((has("plugins") | not) or (.plugins | type == "array"))
-    and all(.features[]?; type == "string")
-    and all(.plugins[]?; type == "string")
-  ' "$pending_file" >/dev/null; then
+if [ -L "$pending_file" ] || [ ! -f "$pending_file" ]; then
+  printf '%s\n' "Invalid pending file; preserved unchanged: $pending_file" >&2
+  exit 1
+fi
+pending_snapshot="$(mktemp "$pending_dir/.starter-kit-pending-features.json.snapshot.XXXXXX")" \
+  || exit 1
+pending_tmp=""
+trap 'rm -f "$pending_snapshot" "$pending_tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+chmod 600 "$pending_snapshot" || exit 1
+
+if ! jq -e -s '
+  if length == 1
+    and (.[0] |
+      type == "object"
+      and ((has("features") | not) or (.features | type == "array"))
+      and ((has("plugins") | not) or (.plugins | type == "array"))
+      and all(.features[]?; type == "string")
+      and all(.plugins[]?; type == "string")
+    )
+  then .[0]
+  else error("invalid pending file")
+  end
+' "$pending_file" > "$pending_snapshot"; then
   printf '%s\n' "Invalid pending file; preserved unchanged: $pending_file" >&2
   exit 1
 fi
 pending_tmp="$(mktemp "$pending_dir/.starter-kit-pending-features.json.tmp.XXXXXX")" \
   || exit 1
-trap 'rm -f "$pending_tmp"' EXIT
-trap 'exit 1' HUP INT TERM
 chmod 600 "$pending_tmp" || exit 1
 
 jq -e '(.features //= []) | (.plugins //= [])
     | .features |= map(select(. != "doc-size-guard"))
     | .plugins  |= map(select(. != "claude-security"))' \
-  "$pending_file" > "$pending_tmp" || exit 1
-mv "$pending_tmp" "$pending_file" || exit 1
-trap - EXIT HUP INT TERM
+  "$pending_snapshot" > "$pending_tmp" || exit 1
 
 if jq -e '
-  type == "object"
-  and ((has("features") | not) or (.features | type == "array"))
-  and ((has("plugins") | not) or (.plugins | type == "array"))
-  and ((.features // []) | length == 0)
+  ((.features // []) | length == 0)
   and ((.plugins // []) | length == 0)
-' "$pending_file" >/dev/null; then
+' "$pending_tmp" >/dev/null; then
   rm -f "$pending_file" || exit 1
+else
+  mv "$pending_tmp" "$pending_file" || exit 1
 fi
+rm -f "$pending_snapshot" "$pending_tmp" || exit 1
+trap - EXIT HUP INT TERM
 ```
 
 Finally, if you skipped any uncatalogued entry, tell the user once:

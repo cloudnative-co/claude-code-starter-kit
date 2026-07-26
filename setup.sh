@@ -1408,10 +1408,49 @@ _selected_plugin_list_has() { # <plugin-list> <resolved-target>
   '
 }
 
+# Capture an installed-plugin snapshot only when `claude plugin list` succeeds.
+# A failing command may still emit partial stdout; treating that as authoritative
+# would make both the real install and its dry-run preview skip required work.
+_read_claude_plugin_list() { # <output-variable>
+  local output_var="$1" plugin_snapshot=""
+  printf -v "$output_var" '%s' ""
+  command -v claude &>/dev/null || return 1
+  if ! plugin_snapshot="$(claude plugin list 2>/dev/null)"; then
+    return 1
+  fi
+  printf -v "$output_var" '%s' "$plugin_snapshot"
+}
+
+_plugin_install_plan_needs_work() { # <installed-plugin-list>
+  local installed_plugins="$1" entry
+  [[ "${UPDATE_MODE:-false}" == "true" ]] \
+    && [[ "${#_PLUGIN_INSTALL_ENTRIES[@]}" -gt 0 ]] \
+    && return 0
+  for entry in "${_PLUGIN_INSTALL_ENTRIES[@]+"${_PLUGIN_INSTALL_ENTRIES[@]}"}"; do
+    if ! _selected_plugin_list_has "$installed_plugins" "$entry"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 _dryrun_log_plugin_operations() { # <plugins-csv> [label]
   local csv="${1:-}" label="${2:-Plugin}" i repo entry
-  local registered_repos=""
+  local installed_plugins="" registered_repos=""
   _build_plugin_install_plan "$csv" || return 1
+  [[ "${#_PLUGIN_INSTALL_ENTRIES[@]}" -gt 0 ]] || return 0
+
+  # When no CLI exists yet, setup_finish_dryrun has already previewed the CLI
+  # bootstrap that precedes plugin installation. Keep an empty snapshot so the
+  # follow-on plugin operations remain visible in that case. A present CLI is
+  # trusted as an installed-state source only when its list command succeeds.
+  if command -v claude &>/dev/null; then
+    _read_claude_plugin_list installed_plugins || true
+  fi
+  _plugin_install_plan_needs_work "$installed_plugins" || return 0
+
+  # The real path registers every selected repository before installing any
+  # missing entry (and refreshes every entry during update mode).
   for i in "${!_PLUGIN_INSTALL_ENTRIES[@]}"; do
     repo="${_PLUGIN_INSTALL_REPOS[$i]}"
     if [[ ",$registered_repos," != *",$repo,"* ]]; then
@@ -1419,7 +1458,13 @@ _dryrun_log_plugin_operations() { # <plugins-csv> [label]
         "claude plugin marketplace add $repo"
       registered_repos="${registered_repos:+${registered_repos},}${repo}"
     fi
+  done
+  for i in "${!_PLUGIN_INSTALL_ENTRIES[@]}"; do
     entry="${_PLUGIN_INSTALL_ENTRIES[$i]}"
+    if [[ "${UPDATE_MODE:-false}" != "true" ]] \
+      && _selected_plugin_list_has "$installed_plugins" "$entry"; then
+      continue
+    fi
     _dryrun_log "EXTERNAL" "$label" \
       "claude plugin install $entry --scope user"
   done
@@ -1443,21 +1488,10 @@ install_selected_plugins() {
     return 0
   fi
 
-  local installed_plugins need_install=false
-  installed_plugins="$(claude plugin list 2>/dev/null || true)"
-  if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  local installed_plugins="" need_install=false
+  _read_claude_plugin_list installed_plugins || true
+  if _plugin_install_plan_needs_work "$installed_plugins"; then
     need_install=true
-  else
-    local p p_name
-    for p in "${_PLUGIN_INSTALL_ENTRIES[@]}"; do
-      p_name="${p%%@*}"
-      # Match on the full "name@marketplace" identity so a same-named plugin
-      # from a different marketplace is not mistaken for this one.
-      if [[ -n "$p_name" ]] && ! _selected_plugin_list_has "$installed_plugins" "$p"; then
-        need_install=true
-        break
-      fi
-    done
   fi
 
   local failed_repos=""

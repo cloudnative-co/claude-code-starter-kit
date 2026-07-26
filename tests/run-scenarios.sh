@@ -1070,9 +1070,12 @@ test_update_kit_pending_finalize_safe() {
 
   local static_ok=no
   if grep -Fq 'mktemp "$pending_dir/.starter-kit-pending-features.json.tmp.XXXXXX"' "$command_file" \
+    && grep -Fq 'mktemp "$pending_dir/.starter-kit-pending-features.json.snapshot.XXXXXX"' "$command_file" \
     && grep -Fq 'chmod 600 "$pending_tmp"' "$command_file" \
     && grep -Fq 'mv "$pending_tmp" "$pending_file" || exit 1' "$command_file" \
-    && [[ "$(grep -Fc 'Invalid pending file; preserved unchanged' "$command_file")" -eq 2 ]] \
+    && [[ "$(grep -Fc 'jq -e -s' "$command_file")" -eq 2 ]] \
+    && grep -Fq '"$pending_snapshot" > "$pending_tmp" || exit 1' "$command_file" \
+    && [[ "$(grep -Fc 'Invalid pending file; preserved unchanged' "$command_file")" -eq 3 ]] \
     && ! grep -Fq '/tmp/pf.$$' "$command_file"; then
     static_ok=yes
   fi
@@ -1119,8 +1122,30 @@ test_update_kit_pending_finalize_safe() {
   if [[ $malformed_step1_rc -ne 0 && $malformed_step7_rc -ne 0 ]] \
     && [[ "$malformed_after" == "$malformed_before" ]] \
     && [[ "$(test_stat_mode "$pending")" == "640" ]] \
-    && [[ -z "$(find "$CLAUDE_DIR" -name '.starter-kit-pending-features.json.tmp.*' -prune -print)" ]]; then
+    && [[ -z "$(find "$CLAUDE_DIR" -name '.starter-kit-pending-features.json.*' -prune -print)" ]]; then
     malformed_ok=yes
+  fi
+
+  printf '%s\n' \
+    '{"features":"not-an-array"}' \
+    '{"features":["doc-size-guard"],"plugins":["claude-security"]}' \
+    > "$pending"
+  chmod 640 "$pending"
+  local multiple_before="$HOME/pending-multiple-before"
+  cp "$pending" "$multiple_before"
+  local multiple_step1_rc=0 multiple_step7_rc=0
+  HOME="$HOME" bash -eu -c "$step1_script" >/dev/null 2>&1 || multiple_step1_rc=$?
+  local multiple_step1_preserved=no
+  if [[ $multiple_step1_rc -ne 0 ]] && cmp -s "$multiple_before" "$pending"; then
+    multiple_step1_preserved=yes
+  fi
+  HOME="$HOME" bash -eu -c "$step7_script" >/dev/null 2>&1 || multiple_step7_rc=$?
+  local multiple_ok=no
+  if [[ "$multiple_step1_preserved" == "yes" && $multiple_step7_rc -ne 0 ]] \
+    && cmp -s "$multiple_before" "$pending" \
+    && [[ "$(test_stat_mode "$pending")" == "640" ]] \
+    && [[ -z "$(find "$CLAUDE_DIR" -name '.starter-kit-pending-features.json.*' -prune -print)" ]]; then
+    multiple_ok=yes
   fi
 
   local symlink_target="$CLAUDE_DIR/pending-target"
@@ -1137,10 +1162,11 @@ test_update_kit_pending_finalize_safe() {
 
   if [[ "$static_ok" == "yes" && "$keep_ok" == "yes" \
     && "$empty_ok" == "yes" && "$zero_ok" == "yes" \
-    && "$malformed_ok" == "yes" && "$symlink_ok" == "yes" ]]; then
+    && "$malformed_ok" == "yes" && "$multiple_ok" == "yes" \
+    && "$symlink_ok" == "yes" ]]; then
     pass "update-kit-pending-finalize-safe"
   else
-    fail "update-kit-pending-finalize-safe (static=$static_ok keep=$keep_ok empty=$empty_ok zero=$zero_ok malformed=$malformed_ok symlink=$symlink_ok)"
+    fail "update-kit-pending-finalize-safe (static=$static_ok keep=$keep_ok empty=$empty_ok zero=$zero_ok malformed=$malformed_ok multiple=$multiple_ok symlink=$symlink_ok)"
   fi
 
   teardown_test_env
