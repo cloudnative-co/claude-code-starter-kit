@@ -907,7 +907,7 @@ CONF
   cat > "$WIZARD_CONFIG_FILE" <<'CONF'
 PROFILE="full"
 ENABLE_STATUSLINE="false"
-SELECTED_PLUGINS="legacy-only"
+SELECTED_PLUGINS="security-guidance"
 CONF
   # shellcheck disable=SC2034  # run_wizard reads this global.
   WIZARD_NONINTERACTIVE=true
@@ -916,8 +916,8 @@ CONF
   _rc=0
   run_wizard >/dev/null 2>&1 || _rc=$?
   if [[ "$_rc" -eq 0 ]] \
-    && [[ "$ENABLE_STATUSLINE" == "false" && "$SELECTED_PLUGINS" == "legacy-only" ]]; then
-    pass "mdm-managed: non-MDM fresh の保存値優先は不変"
+    && [[ "$ENABLE_STATUSLINE" == "false" && "$SELECTED_PLUGINS" == "security-guidance" ]]; then
+    pass "mdm-managed: non-MDM fresh のcatalog内保存値優先は不変"
   else
     fail "mdm-managed: non-MDM fresh の挙動を変更している"
   fi

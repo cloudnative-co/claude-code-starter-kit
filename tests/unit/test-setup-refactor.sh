@@ -106,7 +106,7 @@
 {
   test_name="setup-refactor: plugin install block is a callable function using exact matching"
   if grep -q '^install_selected_plugins()' "$PROJECT_DIR/setup.sh" \
-    && grep -q '_claude_plugin_list_has "$installed_plugins" "$p_name"' "$PROJECT_DIR/setup.sh" \
+    && grep -q '_selected_plugin_list_has "$installed_plugins" "$p"' "$PROJECT_DIR/setup.sh" \
     && ! grep -q '_installed_plugins.*grep' "$PROJECT_DIR/setup.sh"; then
     pass "$test_name"
   else
@@ -460,8 +460,10 @@
     backup_existing() { return 0; }
     _snapshot_exists() { return 0; }
     _validate_dismissed_features() { return 0; }
+    _validate_plugin_csv() { return 0; }
     run_update() { return 0; }
     _detect_and_write_pending_features() { return 0; }
+    _detect_and_offer_new_plugins() { return 0; }
     maybe_install_web_content_deps() { return 23; }
     CLAUDE_DIR="$_fail_mode_tmp/claude"
     UPDATE_MODE=true
@@ -828,7 +830,7 @@ printf '%s\n' '#!/bin/bash
 printf "%s\n" "$*" >> "${FAKE_CLAUDE_LOG:?}"
 if [[ "${1:-}" == "plugin" && "${2:-}" == "list" ]]; then
   printf "%s\n" "${FAKE_CLAUDE_PLUGIN_LIST:-}"
-  exit 0
+  exit "${FAKE_CLAUDE_PLUGIN_LIST_RC:-0}"
 fi
 if [[ "${1:-}" == "plugin" && "${2:-}" == "marketplace" && "${3:-}" == "add" ]]; then
   if [[ "${FAKE_CLAUDE_MARKETPLACE_RC:-0}" -ne 0 ]]; then
@@ -842,14 +844,22 @@ exit 0
 chmod +x "$_ISP_DIR/bin/claude"
 
 # _isp_run_case <selected_plugins> <plugin_list_output> <marketplace_rc> <with_claude>
+#               [catalog_body] [plugin_list_rc]
 #
 # Runs install_selected_plugins in an isolated subshell with the fake claude.
 # Results: $_ISP_DIR/calls.log (fake claude invocations, one per line),
 #          $_ISP_DIR/out.log (function stdout+stderr), $_ISP_DIR/rc.txt (exit code)
 _isp_run_case() {
   local _sel="$1" _plist="$2" _mp_rc="$3" _with_claude="$4"
+  local _catalog_dir="" _catalog_body="${5:-}" _list_rc="${6:-0}"
   : > "$_ISP_DIR/calls.log"
   rm -f "$_ISP_DIR/out.log" "$_ISP_DIR/rc.txt"
+  if [[ -n "$_catalog_body" ]]; then
+    _catalog_dir="$_ISP_DIR/catalog"
+    rm -rf "$_catalog_dir"
+    mkdir -p "$_catalog_dir/config"
+    printf '%s' "$_catalog_body" > "$_catalog_dir/config/plugins.json"
+  fi
   (
     # shellcheck source=/dev/null
     source "$PROJECT_DIR/setup.sh"
@@ -862,8 +872,12 @@ _isp_run_case() {
     # STR_DEPLOY_PLUGINS_*
     # shellcheck source=/dev/null
     source "$PROJECT_DIR/i18n/en/strings.sh"
+    if [[ -n "$_catalog_dir" ]]; then
+      PROJECT_DIR="$_catalog_dir"
+    fi
     export FAKE_CLAUDE_LOG="$_ISP_DIR/calls.log"
     export FAKE_CLAUDE_PLUGIN_LIST="$_plist"
+    export FAKE_CLAUDE_PLUGIN_LIST_RC="$_list_rc"
     export FAKE_CLAUDE_MARKETPLACE_RC="$_mp_rc"
     # install_selected_plugins (sourced from setup.sh) が参照するグローバル
     # shellcheck disable=SC2034
@@ -883,13 +897,44 @@ _isp_run_case() {
   )
 }
 
+# _isp_run_dry_case <selected_plugins> <plugin_list_output> <plugin_list_rc>
+#                   <update_mode> <with_claude>
+_isp_run_dry_case() {
+  local _sel="$1" _plist="$2" _list_rc="$3" _update="$4" _with_claude="$5"
+  : > "$_ISP_DIR/calls.log"
+  : > "$_ISP_DIR/dryrun.log"
+  rm -f "$_ISP_DIR/out.log" "$_ISP_DIR/rc.txt"
+  (
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/setup.sh"
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/lib/colors.sh"
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/lib/codex-setup.sh"
+    export FAKE_CLAUDE_LOG="$_ISP_DIR/calls.log"
+    export FAKE_CLAUDE_PLUGIN_LIST="$_plist"
+    export FAKE_CLAUDE_PLUGIN_LIST_RC="$_list_rc"
+    UPDATE_MODE="$_update"
+    if [[ "$_with_claude" == "true" ]]; then
+      PATH="$_ISP_DIR/bin:$PATH"
+    else
+      PATH="/usr/bin:/bin"
+    fi
+    hash -r
+    _dryrun_log() { printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$_ISP_DIR/dryrun.log"; }
+    _rc=0
+    _dryrun_log_plugin_operations "$_sel" > "$_ISP_DIR/out.log" 2>&1 || _rc=$?
+    printf '%s\n' "$_rc" > "$_ISP_DIR/rc.txt"
+  )
+}
+
 {
-  test_name="install_selected_plugins: exact-match already-installed plugin skips install"
-  if _isp_run_case "codex" "codex@1.0.0" 0 true \
+  test_name="install_selected_plugins: exact official-marketplace match skips install"
+  if _isp_run_case "security-guidance" "security-guidance@claude-plugins-official" 0 true \
     && grep -qx "plugin list" "$_ISP_DIR/calls.log" \
     && ! grep -q "plugin install" "$_ISP_DIR/calls.log" \
     && ! grep -q "plugin marketplace add" "$_ISP_DIR/calls.log" \
-    && grep -qF "Already installed: codex" "$_ISP_DIR/out.log" \
+    && grep -qF "Already installed: security-guidance" "$_ISP_DIR/out.log" \
     && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
     pass "$test_name"
   else
@@ -898,11 +943,25 @@ _isp_run_case() {
 }
 
 {
-  test_name="install_selected_plugins: prefix-similar name (codex-companion) does not mask codex"
-  if _isp_run_case "codex" "codex-companion@1.0.0" 0 true \
+  test_name="install_selected_plugins: failed plugin list output is not trusted"
+  if _isp_run_case "security-guidance" \
+    "security-guidance@claude-plugins-official" 0 true "" 1 \
+    && grep -qx "plugin list" "$_ISP_DIR/calls.log" \
     && grep -qx "plugin marketplace add anthropics/claude-plugins-official" "$_ISP_DIR/calls.log" \
-    && grep -qx "plugin install codex --scope user" "$_ISP_DIR/calls.log" \
-    && grep -qF "Plugin: codex" "$_ISP_DIR/out.log" \
+    && grep -qx "plugin install security-guidance --scope user" "$_ISP_DIR/calls.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: prefix-similar name does not mask the selected plugin"
+  if _isp_run_case "security-guidance" "security-guidance-companion@claude-plugins-official" 0 true \
+    && grep -qx "plugin marketplace add anthropics/claude-plugins-official" "$_ISP_DIR/calls.log" \
+    && grep -qx "plugin install security-guidance --scope user" "$_ISP_DIR/calls.log" \
+    && grep -qF "Plugin: security-guidance" "$_ISP_DIR/out.log" \
     && ! grep -qF "Already installed:" "$_ISP_DIR/out.log" \
     && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
     pass "$test_name"
@@ -912,11 +971,11 @@ _isp_run_case() {
 }
 
 {
-  test_name="install_selected_plugins: marketplace add failure warns with output and continues"
-  if _isp_run_case "codex" "" 1 true \
+  test_name="install_selected_plugins: marketplace add failure suppresses that repository's installs"
+  if _isp_run_case "security-guidance" "" 1 true \
     && grep -qF "Failed to add plugin marketplace" "$_ISP_DIR/out.log" \
     && grep -qF "fake-marketplace-error" "$_ISP_DIR/out.log" \
-    && grep -qx "plugin install codex --scope user" "$_ISP_DIR/calls.log" \
+    && ! grep -q "plugin install" "$_ISP_DIR/calls.log" \
     && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
     pass "$test_name"
   else
@@ -925,10 +984,26 @@ _isp_run_case() {
 }
 
 {
+  test_name="install_selected_plugins: malformed late catalog row invalidates the whole plan"
+  _isp_invalid_catalog='{"marketplaces":{"claude-plugins-official":"a/b","unused":7},"plugins":[
+    {"name":"security-guidance","marketplace":"claude-plugins-official","description":"security","profiles":["standard"]}
+  ]}'
+  if _isp_run_case "security-guidance" "" 0 true "$_isp_invalid_catalog" \
+    && [[ ! -s "$_ISP_DIR/calls.log" ]] \
+    && grep -qF "config/plugins.json is invalid" "$_ISP_DIR/out.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "1" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  unset _isp_invalid_catalog
+}
+
+{
   test_name="install_selected_plugins: missing claude CLI skips gracefully with hint"
-  if _isp_run_case "codex" "" 0 false \
+  if _isp_run_case "security-guidance" "" 0 false \
     && grep -qF "Skipping plugin install" "$_ISP_DIR/out.log" \
-    && grep -qF "/install codex" "$_ISP_DIR/out.log" \
+    && grep -qF "/install security-guidance" "$_ISP_DIR/out.log" \
     && [[ ! -s "$_ISP_DIR/calls.log" ]] \
     && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
     pass "$test_name"
@@ -937,6 +1012,188 @@ _isp_run_case() {
   fi
 }
 
+# ── marketplace identity is preserved end-to-end (F12) ──────────────────────
+{
+  test_name="install_selected_plugins: qualified entry keeps @marketplace through to install argv"
+  if _isp_run_case "document-skills@anthropic-agent-skills" "" 0 true \
+    && grep -qx "plugin marketplace add anthropics/skills" "$_ISP_DIR/calls.log" \
+    && grep -qx "plugin install document-skills@anthropic-agent-skills --scope user" "$_ISP_DIR/calls.log" \
+    && ! grep -qx "plugin install document-skills --scope user" "$_ISP_DIR/calls.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: same name from another marketplace is not mistaken for installed"
+  if _isp_run_case "document-skills@anthropic-agent-skills" "  ❯ document-skills@some-other-marketplace" 0 true \
+    && ! grep -qF "Already installed:" "$_ISP_DIR/out.log" \
+    && grep -qx "plugin install document-skills@anthropic-agent-skills --scope user" "$_ISP_DIR/calls.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: unambiguous official name remains bare for backward compatibility"
+  if _isp_run_case "security-guidance" "" 0 true \
+    && grep -qx "plugin install security-guidance --scope user" "$_ISP_DIR/calls.log" \
+    && ! grep -qF "plugin install security-guidance@" "$_ISP_DIR/calls.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: no-CLI hint keeps the @marketplace suffix"
+  if _isp_run_case "document-skills@anthropic-agent-skills" "" 0 false \
+    && grep -qF "/install document-skills@anthropic-agent-skills" "$_ISP_DIR/out.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: bare official target does not match another marketplace"
+  if _isp_run_case "security-guidance" "  ❯ security-guidance@some-other-marketplace" 0 true \
+    && grep -qx "plugin install security-guidance --scope user" "$_ISP_DIR/calls.log" \
+    && ! grep -qF "Already installed:" "$_ISP_DIR/out.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: unmapped marketplace fails closed before CLI execution"
+  if _isp_run_case "security-guidance@missing-marketplace" "" 0 true \
+    && [[ ! -s "$_ISP_DIR/calls.log" ]] \
+    && grep -qF "Skipping plugin outside the current catalog or marketplace mapping" "$_ISP_DIR/out.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: marketplace and duplicate plugin operations are deduplicated"
+  if _isp_run_case "security-guidance,commit-commands,security-guidance" "" 0 true \
+    && [[ "$(grep -c '^plugin marketplace add anthropics/claude-plugins-official$' "$_ISP_DIR/calls.log")" -eq 1 ]] \
+    && [[ "$(grep -c '^plugin install security-guidance --scope user$' "$_ISP_DIR/calls.log")" -eq 1 ]] \
+    && [[ "$(grep -c '^plugin install commit-commands --scope user$' "$_ISP_DIR/calls.log")" -eq 1 ]] \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="dry-run plugins: installed entries produce no external-operation preview"
+  if _isp_run_dry_case "security-guidance,document-skills@anthropic-agent-skills" \
+    $'security-guidance@claude-plugins-official\ndocument-skills@anthropic-agent-skills' \
+    0 false true \
+    && grep -qx "plugin list" "$_ISP_DIR/calls.log" \
+    && [[ ! -s "$_ISP_DIR/dryrun.log" ]] \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="dry-run plugins: only missing entries are previewed"
+  if _isp_run_dry_case "security-guidance,commit-commands" \
+    "security-guidance@claude-plugins-official" 0 false true \
+    && [[ "$(grep -cF 'claude plugin marketplace add anthropics/claude-plugins-official' "$_ISP_DIR/dryrun.log")" -eq 1 ]] \
+    && grep -qF 'claude plugin install commit-commands --scope user' "$_ISP_DIR/dryrun.log" \
+    && ! grep -qF 'claude plugin install security-guidance --scope user' "$_ISP_DIR/dryrun.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="dry-run plugins: failed list output is treated as untrusted"
+  if _isp_run_dry_case "document-skills@anthropic-agent-skills" \
+    "document-skills@anthropic-agent-skills" 1 false true \
+    && grep -qF 'claude plugin marketplace add anthropics/skills' "$_ISP_DIR/dryrun.log" \
+    && grep -qF 'claude plugin install document-skills@anthropic-agent-skills --scope user' "$_ISP_DIR/dryrun.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="dry-run plugins: update previews reinstall even when already installed"
+  if _isp_run_dry_case "security-guidance" \
+    "security-guidance@claude-plugins-official" 0 true true \
+    && grep -qF 'claude plugin marketplace add anthropics/claude-plugins-official' "$_ISP_DIR/dryrun.log" \
+    && grep -qF 'claude plugin install security-guidance --scope user' "$_ISP_DIR/dryrun.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="dry-run plugins: absent Claude CLI previews the post-bootstrap plugin plan"
+  if _isp_run_dry_case "security-guidance" "" 0 false false \
+    && [[ ! -s "$_ISP_DIR/calls.log" ]] \
+    && grep -qF 'claude plugin marketplace add anthropics/claude-plugins-official' "$_ISP_DIR/dryrun.log" \
+    && grep -qF 'claude plugin install security-guidance --scope user' "$_ISP_DIR/dryrun.log" \
+    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="dry-run plugins: invalid catalog propagates without logging a partial plan"
+  _isp_dry_log="$_ISP_DIR/dryrun-invalid.log"
+  _isp_invalid_dir="$_ISP_DIR/dryrun-invalid-kit"
+  mkdir -p "$_isp_invalid_dir/config"
+  printf '%s' '{"marketplaces":{"claude-plugins-official":"a/b"},"plugins":[
+    {"name":"security-guidance","marketplace":false,"description":"security","profiles":["standard"]}
+  ]}' > "$_isp_invalid_dir/config/plugins.json"
+  : > "$_isp_dry_log"
+  _isp_dry_rc=0
+  (
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/setup.sh"
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/lib/colors.sh"
+    PROJECT_DIR="$_isp_invalid_dir"
+    _dryrun_log() { printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$_isp_dry_log"; }
+    _dryrun_log_plugin_operations "security-guidance"
+  ) >/dev/null 2>&1 || _isp_dry_rc=$?
+  if [[ "$_isp_dry_rc" -eq 1 && ! -s "$_isp_dry_log" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+  rm -rf "$_isp_invalid_dir"
+  rm -f "$_isp_dry_log"
+  unset _isp_dry_log _isp_invalid_dir _isp_dry_rc
+}
+
 rm -rf "$_ISP_DIR"
 unset _ISP_DIR
-unset -f _isp_run_case
+unset -f _isp_run_case _isp_run_dry_case

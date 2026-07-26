@@ -37,7 +37,8 @@ run_scenario() {
 # --- 1. fresh-install-clean ---
 test_fresh_install_clean() {
   setup_test_env
-  local rc=0
+  local rc=0 pending_reader
+  pending_reader="$CLAUDE_DIR/hooks/feature-recommendation/check-pending.sh"
   run_setup --profile=minimal >/dev/null 2>&1 || rc=$?
 
   if [[ $rc -eq 0 ]] \
@@ -46,6 +47,12 @@ test_fresh_install_clean() {
     && assert_file_exists "$CLAUDE_DIR/.starter-kit-manifest.json" \
     && assert_dir_exists "$CLAUDE_DIR/.starter-kit-snapshot" \
     && assert_file_exists "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" \
+    && assert_file_contains "$CLAUDE_DIR/settings.json" "feature-recommendation/check-pending.sh" \
+    && [[ -x "$pending_reader" ]] \
+    && assert_file_exists \
+      "$CLAUDE_DIR/.starter-kit-snapshot/hooks/feature-recommendation/check-pending.sh" \
+    && jq -e --arg reader "$pending_reader" '.files | index($reader) != null' \
+      "$CLAUDE_DIR/.starter-kit-manifest.json" >/dev/null 2>&1 \
     && assert_file_contains "$CLAUDE_DIR/CLAUDE.md" "BEGIN STARTER-KIT-MANAGED" \
     && assert_json_field "$CLAUDE_DIR/.starter-kit-manifest.json" '.version' "2"; then
     pass "fresh-install-clean"
@@ -193,6 +200,55 @@ test_auto_update_legacy_claude_fallback() {
   teardown_test_env
 }
 
+# --- 4d. auto-update-preserves-custom-config-binding ---
+test_auto_update_preserves_custom_config_binding() {
+  setup_test_env
+  local custom_dir="$HOME/設定+custom"
+  local custom_config="$custom_dir/wizard+設定.conf"
+  local custom_physical default_config manifest config_tmp
+  local rc=0
+  default_config="$HOME/.claude-starter-kit.conf"
+  manifest="$CLAUDE_DIR/.starter-kit-manifest.json"
+  mkdir -p "$custom_dir"
+  custom_physical="$(cd -P "$custom_dir" && pwd -P)/${custom_config##*/}"
+
+  run_setup --profile=minimal --config="$custom_config" >/dev/null 2>&1 || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    fail "auto-update-preserves-custom-config-binding (setup failed)"
+    teardown_test_env
+    return
+  fi
+
+  # Prove that the argument-free update reads and rewrites the manifest-bound
+  # config rather than falling back to the default path.
+  config_tmp="$custom_config.tmp"
+  awk '
+    /^COMMIT_ATTRIBUTION=/ { print "COMMIT_ATTRIBUTION=\"true\""; next }
+    { print }
+  ' "$custom_config" > "$config_tmp" && mv "$config_tmp" "$custom_config"
+  printf '%s\n' '# custom-config-update-probe' >> "$custom_config"
+
+  rc=0
+  run_setup_update >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && jq -e --arg config "$custom_physical" '
+      .config_file == $config
+      and .profile == "minimal"
+      and .commit_attribution == "true"
+    ' "$manifest" >/dev/null 2>&1 \
+    && assert_file_contains "$custom_config" 'PROFILE="minimal"' \
+    && assert_file_contains "$custom_config" 'COMMIT_ATTRIBUTION="true"' \
+    && assert_file_not_contains "$custom_config" '# custom-config-update-probe' \
+    && assert_file_not_exists "$default_config"; then
+    pass "auto-update-preserves-custom-config-binding"
+  else
+    fail "auto-update-preserves-custom-config-binding"
+  fi
+
+  teardown_test_env
+}
+
 # --- 5. update-user-changed ---
 test_update_user_changed() {
   setup_test_env
@@ -229,6 +285,98 @@ test_update_feature_toggle() {
     pass "update-feature-toggle"
   else
     fail "update-feature-toggle"
+  fi
+
+  teardown_test_env
+}
+
+# --- update-adopts-new-catalog-plugin (F10 + F13) ---
+#
+# End-to-end through the real setup.sh and the real config/plugins.json:
+#   F10: a fresh install stamps the profile's default plugin set into
+#        KNOWN_PLUGINS, so a default the user deselected here is not treated as
+#        a newcomer and re-offered on the first update.
+#   F13: a plugin the install has not seen (simulated by dropping it from
+#        KNOWN_PLUGINS) is detected on update and recorded for the user.
+# The last full-only catalog entry stands in for "the newly catalogued plugin"
+# (after #152 merges this generalizes to claude-security, the 15th full plugin).
+test_update_adopts_new_catalog_plugin() {
+  setup_test_env
+  local conf="$HOME/.claude-starter-kit.conf"
+  local pending="$CLAUDE_DIR/.starter-kit-pending-features.json"
+  local q='def q: if (.marketplace // "claude-plugins-official")=="claude-plugins-official" then .name else .name+"@"+.marketplace end;'
+  local victim old_set
+  victim="$(jq -r "$q"' [.plugins[] | select(.profiles | index("full"))] | .[-1] | q' "$PROJECT_DIR/config/plugins.json")"
+  old_set="$(jq -r "$q"' ([.plugins[] | select(.profiles | index("full"))] | .[-1] | q) as $v | [.plugins[] | select(.profiles | index("full")) | q] | map(select(. != $v)) | join(",")' "$PROJECT_DIR/config/plugins.json")"
+
+  # 1. Fresh full install with the victim explicitly deselected.
+  run_setup --profile=full --fonts=false --ghostty=false --codex-plugin=false \
+    --plugins="$old_set" >/dev/null 2>&1
+
+  # F10: the fresh install must record the profile defaults (incl. victim).
+  local known
+  known="$(grep '^KNOWN_PLUGINS=' "$conf" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
+
+  # 2. Non-interactive update must NOT re-offer the deselected default.
+  run_setup_update --profile=full >/dev/null 2>&1
+  local reoffered=no
+  if [[ -f "$pending" ]] \
+    && jq -e --arg v "$victim" '(.plugins // []) | index($v)' "$pending" >/dev/null 2>&1; then
+    reoffered=yes
+  fi
+  local f10_ok=no
+  [[ ",$known," == *",$victim,"* ]] && [[ "$reoffered" == "no" ]] && f10_ok=yes
+
+  # 3. Simulate the victim being catalogued after the user was last asked: drop
+  #    it from KNOWN_PLUGINS (SELECTED already lacks it), then update again.
+  local tmpconf
+  tmpconf="$(mktemp)"
+  grep -v '^KNOWN_PLUGINS=' "$conf" > "$tmpconf" 2>/dev/null || true
+  printf 'KNOWN_PLUGINS="%s"\n' "$old_set" >> "$tmpconf"
+  mv "$tmpconf" "$conf"
+
+  run_setup_update --profile=full >/dev/null 2>&1
+  local f13_ok=no
+  if [[ -f "$pending" ]] \
+    && jq -e --arg v "$victim" '(.plugins // []) | index($v)' "$pending" >/dev/null 2>&1; then
+    f13_ok=yes
+  fi
+
+  # 4. Simulate /update-kit accepting the newcomer on an older conf that has
+  #    no SELECTED_PLUGINS line. The command contract initializes that line
+  #    from the current manifest before appending, so earlier choices survive.
+  local manifest="$CLAUDE_DIR/.starter-kit-manifest.json"
+  local manifest_selected accepted adopted
+  manifest_selected="$(jq -er '.plugins | select(type == "string")' "$manifest")"
+  accepted="$manifest_selected"
+  if [[ ",$accepted," != *",$victim,"* ]]; then
+    accepted="${accepted:+${accepted},}${victim}"
+  fi
+  tmpconf="$(mktemp "${conf}.XXXXXX")"
+  grep -v '^SELECTED_PLUGINS=' "$conf" > "$tmpconf" 2>/dev/null || true
+  printf 'SELECTED_PLUGINS="%s"\n' "$accepted" >> "$tmpconf"
+  chmod 600 "$tmpconf"
+  mv "$tmpconf" "$conf"
+
+  run_setup_update --profile=full >/dev/null 2>&1
+  adopted="$(jq -r '.plugins // ""' "$manifest")"
+  local f14_ok=no command_contract=no
+  if [[ "$adopted" == "$accepted" ]] \
+    && { [[ ! -f "$pending" ]] \
+      || ! jq -e --arg v "$victim" '(.plugins // []) | index($v)' \
+        "$pending" >/dev/null 2>&1; }; then
+    f14_ok=yes
+  fi
+  if grep -Fq 'If the `SELECTED_PLUGINS` line is absent' \
+    "$PROJECT_DIR/commands/update-kit.md"; then
+    command_contract=yes
+  fi
+
+  if [[ "$f10_ok" == "yes" ]] && [[ "$f13_ok" == "yes" ]] \
+    && [[ "$f14_ok" == "yes" ]] && [[ "$command_contract" == "yes" ]]; then
+    pass "update-adopts-new-catalog-plugin"
+  else
+    fail "update-adopts-new-catalog-plugin (f10=$f10_ok f13=$f13_ok f14=$f14_ok contract=$command_contract victim=$victim known=[$known])"
   fi
 
   teardown_test_env
@@ -849,17 +997,296 @@ test_dry_run_quiet_merge_summary() {
 
 # --- 34. update-kit-command-paths ---
 test_update_kit_command_paths() {
-  local update_cmd dry_run_cmd
-  update_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit.md")"
-  dry_run_cmd="$(sed -n '1,20p' "$PROJECT_DIR/commands/update-kit-dry-run.md")"
+  local update_cmd dry_run_cmd update_resolver dry_run_resolver
+  update_cmd="$(cat "$PROJECT_DIR/commands/update-kit.md")"
+  dry_run_cmd="$(cat "$PROJECT_DIR/commands/update-kit-dry-run.md")"
+  update_resolver="$(awk '
+    /^## Instructions$/ { within_section = 1; next }
+    within_section && /^```bash$/ { in_code = 1; next }
+    in_code && /^printf .*Resolved kit repo:/ { exit }
+    in_code { print }
+  ' "$PROJECT_DIR/commands/update-kit.md")"
+  dry_run_resolver="$(awk '
+    /^## Instructions$/ { within_section = 1; next }
+    within_section && /^```bash$/ { in_code = 1; next }
+    in_code && /^printf .*Resolved kit repo:/ { exit }
+    in_code { print }
+  ' "$PROJECT_DIR/commands/update-kit-dry-run.md")"
 
-  if grep -q "bash setup.sh --update" < <(printf '%s\n' "$update_cmd") \
-    && grep -q "bash setup.sh --update --dry-run" \
-      < <(printf '%s\n' "$dry_run_cmd"); then
+  if grep -Fq 'default_config_file="$HOME/.claude-starter-kit.conf"' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'KIT_REPO="...' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'repo_top="$(git -C "$kit_repo_physical" rev-parse --show-toplevel' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'setup_args=(--update)' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'setup_args+=("--config=$config_file")' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'bash setup.sh "${setup_args[@]}"' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'exact key in `_FEATURE_FLAGS`' < <(printf '%s\n' "$update_cmd") \
+    && ! grep -Fq 'cd ~/.claude-starter-kit' < <(printf '%s\n' "$update_cmd") \
+    && ! grep -Fq 'Read `~/.claude-starter-kit/' < <(printf '%s\n' "$update_cmd") \
+    && ! grep -Fq 're-run in Step 9' < <(printf '%s\n' "$update_cmd") \
+    && grep -Fq 'default_config_file="$HOME/.claude-starter-kit.conf"' < <(printf '%s\n' "$dry_run_cmd") \
+    && grep -Fq 'setup_args=(--update --dry-run)' < <(printf '%s\n' "$dry_run_cmd") \
+    && grep -Fq 'setup_args+=("--config=$config_file")' < <(printf '%s\n' "$dry_run_cmd") \
+    && grep -Fq 'bash setup.sh "${setup_args[@]}"' < <(printf '%s\n' "$dry_run_cmd") \
+    && ! grep -Fq 'cd ~/.claude-starter-kit' < <(printf '%s\n' "$dry_run_cmd") \
+    && [[ "$update_resolver" == "$dry_run_resolver" ]]; then
     pass "update-kit-command-paths"
   else
     fail "update-kit-command-paths"
   fi
+}
+
+# --- 34a. update-kit-repo-resolution ---
+test_update_kit_repo_resolution() {
+  setup_test_env
+  local command_file="$PROJECT_DIR/commands/update-kit.md"
+  local config_file="$HOME/.claude-starter-kit.conf"
+  local manifest_file="$HOME/.claude/.starter-kit-manifest.json"
+  local custom_repo="$HOME/キット+custom checkout"
+  local default_repo="$HOME/.claude-starter-kit"
+  local repo
+  for repo in "$custom_repo" "$default_repo"; do
+    mkdir -p "$repo/lib" "$repo/config"
+    : > "$repo/setup.sh"
+    : > "$repo/lib/features.sh"
+    printf '%s\n' '{}' > "$repo/config/plugins.json"
+    git init -q "$repo"
+  done
+
+  local resolver_script resolver_command
+  resolver_script="$(awk '
+    /^## Instructions$/ { within_section = 1; next }
+    within_section && /^```bash$/ { in_code = 1; next }
+    in_code && /^printf .*Resolved kit repo:/ { exit }
+    in_code { print }
+  ' "$command_file")"
+  resolver_command="${resolver_script}"$'\n''printf "%s" "$kit_repo_physical"'
+
+  printf 'KIT_REPO="%s"\n' "$custom_repo" > "$config_file"
+  local custom_actual custom_rc=0
+  custom_actual="$(HOME="$HOME" bash -eu -c "$resolver_command")" || custom_rc=$?
+  local custom_ok=no
+  if [[ $custom_rc -eq 0 ]] \
+    && [[ "$custom_actual" == "$(cd "$custom_repo" && pwd -P)" ]]; then
+    custom_ok=yes
+  fi
+
+  local bound_config="$HOME/custom wizard.conf"
+  printf 'KIT_REPO="%s"\n' "$custom_repo" > "$bound_config"
+  mkdir -p "${manifest_file%/*}"
+  jq -n --arg repo "$custom_repo" --arg config "$bound_config" \
+    '{version:2,mdm_managed:false,kit_repo:$repo,config_file:$config}' \
+    > "$manifest_file"
+  local bound_actual bound_rc=0
+  bound_actual="$(HOME="$HOME" bash -eu -c \
+    "${resolver_script}"$'\n''printf "%s|%s|%s" "$kit_repo_physical" "$config_file" "$manifest_bound"')" \
+    || bound_rc=$?
+  local bound_ok=no
+  if [[ $bound_rc -eq 0 ]] \
+    && [[ "$bound_actual" == "$(cd "$custom_repo" && pwd -P)|$bound_config|true" ]]; then
+    bound_ok=yes
+  fi
+
+  local fallback_manifest_ok=yes manifest_json manifest_actual manifest_rc
+  for manifest_json in '{"version":2}' '{"version":2,"mdm_managed":true}'; do
+    printf '%s\n' "$manifest_json" > "$manifest_file"
+    manifest_rc=0
+    manifest_actual="$(HOME="$HOME" bash -eu -c \
+      "${resolver_script}"$'\n''printf "%s|%s|%s" "$kit_repo_physical" "$config_file" "$manifest_bound"')" \
+      || manifest_rc=$?
+    if [[ $manifest_rc -ne 0 ]] \
+      || [[ "$manifest_actual" != "$(cd "$custom_repo" && pwd -P)|$config_file|false" ]]; then
+      fallback_manifest_ok=no
+    fi
+  done
+  rm -f "$manifest_file"
+
+  rm -f "$config_file"
+  local fallback_actual fallback_rc=0
+  fallback_actual="$(HOME="$HOME" bash -eu -c "$resolver_command")" || fallback_rc=$?
+  local fallback_ok=no
+  if [[ $fallback_rc -eq 0 ]] \
+    && [[ "$fallback_actual" == "$(cd "$default_repo" && pwd -P)" ]]; then
+    fallback_ok=yes
+  fi
+
+  printf '%s\n' 'PROFILE="standard"' > "$config_file"
+  local legacy_actual legacy_rc=0
+  legacy_actual="$(HOME="$HOME" bash -eu -c "$resolver_command")" || legacy_rc=$?
+  local legacy_ok=no
+  if [[ $legacy_rc -eq 0 ]] \
+    && [[ "$legacy_actual" == "$(cd "$default_repo" && pwd -P)" ]]; then
+    legacy_ok=yes
+  fi
+
+  printf '%s\n' 'KIT_REPO="relative/path"' > "$config_file"
+  local relative_rc=0
+  HOME="$HOME" bash -eu -c "$resolver_command" >/dev/null 2>&1 || relative_rc=$?
+
+  printf 'KIT_REPO="%s"\nKIT_REPO="%s"\n' "$custom_repo" "$default_repo" > "$config_file"
+  local duplicate_rc=0
+  HOME="$HOME" bash -eu -c "$resolver_command" >/dev/null 2>&1 || duplicate_rc=$?
+
+  local marker="$HOME/config-was-evaluated"
+  printf 'KIT_REPO="$(touch %s)"\n' "$marker" > "$config_file"
+  local injection_rc=0
+  HOME="$HOME" bash -eu -c "$resolver_command" >/dev/null 2>&1 || injection_rc=$?
+
+  local nongit_repo="$HOME/not-a-repo"
+  mkdir -p "$nongit_repo/lib" "$nongit_repo/config"
+  : > "$nongit_repo/setup.sh"
+  : > "$nongit_repo/lib/features.sh"
+  printf '%s\n' '{}' > "$nongit_repo/config/plugins.json"
+  printf 'KIT_REPO="%s"\n' "$nongit_repo" > "$config_file"
+  local nongit_rc=0
+  HOME="$HOME" bash -eu -c "$resolver_command" >/dev/null 2>&1 || nongit_rc=$?
+
+  local incomplete_repo="$HOME/incomplete-repo"
+  mkdir -p "$incomplete_repo/lib"
+  : > "$incomplete_repo/setup.sh"
+  : > "$incomplete_repo/lib/features.sh"
+  git init -q "$incomplete_repo"
+  printf 'KIT_REPO="%s"\n' "$incomplete_repo" > "$config_file"
+  local incomplete_rc=0
+  HOME="$HOME" bash -eu -c "$resolver_command" >/dev/null 2>&1 || incomplete_rc=$?
+
+  if [[ "$custom_ok" == "yes" && "$bound_ok" == "yes" ]] \
+    && [[ "$fallback_manifest_ok" == "yes" ]] \
+    && [[ "$fallback_ok" == "yes" && "$legacy_ok" == "yes" ]] \
+    && [[ $relative_rc -ne 0 && $duplicate_rc -ne 0 ]] \
+    && [[ $injection_rc -ne 0 && ! -e "$marker" ]] \
+    && [[ $nongit_rc -ne 0 && $incomplete_rc -ne 0 ]]; then
+    pass "update-kit-repo-resolution"
+  else
+    fail "update-kit-repo-resolution (custom=$custom_ok bound=$bound_ok legacy-mdm=$fallback_manifest_ok fallback=$fallback_ok legacy=$legacy_ok relative=$relative_rc duplicate=$duplicate_rc injection=$injection_rc nongit=$nongit_rc incomplete=$incomplete_rc)"
+  fi
+
+  teardown_test_env
+}
+
+# --- 34b. update-kit-pending-finalize-safe ---
+test_update_kit_pending_finalize_safe() {
+  setup_test_env
+  mkdir -p "$CLAUDE_DIR"
+  local command_file="$PROJECT_DIR/commands/update-kit.md"
+  local pending="$CLAUDE_DIR/.starter-kit-pending-features.json"
+  local step1_script step7_script
+  step1_script="$(awk '
+    /^#### Step 1:/ { within_step = 1; next }
+    /^#### Step 2:/ { exit }
+    within_step && /^```bash$/ { in_code = 1; next }
+    within_step && in_code && /^```$/ { in_code = 0; next }
+    within_step && in_code { print }
+  ' "$command_file")"
+  step7_script="$(awk '
+    /^#### Step 7:/ { within_step = 1; next }
+    /^#### Step 8:/ { exit }
+    within_step && /^```bash$/ { in_code = 1; next }
+    within_step && in_code && /^```$/ { in_code = 0; next }
+    within_step && in_code { print }
+  ' "$command_file")"
+
+  local static_ok=no
+  if grep -Fq 'mktemp "$pending_dir/.starter-kit-pending-features.json.tmp.XXXXXX"' "$command_file" \
+    && grep -Fq 'mktemp "$pending_dir/.starter-kit-pending-features.json.snapshot.XXXXXX"' "$command_file" \
+    && grep -Fq 'chmod 600 "$pending_tmp"' "$command_file" \
+    && grep -Fq 'mv "$pending_tmp" "$pending_file" || exit 1' "$command_file" \
+    && [[ "$(grep -Fc 'jq -e -s' "$command_file")" -eq 2 ]] \
+    && grep -Fq '"$pending_snapshot" > "$pending_tmp" || exit 1' "$command_file" \
+    && [[ "$(grep -Fc 'Invalid pending file; preserved unchanged' "$command_file")" -eq 3 ]] \
+    && ! grep -Fq '/tmp/pf.$$' "$command_file"; then
+    static_ok=yes
+  fi
+
+  printf '%s\n' \
+    '{"features":["doc-size-guard","keep-feature"],"plugins":["claude-security","keep-plugin"],"meta":"keep"}' \
+    > "$pending"
+  chmod 644 "$pending"
+  local keep_rc=0
+  HOME="$HOME" bash -eu -c "$step7_script" >/dev/null 2>&1 || keep_rc=$?
+  local keep_ok=no
+  if [[ $keep_rc -eq 0 ]] \
+    && jq -e '.features == ["keep-feature"] and .plugins == ["keep-plugin"] and .meta == "keep"' "$pending" >/dev/null 2>&1 \
+    && [[ "$(test_stat_mode "$pending")" == "600" ]]; then
+    keep_ok=yes
+  fi
+
+  printf '%s\n' '{"features":["doc-size-guard"],"plugins":["claude-security"]}' > "$pending"
+  local empty_rc=0
+  HOME="$HOME" bash -eu -c "$step7_script" >/dev/null 2>&1 || empty_rc=$?
+  local empty_ok=no
+  [[ $empty_rc -eq 0 && ! -e "$pending" ]] && empty_ok=yes
+
+  : > "$pending"
+  chmod 640 "$pending"
+  local zero_step1_rc=0 zero_step7_rc=0
+  HOME="$HOME" bash -eu -c "$step1_script" >/dev/null 2>&1 || zero_step1_rc=$?
+  HOME="$HOME" bash -eu -c "$step7_script" >/dev/null 2>&1 || zero_step7_rc=$?
+  local zero_ok=no
+  if [[ $zero_step1_rc -ne 0 && $zero_step7_rc -ne 0 ]] \
+    && [[ -f "$pending" && ! -s "$pending" ]] \
+    && [[ "$(test_stat_mode "$pending")" == "640" ]]; then
+    zero_ok=yes
+  fi
+
+  printf '%s\n' '{not-json' > "$pending"
+  chmod 640 "$pending"
+  local malformed_before malformed_after malformed_step1_rc=0 malformed_step7_rc=0
+  malformed_before="$(cat "$pending")"
+  HOME="$HOME" bash -eu -c "$step1_script" >/dev/null 2>&1 || malformed_step1_rc=$?
+  HOME="$HOME" bash -eu -c "$step7_script" >/dev/null 2>&1 || malformed_step7_rc=$?
+  malformed_after="$(cat "$pending")"
+  local malformed_ok=no
+  if [[ $malformed_step1_rc -ne 0 && $malformed_step7_rc -ne 0 ]] \
+    && [[ "$malformed_after" == "$malformed_before" ]] \
+    && [[ "$(test_stat_mode "$pending")" == "640" ]] \
+    && [[ -z "$(find "$CLAUDE_DIR" -name '.starter-kit-pending-features.json.*' -prune -print)" ]]; then
+    malformed_ok=yes
+  fi
+
+  printf '%s\n' \
+    '{"features":"not-an-array"}' \
+    '{"features":["doc-size-guard"],"plugins":["claude-security"]}' \
+    > "$pending"
+  chmod 640 "$pending"
+  local multiple_before="$HOME/pending-multiple-before"
+  cp "$pending" "$multiple_before"
+  local multiple_step1_rc=0 multiple_step7_rc=0
+  HOME="$HOME" bash -eu -c "$step1_script" >/dev/null 2>&1 || multiple_step1_rc=$?
+  local multiple_step1_preserved=no
+  if [[ $multiple_step1_rc -ne 0 ]] && cmp -s "$multiple_before" "$pending"; then
+    multiple_step1_preserved=yes
+  fi
+  HOME="$HOME" bash -eu -c "$step7_script" >/dev/null 2>&1 || multiple_step7_rc=$?
+  local multiple_ok=no
+  if [[ "$multiple_step1_preserved" == "yes" && $multiple_step7_rc -ne 0 ]] \
+    && cmp -s "$multiple_before" "$pending" \
+    && [[ "$(test_stat_mode "$pending")" == "640" ]] \
+    && [[ -z "$(find "$CLAUDE_DIR" -name '.starter-kit-pending-features.json.*' -prune -print)" ]]; then
+    multiple_ok=yes
+  fi
+
+  local symlink_target="$CLAUDE_DIR/pending-target"
+  printf '%s\n' 'sentinel' > "$symlink_target"
+  rm -f "$pending"
+  ln -s "$symlink_target" "$pending"
+  local symlink_rc=0
+  HOME="$HOME" bash -eu -c "$step7_script" >/dev/null 2>&1 || symlink_rc=$?
+  local symlink_ok=no
+  if [[ $symlink_rc -ne 0 && -L "$pending" ]] \
+    && [[ "$(cat "$symlink_target")" == "sentinel" ]]; then
+    symlink_ok=yes
+  fi
+
+  if [[ "$static_ok" == "yes" && "$keep_ok" == "yes" \
+    && "$empty_ok" == "yes" && "$zero_ok" == "yes" \
+    && "$malformed_ok" == "yes" && "$multiple_ok" == "yes" \
+    && "$symlink_ok" == "yes" ]]; then
+    pass "update-kit-pending-finalize-safe"
+  else
+    fail "update-kit-pending-finalize-safe (static=$static_ok keep=$keep_ok empty=$empty_ok zero=$zero_ok malformed=$malformed_ok multiple=$multiple_ok symlink=$symlink_ok)"
+  fi
+
+  teardown_test_env
 }
 
 # --- 35. biome-hooks-full-profile ---
@@ -1099,7 +1526,11 @@ run_scenario update test_update_partial_failure_recovery
 run_scenario update test_update_progress_output
 run_scenario update test_auto_update_session_hooks
 run_scenario update test_auto_update_legacy_claude_fallback
+run_scenario update test_auto_update_preserves_custom_config_binding
 run_scenario update test_update_kit_command_paths
+run_scenario update test_update_kit_repo_resolution
+run_scenario update test_update_kit_pending_finalize_safe
+run_scenario update test_update_adopts_new_catalog_plugin
 
 # update-merge: 3-way merge decisions, CLAUDE.md sections, snapshot handling
 run_scenario update-merge test_update_kit_changed

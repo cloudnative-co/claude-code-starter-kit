@@ -1228,12 +1228,10 @@ _update_hook_scripts() {
   _UPDATE_UPDATED_FILES=()
   _UPDATE_SKIPPED_FILES=()
 
-  local feature_name flag src_dir
+  local feature_name src_dir
   for feature_name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$feature_name]+set}" ]] || continue
-    flag="${_FEATURE_FLAGS[$feature_name]:-}"
-    [[ -n "$flag" ]] || continue
-    is_true "${!flag:-false}" || continue
+    _feature_deploy_enabled "$feature_name" || continue
     src_dir="$PROJECT_DIR/features/${feature_name}/scripts"
     _update_hook_feature "$feature_name" "$src_dir" "$claude_dir" "$snapshot_dir" || return 1
   done
@@ -1563,12 +1561,10 @@ _count_update_content_files() {
 
 _count_update_hook_files() {
   local total=0 feature_count
-  local feature_name flag src_dir
+  local feature_name src_dir
   for feature_name in "${_FEATURE_SCRIPT_ORDER[@]}"; do
     [[ "${_FEATURE_HAS_SCRIPTS[$feature_name]+set}" ]] || continue
-    flag="${_FEATURE_FLAGS[$feature_name]:-}"
-    [[ -n "$flag" ]] || continue
-    is_true "${!flag:-false}" || continue
+    _feature_deploy_enabled "$feature_name" || continue
     src_dir="$PROJECT_DIR/features/${feature_name}/scripts"
     [[ -d "$src_dir" ]] || continue
     feature_count="$(_count_update_files_in_dir "$src_dir")" || return 1

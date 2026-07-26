@@ -51,6 +51,14 @@ printf -v ENABLE_DOC_SIZE_GUARD '%s' "true"
   else
     fail "$test_name (rc=$_rt_rc)"
   fi
+
+  test_name="retired-files: update deploy keeps the plugin pending reader independently enabled"
+  if [[ "$_rt_rc" -eq 0 ]] \
+    && [[ -x "$_rt_cd/hooks/feature-recommendation/check-pending.sh" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name (rc=$_rt_rc)"
+  fi
 }
 
 # ── 2. manifest/snapshot tracking covers scripted features ────────────────
@@ -59,6 +67,14 @@ printf -v ENABLE_DOC_SIZE_GUARD '%s' "true"
   collect_managed_target_files
   if printf '%s\n' "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}" \
     | grep -qx "$CLAUDE_DIR/hooks/doc-size-guard/check-doc-size.sh"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+
+  test_name="retired-files: managed target tracking includes the shared pending reader"
+  if printf '%s\n' "${_MANAGED_TARGET_FILES[@]+"${_MANAGED_TARGET_FILES[@]}"}" \
+    | grep -qx "$CLAUDE_DIR/hooks/feature-recommendation/check-pending.sh"; then
     pass "$test_name"
   else
     fail "$test_name"

@@ -75,7 +75,7 @@ Missing or unsupported prerequisites are installed or upgraded automatically whe
 > - The startup banner recommends `--permission-mode auto`. The kit's `disableBypassPermissionsMode` controls a different mode and does not block auto mode, so any permission expansion remains your decision.
 > - Scan only trusted repositories. The plugin runs inside the current Claude Code session and permissions, without isolating the target code. Patch validation may run the project's build or tests in a scratch clone; that protects the working tree but does not isolate host credentials, network access, or external side effects. For unknown code, remove credentials from a copy and run the whole session in a sandbox.
 > - The kit denies Read for filenames matching `.env`, `secrets/`, `*secret*`, or `*credential*`, while its Bash-side deny covers only `.env` patterns; commands that reference the other paths are not guaranteed to be blocked. These filename-based rules are guardrails, not a confidentiality boundary. Remove credentials from the scan copy rather than relying on deny rules to keep them out of model context.
-> - Existing installs do not receive the plugin automatically: run `/plugin install claude-security@claude-plugins-official`, then `/reload-plugins` or restart Claude Code.
+> - Existing Full installs receive the plugin only after consent. An interactive update asks with a default of no; auto-update and `--non-interactive` install nothing and leave a pending notice. Use `/update-kit` to dismiss it permanently, or install manually with `/plugin install claude-security@claude-plugins-official`. After installation, run `/reload-plugins` or restart Claude Code.
 
 ### Security layers
 
@@ -380,6 +380,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--non-interactive` is intended for CI/automation. Interactive mode is recommended for existing users.
 > - A backup is automatically created at `~/.claude.backup.<timestamp>` before every update or first install with existing files.
 > - `setup.sh --update` and `/update-kit` now show `Step N/M` progress so long-running phases such as settings merges no longer look stalled.
+> - **Plugins added after you installed**: an interactive update asks about each one that is a default for your profile, one at a time, defaulting to no — nothing is installed without an explicit yes, and a plugin you previously deselected is never silently restored. Auto-update and `--non-interactive` runs install nothing and only leave a "new plugins available" notice for your next session. Declines are remembered, so you are not asked twice.
 > - **Dirty check**: If the kit repo has local changes, update is blocked with a `git stash` hint (applies to auto-update, install.sh, and /update-kit).
 > - **Auto-update**: SessionStart and SessionEnd hooks now check on every session boundary and run asynchronously. `~/.claude/.starter-kit-update.lock` prevents overlapping updates.
 > - **Recovery**: If an update fails, backup path and restore commands are shown. The latest backup path is saved in `~/.claude/.starter-kit-last-backup`.

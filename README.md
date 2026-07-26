@@ -601,7 +601,7 @@ Standard / Full プロファイルではおすすめのプラグインが自動�
 > - **信頼済みのリポジトリだけをスキャンしてください。** プラグインは現在の Claude Code セッションと権限の中で動作し、対象コードを別環境へ隔離しません。パッチ提案の検証では scratch clone 内で対象プロジェクトの build や test を実行する場合がありますが、scratch clone は作業ツリーを守るためのもので、ホストの資格情報・ネットワーク・外部副作用を隔離しません。未知・未審査のリポジトリは、資格情報や秘密を含まないコピーを用意し、Claude Code セッション全体を sandbox 内で実行してください。
 > - キットの deny ルールの都合で、**ファイル名が `.env` / `secrets/` / `*secret*` / `*credential*` に一致するファイル**は Read が拒否されます。Bash 側の deny は `.env` 系（`Bash(* .env*)`）のみで、`secrets/` 等を参照する Bash コマンドは設定としては拒否されません（Claude Code 本体のコマンド解析で止まる場合はありますが保証はありません）。いずれもファイル名ベースのガードレールで、機密保持の境界ではありません。スキャン用コピーから資格情報を除去し、deny だけでモデルの文脈への流入を防げるとは考えないでください。
 >
-> **既存の環境には自動で追加されません。** アップデート（`/update-kit` や `setup.sh --update`、ワンライナーの再実行）では、導入済みプラグインの一覧がマニフェストから復元されるため、新しく追加されたプラグインは取り込まれません。すでに Full でインストール済みの方は、Claude Code 上で `/plugin install claude-security@claude-plugins-official` を実行し、続けて `/reload-plugins` を実行してください（または Claude Code を再起動）。install しただけでは同じセッションでは有効になりません。
+> **既存の Full 環境では同意後に追加されます。** 対話的な update（`/update-kit`、`setup.sh --update`、ワンライナー再実行）は `claude-security` を既定「いいえ」で個別に確認し、明示的に承諾した場合だけ導入します。auto-update や `--non-interactive` は導入せず、次のセッションに pending 通知を残します。不要なら `/update-kit` で「今後追加しない」を選べます。手動の `/plugin install claude-security@claude-plugins-official` も任意の代替です。導入後は `/reload-plugins`（または Claude Code の再起動）が必要です。
 
 > **マルチマーケットプレイス**: プラグインは複数のマーケットプレイス（現在は `claude-plugins-official` と `anthropic-agent-skills`）から導入されます。
 > 同名のプラグインが複数のマーケットプレイスに存在する場合は、ウィザードで `[マーケットプレイス名]` のサフィックスが表示され、
@@ -906,6 +906,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
 > - `--non-interactive` は CI/自動デプロイ向けです。既存ユーザーには対話モードを推奨します。
 > - update 実行前には `~/.claude.backup.<タイムスタンプ>` に自動バックアップが作成されます。
 > - `setup.sh --update` / `/update-kit` では `Step N/M` の進捗表示が出ます。`settings.json` のマージのような長い処理でも途中経過が分かるようになっています。
+> - **新しく追加されたプラグインの取り込み**: キットに後から追加されたプラグインのうち、お使いのプロファイルで既定のものは、対話的なアップデート時に 1 件ずつ確認します（既定は「いいえ」で、承諾したものだけ導入されます）。過去に自分で外したプラグインが勝手に戻ることはありません。自動更新（auto-update）や `--non-interactive` では**何も導入せず**、次のセッション開始時に「新しいプラグインが利用可能です」と通知するだけです。辞退した内容は記録され、同じ確認は繰り返されません。
 >
 > **ドライラン（事前プレビュー）**:
 > - `/update-kit-dry-run` または `bash setup.sh --update --dry-run` で、update が何をするか事前に確認できます。ファイルの作成・変更・削除・スキップの一覧、settings.json の diff、外部操作（plugins 等）を `[WOULD RUN]` として表示します。
