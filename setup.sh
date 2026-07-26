@@ -137,6 +137,8 @@ setup_source_stage2() {
 . "$PROJECT_DIR/lib/fonts.sh"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/lib/codex-setup.sh"
+# shellcheck source=/dev/null
+. "$PROJECT_DIR/lib/plugin-provenance.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -1280,15 +1282,20 @@ install_selected_plugins() {
     return 0
   fi
 
-  local installed_plugins need_install=false
-  installed_plugins="$(claude plugin list 2>/dev/null || true)"
+  local installed_plugins="" plugin_list_trusted=false need_install=false
+  if _run_capture installed_plugins claude plugin list; then
+    plugin_list_trusted=true
+  fi
   if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
     need_install=true
+  elif [[ "$plugin_list_trusted" != "true" ]]; then
+    need_install=true
   else
-    local p p_name
+    local p p_qualified
     for p in "${plugins[@]}"; do
-      p_name="${p%%@*}"
-      if [[ -n "$p_name" ]] && ! _claude_plugin_list_has "$installed_plugins" "$p_name"; then
+      p_qualified="$(_plugin_provenance_qualify "$p")" || continue
+      if ! _plugin_provenance_list_has_exact \
+          "$installed_plugins" "$p_qualified"; then
         need_install=true
         break
       fi
@@ -1314,24 +1321,43 @@ install_selected_plugins() {
     info "$STR_DEPLOY_PLUGINS_INSTALLING"
   fi
 
-  local p p_name plugin_output
+  local p p_name p_qualified plugin_output was_absent
   for p in "${plugins[@]}"; do
-    p_name="${p%%@*}"
-    [[ -z "$p_name" ]] && continue
+    p_qualified="$(_plugin_provenance_qualify "$p")" || {
+      warn "$STR_DEPLOY_PLUGINS_FAILED $p"
+      continue
+    }
+    p_name="${p_qualified%%@*}"
+    was_absent=false
+    if [[ "$plugin_list_trusted" == "true" ]] \
+      && ! _plugin_provenance_list_has_exact \
+        "$installed_plugins" "$p_qualified"; then
+      was_absent=true
+    fi
     if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
       plugin_output=""
-      if _run_capture plugin_output claude plugin install "$p_name" --scope user; then
+      if _run_capture plugin_output claude plugin install "$p_qualified" --scope user; then
         ok "${STR_DEPLOY_PLUGINS_UPDATED:-Updated} $p_name"
+        if [[ "$was_absent" == "true" ]] \
+          && ! _plugin_provenance_record "$CLAUDE_DIR" "$p_qualified"; then
+          warn "Could not record starter-kit plugin ownership: $p_qualified"
+        fi
       else
         warn "$STR_DEPLOY_PLUGINS_FAILED $p_name"
         [[ -n "$plugin_output" ]] && info "  $plugin_output"
       fi
-    elif _claude_plugin_list_has "$installed_plugins" "$p_name"; then
+    elif [[ "$plugin_list_trusted" == "true" ]] \
+      && _plugin_provenance_list_has_exact \
+        "$installed_plugins" "$p_qualified"; then
       ok "$STR_DEPLOY_PLUGINS_ALREADY $p_name"
     else
       plugin_output=""
-      if _run_capture plugin_output claude plugin install "$p_name" --scope user; then
+      if _run_capture plugin_output claude plugin install "$p_qualified" --scope user; then
         ok "$STR_DEPLOY_PLUGINS_INSTALLED $p_name"
+        if [[ "$was_absent" == "true" ]] \
+          && ! _plugin_provenance_record "$CLAUDE_DIR" "$p_qualified"; then
+          warn "Could not record starter-kit plugin ownership: $p_qualified"
+        fi
       else
         warn "$STR_DEPLOY_PLUGINS_FAILED $p_name"
         [[ -n "$plugin_output" ]] && info "  $plugin_output"

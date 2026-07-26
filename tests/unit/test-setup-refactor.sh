@@ -106,7 +106,9 @@
 {
   test_name="setup-refactor: plugin install block is a callable function using exact matching"
   if grep -q '^install_selected_plugins()' "$PROJECT_DIR/setup.sh" \
-    && grep -q '_claude_plugin_list_has "$installed_plugins" "$p_name"' "$PROJECT_DIR/setup.sh" \
+    && grep -q '_plugin_provenance_list_has_exact' "$PROJECT_DIR/setup.sh" \
+    && ! grep -q '_claude_plugin_list_has "$installed_plugins" "$p_name"' \
+      "$PROJECT_DIR/setup.sh" \
     && ! grep -q '_installed_plugins.*grep' "$PROJECT_DIR/setup.sh"; then
     pass "$test_name"
   else
@@ -813,84 +815,80 @@
 }
 
 # ---------------------------------------------------------------------------
-# install_selected_plugins() behavior tests
-#
-# setup.sh を source すると set -euo pipefail / umask / trap がこのシェルに
-# 漏れるため、必ずサブシェル ( ... ) 内で source し、アサーション材料
-# (fake claude の呼び出しログ・関数出力・終了コード) はファイルに書いて
-# 親シェルで判定する。
+# install_selected_plugins() and durable provenance behavior
 # ---------------------------------------------------------------------------
 
 _ISP_DIR="$(mktemp -d)"
-mkdir -p "$_ISP_DIR/bin"
+_ISP_FIXED_PATH="$_ISP_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+mkdir -p "$_ISP_DIR/bin" "$_ISP_DIR/no-cli" "$_ISP_DIR/state"
+ln -s "$(command -v jq)" "$_ISP_DIR/bin/jq"
 printf '%s\n' '#!/bin/bash
-# Fake claude CLI: logs every invocation; `plugin list` output is controllable.
 printf "%s\n" "$*" >> "${FAKE_CLAUDE_LOG:?}"
-if [[ "${1:-}" == "plugin" && "${2:-}" == "list" ]]; then
+if [[ "${1:-}" == plugin && "${2:-}" == list ]]; then
   printf "%s\n" "${FAKE_CLAUDE_PLUGIN_LIST:-}"
+  exit "${FAKE_CLAUDE_LIST_RC:-0}"
+fi
+if [[ "${1:-}" == plugin && "${2:-}" == marketplace && "${3:-}" == add ]]; then
+  [[ "${FAKE_CLAUDE_MARKETPLACE_RC:-0}" -eq 0 ]] || {
+    printf "fake-marketplace-error: %s\n" "${4:-}" >&2
+    exit "${FAKE_CLAUDE_MARKETPLACE_RC}"
+  }
   exit 0
 fi
-if [[ "${1:-}" == "plugin" && "${2:-}" == "marketplace" && "${3:-}" == "add" ]]; then
-  if [[ "${FAKE_CLAUDE_MARKETPLACE_RC:-0}" -ne 0 ]]; then
-    echo "fake-marketplace-error: cannot add ${4:-}" >&2
-    exit "${FAKE_CLAUDE_MARKETPLACE_RC}"
-  fi
-  exit 0
+if [[ "${1:-}" == plugin && "${2:-}" == install ]]; then
+  exit "${FAKE_CLAUDE_INSTALL_RC:-0}"
 fi
 exit 0
 ' > "$_ISP_DIR/bin/claude"
 chmod +x "$_ISP_DIR/bin/claude"
 
-# _isp_run_case <selected_plugins> <plugin_list_output> <marketplace_rc> <with_claude>
-#
-# Runs install_selected_plugins in an isolated subshell with the fake claude.
-# Results: $_ISP_DIR/calls.log (fake claude invocations, one per line),
-#          $_ISP_DIR/out.log (function stdout+stderr), $_ISP_DIR/rc.txt (exit code)
-_isp_run_case() {
-  local _sel="$1" _plist="$2" _mp_rc="$3" _with_claude="$4"
-  : > "$_ISP_DIR/calls.log"
-  rm -f "$_ISP_DIR/out.log" "$_ISP_DIR/rc.txt"
-  (
-    # shellcheck source=/dev/null
-    source "$PROJECT_DIR/setup.sh"
-    # setup_stage1/setup_source_stage2 は実行しないので、依存を手動で source する
-    # shellcheck source=/dev/null
-    source "$PROJECT_DIR/lib/colors.sh"
-    # _run_capture / _claude_plugin_list_has
-    # shellcheck source=/dev/null
-    source "$PROJECT_DIR/lib/codex-setup.sh"
-    # STR_DEPLOY_PLUGINS_*
-    # shellcheck source=/dev/null
-    source "$PROJECT_DIR/i18n/en/strings.sh"
-    export FAKE_CLAUDE_LOG="$_ISP_DIR/calls.log"
-    export FAKE_CLAUDE_PLUGIN_LIST="$_plist"
-    export FAKE_CLAUDE_MARKETPLACE_RC="$_mp_rc"
-    # install_selected_plugins (sourced from setup.sh) が参照するグローバル
-    # shellcheck disable=SC2034
-    SELECTED_PLUGINS="$_sel"
-    # shellcheck disable=SC2034
-    UPDATE_MODE="false"
-    if [[ "$_with_claude" == "true" ]]; then
-      PATH="$_ISP_DIR/bin:$PATH"
-    else
-      # claude が見つからない最小 PATH (この分岐は builtin のみで動く)
-      PATH="/usr/bin:/bin"
-    fi
-    hash -r
-    _rc=0
-    install_selected_plugins > "$_ISP_DIR/out.log" 2>&1 || _rc=$?
-    printf '%s\n' "$_rc" > "$_ISP_DIR/rc.txt"
-  )
+_isp_run_case() { # <name> <selected> <list> <list-rc> <market-rc> <install-rc> <cli> [dry-run]
+  local name="$1" selected="$2" plugin_list="$3" list_rc="$4"
+  local market_rc="$5" install_rc="$6" with_cli="$7" dry_run="${8:-false}"
+  local case_dir="$_ISP_DIR/state/$name" case_home case_path
+  case_home="$case_dir/home"
+  mkdir -p "$case_home/.claude" "$case_dir/tmp" "$case_dir/npm" \
+    "$case_dir/appdata" "$case_dir/localappdata"
+  : > "$case_dir/calls.log"
+  if [[ "$with_cli" == "true" ]]; then
+    case_path="$_ISP_FIXED_PATH"
+  else
+    case_path="$_ISP_DIR/no-cli:/usr/bin:/bin:/usr/sbin:/sbin"
+  fi
+  env -i \
+    HOME="$case_home" TMPDIR="$case_dir/tmp" \
+    APPDATA="$case_dir/appdata" LOCALAPPDATA="$case_dir/localappdata" \
+    NPM_CONFIG_PREFIX="$case_dir/npm" npm_config_prefix="$case_dir/npm" \
+    PATH="$case_path" LC_ALL=C TERM=dumb \
+    FAKE_CLAUDE_LOG="$case_dir/calls.log" \
+    FAKE_CLAUDE_PLUGIN_LIST="$plugin_list" FAKE_CLAUDE_LIST_RC="$list_rc" \
+    FAKE_CLAUDE_MARKETPLACE_RC="$market_rc" \
+    FAKE_CLAUDE_INSTALL_RC="$install_rc" \
+    bash -c '
+      set -euo pipefail
+      source "$1/setup.sh"
+      source "$1/lib/colors.sh"
+      source "$1/lib/codex-setup.sh"
+      source "$1/lib/plugin-provenance.sh"
+      source "$1/i18n/en/strings.sh"
+      SELECTED_PLUGINS="$2"
+      UPDATE_MODE=false
+      DRY_RUN="$3"
+      rc=0
+      install_selected_plugins > "$4/out.log" 2>&1 || rc=$?
+      printf "%s\n" "$rc" > "$4/rc.txt"
+    ' _ "$PROJECT_DIR" "$selected" "$dry_run" "$case_dir"
 }
 
 {
-  test_name="install_selected_plugins: exact-match already-installed plugin skips install"
-  if _isp_run_case "codex" "codex@1.0.0" 0 true \
-    && grep -qx "plugin list" "$_ISP_DIR/calls.log" \
-    && ! grep -q "plugin install" "$_ISP_DIR/calls.log" \
-    && ! grep -q "plugin marketplace add" "$_ISP_DIR/calls.log" \
-    && grep -qF "Already installed: codex" "$_ISP_DIR/out.log" \
-    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+  test_name="install_selected_plugins: a pre-existing plugin is never adopted"
+  _isp_run_case existing "security-guidance" \
+    "security-guidance@claude-plugins-official" 0 0 0 true
+  _case="$_ISP_DIR/state/existing"
+  if grep -qx "plugin list" "$_case/calls.log" \
+    && ! grep -q "plugin install" "$_case/calls.log" \
+    && [[ ! -e "$_case/home/.claude/.starter-kit-plugin-provenance.json" ]] \
+    && [[ "$(cat "$_case/rc.txt")" == 0 ]]; then
     pass "$test_name"
   else
     fail "$test_name"
@@ -898,13 +896,16 @@ _isp_run_case() {
 }
 
 {
-  test_name="install_selected_plugins: prefix-similar name (codex-companion) does not mask codex"
-  if _isp_run_case "codex" "codex-companion@1.0.0" 0 true \
-    && grep -qx "plugin marketplace add anthropics/claude-plugins-official" "$_ISP_DIR/calls.log" \
-    && grep -qx "plugin install codex --scope user" "$_ISP_DIR/calls.log" \
-    && grep -qF "Plugin: codex" "$_ISP_DIR/out.log" \
-    && ! grep -qF "Already installed:" "$_ISP_DIR/out.log" \
-    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+  test_name="install_selected_plugins: same name in another marketplace is not adopted"
+  _isp_run_case other-marketplace "security-guidance" \
+    "security-guidance@third-party" 0 0 0 true
+  _case="$_ISP_DIR/state/other-marketplace"
+  _marker="$_case/home/.claude/.starter-kit-plugin-provenance.json"
+  if grep -qx \
+      "plugin install security-guidance@claude-plugins-official --scope user" \
+      "$_case/calls.log" \
+    && jq -e '.installed_by_kit == [
+      "security-guidance@claude-plugins-official"]' "$_marker" >/dev/null; then
     pass "$test_name"
   else
     fail "$test_name"
@@ -912,12 +913,26 @@ _isp_run_case() {
 }
 
 {
-  test_name="install_selected_plugins: marketplace add failure warns with output and continues"
-  if _isp_run_case "codex" "" 1 true \
-    && grep -qF "Failed to add plugin marketplace" "$_ISP_DIR/out.log" \
-    && grep -qF "fake-marketplace-error" "$_ISP_DIR/out.log" \
-    && grep -qx "plugin install codex --scope user" "$_ISP_DIR/calls.log" \
-    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+  test_name="install_selected_plugins: a successful exact install records strict provenance"
+  _isp_run_case success "security-guidance,code-review@claude-plugins-official,security-guidance" \
+    "codex-companion@claude-plugins-official" 0 0 0 true
+  _case="$_ISP_DIR/state/success"
+  _marker="$_case/home/.claude/.starter-kit-plugin-provenance.json"
+  _mode="$(stat -f '%Lp' "$_marker" 2>/dev/null || stat -c '%a' "$_marker")"
+  if grep -qx "plugin install security-guidance@claude-plugins-official --scope user" \
+      "$_case/calls.log" \
+    && grep -qx "plugin install code-review@claude-plugins-official --scope user" \
+      "$_case/calls.log" \
+    && [[ "$_mode" == 600 ]] \
+    && jq -e '.version == 1 and .installed_by_kit == [
+      "code-review@claude-plugins-official",
+      "security-guidance@claude-plugins-official"]' "$_marker" >/dev/null \
+    && ! compgen -G "$_case/home/.claude/..starter-kit-plugin-provenance.json.tmp.*" \
+      >/dev/null \
+    && [[ ! -e "$_case/home/.claude/.starter-kit-plugin-provenance.lock" ]] \
+    && ! compgen -G \
+      "$_case/home/.claude/.starter-kit-plugin-provenance.lock.release-*" \
+      >/dev/null; then
     pass "$test_name"
   else
     fail "$test_name"
@@ -925,18 +940,93 @@ _isp_run_case() {
 }
 
 {
-  test_name="install_selected_plugins: missing claude CLI skips gracefully with hint"
-  if _isp_run_case "codex" "" 0 false \
-    && grep -qF "Skipping plugin install" "$_ISP_DIR/out.log" \
-    && grep -qF "/install codex" "$_ISP_DIR/out.log" \
-    && [[ ! -s "$_ISP_DIR/calls.log" ]] \
-    && [[ "$(cat "$_ISP_DIR/rc.txt")" == "0" ]]; then
+  test_name="install_selected_plugins: invalid prior provenance is never overwritten"
+  _case="$_ISP_DIR/state/invalid-prior"
+  mkdir -p "$_case/home/.claude"
+  printf '{"version":99,"installed_by_kit":[]}\n' \
+    > "$_case/home/.claude/.starter-kit-plugin-provenance.json"
+  chmod 600 "$_case/home/.claude/.starter-kit-plugin-provenance.json"
+  _before="$(cksum < "$_case/home/.claude/.starter-kit-plugin-provenance.json")"
+  _isp_run_case invalid-prior "security-guidance" "" 0 0 0 true
+  _after="$(cksum < "$_case/home/.claude/.starter-kit-plugin-provenance.json")"
+  if [[ "$_before" == "$_after" ]] \
+    && grep -q 'Could not record starter-kit plugin ownership' "$_case/out.log" \
+    && [[ ! -e "$_case/home/.claude/.starter-kit-plugin-provenance.lock" ]]; then
     pass "$test_name"
   else
     fail "$test_name"
   fi
 }
+
+{
+  test_name="install_selected_plugins: untrusted list and failed install create no authority"
+  _isp_run_case list-failed "security-guidance" "untrusted" 7 0 0 true
+  _isp_run_case install-failed "security-guidance" "" 0 0 9 true
+  if grep -q "plugin install security-guidance@claude-plugins-official" \
+      "$_ISP_DIR/state/list-failed/calls.log" \
+    && [[ ! -e "$_ISP_DIR/state/list-failed/home/.claude/.starter-kit-plugin-provenance.json" ]] \
+    && [[ ! -e "$_ISP_DIR/state/install-failed/home/.claude/.starter-kit-plugin-provenance.json" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: missing CLI and dry-run create no authority"
+  _isp_run_case no-cli "security-guidance" "" 0 0 0 false
+  _isp_run_case dry-run "security-guidance" "" 0 0 0 true true
+  if grep -qF "Skipping plugin install" "$_ISP_DIR/state/no-cli/out.log" \
+    && [[ ! -e "$_ISP_DIR/state/no-cli/home/.claude/.starter-kit-plugin-provenance.json" ]] \
+    && [[ ! -e "$_ISP_DIR/state/dry-run/home/.claude/.starter-kit-plugin-provenance.json" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: a fresh empty selection creates no history"
+  _isp_run_case fresh-deselect "" "" 0 0 0 true
+  if [[ ! -s "$_ISP_DIR/state/fresh-deselect/calls.log" ]] \
+    && [[ ! -e "$_ISP_DIR/state/fresh-deselect/home/.claude/.starter-kit-plugin-provenance.json" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="install_selected_plugins: deselection preserves prior install history"
+  _isp_run_case deselect "security-guidance" "" 0 0 0 true
+  _case="$_ISP_DIR/state/deselect"
+  _before="$(cksum < "$_case/home/.claude/.starter-kit-plugin-provenance.json")"
+  env -i HOME="$_case/home" TMPDIR="$_case/tmp" APPDATA="$_case/appdata" \
+    LOCALAPPDATA="$_case/localappdata" NPM_CONFIG_PREFIX="$_case/npm" \
+    npm_config_prefix="$_case/npm" PATH="$_ISP_FIXED_PATH" LC_ALL=C TERM=dumb \
+    bash -c '
+      set -euo pipefail
+      source "$1/setup.sh"
+      source "$1/lib/plugin-provenance.sh"
+      SELECTED_PLUGINS=""
+      install_selected_plugins
+    ' _ "$PROJECT_DIR"
+  _after="$(cksum < "$_case/home/.claude/.starter-kit-plugin-provenance.json")"
+  if [[ "$_before" == "$_after" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+if grep -qF '. "$PROJECT_DIR/lib/plugin-provenance.sh"' "$PROJECT_DIR/setup.sh" \
+  && grep -qF '. "$_uninstall_source_dir/lib/plugin-provenance.sh"' \
+    "$PROJECT_DIR/uninstall.sh"; then
+  pass "plugin provenance: setup and uninstall source the same helper implementation"
+else
+  fail "plugin provenance: setup/uninstall helper loading drifted"
+fi
 
 rm -rf "$_ISP_DIR"
-unset _ISP_DIR
+unset _ISP_DIR _ISP_FIXED_PATH _case _marker _mode _before _after
 unset -f _isp_run_case
