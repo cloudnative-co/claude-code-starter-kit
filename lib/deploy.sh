@@ -1502,8 +1502,8 @@ refresh_fresh_wce_snapshot_pair() {
 # - Dry-run: logs the matching activation/install action without executing it.
 # Covers fresh, fresh-with-existing, and update paths (called once after deploy).
 # ---------------------------------------------------------------------------
-_WCE_MDM_PACKAGE_SHA256="e63fb86cb553a034ecafd4ca11334d317b8b5d115775daa728e56c3bf5b1749c"
-_WCE_MDM_LOCK_SHA256="f39ea3b4028710e986afb1c423b7895845e0d41839521e6cee866ed37cdb33cd"
+_WCE_MDM_PACKAGE_SHA256="711c13b06916af27f643386615cae616114dc359b7c0463147b4fd607e2912c1"
+_WCE_MDM_LOCK_SHA256="e235f6738b9350d2c6fe6c64b4bfd8e458efcd47df6bb52dd30749ed2c7d45c4"
 
 _wce_mdm_trust_base() {
   printf '%s' "/Library/Application Support"

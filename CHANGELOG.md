@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.75.2] - 2026-08-20
+
+`web-content-extraction` skill の `undici` / `pdfjs-dist` 脆弱性を解消（Wiz `main` ブランチスキャン #147）。
+
+### Security
+- **`undici` を脆弱性修正版へ更新（#147）**: 直接依存を `^8.7.0` → `^8.10.0`（解決 8.7.0 → 8.10.0）、`jsdom` 経由の推移依存を 7.28.0 → 7.29.0（`jsdom@29.1.1` の `undici@^7.25.0` 範囲内）に更新。修正境界はいずれも 8.9.0 / 7.29.0。解消した advisory: GHSA-4cwx-7wf7-3272（High — 縮退した `private` キャッシュディレクティブによるユーザー間情報漏えい / パース時クラッシュ）、GHSA-8xcm-r25x-g524（retry interceptor 経由のレスポンス非同期化）、GHSA-m8rv-5g2x-5cg5（blob 様 body の `type` プロパティ経由 CRLF インジェクション）、GHSA-jr45-8vmc-qm54（Cache-Control ディレクティブの `=` 周り空白によるユーザー間情報漏えい）、GHSA-v3r7-h72x-cjcm（未サニタイズ `domain` / 未パース `setCookie` による Cookie 属性インジェクション）
+- **`pdfjs-dist` を脆弱性修正版へ更新（#147）**: `^6.0.227` → `^6.2.108`（解決 6.0.227 → 6.2.108）。GHSA-hq66-cqwq-w95j（High — 悪意ある PDF を開いた際の任意 JavaScript 実行、影響範囲 `>=5.6.83 <6.2.108`）を解消。`web-content-extraction` skill は攻撃者由来の任意 PDF を処理しうるため優先度が高い
+- 上記により `npm audit` を 0 件にした。`undici` は手動レビュー必須の HTTP 層のため手動更新。skill 自身のテスト（node `--test` 47 件）と `npm ci` 整合を確認済み
+
+### Changed
+- **MDM runtime bundle の期待 SHA256 ピンを更新**: `package.json` / `package-lock.json` の更新に伴い、`lib/deploy.sh`・`mdm/detect-mdm.sh`・`mdm/install-mdm.sh`・`docs/mdm/README.md`・関連テストの期待ハッシュとバンドルパスを新しいダイジェストへ更新。**MDM 配布環境は新しいバンドルパス（`711c13b0…-e235f673…`）で root-owned runtime bundle を再ビルド・再配布する必要がある**（旧バンドルは検証で拒否される）
+
 ## [0.75.1] - 2026-07-26
 
 ### Fixed
