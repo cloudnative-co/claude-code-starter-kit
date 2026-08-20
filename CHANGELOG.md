@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.75.3] - 2026-08-21
+
+### Fixed
+- **`web-content-update` の機能説明から欠けていた `undici` を追加**: `features/web-content-update/feature.json` の `description` が自動更新対象を `(defuddle/jsdom/pdfjs-dist)` と説明したままだった。`undici` は v0.73.0 で `update-deps.mjs` の `TARGETS` に追加され、同バージョンで README.md / README.en.md / SKILL.md は更新されたが、この 1 ファイルだけ取り残されていた。この文字列は feature recommendation の SessionStart 通知（`check-pending.sh` が `displayName` / `description` を読む）でユーザーに提示されるため、opt-in を検討する時点で実際の更新対象を誤って伝えていた。動作の変更はなく、説明文のみの修正
+
 ## [0.75.2] - 2026-08-20
 
 `web-content-extraction` skill の `undici` / `pdfjs-dist` 脆弱性を解消（Wiz `main` ブランチスキャン #147）。
