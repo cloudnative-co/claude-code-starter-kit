@@ -3703,7 +3703,7 @@ _mdm_wce_runtime_root() {
   _base="$(_mdm_receipt_trust_base)" || return 1
   _arch="$(_mdm_node_runtime_arch)" || return 1
   printf '%s' \
-    "$_base/ClaudeCodeStarterKit/runtime/web-content-extraction/node-v24.18.0-npm-v11.16.0-darwin-$_arch/e63fb86cb553a034ecafd4ca11334d317b8b5d115775daa728e56c3bf5b1749c-f39ea3b4028710e986afb1c423b7895845e0d41839521e6cee866ed37cdb33cd"
+    "$_base/ClaudeCodeStarterKit/runtime/web-content-extraction/node-v24.18.0-npm-v11.16.0-darwin-$_arch/711c13b06916af27f643386615cae616114dc359b7c0463147b4fd607e2912c1-e235f6738b9350d2c6fe6c64b4bfd8e458efcd47df6bb52dd30749ed2c7d45c4"
 }
 
 _mdm_wce_runtime_marker_is_valid() { # <runtime-root>
@@ -3717,8 +3717,8 @@ import stat
 import sys
 
 path, arch = sys.argv[1:]
-package_digest = "e63fb86cb553a034ecafd4ca11334d317b8b5d115775daa728e56c3bf5b1749c"
-lock_digest = "f39ea3b4028710e986afb1c423b7895845e0d41839521e6cee866ed37cdb33cd"
+package_digest = "711c13b06916af27f643386615cae616114dc359b7c0463147b4fd607e2912c1"
+lock_digest = "e235f6738b9350d2c6fe6c64b4bfd8e458efcd47df6bb52dd30749ed2c7d45c4"
 expected = (
     f'{{"arch":"{arch}","lock_sha256":"{lock_digest}",'
     f'"node_version":"v24.18.0","npm_version":"11.16.0",'
@@ -3927,9 +3927,9 @@ _mdm_wce_runtime_tree_is_trusted() { # <runtime-root>
   _mdm_wce_runtime_metadata_is_valid "$_root" || return 1
   _mdm_wce_runtime_marker_is_valid "$_root" || return 1
   [[ "$(_mdm_sha256 "$_root/package.json")" \
-      == e63fb86cb553a034ecafd4ca11334d317b8b5d115775daa728e56c3bf5b1749c \
+      == 711c13b06916af27f643386615cae616114dc359b7c0463147b4fd607e2912c1 \
     && "$(_mdm_sha256 "$_root/package-lock.json")" \
-      == f39ea3b4028710e986afb1c423b7895845e0d41839521e6cee866ed37cdb33cd ]] \
+      == e235f6738b9350d2c6fe6c64b4bfd8e458efcd47df6bb52dd30749ed2c7d45c4 ]] \
     || return 1
   _mdm_artifact_digest tree "$_root" "$_uid" "$_gid" >/dev/null
 }

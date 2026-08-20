@@ -1064,8 +1064,8 @@ _wce_mdm_results="$_wce_tmp/mdm-runtime-results"
       case "$dep" in
         defuddle) version=0.19.1 ;;
         jsdom) version=29.1.1 ;;
-        pdfjs-dist) version=6.0.227 ;;
-        undici) version=8.7.0 ;;
+        pdfjs-dist) version=6.2.108 ;;
+        undici) version=8.10.0 ;;
       esac
       mkdir -p "$_wce_bundle/node_modules/$dep/lib"
       printf '{"name":"%s","version":"%s"}\n' "$dep" "$version" \
