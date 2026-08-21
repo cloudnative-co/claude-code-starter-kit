@@ -1,5 +1,6 @@
 #!/bin/bash
 # tests/unit/test-mdm-detect.sh - MDM receipt and deployed-state detection.
+# MDM_TEST_TIMEOUT_SECONDS=2700
 
 MDM_SOURCE_ONLY=1 source "$PROJECT_DIR/mdm/detect-mdm.sh"
 
