@@ -454,6 +454,14 @@ Claude Code のチャットで `/` に続けて入力します。
 | `/update-kit` | スターターキットを手動で最新版に更新 |
 | `/audit-config` | 個人設定（CLAUDE.md ユーザーセクション・user-*.md）に旧モデル向けの不要な指示が残っていないか監査 |
 
+### ✍️ 日本語業務文書の品質基準スキル（cloudnative-writing-baseline）
+
+日本語の業務文書（提案書・報告・議事録・メール・Slack 投稿・要約のほか、PR 説明・Issue コメント・CHANGELOG・README などの開発文書）を作成・修正・要約・レビューするときに、**事実を作らない・確度を変えない・事実と推論を混同しない・元情報の意味を変えない**という意味品質の下限を守らせる規範スキルです（Standard / Full で導入）。description に一致したときだけ本文が読み込まれ、明示的に使うときは `/cloudnative-writing-baseline` で呼び出せます。
+
+- **校正ツールではありません**: 誤字脱字・表記ゆれ・敬語の正誤といった機械的な校正や、一文一行・太字・脚注などの組版規則は対象外です。媒体固有・用途固有のスキルと併用する前提で、書式や文体はそれらを優先します。
+- **日本語専用**: 英語の文書には発火しません。英語（`--language=en`）の環境にも同梱されますが、一覧に載る description 以外のコストはありません。
+- CloudNative Inc. が社内運用していた `cloudnative-writing-baseline` v1.0.0 を MIT で公開したもので、本文は社内版と同一です。以後はこのリポジトリを正として更新します。
+
 ### 🌐 Web 取得スキル（web-content-extraction）
 
 URL・公式ドキュメント・ブログ・ニュース・OSS ページを読むとき、**生 HTML を直接読まずに [Defuddle](https://github.com/kepano/defuddle) で本文を Markdown/JSON 化** してから読むための実行スキルです（Standard / Full で導入）。`/web-article`・`/oss-analyze`・`/web-source-review` の3コマンドと CLAUDE.md の標準ルールがこのスキルを使います。
@@ -1146,7 +1154,7 @@ claude-code-starter-kit/
 ├── agents/                 # AI エージェント定義（9種）
 ├── rules/                  # コーディングルール（8種）
 ├── commands/               # スラッシュコマンド（21個）
-└── skills/                 # スキルモジュール（12個）
+└── skills/                 # スキルモジュール（13個）
 ```
 
 ---
