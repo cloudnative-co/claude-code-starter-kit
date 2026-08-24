@@ -202,10 +202,10 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 
 ### Japanese Business Writing Baseline Skill (`cloudnative-writing-baseline`)
 
-A Japanese-only guidance skill for business documents (proposals, reports, meeting notes, email, Slack posts, summaries, and developer documents such as PR descriptions, issue comments, CHANGELOG, and README). When Claude writes, edits, summarizes, or reviews Japanese prose, it enforces a floor of meaning quality: never fabricate facts, never change the stated confidence level, keep facts separate from inference, and preserve the source meaning (installed in Standard / Full). The body loads only when the description matches; invoke explicitly with `/cloudnative-writing-baseline`.
+A guidance skill for Japanese business documents (proposals, reports, meeting notes, email, Slack posts, summaries, and developer documents such as PR descriptions, issue comments, CHANGELOG, and README). When Claude writes, edits, summarizes, or reviews Japanese prose, it enforces a floor of meaning quality: never fabricate facts, never change the stated confidence level, keep facts separate from inference, and preserve the source meaning (installed in Standard / Full). Claude decides whether to load the body automatically from its description / when_to_use; invoke it explicitly with `/cloudnative-writing-baseline`.
 
 - **Not a proofreader**: typos, spelling variants, honorific correctness, and typographic rules (one-sentence-per-line, bold, footnotes) are out of scope. It is designed to run alongside medium- or task-specific skills, which win on format and tone.
-- **Japanese only**: it does not trigger on English documents. English installs receive it too; the only cost is the description entry in the skill listing.
+- **Scoped to Japanese prose**: its description / when_to_use are limited to Japanese business documents, so Claude normally won't pick it up for English documents (there is no mechanical language gate; invoking `/cloudnative-writing-baseline` explicitly applies it to English text as well). English installs receive it too; the only always-loaded cost is its skill-listing entry (description + when_to_use, about 260 characters).
 - Published under MIT from CloudNative Inc.'s internal `cloudnative-writing-baseline` v1.0.0 with an identical body; this repository is now the upstream.
 
 ### Web Content Extraction Skill

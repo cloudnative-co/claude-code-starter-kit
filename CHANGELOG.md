@@ -4,13 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.76.0] - 2026-08-23
+## [0.76.0] - 2026-08-24
 
 ### Added
-- **日本語業務文書の品質基準スキル `cloudnative-writing-baseline` を同梱**: 日本語の業務文書（提案書・報告・議事録・メール・Slack 投稿・要約のほか、PR 説明・Issue コメント・CHANGELOG・README などの開発文書）を作成・修正・要約・レビューするときに、事実を作らない・確度を変えない・事実と推論を混同しない・元情報の意味を変えない、という意味品質の下限を守らせる規範スキル。`INSTALL_SKILLS=true`（Standard / Full）で `~/.claude/skills/cloudnative-writing-baseline/SKILL.md` として配布され、description に一致したときだけ本文（約 290 行）が読み込まれる。常時ロードされる `rules/` や CLAUDE.md には手を入れていない
+- **日本語業務文書の品質基準スキル `cloudnative-writing-baseline` を同梱**: 日本語の業務文書（提案書・報告・議事録・メール・Slack 投稿・要約のほか、PR 説明・Issue コメント・CHANGELOG・README などの開発文書）を作成・修正・要約・レビューするときに、事実を作らない・確度を変えない・事実と推論を混同しない・元情報の意味を変えない、という意味品質の下限を守らせる規範スキル。`INSTALL_SKILLS=true`（Standard / Full）で `~/.claude/skills/cloudnative-writing-baseline/SKILL.md` として配布され、本文（約 280 行）を自動で読み込むかは description / when_to_use をもとに Claude が判断し、`/cloudnative-writing-baseline` で明示的にも呼び出せる。常時ロードされるのはスキル一覧に載る description + when_to_use（合計約 260 字）で、`rules/` や CLAUDE.md には手を入れていない
   - **校正ツールではない**: 誤字脱字・表記ゆれ・敬語の正誤や、一文一行・太字・脚注などの組版規則は設計上の対象外。媒体固有・用途固有のスキルと併用する前提で、書式・文体はそれらを優先する
   - **出自とライセンス**: CloudNative Inc. が社内運用していた同名スキル v1.0.0（社内新規作成・外部 Skill の収録なし）を権利者として MIT で公開したもの。本文は社内版と byte 同一で、frontmatter のみ変更した（`license: MIT`、description から社名を除去、キット CI が要求する `when_to_use` を追加）。社内版の README / CHANGELOG（社内利用前提の記述）は同梱しない。以後はこのリポジトリを正とし、社内配布物はここから生成する
-  - **既存ユーザーへの影響**: `setup.sh --update` で新規ファイルとして配置される。同じパスに手動で設置済みのファイルがある場合、snapshot 基準がないため初回アップデートでキット版に置き換わる（2 回目以降は通常の 3-way マージ）。English 環境にも同梱されるが、日本語の文書にしか発火しない
+  - **既存ユーザーへの影響**: `setup.sh --update` で新規ファイルとして配置される。同じパスに手動で設置済みのファイルがある場合、snapshot 基準がないため初回アップデートでキット版に置き換わる（2 回目以降は通常の 3-way マージ）。English 環境にも同梱されるが、description / when_to_use を日本語の業務文書に限定しているため英語の文書では通常発火しない（言語で機械的に制御する仕組みはない）
   - README.md / README.en.md にスキルの説明を追加し、スキル数を 12 → 13 に更新
 
 ## [0.75.3] - 2026-08-21
