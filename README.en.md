@@ -54,7 +54,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **9 agents**: planner, architect, tdd-guide, code-reviewer, security-reviewer, build-error-resolver, e2e-runner, refactor-cleaner, doc-updater
 - **8 rules**: coding-style, git-workflow, performance, security, testing, agents, anti-patterns, permissions-guide
 - **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
-- **12 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, and more
+- **13 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, cloudnative-writing-baseline (Japanese business writing), and more
 - **11 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
 - **15 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp, claude-security
 - **i18n**: English & Japanese
@@ -199,6 +199,14 @@ Other supported editors: [Cursor](https://www.cursor.com/) (AI-native), [Zed](ht
 - **Minimal**: Lightweight start with just agents and rules
 - **Standard**: Best for most teams. Includes commands, skills, and core hooks
 - **Full**: Everything enabled including all hooks and Codex Plugin sub-agent delegation
+
+### Japanese Business Writing Baseline Skill (`cloudnative-writing-baseline`)
+
+A guidance skill for Japanese business documents (proposals, reports, meeting notes, email, Slack posts, summaries, and developer documents such as PR descriptions, issue comments, CHANGELOG, and README). When Claude writes, edits, summarizes, or reviews Japanese prose, it enforces a floor of meaning quality: never fabricate facts, never change the stated confidence level, keep facts separate from inference, and preserve the source meaning (installed in Standard / Full). Claude decides whether to load the body automatically from its description / when_to_use; invoke it explicitly with `/cloudnative-writing-baseline`.
+
+- **Not a proofreader**: typos, spelling variants, honorific correctness, and typographic rules (one-sentence-per-line, bold, footnotes) are out of scope. It is designed to run alongside medium- or task-specific skills, which win on format and tone.
+- **Scoped to Japanese prose**: its description / when_to_use are limited to Japanese business documents, so Claude normally won't pick it up for English documents (there is no mechanical language gate; invoking `/cloudnative-writing-baseline` explicitly applies it to English text as well). English installs receive it too; the only always-loaded cost is its skill-listing entry (description + when_to_use, about 260 characters).
+- Published under MIT from CloudNative Inc.'s internal `cloudnative-writing-baseline` v1.0.0 with an identical body; this repository is now the upstream.
 
 ### Web Content Extraction Skill
 
@@ -429,7 +437,7 @@ claude-code-starter-kit/
 ├── agents/                 # Agent definitions (9 files)
 ├── rules/                  # Rule files (8 files)
 ├── commands/               # Slash commands (21 files)
-└── skills/                 # Skill modules (12 dirs)
+└── skills/                 # Skill modules (13 dirs)
 ```
 
 ## Customization
