@@ -107,7 +107,13 @@ _load_manifest_binding() {
     return 0
   fi
 
-  binding="$(jq -cse '
+  # No -e: "no runtime binding" is reported as a null result, and `jq -e` treats
+  # a trailing null as failure. With -e the legacy branch below was unreachable,
+  # so every manifest without a binding — MDM's policy_sha256 form and every
+  # pre-binding manifest — was marked invalid and silenced the notification.
+  # A malformed or partial binding still exits non-zero through error(), so the
+  # fail-closed path is unchanged. Matches wizard/runtime-binding.sh.
+  binding="$(jq -cs '
     if length == 1 and (.[0] | type == "object") then
       .[0]
       | if (has("kit_repo") or has("config_file")) then

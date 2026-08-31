@@ -347,6 +347,42 @@ else
   fail "check-pending: partial manifest binding fell through (got '$_cp_out')"
 fi
 
+# A manifest with no runtime binding at all is not an error: MDM writes the
+# policy_sha256 form and every pre-binding install predates the pair. Those
+# keep the legacy config/default-checkout lookup. The filter reports "no
+# binding" as null, and `jq -e` reads a trailing null as failure — which marked
+# them invalid and silenced the notification entirely.
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+printf '%s' '{"version":2,"mdm_managed":true,"policy_sha256":"abc"}' \
+  > "$_cp_home/.claude/.starter-kit-manifest.json"
+_cp_out="$(_cp_run)"
+if [[ "$_cp_out" == *"claude-security"* ]]; then
+  pass "check-pending: an MDM manifest without a binding keeps the legacy lookup"
+else
+  fail "check-pending: a bindingless MDM manifest must not silence the notice (got '$_cp_out')"
+fi
+
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+printf '%s' '{"version":1,"files":[]}' \
+  > "$_cp_home/.claude/.starter-kit-manifest.json"
+_cp_out="$(_cp_run)"
+if [[ "$_cp_out" == *"claude-security"* ]]; then
+  pass "check-pending: a pre-binding manifest keeps the legacy lookup"
+else
+  fail "check-pending: an older manifest must not silence the notice (got '$_cp_out')"
+fi
+
+# The fail-closed direction must survive the same change: a manifest that is
+# not a single JSON object is rejected, not treated as "no binding".
+_cp_setup '{"version":1,"plugins":["claude-security"]}'
+printf '%s' 'not json' > "$_cp_home/.claude/.starter-kit-manifest.json"
+_cp_out="$(_cp_run)"
+if [[ -z "$_cp_out" ]]; then
+  pass "check-pending: an unparseable manifest still fails closed"
+else
+  fail "check-pending: malformed manifest must not fall through (got '$_cp_out')"
+fi
+
 # /update-kit is advertised only when the command was actually deployed from
 # this checkout. INSTALL_COMMANDS=false leaves it absent, so the hook points to
 # the setup.sh update path instead of promising a nonexistent slash command.

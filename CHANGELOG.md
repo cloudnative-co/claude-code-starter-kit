@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.77.1] - 2026-08-31
+
+### Fixed
+- **binding を持たない manifest で SessionStart の通知が無音になる問題を修正（#166）**: `check-pending.sh` の `_load_manifest_binding` は、runtime binding の有無を `jq -cse` の結果で判定していた。「binding なし」を表すセンチネルは `null` だが、`jq -e` は最後の出力が `null` のとき終了コード 1 を返す。このため binding を持たない manifest は常に「不正な manifest」と分類され、`_MANIFEST_BINDING_STATE` が `legacy` ではなく `invalid` になっていた。下流の `_resolve_kit_repo` が失敗して `KIT_REPO` が解決されず、カタログを読めないまま hook が exit 0 で終了するため、**新機能・新プラグインの通知が何の表示もなく抑止されていた**
+  - 対象は `~/.claude/.starter-kit-manifest.json` が存在し、かつ `kit_repo` / `config_file` を持たないインストール。`write_manifest` は MDM 環境で `policy_sha256` 形式を出力するため MDM 管理下の環境が該当し、binding 導入前の古い manifest も同様。`~/.claude-starter-kit.conf` に有効な `KIT_REPO` があっても、既定のチェックアウトが存在しても使われなかった
+  - `-e` を外して修正した。`null` は正常なセンチネルであって失敗ではない。部分的な binding と壊れた manifest は引き続き `error()` 経由で非ゼロ終了するため、**fail-closed の挙動は変わらない**。同じフィルタを持つ `wizard/runtime-binding.sh` は元から `-e` なしで、そちらが意図した形だった
+  - 回帰テストを 3 件追加した（MDM 形式 manifest / 旧 v1 manifest で通知が出ること、壊れた manifest では引き続き出ないこと）。既存のテストは manifest を作らない経路と完全な binding・部分的な binding しか通っておらず、「manifest はあるが binding が無い」ケースが未検査だった
+
 ## [0.76.0] - 2026-08-24
 
 ### Added
