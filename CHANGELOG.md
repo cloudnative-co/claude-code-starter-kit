@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.76.2] - 2026-08-31
+
+### Fixed
+- **新規プラグインの追加確認が、質問を表示しないまま入力待ちで止まる問題を修正**: 対話更新でカタログに追加されたプラグインを 1 件ずつ確認する `_offer_new_plugins_interactive` が、`read -r -p "..." reply < /dev/tty 2>/dev/null` の形で質問していた。`read -p` はプロンプトを stderr に書くため、端末を開けなかった場合に備えて付けていた `2>/dev/null` が質問文そのものを破棄していた。画面にはプラグイン一覧だけが出て入力待ちで停止するため停止しているように見え、先に進めるために押した Enter は空回答として `DISMISSED_PLUGINS` に記録される。既定は No で、一度断った項目は再提示されない設計のため、質問を一度も見ないまま該当プラグインが恒久的に拒否されていた。キットの他の対話プロンプト（`lib/deploy.sh` / `lib/merge.sh`）と同じ形に揃え、`printf ... >&2` で質問を出力してから `-p` なしの `read` を実行するようにした
+  - **既に拒否記録が残っている環境の復旧**: `~/.claude-starter-kit.conf` の `DISMISSED_PLUGINS` と `KNOWN_PLUGINS` の両方から該当エントリを削除すると、次回の対話更新で再度提示される。`_compute_new_plugins` は SELECTED / DISMISSED / KNOWN のいずれかに含まれる項目を除外するため、`DISMISSED_PLUGINS` だけを消しても再提示されない。Claude Code 内で `/plugin install <name>@<marketplace>` を直接実行する方法も従来どおり使える
+- **プラグイン一覧に `\033[1m` が制御文字列のまま表示される問題を修正**: 同じ関数がプラグイン名を `printf "  %s%s%s%s\n" "${BOLD:-}" ...` と出力していた。`BOLD` / `NC` はエスケープシーケンスをバックスラッシュ表記の文字列として保持しており、printf が解釈するのは書式文字列に含まれる場合だけなので、`%s` の引数として渡すと画面にそのまま出る。色出力が有効な端末で発生する（`lib/colors.sh` は stdout が端末のときのみ色を設定するため、リダイレクト時は空文字列になり影響しない）。`lib/colors.sh` の他の出力と同じく書式文字列側に置くよう変更した
+- 上記 2 点の回帰テストを `tests/unit/test-plugin-adoption.sh` に追加した。修正前のコードでは 2 件とも失敗する
+
 ## [0.76.0] - 2026-08-24
 
 ### Added
