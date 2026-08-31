@@ -167,7 +167,20 @@ _merge_settings_mdm_documents() {
 #   - Items in snapshot but not newkit, still in current
 #                                        → kit removed  → ask (interactive)
 #                                                          keep (non-interactive)
-#   - Deduplicate via jq 'unique'
+#   - Items whose IDENTITY the kit shipped before and still ships
+#                                        → kit modified → kit's version wins
+#   - Deduplicate while preserving order
+#
+# Identity exists because elements are compared by exact equality. A kit-side
+# EDIT of a hook entry (matcher, async, asyncTimeout, a renamed command) makes
+# the live copy unequal to every snapshot element, so it used to be classified
+# as a user addition and re-appended NEXT TO the kit's new version — leaving
+# the same hook registered twice, permanently (the snapshot stores the kit
+# build, so the stale copy is re-classified as a user addition on every later
+# update). Hook entries carry a "hooks" array of commands; that command set is
+# the logical registration, independent of the matcher it is bound to. Any
+# other element (permissions strings, plain scalars) is its own identity, so
+# an identity match is impossible for them and their behaviour is unchanged.
 # ---------------------------------------------------------------------------
 _merge_arrays_3way() {
   local s_val="$1"  # snapshot array JSON
@@ -175,13 +188,27 @@ _merge_arrays_3way() {
   local n_val="$3"  # new-kit  array JSON
 
   # Determine items to keep/remove through set operations via jq
-  # user_added  = current \ snapshot  (user introduced these)
+  # user_added  = current \ snapshot, minus superseded kit generations
   # kit_removed = snapshot \ newkit, still in current  (kit deleted these)
   local user_added kit_removed
   user_added="$(jq -n \
     --argjson s "$s_val" \
     --argjson c "$c_val" \
-    '[$c[] | select(. as $item | $s | map(. == $item) | any | not)]')" || return 1
+    --argjson n "$n_val" \
+    'def ident: if type == "object" and ((.hooks? | type) == "array")
+                then [.hooks[]?.command?] else . end;
+     ($s | map(ident)) as $sids |
+     ($n | map(ident)) as $nids |
+     [ $c[]
+       | . as $item
+       | ($item | ident) as $id
+       | select(($s | any(. == $item)) | not)
+       # Superseded kit generation, not a user addition: the kit shipped this
+       # identity before and still ships it, so the live copy is an older or
+       # locally edited generation of an entry the kit owns. Drop it and let
+       # the kit version in $n stand alone.
+       | select((($sids | any(. == $id)) and ($nids | any(. == $id))) | not)
+     ]')" || return 1
 
   kit_removed="$(jq -n \
     --argjson s "$s_val" \
@@ -197,11 +224,17 @@ _merge_arrays_3way() {
 
   # Base result: newkit array (authoritative — already includes kit_added items)
   # plus user additions (items the user added that the kit never had)
+  #
+  # Dedup preserves order. `unique` sorts, and .hooks.* arrays are ordered:
+  # PreToolUse runs in array order and safety-net is required to be first
+  # (lib/features.sh, asserted for the build in lib/deploy.sh). Sorting let a
+  # user hook whose command sorts earlier take index 0 away from safety-net.
   local merged
   merged="$(jq -n \
     --argjson n "$n_val" \
     --argjson ua "$user_added" \
-    '$n + $ua | unique')" || return 1
+    'reduce ($n + $ua)[] as $x ([];
+       if any(.[]; . == $x) then . else . + [$x] end)')" || return 1
 
   # Handle kit-removed items that still exist in current
   local removed_count
@@ -213,7 +246,8 @@ _merge_arrays_3way() {
       merged="$(jq -n \
         --argjson m "$merged" \
         --argjson kr "$kit_removed" \
-        '$m + $kr | unique')" || return 1
+        'reduce ($m + $kr)[] as $x ([];
+           if any(.[]; . == $x) then . else . + [$x] end)')" || return 1
     else
       # Interactive: ask for each removed item
       local i=0
@@ -238,7 +272,8 @@ _merge_arrays_3way() {
             merged="$(jq -n \
               --argjson m "$merged" \
               --argjson item "$item" \
-              '$m + [$item] | unique')" || return 1
+              'reduce ($m + [$item])[] as $x ([];
+                 if any(.[]; . == $x) then . else . + [$x] end)')" || return 1
             ;;
         esac
         i=$((i + 1))

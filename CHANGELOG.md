@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.77.0] - 2026-08-31
+
+### Fixed
+- **非対話更新で kit の hook エントリが重複しなくなった（#163）**: `_merge_arrays_3way` は配列要素を**完全一致**で比較していた。キット側がエントリを変更すると（`matcher` の変更、`async` / `asyncTimeout` の追加、コマンドの改名）、live 側の旧世代が snapshot のどの要素とも一致しなくなり「ユーザーが追加した要素」に分類され、`$n + $ua` の**無条件連結**でキットの新エントリと並べて残されていた。結果として同じ hook が二重に登録される
+  - **一度発生すると解消しなかった**: `_update_phase_snapshot` は settings.json の snapshot に「マージ結果ではなくキットが生成した版」を保存する（利用者の変更を黙って上書きしないための意図的な設計）。stale エントリは snapshot に入らないため、以降の更新でも毎回「ユーザー追加」と分類され続けていた
+  - **判定を identity ベースにした**: hook エントリは `hooks[].command` の集合を論理的な登録単位とみなす。この identity が snapshot と新キットの両方に存在する要素は「キットが変更した既存エントリ」であり、ユーザー追加ではないと判断してキット版を採用する。identity が snapshot に無い要素（利用者独自の hook）は従来どおり保持され、identity が snapshot にあり新キットに無い要素は従来どおり kit-removed として扱われる
+  - **既存の壊れた環境は次回の非対話更新で自動的に解消される**。手作業での `settings.json` 編集は不要
+  - 発生していたのは `_MERGE_INTERACTIVE` が false の経路（auto-update hook 経由の更新、`--non-interactive`、`install.sh` の `--update`）のみ。`/update-kit` と対話的な再実行は配列まるごと置換の経路を通るため該当しない
+- **配列マージがキットの並び順を保持するようになった**: 重複排除に使っていた `unique` は配列を**ソート**する。`.hooks.PreToolUse` は配列順に実行され、`lib/features.sh` は safety-net が先頭であることを要求している（`lib/deploy.sh` がビルド時に FATAL で検査）。しかしこの検査はビルド時の `_FEATURE_ORDER` のみを見ており、更新時のマージは通らない。実測で、コマンド文字列が `cc-safety-net` より辞書順で前に来るユーザー hook（例: `!` 始まり）が index 0 を奪うことを確認した。順序を保つ重複排除に置き換えた
+
+### Changed
+- **`permissions.allow` / `deny` などの文字列配列の並び順が変わる**: 上記の重複排除の変更により、非対話更新後の配列はアルファベット順ではなく「キットの順序 → ユーザー追加分」の順になる。要素の集合は変わらず、権限判定の挙動にも影響はないが、更新後の `settings.json` の差分としては見える
+- **キット所有の hook エントリを利用者が直接編集していた場合、更新でキット版に戻るようになった**: 従来は新旧が両方残って同じ hook が二重に登録されていた。単一の登録として扱う以上どちらかを選ぶ必要があり、キット管理下のエントリはキット版を正とする。利用者独自のコマンドを持つ hook は影響を受けない
+
 ## [0.76.0] - 2026-08-24
 
 ### Added

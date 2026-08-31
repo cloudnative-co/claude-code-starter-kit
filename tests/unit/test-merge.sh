@@ -212,7 +212,7 @@ _large_merge_doc() {
 
   run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
 
-  # Result should contain: a, b, kit-added, user-added (deduplicated, sorted by unique)
+  # Result should contain: a, b, kit-added, user-added (deduplicated, kit order first)
   result="$_RF_STDOUT"
   has_user="$(printf '%s' "$result" | jq 'map(select(. == "user-added")) | length')"
   has_kit="$(printf '%s' "$result" | jq 'map(select(. == "kit-added")) | length')"
@@ -888,4 +888,133 @@ _large_merge_doc() {
     fail "$test_name"
   fi
   unset s_val c_val n_val merged key_bytes
+}
+
+# ---------------------------------------------------------------------------
+# 31. _merge_arrays_3way: a kit-side EDIT of a hook entry is not a user addition
+#
+# Elements are compared by exact equality, so changing a hook entry's matcher
+# (as v0.55.0 did for "*" -> "startup") made the live copy unequal to every
+# snapshot element. It was then re-appended next to the kit's new version and
+# the same hook stayed registered twice. The snapshot stores the kit build, so
+# the stale copy was re-classified as a user addition on every later update and
+# never went away.
+# ---------------------------------------------------------------------------
+{
+  test_name="arrays_3way: a kit-side matcher change does not duplicate the hook"
+  snapshot='[{"matcher":"startup","hooks":[{"type":"command","command":"A.sh"}]},{"matcher":"startup","hooks":[{"type":"command","command":"B.sh"}]}]'
+  current='[{"matcher":"*","hooks":[{"type":"command","command":"A.sh"}]},{"matcher":"*","hooks":[{"type":"command","command":"B.sh"}]}]'
+  new_kit="$snapshot"
+
+  run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && printf '%s' "$_RF_STDOUT" | jq -e '
+        length == 2 and all(.[]; .matcher == "startup")' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name (got '$_RF_STDOUT')"
+  fi
+}
+
+# An install already carrying both generations must converge on the next run.
+{
+  test_name="arrays_3way: an already-duplicated hooks array heals"
+  snapshot='[{"matcher":"startup","hooks":[{"type":"command","command":"A.sh"}]},{"matcher":"startup","hooks":[{"type":"command","command":"B.sh"}]}]'
+  current='[{"matcher":"startup","hooks":[{"type":"command","command":"A.sh"}]},{"matcher":"*","hooks":[{"type":"command","command":"A.sh"}]},{"matcher":"*","hooks":[{"type":"command","command":"B.sh"}]},{"matcher":"startup","hooks":[{"type":"command","command":"B.sh"}]}]'
+  new_kit="$snapshot"
+
+  run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && printf '%s' "$_RF_STDOUT" | jq -e '
+        length == 2
+        and ([.[] | .hooks[0].command] | sort) == ["A.sh","B.sh"]' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name (got '$_RF_STDOUT')"
+  fi
+}
+
+# async/asyncTimeout drift is the same class: only the payload differs.
+{
+  test_name="arrays_3way: an async/asyncTimeout-only difference does not duplicate"
+  snapshot='[{"matcher":"startup","hooks":[{"type":"command","command":"A.sh","async":true,"asyncTimeout":300000}]}]'
+  current='[{"matcher":"startup","hooks":[{"type":"command","command":"A.sh"}]}]'
+  new_kit='[{"matcher":"startup","hooks":[{"type":"command","command":"A.sh","async":true,"asyncTimeout":720000}]}]'
+
+  run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && printf '%s' "$_RF_STDOUT" | jq -e '
+        length == 1 and .[0].hooks[0].asyncTimeout == 720000' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name (got '$_RF_STDOUT')"
+  fi
+}
+
+# Identity only matches entries the kit shipped, so a user's own hook is safe.
+{
+  test_name="arrays_3way: a user's own hook entry survives the identity check"
+  snapshot='[{"matcher":"startup","hooks":[{"type":"command","command":"A.sh"}]}]'
+  current='[{"matcher":"*","hooks":[{"type":"command","command":"A.sh"}]},{"matcher":"startup","hooks":[{"type":"command","command":"MY-OWN.sh"}]}]'
+  new_kit="$snapshot"
+
+  run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && printf '%s' "$_RF_STDOUT" | jq -e '
+        length == 2
+        and any(.[]; .hooks[0].command == "MY-OWN.sh")
+        and ([.[] | select(.hooks[0].command == "A.sh")] | length) == 1' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name (got '$_RF_STDOUT')"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 32. _merge_arrays_3way: dedup must not reorder
+#
+# PreToolUse runs in array order and safety-net is required to be first
+# (lib/features.sh; lib/deploy.sh asserts it for the build). `unique` sorts, so
+# a user hook whose command sorted earlier took index 0 away from safety-net.
+# ---------------------------------------------------------------------------
+{
+  test_name="arrays_3way: dedup preserves kit order (safety-net stays first)"
+  snapshot='[{"matcher":"Bash","hooks":[{"type":"command","command":"cc-safety-net"}]}]'
+  current='[{"matcher":"Bash","hooks":[{"type":"command","command":"cc-safety-net"}]},{"matcher":"Bash","hooks":[{"type":"command","command":"!my-own-hook"}]}]'
+  new_kit='[{"matcher":"Bash","hooks":[{"type":"command","command":"cc-safety-net"}]},{"matcher":"Bash","hooks":[{"type":"command","command":"zz-new-kit"}]}]'
+
+  run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && printf '%s' "$_RF_STDOUT" | jq -e '
+        .[0].hooks[0].command == "cc-safety-net"
+        and length == 3' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name (got '$_RF_STDOUT')"
+  fi
+}
+
+# String arrays have no "hooks" key, so identity is the element itself and no
+# identity match is possible — permissions keep their existing semantics.
+{
+  test_name="arrays_3way: string arrays keep user additions and kit removals"
+  snapshot='["Read","WebFetch"]'
+  current='["Read","WebFetch","Mine"]'
+  new_kit='["Read","Bash(git diff)"]'
+
+  run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && printf '%s' "$_RF_STDOUT" | jq -e '
+        (. | sort) == ["Bash(git diff)","Mine","Read","WebFetch"]
+        and .[0] == "Read"' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name (got '$_RF_STDOUT')"
+  fi
 }
