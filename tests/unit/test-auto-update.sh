@@ -272,3 +272,108 @@ if jq -e '
 else
   fail "auto-update: legacy Claude Code should fall back to SessionStart without async"
 fi
+
+# ── _check_auto_update_health: hook detection ──────────────────────────────
+#
+# `jq -e` derives its exit code from the LAST output, so the original
+# `.hooks.SessionStart[]?.hooks[]?.command | contains("auto-update")` filter
+# answered "not registered" whenever any other SessionStart hook was merged
+# after auto-update. _FEATURE_ORDER puts feature-recommendation last and
+# _feature_deploy_enabled deploys it on every non-MDM install, so a healthy
+# standard/full install reported the warning on every update and fresh install.
+#
+# HOME is redirected because the function resolves $HOME/.claude-starter-kit
+# for its repo and version checks, which would otherwise fold the developer's
+# own machine state into the same issues[] array these cases assert on.
+# shellcheck source=lib/update.sh
+source "$PROJECT_DIR/lib/update.sh"
+
+_auh_home="$_au_tmp/auh-home"
+mkdir -p "$_auh_home/.claude-starter-kit/.git"
+
+_auh_run() { # <settings-body> <async-supported> -> health check output
+  local body="$1" async="$2" dir
+  dir="$(mktemp -d "$_au_tmp/auh-XXXXXX")"
+  printf '%s' "$body" > "$dir/settings.json"
+  # shellcheck disable=SC2034 # STR_* are read by _check_auto_update_health
+  (
+    HOME="$_auh_home"
+    STR_AUTOUPDATE_NO_HOOK="NOHOOK"
+    STR_AUTOUPDATE_NOTICE="NOTICE"
+    STR_AUTOUPDATE_HINT_HOOK="HINT"
+    STR_AUTOUPDATE_NO_REPO="NOREPO"
+    STR_AUTOUPDATE_OUTDATED="OUTDATED"
+    STR_AUTOUPDATE_OK="ACTIVE"
+    _claude_supports_async_hooks() { [[ "$async" == "true" ]]; }
+    info() { printf '%s\n' "$*"; }
+    ok() { printf '%s\n' "$*"; }
+    _check_auto_update_health "$dir"
+  ) 2>&1
+}
+
+_auh_start_au='{"matcher":"startup","hooks":[{"type":"command","command":"AUTO_UPDATE_HOOK=SessionStart /h/auto-update/auto-update.sh"}]}'
+_auh_start_other='{"matcher":"startup","hooks":[{"type":"command","command":"/h/feature-recommendation/check-pending.sh"}]}'
+_auh_start_nocmd='{"matcher":"startup","hooks":[{"type":"other"}]}'
+_auh_end_au='{"matcher":"*","hooks":[{"type":"command","command":"AUTO_UPDATE_HOOK=SessionEnd /h/auto-update/auto-update.sh"}]}'
+_auh_end_other='{"matcher":"*","hooks":[{"type":"command","command":"echo bye"}]}'
+
+# The regression itself: auto-update registered, another hook after it.
+_auh_out="$(_auh_run "{\"hooks\":{\"SessionStart\":[$_auh_start_au,$_auh_start_other],\"SessionEnd\":[$_auh_end_au]}}" true)"
+if [[ "$_auh_out" != *NOHOOK* ]] && [[ "$_auh_out" == *ACTIVE* ]]; then
+  pass "auto-update health: a hook registered after auto-update is not read as missing"
+else
+  fail "auto-update health: trailing SessionStart hook must not fake a missing registration (got '$_auh_out')"
+fi
+
+_auh_out="$(_auh_run "{\"hooks\":{\"SessionStart\":[$_auh_start_other,$_auh_start_au],\"SessionEnd\":[$_auh_end_au]}}" true)"
+if [[ "$_auh_out" != *NOHOOK* ]]; then
+  pass "auto-update health: detection is independent of position in the array"
+else
+  fail "auto-update health: auto-update last should still be detected (got '$_auh_out')"
+fi
+
+# A hook entry with no `command` key aborts an unguarded filter with jq exit 5,
+# which looks exactly like "absent" once the status is discarded.
+_auh_out="$(_auh_run "{\"hooks\":{\"SessionStart\":[$_auh_start_nocmd,$_auh_start_au],\"SessionEnd\":[$_auh_end_au]}}" true)"
+if [[ "$_auh_out" != *NOHOOK* ]]; then
+  pass "auto-update health: an entry without a command does not hide the registration"
+else
+  fail "auto-update health: commandless entry must not abort the probe (got '$_auh_out')"
+fi
+
+_auh_out="$(_auh_run "{\"hooks\":{\"SessionStart\":[$_auh_start_other]}}" true)"
+if [[ "$_auh_out" == *NOHOOK* ]]; then
+  pass "auto-update health: a genuinely absent hook is still reported"
+else
+  fail "auto-update health: missing auto-update must warn (got '$_auh_out')"
+fi
+
+_auh_out="$(_auh_run '{}' true)"
+if [[ "$_auh_out" == *NOHOOK* ]]; then
+  pass "auto-update health: settings with no hooks at all is reported"
+else
+  fail "auto-update health: empty settings must warn (got '$_auh_out')"
+fi
+
+# SessionEnd is only required on a Claude Code that supports async hooks.
+_auh_out="$(_auh_run "{\"hooks\":{\"SessionStart\":[$_auh_start_au,$_auh_start_other],\"SessionEnd\":[$_auh_end_other]}}" true)"
+if [[ "$_auh_out" == *NOHOOK* ]]; then
+  pass "auto-update health: a missing SessionEnd hook is reported on async-capable CLIs"
+else
+  fail "auto-update health: SessionEnd probe must not inherit the SessionStart answer (got '$_auh_out')"
+fi
+
+_auh_out="$(_auh_run "{\"hooks\":{\"SessionStart\":[$_auh_start_au,$_auh_start_other],\"SessionEnd\":[$_auh_end_other]}}" false)"
+if [[ "$_auh_out" != *NOHOOK* ]]; then
+  pass "auto-update health: legacy CLIs are not asked for a SessionEnd hook"
+else
+  fail "auto-update health: SessionEnd must not be required without async support (got '$_auh_out')"
+fi
+
+# An unreadable answer is not an answer: claim neither failure nor health.
+_auh_out="$(_auh_run '{"hooks": ' true)"
+if [[ "$_auh_out" != *NOHOOK* ]] && [[ "$_auh_out" != *ACTIVE* ]]; then
+  pass "auto-update health: an unparseable settings.json reports neither state"
+else
+  fail "auto-update health: invalid JSON must not be read as a verdict (got '$_auh_out')"
+fi

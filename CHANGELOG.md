@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.76.1] - 2026-08-31
+
+### Fixed
+- **auto-update の hook が登録済みでも「自動更新は無効です」と誤警告される問題を修正（#161）**: 稼働確認 `_check_auto_update_health` が `jq -e '.hooks.SessionStart[]?.hooks[]?.command | contains("auto-update")'` で判定していた。このフィルタは hook 1 件につき 1 出力を出し、`jq -e` は**最後の出力**だけで終了コードを決めるため、`auto-update` より後ろに別の SessionStart hook が登録されていると最後が `false` になり未登録と判定されていた。`_FEATURE_ORDER` は `feature-recommendation` を末尾に置き、`_feature_deploy_enabled` は非 MDM では `ENABLE_FEATURE_RECOMMENDATION` の値によらず常に配備するため、Standard / Full の通常環境ではこの誤警告を回避する設定が存在しなかった。`any(GEN; COND)` で単一の真偽値に畳み込む形に変更した（`_strip_retired_hook_entries` と同じイディオム）。機能自体は正常に動作しており、変わるのは表示のみ
+  - **`setup.sh --update` だけでなく新規インストールでも発生していた**: 呼び出し箇所は `lib/update.sh`（更新完了時）と `setup.sh`（`setup_finalize`）の 2 つ。イシュー本文は更新時のみと記載していたが、Standard / Full の新規インストール完了時にも同じ誤警告が出ていた。`--dry-run` は `_update_report` が早期 return するため影響しない
+  - **SessionEnd 側の同型の不具合もあわせて修正**: 隣接する SessionEnd 判定も同じ形だった。現状 SessionEnd hook を登録する feature は auto-update だけなので顕在化していなかったが、2 つ目が追加された時点で同じ誤判定になる
+  - **`command` を持たない hook エントリで誤判定していた点も修正**: `null | contains(...)` は jq をエラー終了（exit 5）させ、終了コードを捨てている以上「未登録」と区別できなかった。`type == "string"` ガードを追加した
+- **判定できなかった状態を「有効」と報告しなくなった**: jq が無い場合のフォールバックは `grep -q '"SessionStart"'` と `grep -q "auto-update"` をファイル全体に対して独立に評価しており、SessionEnd にしか auto-update が無い場合でも両方登録済みと判定していた（#161 の誤警告とは逆方向の誤り）。jq は前提ツールでこの分岐は実質到達しないため、フォールバックを削除し、判定不能時は警告も「有効です」の表示も行わないようにした。settings.json が読めない・壊れている場合も同様に扱う
+- `_check_auto_update_health` の回帰テスト 8 件を `tests/unit/test-auto-update.sh` に追加した。修正前のコードでは 4 件が失敗する
+
 ## [0.76.0] - 2026-08-24
 
 ### Added
