@@ -52,20 +52,26 @@ fi
 # the regression they exist to catch. Collect first, then assert on the whole
 # set: `length == 1` pins the entry and `all(...)` is the correct collapse for
 # a negated condition (`any(...)` would still pass on a regressed first entry).
-_pr_entries='[.hooks.PostToolUse[]?.hooks[]?
-  | select((.command? // "") | contains("pr-creation-log/log-pr.sh"))]'
+# Selection walks the PARENT PostToolUse entries (not the inner hooks) so the
+# matcher stays visible: this feature must remain bound to matcher "Bash".
+_pr_entries='[.hooks.PostToolUse[]?
+  | select(any(.hooks[]?; (.command? // "") | contains("pr-creation-log/log-pr.sh")))]'
 
 _pr_modern_hook_ok() { # <settings-file>
   jq -e "$_pr_entries
     | length == 1
-      and all(.if == \"Bash(gh pr create *)\" and .async == true)" \
+      and all(.matcher == \"Bash\"
+              and (.hooks | length == 1)
+              and all(.hooks[]; .if == \"Bash(gh pr create *)\" and .async == true))" \
     "$1" >/dev/null 2>&1
 }
 
 _pr_legacy_hook_ok() { # <settings-file>
   jq -e "$_pr_entries
     | length == 1
-      and all((has(\"if\") | not) and (has(\"async\") | not))" \
+      and all(.matcher == \"Bash\"
+              and (.hooks | length == 1)
+              and all(.hooks[]; (has(\"if\") | not) and (has(\"async\") | not)))" \
     "$1" >/dev/null 2>&1
 }
 
