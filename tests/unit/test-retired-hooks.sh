@@ -178,4 +178,124 @@ JSON
   fi
 }
 
+# ── _strip_superseded_kit_hook_generations ─────────────────────────────────
+#
+# The 3-way merge only runs when snapshot, current and new kit all differ, so
+# a hooks array that already carries a stale kit generation next to the kit's
+# current entry (#163) would persist until the kit next edits that very array.
+# This post-merge sweep heals it on every update.
+_rh_sweep() { # <settings-file> <kit-file>
+  HOME=/home/u bash -c '
+    set -uo pipefail
+    PROJECT_DIR="'"$PROJECT_DIR"'"
+    ok(){ :; }; warn(){ :; }; info(){ :; }; is_true(){ [[ "$1" == "true" ]]; }
+    _SETUP_TMP_FILES=()
+    source "$PROJECT_DIR/lib/features.sh"
+    source "$PROJECT_DIR/lib/snapshot.sh"
+    source "$PROJECT_DIR/lib/update.sh" 2>/dev/null || true
+    _strip_superseded_kit_hook_generations "'"$1"'" "'"$2"'"
+  '
+}
+
+_rh_kit="$_rh_tmp/kit-built.json"
+printf '%s\n' '{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "startup", "hooks": [{"type": "command", "command": "A.sh"}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "safety.sh"}]}
+    ]
+  }
+}' > "$_rh_kit"
+
+{
+  test_name="superseded-generations: a stale kit generation next to the current entry is dropped"
+  _rh_dup="$_rh_tmp/dup.json"
+  printf '%s\n' '{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "startup", "hooks": [{"type": "command", "command": "A.sh"}]},
+      {"matcher": "*", "hooks": [{"type": "command", "command": "A.sh"}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "safety.sh"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}]}
+    ]
+  }
+}' > "$_rh_dup"
+  _rh_sweep "$_rh_dup" "$_rh_kit" >/dev/null 2>&1
+  if jq -e '
+      (.hooks.SessionStart | length) == 1
+      and .hooks.SessionStart[0].matcher == "startup"
+      and (.hooks.PreToolUse | length) == 2
+      and .hooks.PreToolUse[1].hooks[0].command == "mine.sh"' \
+      "$_rh_dup" >/dev/null 2>&1; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="superseded-generations: a kit entry edited in place is left alone"
+  _rh_edited="$_rh_tmp/edited.json"
+  printf '%s\n' '{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "A.sh"}]}
+    ]
+  }
+}' > "$_rh_edited"
+  _rh_sweep "$_rh_edited" "$_rh_kit" >/dev/null 2>&1
+  if jq -e '
+      (.hooks.SessionStart | length) == 1
+      and .hooks.SessionStart[0].matcher == "*"' \
+      "$_rh_edited" >/dev/null 2>&1; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="superseded-generations: user hooks and unknown events are untouched"
+  _rh_mixed="$_rh_tmp/mixed.json"
+  printf '%s\n' '{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "startup", "hooks": [{"type": "command", "command": "A.sh"}]},
+      {"matcher": "startup", "hooks": [{"type": "command", "command": "mine.sh"}]}
+    ],
+    "Stop": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "A.sh"}]}
+    ]
+  },
+  "permissions": {"allow": ["Read"]}
+}' > "$_rh_mixed"
+  _rh_before="$(jq -cS . "$_rh_mixed")"
+  _rh_sweep "$_rh_mixed" "$_rh_kit" >/dev/null 2>&1
+  if [[ "$(jq -cS . "$_rh_mixed")" == "$_rh_before" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="superseded-generations: a missing or broken kit build changes nothing"
+  _rh_safe="$_rh_tmp/safe.json"
+  printf '{"hooks":{"SessionStart":[{"matcher":"*","hooks":[{"type":"command","command":"A.sh"}]}]}}\n' > "$_rh_safe"
+  printf 'not json' > "$_rh_tmp/broken-kit.json"
+  _rh_before="$(jq -cS . "$_rh_safe")"
+  _rh_rc1=0; _rh_sweep "$_rh_safe" "$_rh_tmp/no-such-kit.json" >/dev/null 2>&1 || _rh_rc1=$?
+  _rh_rc2=0; _rh_sweep "$_rh_safe" "$_rh_tmp/broken-kit.json" >/dev/null 2>&1 || _rh_rc2=$?
+  if [[ "$_rh_rc1" -eq 0 && "$_rh_rc2" -eq 0 \
+    && "$(jq -cS . "$_rh_safe")" == "$_rh_before" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
 rm -rf "$_rh_tmp"
