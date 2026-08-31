@@ -280,6 +280,42 @@ else
   fail "plugin-adoption: blank answer must not install (got '$_pa_out')"
 fi
 
+# ── prompt visibility ──────────────────────────────────────────────────────
+#
+# The question is what makes an offer an offer. `read -p` writes its prompt to
+# stderr, so the `2>/dev/null` that guards an unreadable terminal swallowed the
+# prompt itself: the run looked like a hang, and the Enter someone pressed to
+# get past it was recorded as a permanent dismissal.
+_pa_out="$(_pa_run '
+  _MERGE_INTERACTIVE="true"
+  printf "n\n" > "'"$_pa_tmp"'/answer-visible"
+  _TTY_INPUT="'"$_pa_tmp"'/answer-visible"
+  SELECTED_PLUGINS="alpha"
+  mkdir -p "'"$_pa_tmp"'/home7"
+  _detect_and_offer_new_plugins "'"$_pa_tmp"'/home7" 2>&1 >/dev/null')"
+if [[ "$_pa_out" == *"gamma@other-mp"*"[y/N]"* ]]; then
+  pass "plugin-adoption: the offer prompt reaches the user"
+else
+  fail "plugin-adoption: the [y/N] prompt must not be swallowed (got '$_pa_out')"
+fi
+
+# BOLD/NC carry escape sequences as literal backslash text. printf renders them
+# only from the format string; passed as %s arguments they print as raw
+# "\033[1m" in the middle of the plugin list.
+_pa_out="$(_pa_run '
+  _MERGE_INTERACTIVE="true"
+  BOLD="\033[1m"; NC="\033[0m"
+  printf "n\n" > "'"$_pa_tmp"'/answer-bold"
+  _TTY_INPUT="'"$_pa_tmp"'/answer-bold"
+  SELECTED_PLUGINS="alpha"
+  mkdir -p "'"$_pa_tmp"'/home8"
+  _detect_and_offer_new_plugins "'"$_pa_tmp"'/home8" 2>/dev/null')"
+if [[ "$_pa_out" == *"gamma@other-mp"* && "$_pa_out" != *'\033['* ]]; then
+  pass "plugin-adoption: the plugin line renders escapes instead of printing them"
+else
+  fail "plugin-adoption: the plugin line must appear without literal BOLD/NC (got '$_pa_out')"
+fi
+
 # ── CSV validation ─────────────────────────────────────────────────────────
 #
 # These CSVs gate an install offer, so a corrupted or hand-edited value is
