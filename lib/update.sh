@@ -2166,31 +2166,55 @@ _check_auto_update_health() {
   local has_session_start=false
   local has_session_end=false
   local require_session_end=false
+  local hook_state_known=true
+  local hook_issue=false
 
   if _claude_supports_async_hooks "2.1.89"; then
     require_session_end=true
   fi
 
-  if command -v jq &>/dev/null; then
-    if jq -e '.hooks.SessionStart[]?.hooks[]?.command | contains("auto-update")' "$settings" >/dev/null 2>&1; then
-      has_session_start=true
-    fi
-    if jq -e '.hooks.SessionEnd[]?.hooks[]?.command | contains("auto-update")' "$settings" >/dev/null 2>&1; then
-      has_session_end=true
-    fi
-  else
-    if grep -q '"SessionStart"' "$settings" 2>/dev/null && grep -q "auto-update" "$settings" 2>/dev/null; then
-      has_session_start=true
-    fi
-    if grep -q '"SessionEnd"' "$settings" 2>/dev/null && grep -q "auto-update" "$settings" 2>/dev/null; then
-      has_session_end=true
+  # `.hooks.<Event>[]?.hooks[]?.command | contains(...)` emits one output per
+  # registered hook, and `jq -e` derives its exit code from the LAST output
+  # only. Any hook registered after auto-update therefore reported "not
+  # registered" for a perfectly healthy install. `any(GEN; COND)` collapses the
+  # stream to a single boolean, and the `type == "string"` guard keeps an entry
+  # without a string `command` from aborting the filter — an abort is exit 5,
+  # which is indistinguishable from "absent" once the status is discarded.
+  # Same shape as _strip_retired_hook_entries above.
+  local probe_rc
+  probe_rc=0
+  jq -e 'any(.hooks.SessionStart[]?.hooks[]?.command?;
+             type == "string" and contains("auto-update"))' \
+    "$settings" >/dev/null 2>&1 || probe_rc=$?
+  case "$probe_rc" in
+    0) has_session_start=true ;;
+    1) ;;
+    *) hook_state_known=false ;;
+  esac
+
+  probe_rc=0
+  jq -e 'any(.hooks.SessionEnd[]?.hooks[]?.command?;
+             type == "string" and contains("auto-update"))' \
+    "$settings" >/dev/null 2>&1 || probe_rc=$?
+  case "$probe_rc" in
+    0) has_session_end=true ;;
+    1) ;;
+    *) hook_state_known=false ;;
+  esac
+
+  # Check 1: hook registered. Anything other than a clean true/false answer
+  # (jq missing, settings.json unreadable or invalid) means the state was never
+  # determined, so report nothing rather than guess. The previous fallback
+  # answered both questions from one file-wide `grep -q auto-update` and so
+  # called a half-registered pair healthy — the opposite error, equally wrong.
+  if [[ "$hook_state_known" == "true" ]]; then
+    if [[ "$has_session_start" != "true" ]]; then
+      hook_issue=true
+    elif [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; then
+      hook_issue=true
     fi
   fi
-
-  # Check 1: hook registered
-  if [[ "$has_session_start" != "true" ]]; then
-    issues+=("${STR_AUTOUPDATE_NO_HOOK:-SessionStart / SessionEnd hooks are not fully registered}")
-  elif [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; then
+  if [[ "$hook_issue" == "true" ]]; then
     issues+=("${STR_AUTOUPDATE_NO_HOOK:-SessionStart / SessionEnd hooks are not fully registered}")
   fi
 
@@ -2217,13 +2241,13 @@ _check_auto_update_health() {
       info "  - $issue"
     done
     # Show targeted hints based on what's missing
-    if [[ "$has_session_start" != "true" ]] || { [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; }; then
+    if [[ "$hook_issue" == "true" ]]; then
       info "${STR_AUTOUPDATE_HINT_HOOK:-To enable: re-run setup.sh and select auto-update in hooks, or use standard/full profile}"
     fi
     if [[ ! -d "${kit_dir}/.git" ]]; then
       info "${STR_AUTOUPDATE_HINT_REPO:-To enable: git clone https://github.com/cloudnative-co/claude-code-starter-kit.git ~/.claude-starter-kit}"
     fi
-  else
+  elif [[ "$hook_state_known" == "true" ]]; then
     ok "${STR_AUTOUPDATE_OK:-Auto-update is active}"
   fi
 }

@@ -414,10 +414,21 @@ _offer_new_plugins_interactive() {
     [[ -n "$entry" ]] || continue
     local desc
     desc="$(_plugin_description "$entry")"
-    printf "  %s%s%s%s\n" "${BOLD:-}" "$entry" "${NC:-}" "${desc:+ — $desc}"
+    # BOLD/NC carry escape sequences as literal backslash text, so they only
+    # render when printf interprets them in the FORMAT string. Passing them as
+    # %s arguments printed a raw "\033[1m" instead of bold.
+    # shellcheck disable=SC2059 # BOLD/NC are kit-owned escape constants
+    printf "  ${BOLD:-}%s${NC:-}%s\n" "$entry" "${desc:+ — $desc}"
+    # Print the question separately: `read -p` writes its prompt to stderr, so
+    # the `2>/dev/null` that guards an unreadable terminal swallowed the prompt
+    # itself. The run then looked like a hang, and the Enter a user pressed to
+    # get past it was recorded as a permanent dismissal. Same shape as the
+    # kit's other post-wizard prompts (lib/deploy.sh, lib/merge.sh).
     # shellcheck disable=SC2059 # STR_* carries the %s placeholder
-    if ! read -r -p "$(printf "${STR_NEW_PLUGINS_ASK:-Add %s? [y/N]}" "$entry") " \
-      reply < "${_TTY_INPUT:-/dev/tty}" 2>/dev/null; then
+    printf "${STR_NEW_PLUGINS_ASK:-Add %s? [y/N]} " "$entry" >&2
+    reply=""
+    if ! read -r reply < "${_TTY_INPUT:-/dev/tty}" 2>/dev/null; then
+      printf "\n" >&2
       return 2
     fi
     case "$reply" in
