@@ -310,10 +310,10 @@ _pa_out="$(_pa_run '
   SELECTED_PLUGINS="alpha"
   mkdir -p "'"$_pa_tmp"'/home8"
   _detect_and_offer_new_plugins "'"$_pa_tmp"'/home8" 2>/dev/null')"
-if [[ "$_pa_out" != *'\033['* ]]; then
+if [[ "$_pa_out" == *"gamma@other-mp"* && "$_pa_out" != *'\033['* ]]; then
   pass "plugin-adoption: the plugin line renders escapes instead of printing them"
 else
-  fail "plugin-adoption: BOLD/NC must not reach the terminal literally (got '$_pa_out')"
+  fail "plugin-adoption: the plugin line must appear without literal BOLD/NC (got '$_pa_out')"
 fi
 
 # ── CSV validation ─────────────────────────────────────────────────────────
