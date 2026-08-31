@@ -12,6 +12,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   - `-e` を外して修正した。`null` は正常なセンチネルであって失敗ではない。部分的な binding と壊れた manifest は引き続き `error()` 経由で非ゼロ終了するため、**fail-closed の挙動は変わらない**。同じフィルタを持つ `wizard/runtime-binding.sh` は元から `-e` なしで、そちらが意図した形だった
   - 回帰テストを 3 件追加した（MDM 形式 manifest / 旧 v1 manifest で通知が出ること、壊れた manifest では引き続き出ないこと）。既存のテストは manifest を作らない経路と完全な binding・部分的な binding しか通っておらず、「manifest はあるが binding が無い」ケースが未検査だった
 
+## [0.77.0] - 2026-08-31
+
+### Fixed
+- **非対話更新で kit の hook エントリが重複しなくなった（#163）**: `_merge_arrays_3way` は配列要素を**完全一致**で比較していた。キット側がエントリを変更すると（`matcher` の変更、`async` / `asyncTimeout` の追加）、live 側の旧世代が snapshot のどの要素とも一致しなくなり「ユーザーが追加した要素」に分類され、`$n + $ua` の**無条件連結**でキットの新エントリと並べて残されていた。結果として同じ hook が二重に登録される（コマンド自体の改名は identity ごと変わる別クラスで、従来どおり `_strip_retired_hook_entries` が対象コマンドを掃除する）
+  - **一度発生すると解消しなかった**: `_update_phase_snapshot` は settings.json の snapshot に「マージ結果ではなくキットが生成した版」を保存する（利用者の変更を黙って上書きしないための意図的な設計）。stale エントリは snapshot に入らないため、以降の更新でも毎回「ユーザー追加」と分類され続けていた
+  - **判定を identity ベースにした**: hook エントリは `hooks[].command` の集合を論理的な登録単位とみなす。この identity が snapshot と新キットの両方に存在する要素は「キットが変更した既存エントリ」であり、ユーザー追加ではないと判断してキット版を採用する。kit-removed 側にも同じ判定を適用し、identity が新キットに残っている snapshot 要素（＝キットが「変更」したエントリ）を「キットが削除したエントリ」として復活させない。identity が snapshot に無い要素（利用者独自の hook）は従来どおり保持され、identity が新キットからも消えた要素は従来どおり kit-removed として扱われる
+  - **既存の壊れた環境は次回の更新で自動的に解消される**。手作業での `settings.json` 編集は不要。3-way マージは snapshot・現行・新キットがすべて異なるときにしか走らないため、マージだけでは「キットが該当配列を次に変更する更新」まで重複が残る。これを埋めるため、更新のたびにマージ後の settings.json をキット生成版と突き合わせ、キットの現行エントリと並んで残っている旧世代（同じ command 集合で内容が異なり、かつキット現行版が同じ配列に存在するもの）を取り除く `_strip_superseded_kit_hook_generations` を追加した。対話・非対話のどちらの更新経路でも実行される
+  - 重複が**発生**するのは `_MERGE_INTERACTIVE` が false の経路（auto-update hook 経由の更新、`--non-interactive`、`install.sh` の `--update`）のみ。`/update-kit` と対話的な再実行は配列まるごと置換の経路を通るため該当しない
+- **配列マージがキットの並び順を保持するようになった**: 重複排除に使っていた `unique` は配列を**ソート**する。`.hooks.PreToolUse` は配列順に実行され、`lib/features.sh` は safety-net が先頭であることを要求している（`lib/deploy.sh` がビルド時に FATAL で検査）。しかしこの検査はビルド時の `_FEATURE_ORDER` のみを見ており、更新時のマージは通らない。実測で、コマンド文字列が `cc-safety-net` より辞書順で前に来るユーザー hook（例: `!` 始まり）が index 0 を奪うことを確認した。順序を保つ重複排除に置き換えた
+
+### Changed
+- **`permissions.allow` / `deny` などの文字列配列の並び順が変わる**: 上記の重複排除の変更により、非対話更新後の配列はアルファベット順ではなく「キットの順序 → ユーザー追加分」の順になる。要素の集合は変わらず、権限判定の挙動にも影響はないが、更新後の `settings.json` の差分としては見える
+- **キット所有の hook エントリを利用者が直接編集していた場合、キットが該当エントリを変更する更新の時点でキット版に戻るようになった**: 従来は新旧が両方残って同じ hook が二重に登録されていた。単一の登録として扱う以上どちらかを選ぶ必要があり、キット管理下のエントリはキット版を正とする。キット版を残したまま同じコマンド（`hooks[].command` の集合が一致するエントリ）を別の matcher で**追加登録**していた場合は、更新のたびに世代掃除の対象となりキット版 1 件に統合される。利用者独自のコマンドを持つ hook は影響を受けない
+
+## [0.76.2] - 2026-08-31
+
+### Fixed
+- **新規プラグインの追加確認が、質問を表示しないまま入力待ちで止まる問題を修正**: 対話更新でカタログに追加されたプラグインを 1 件ずつ確認する `_offer_new_plugins_interactive` が、`read -r -p "..." reply < /dev/tty 2>/dev/null` の形で質問していた。`read -p` はプロンプトを stderr に書くため、端末を開けなかった場合に備えて付けていた `2>/dev/null` が質問文そのものを破棄していた。画面にはプラグイン一覧だけが出て入力待ちで停止するため停止しているように見え、先に進めるために押した Enter は空回答として `DISMISSED_PLUGINS` に記録される。既定は No で、一度断った項目は再提示されない設計のため、質問を一度も見ないまま該当プラグインが恒久的に拒否されていた。キットの他の対話プロンプト（`lib/deploy.sh` / `lib/merge.sh`）と同じ形に揃え、`printf ... >&2` で質問を出力してから `-p` なしの `read` を実行するようにした
+  - **既に拒否記録が残っている環境の復旧**: `~/.claude-starter-kit.conf` の `DISMISSED_PLUGINS` と `KNOWN_PLUGINS` の両方から該当エントリを削除すると、次回の対話更新で再度提示される。`_compute_new_plugins` は SELECTED / DISMISSED / KNOWN のいずれかに含まれる項目を除外するため、`DISMISSED_PLUGINS` だけを消しても再提示されない。Claude Code 内で `/plugin install <name>@<marketplace>` を直接実行する方法も従来どおり使える
+- **プラグイン一覧に `\033[1m` が制御文字列のまま表示される問題を修正**: 同じ関数がプラグイン名を `printf "  %s%s%s%s\n" "${BOLD:-}" ...` と出力していた。`BOLD` / `NC` はエスケープシーケンスをバックスラッシュ表記の文字列として保持しており、printf が解釈するのは書式文字列に含まれる場合だけなので、`%s` の引数として渡すと画面にそのまま出る。色出力が有効な端末で発生する（`lib/colors.sh` は stdout が端末のときのみ色を設定するため、リダイレクト時は空文字列になり影響しない）。`lib/colors.sh` の他の出力と同じく書式文字列側に置くよう変更した
+- 上記 2 点の回帰テストを `tests/unit/test-plugin-adoption.sh` に追加した。修正前のコードでは 2 件とも失敗する
+
+## [0.76.1] - 2026-08-31
+
+### Fixed
+- **auto-update の hook が登録済みでも「自動更新は無効です」と誤警告される問題を修正（#161）**: 稼働確認 `_check_auto_update_health` が `jq -e '.hooks.SessionStart[]?.hooks[]?.command | contains("auto-update")'` で判定していた。このフィルタは hook 1 件につき 1 出力を出し、`jq -e` は**最後の出力**だけで終了コードを決めるため、`auto-update` より後ろに別の SessionStart hook が登録されていると最後が `false` になり未登録と判定されていた。`_FEATURE_ORDER` は `feature-recommendation` を末尾に置き、`_feature_deploy_enabled` は非 MDM では `ENABLE_FEATURE_RECOMMENDATION` の値によらず常に配備するため、Standard / Full の通常環境ではこの誤警告を回避する設定が存在しなかった。`any(GEN; COND)` で単一の真偽値に畳み込む形に変更した（`_strip_retired_hook_entries` と同じイディオム）。機能自体は正常に動作しており、変わるのは表示のみ
+  - **`setup.sh --update` だけでなく新規インストールでも発生していた**: 呼び出し箇所は `lib/update.sh`（更新完了時）と `setup.sh`（`setup_finalize`）の 2 つ。イシュー本文は更新時のみと記載していたが、Standard / Full の新規インストール完了時にも同じ誤警告が出ていた。`--dry-run` は `_update_report` が早期 return するため影響しない
+  - **SessionEnd 側の同型の不具合もあわせて修正**: 隣接する SessionEnd 判定も同じ形だった。現状 SessionEnd hook を登録する feature は auto-update だけなので顕在化していなかったが、2 つ目が追加された時点で同じ誤判定になる
+  - **`command` を持たない hook エントリで誤判定していた点も修正**: `null | contains(...)` は jq をエラー終了（exit 5）させ、終了コードを捨てている以上「未登録」と区別できなかった。`type == "string"` ガードを追加した
+- **判定できなかった状態を「有効」と報告しなくなった**: jq が無い場合のフォールバックは `grep -q '"SessionStart"'` と `grep -q "auto-update"` をファイル全体に対して独立に評価しており、SessionEnd にしか auto-update が無い場合でも両方登録済みと判定していた（#161 の誤警告とは逆方向の誤り）。jq は前提ツールでこの分岐は実質到達しないため、フォールバックを削除し、判定不能時は警告も「有効です」の表示も行わないようにした。settings.json が読めない・壊れている場合も同様に扱う
+- `_check_auto_update_health` の回帰テスト 8 件を `tests/unit/test-auto-update.sh` に追加した。修正前のコードでは 4 件が失敗する
+
 ## [0.76.0] - 2026-08-24
 
 ### Added

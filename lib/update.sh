@@ -1374,6 +1374,74 @@ _strip_retired_hook_entries() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# _strip_superseded_kit_hook_generations - Drop stale generations of kit hooks
+#
+# Usage: _strip_superseded_kit_hook_generations <settings-file> <kit-built-file>
+#
+# A hooks array that carries BOTH the kit's current entry and an older kit
+# generation of it (same command set, different matcher/async/etc — the
+# pre-identity-merge failure mode, #163) runs the same hook twice. The 3-way
+# merge only executes when snapshot, current and new kit all differ, so an
+# already-duplicated array would otherwise persist until the kit next edits
+# that very array. This sweep runs on every update, after the merge, against
+# the freshly built kit settings.
+#
+# An entry is dropped ONLY when all three hold: it differs from every kit
+# entry, its command set matches a kit entry's, and that kit entry is itself
+# present in the array. A kit entry the user edited IN PLACE (kit's exact
+# version absent) is left alone — removing it would deregister the hook.
+# User hooks with their own commands never match a kit identity.
+# ---------------------------------------------------------------------------
+_strip_superseded_kit_hook_generations() {
+  local settings_file="$1"
+  local kit_file="$2"
+  [[ -f "$settings_file" ]] || return 1
+  [[ -f "$kit_file" ]] || return 0
+  local filter='
+    def ident: if type == "object" and ((.hooks? | type) == "array")
+               then [.hooks[]?.command?] else null end;
+    def stale($K; $L):
+      . as $e |
+      (($K | any(. == $e)) | not) and
+      (($e | ident) != null) and
+      ($K | any(ident == ($e | ident))) and
+      ([$K[] | select(ident == ($e | ident))] | any(. as $k | $L | any(. == $k)));
+    ($kit[0].hooks // {}) as $KH'
+  local probe_rc=0
+  jq -e --slurpfile kit "$kit_file" "$filter"' |
+    any((.hooks // {}) | to_entries[];
+        ($KH[.key] // []) as $K | .value as $L |
+        ($L | type) == "array" and any($L[]; stale($K; $L)))
+  ' "$settings_file" >/dev/null 2>&1 || probe_rc=$?
+  case "$probe_rc" in
+    0) ;;
+    1) return 0 ;;
+    *) return 0 ;;  # unreadable kit build or settings — nothing safe to do
+  esac
+  local tmp
+  tmp="$(mktemp)" || return 1
+  _SETUP_TMP_FILES+=("$tmp")
+  if jq --slurpfile kit "$kit_file" "$filter"' |
+    if .hooks then
+      .hooks |= (to_entries
+        | map(($KH[.key] // []) as $K
+              | .value as $L
+              | .value |= (if type == "array"
+                           then map(select(stale($K; $L) | not))
+                           else . end))
+        | from_entries)
+    else . end
+  ' "$settings_file" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$settings_file" || return 1
+    ok "Removed superseded kit hook generations from settings.json"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+    warn "Could not strip superseded kit hook generations from settings.json"
+    return 1
+  fi
+}
+
 _retired_relative_path_is_safe() {
   local rel="$1"
   [[ -n "$rel" && "$rel" != /* && ! "$rel" =~ [[:cntrl:]] ]] || return 1
@@ -1688,6 +1756,12 @@ _update_phase_settings() {
   # which would leave commands pointing at scripts the retired-file sweep
   # deletes. Strip them explicitly.
   _strip_retired_hook_entries "$current_settings" || return 1
+
+  # Heal arrays that already carry a stale kit hook generation next to the
+  # kit's current entry (#163). The 3-way merge above only runs when snapshot,
+  # current and new kit all differ, so without this sweep an already-duplicated
+  # array persists until the kit next edits that very array.
+  _strip_superseded_kit_hook_generations "$current_settings" "$new_settings" || return 1
 }
 
 # _claude_md_user_section_has_content - Returns 0 when the user section of a
@@ -2092,31 +2166,55 @@ _check_auto_update_health() {
   local has_session_start=false
   local has_session_end=false
   local require_session_end=false
+  local hook_state_known=true
+  local hook_issue=false
 
   if _claude_supports_async_hooks "2.1.89"; then
     require_session_end=true
   fi
 
-  if command -v jq &>/dev/null; then
-    if jq -e '.hooks.SessionStart[]?.hooks[]?.command | contains("auto-update")' "$settings" >/dev/null 2>&1; then
-      has_session_start=true
-    fi
-    if jq -e '.hooks.SessionEnd[]?.hooks[]?.command | contains("auto-update")' "$settings" >/dev/null 2>&1; then
-      has_session_end=true
-    fi
-  else
-    if grep -q '"SessionStart"' "$settings" 2>/dev/null && grep -q "auto-update" "$settings" 2>/dev/null; then
-      has_session_start=true
-    fi
-    if grep -q '"SessionEnd"' "$settings" 2>/dev/null && grep -q "auto-update" "$settings" 2>/dev/null; then
-      has_session_end=true
+  # `.hooks.<Event>[]?.hooks[]?.command | contains(...)` emits one output per
+  # registered hook, and `jq -e` derives its exit code from the LAST output
+  # only. Any hook registered after auto-update therefore reported "not
+  # registered" for a perfectly healthy install. `any(GEN; COND)` collapses the
+  # stream to a single boolean, and the `type == "string"` guard keeps an entry
+  # without a string `command` from aborting the filter — an abort is exit 5,
+  # which is indistinguishable from "absent" once the status is discarded.
+  # Same shape as _strip_retired_hook_entries above.
+  local probe_rc
+  probe_rc=0
+  jq -e 'any(.hooks.SessionStart[]?.hooks[]?.command?;
+             type == "string" and contains("auto-update"))' \
+    "$settings" >/dev/null 2>&1 || probe_rc=$?
+  case "$probe_rc" in
+    0) has_session_start=true ;;
+    1) ;;
+    *) hook_state_known=false ;;
+  esac
+
+  probe_rc=0
+  jq -e 'any(.hooks.SessionEnd[]?.hooks[]?.command?;
+             type == "string" and contains("auto-update"))' \
+    "$settings" >/dev/null 2>&1 || probe_rc=$?
+  case "$probe_rc" in
+    0) has_session_end=true ;;
+    1) ;;
+    *) hook_state_known=false ;;
+  esac
+
+  # Check 1: hook registered. Anything other than a clean true/false answer
+  # (jq missing, settings.json unreadable or invalid) means the state was never
+  # determined, so report nothing rather than guess. The previous fallback
+  # answered both questions from one file-wide `grep -q auto-update` and so
+  # called a half-registered pair healthy — the opposite error, equally wrong.
+  if [[ "$hook_state_known" == "true" ]]; then
+    if [[ "$has_session_start" != "true" ]]; then
+      hook_issue=true
+    elif [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; then
+      hook_issue=true
     fi
   fi
-
-  # Check 1: hook registered
-  if [[ "$has_session_start" != "true" ]]; then
-    issues+=("${STR_AUTOUPDATE_NO_HOOK:-SessionStart / SessionEnd hooks are not fully registered}")
-  elif [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; then
+  if [[ "$hook_issue" == "true" ]]; then
     issues+=("${STR_AUTOUPDATE_NO_HOOK:-SessionStart / SessionEnd hooks are not fully registered}")
   fi
 
@@ -2143,13 +2241,13 @@ _check_auto_update_health() {
       info "  - $issue"
     done
     # Show targeted hints based on what's missing
-    if [[ "$has_session_start" != "true" ]] || { [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; }; then
+    if [[ "$hook_issue" == "true" ]]; then
       info "${STR_AUTOUPDATE_HINT_HOOK:-To enable: re-run setup.sh and select auto-update in hooks, or use standard/full profile}"
     fi
     if [[ ! -d "${kit_dir}/.git" ]]; then
       info "${STR_AUTOUPDATE_HINT_REPO:-To enable: git clone https://github.com/cloudnative-co/claude-code-starter-kit.git ~/.claude-starter-kit}"
     fi
-  else
+  elif [[ "$hook_state_known" == "true" ]]; then
     ok "${STR_AUTOUPDATE_OK:-Auto-update is active}"
   fi
 }
