@@ -1018,3 +1018,46 @@ _large_merge_doc() {
     fail "$test_name (got '$_RF_STDOUT')"
   fi
 }
+
+# The identity rule must also hold on the very update that SHIPS the kit edit.
+# There the stale generation is byte-equal to the snapshot, so it never reaches
+# the user_added filter — it lands in kit_removed instead, and the
+# non-interactive branch used to re-append it next to the kit's new version,
+# recreating the duplicate this merge exists to prevent.
+{
+  test_name="arrays_3way: the update shipping a kit edit does not resurrect the old generation"
+  snapshot='[{"matcher":"*","hooks":[{"type":"command","command":"A.sh"}]}]'
+  current='[{"matcher":"*","hooks":[{"type":"command","command":"A.sh"}]},{"matcher":"Bash","hooks":[{"type":"command","command":"MY-OWN.sh"}]}]'
+  new_kit='[{"matcher":"startup","hooks":[{"type":"command","command":"A.sh"}]}]'
+
+  run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && printf '%s' "$_RF_STDOUT" | jq -e '
+        length == 2
+        and (.[0] == {"matcher":"startup","hooks":[{"type":"command","command":"A.sh"}]})
+        and (.[1].hooks[0].command == "MY-OWN.sh")' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name (got '$_RF_STDOUT')"
+  fi
+}
+
+# An entry whose identity is GONE from the new kit is genuinely kit-removed and
+# keeps the existing non-interactive default: the user's value stays.
+{
+  test_name="arrays_3way: a truly removed kit entry is still kept non-interactively"
+  snapshot='[{"matcher":"*","hooks":[{"type":"command","command":"GONE.sh"}]}]'
+  current='[{"matcher":"*","hooks":[{"type":"command","command":"GONE.sh"}]}]'
+  new_kit='[]'
+
+  run_func _merge_arrays_3way "$snapshot" "$current" "$new_kit"
+
+  if [[ "$_RF_RC" -eq 0 ]] \
+    && printf '%s' "$_RF_STDOUT" | jq -e '
+        length == 1 and .[0].hooks[0].command == "GONE.sh"' >/dev/null; then
+    pass "$test_name"
+  else
+    fail "$test_name (got '$_RF_STDOUT')"
+  fi
+}

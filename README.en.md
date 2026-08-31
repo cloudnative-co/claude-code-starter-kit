@@ -255,7 +255,7 @@ Automatically checks for new starter kit releases on GitHub on both `SessionStar
 - **Every-session checks**: Checks at both session start and session end
 - **Background execution**: Hooks run asynchronously, so the session is not blocked
 - **Lock-based deduplication**: A running auto-update prevents duplicate concurrent runs
-- **Settings preserved**: 3-way merge keeps settings and hooks you added yourself. A kit-shipped hook entry you edited in place is restored to the kit's version on update
+- **Settings preserved**: 3-way merge keeps settings and hooks that use your own commands. Kit-shipped hook entries are kit-owned: an entry you edited in place, or a kit command you re-registered under another matcher, is consolidated back to the kit's single version on update
 - **One-liner installs only**: Only works when the kit is installed at `~/.claude-starter-kit/`
 - **SessionEnd is best-effort**: abrupt termination may skip the end-of-session check
 - **Compatibility**: Verified on Claude Code `2.1.89`. When an older Claude Code is detected, the kit falls back to the legacy `SessionStart` + 24h cache hook

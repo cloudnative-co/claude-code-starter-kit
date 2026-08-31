@@ -172,13 +172,15 @@ _merge_settings_mdm_documents() {
 #   - Deduplicate while preserving order
 #
 # Identity exists because elements are compared by exact equality. A kit-side
-# EDIT of a hook entry (matcher, async, asyncTimeout, a renamed command) makes
-# the live copy unequal to every snapshot element, so it used to be classified
-# as a user addition and re-appended NEXT TO the kit's new version — leaving
-# the same hook registered twice, permanently (the snapshot stores the kit
-# build, so the stale copy is re-classified as a user addition on every later
-# update). Hook entries carry a "hooks" array of commands; that command set is
-# the logical registration, independent of the matcher it is bound to. Any
+# EDIT of a hook entry (matcher, async, asyncTimeout) makes the live copy
+# unequal to every snapshot element, so it used to be classified as a user
+# addition and re-appended NEXT TO the kit's new version — leaving the same
+# hook registered twice, permanently (the snapshot stores the kit build, so
+# the stale copy is re-classified as a user addition on every later update).
+# Hook entries carry a "hooks" array of commands; that command set is the
+# logical registration, independent of the matcher it is bound to. A renamed
+# command changes the identity itself and is out of scope here — retired and
+# renamed commands are swept by _strip_retired_hook_entries instead. Any
 # other element (permissions strings, plain scalars) is its own identity, so
 # an identity match is impossible for them and their behaviour is unchanged.
 # ---------------------------------------------------------------------------
@@ -214,11 +216,19 @@ _merge_arrays_3way() {
     --argjson s "$s_val" \
     --argjson c "$c_val" \
     --argjson n "$n_val" \
-    '[
+    'def ident: if type == "object" and ((.hooks? | type) == "array")
+                then [.hooks[]?.command?] else . end;
+     ($n | map(ident)) as $nids |
+     [
       $s[] | . as $item |
       select(
         ($n | map(. == $item) | any | not) and
-        ($c | map(. == $item) | any)
+        ($c | map(. == $item) | any) and
+        # Identity still shipped by the new kit → the kit MODIFIED this entry
+        # rather than removing it. The updated version in $n replaces this
+        # generation; re-adding the snapshot copy would register the same
+        # hook twice — the exact failure this merge exists to prevent.
+        (($nids | any(. == ($item | ident))) | not)
       )
     ]')" || return 1
 
