@@ -21,6 +21,7 @@ _CONFIG_KEYS=(
   ENABLE_PRE_COMPACT_COMMIT ENABLE_SAFETY_NET ENABLE_AUTO_UPDATE ENABLE_WEB_CONTENT_UPDATE
   ENABLE_STATUSLINE ENABLE_GHOSTTY_SETUP ENABLE_FONTS_SETUP ENABLE_DOC_SIZE_GUARD
   ENABLE_NO_FLICKER ENABLE_FEATURE_RECOMMENDATION ENABLE_AGENT_TEAMS
+  ENABLE_NATIVE_FILE_TOOLS
   ""
   DISMISSED_FEATURES
   ""
@@ -231,6 +232,7 @@ HOOK_KEYS=(
   "ENABLE_DOC_SIZE_GUARD"
   "ENABLE_FEATURE_RECOMMENDATION"
   "ENABLE_AGENT_TEAMS"
+  "ENABLE_NATIVE_FILE_TOOLS"
 )
 
 HOOK_TOKENS=(
@@ -246,6 +248,7 @@ HOOK_TOKENS=(
   "doc-size"
   "feature-rec"
   "agent-teams"
+  "native-tools"
 )
 
 HOOK_LABELS=()
@@ -264,7 +267,18 @@ _init_hook_labels() {
     "${STR_HOOKS_DOC_SIZE:-Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large}"
     "${STR_HOOKS_FEATURE_RECOMMENDATION:-Feature Recommendation - Notify about new features on session start}"
     "${STR_HOOKS_AGENT_TEAMS:-Agent Teams (experimental) - Enable Claude Code agent teams}"
+    "${STR_HOOKS_NATIVE_FILE_TOOLS:-Native File Tools - Keep Read/Edit/Write as the primary file tools in auto / bypassPermissions sessions (CLAUDE_CODE_THRIFTY_SONIC=0)}"
   )
+}
+
+# Feature keys introduced after older installs. minimal/standard/full receive
+# the value from their profile conf; a custom profile has no conf, so without
+# this fill an update would leave the key empty and the 3-way merge would drop
+# the env fragment (#138). A saved explicit value is never overwritten.
+_fill_late_feature_defaults() {
+  [[ -z "${ENABLE_AGENT_TEAMS:-}" ]] && ENABLE_AGENT_TEAMS="true"
+  [[ -z "${ENABLE_NATIVE_FILE_TOOLS:-}" ]] && ENABLE_NATIVE_FILE_TOOLS="true"
+  return 0
 }
 
 _apply_hooks_csv() {

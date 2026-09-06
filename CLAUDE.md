@@ -272,6 +272,7 @@ Multiple features can safely use the same hook type (e.g., `PreCompact`, `PostCo
 - **Status Line**: Python statusLine command showing model, context usage, and 5h/7d rate limits.
 - **Doc Size Guard**: non-blocking size-hygiene warning when CLAUDE.md/AGENTS.md exceeds line targets after Write.
 - **Feature Recommendation**: writes pending feature names and notifies via SessionStart for enabled profiles.
+- **Native File Tools**: env-only feature (`CLAUDE_CODE_THRIFTY_SONIC=0`, Standard/Full) that opts out of Claude Code's Bash-first steer in auto/bypassPermissions sessions; without it Fable 5.1 reads/edits via cat/sed/heredocs (0 of 3 reproduction sessions used Read/Edit/Write) so the Edit|Write hooks, `paths:` rules and nested CLAUDE.md do not fire. Real-CLI harness (model-calling, not in CI): `tests/manual/bash-first-steer/`.
 
 ## Platform Detection
 

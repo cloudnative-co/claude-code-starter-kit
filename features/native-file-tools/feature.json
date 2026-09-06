@@ -1,0 +1,14 @@
+{
+	"name": "native-file-tools",
+	"displayName": "Native File Tools",
+	"description": "Set CLAUDE_CODE_THRIFTY_SONIC=0 so auto / bypassPermissions sessions keep using Read, Edit and Write. Without it Claude Code steers the model to cat/sed/heredocs, and Edit|Write hooks, paths-scoped rules, nested CLAUDE.md and native rewind never see the change",
+	"category": "setting",
+	"default": true,
+	"profiles": {
+		"minimal": false,
+		"standard": true,
+		"full": true
+	},
+	"dependencies": [],
+	"conflicts": []
+}

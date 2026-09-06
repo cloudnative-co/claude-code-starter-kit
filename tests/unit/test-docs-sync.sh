@@ -28,7 +28,7 @@
   test_name="docs-sync: wizard mapping covers current feature flags"
   _ok=true
   for _doc in "$PROJECT_DIR/docs/wizard-config-mapping.md" "$PROJECT_DIR/docs/wizard-config-mapping.en.md"; do
-    for _flag in ENABLE_BIOME_HOOKS ENABLE_WEB_CONTENT_UPDATE ENABLE_FEATURE_RECOMMENDATION ENABLE_NO_FLICKER; do
+    for _flag in ENABLE_BIOME_HOOKS ENABLE_WEB_CONTENT_UPDATE ENABLE_FEATURE_RECOMMENDATION ENABLE_NO_FLICKER ENABLE_NATIVE_FILE_TOOLS; do
       grep -q "$_flag" "$_doc" || _ok=false
     done
   done

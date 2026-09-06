@@ -53,6 +53,7 @@ STR_CONFIRM_FONTS="フォント"
 STR_CONFIRM_STATUSLINE="ステータスライン"
 STR_CONFIRM_NO_FLICKER="フリッカー防止"
 STR_CONFIRM_AGENT_TEAMS="Agent Teams（実験的機能）"
+STR_CONFIRM_NATIVE_FILE_TOOLS="ネイティブファイルツール"
 STR_CONFIRM_FEATURE_RECOMMENDATION="機能レコメンド"
 
 # Font installation messages
@@ -91,6 +92,7 @@ STR_HOOKS_PR_LOG="PR 作成ログ - PR 作成後に URL をログ"
 STR_HOOKS_PRE_COMMIT="コンパクト前スナップショット - compact 前に tracked 変更を git stash に退避（opt-in）"
 STR_HOOKS_DOC_SIZE="ドキュメントサイズガード - CLAUDE.md/AGENTS.md の肥大化を警告"
 STR_HOOKS_AGENT_TEAMS="Agent Teams（実験的） - Claude Code の agent teams を有効化（CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS）"
+STR_HOOKS_NATIVE_FILE_TOOLS="ネイティブファイルツール - auto / bypassPermissions モードでも Read/Edit/Write を優先させ、Edit|Write フックと paths 付き Rules を発火させる（CLAUDE_CODE_THRIFTY_SONIC=0）"
 STR_HOOKS_FEATURE_RECOMMENDATION="機能レコメンド - セッション開始時に新機能を通知"
 
 # web-content-extraction skill dependency install (deploy-time messages)

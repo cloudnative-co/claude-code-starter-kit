@@ -49,6 +49,7 @@ ENABLE_FONTS_SETUP="${ENABLE_FONTS_SETUP:-}"
 ENABLE_DOC_SIZE_GUARD="${ENABLE_DOC_SIZE_GUARD:-}"
 ENABLE_NO_FLICKER="${ENABLE_NO_FLICKER:-}"
 ENABLE_AGENT_TEAMS="${ENABLE_AGENT_TEAMS:-}"
+ENABLE_NATIVE_FILE_TOOLS="${ENABLE_NATIVE_FILE_TOOLS:-}"
 ENABLE_FEATURE_RECOMMENDATION="${ENABLE_FEATURE_RECOMMENDATION:-}"
 
 DISMISSED_FEATURES="${DISMISSED_FEATURES:-}"
@@ -334,6 +335,7 @@ fill_missing_profile_defaults() {
   _load_profile_preserving_values "$profile"
   _rc=$?
   [[ "$_rc" -eq 0 ]] || return "$_rc"
+  _fill_late_feature_defaults  # custom has no conf; late keys must not stay empty
   _normalize_formatter_hooks "$_PROFILE_FILL_FORMATTER_PREFER"
 }
 
@@ -455,11 +457,9 @@ _restore_config_from_manifest() {
     ENABLE_CODEX_PLUGIN="$manifest_codex_plugin"
   fi
 
-  # Keys introduced after older installs get their intended default here.
-  # Profile conf covers minimal/standard/full, but custom has no conf file,
-  # so without this fill a custom-profile update would silently drop the
-  # agent-teams env fragment (3-way merge would then delete the key).
-  [[ -z "${ENABLE_AGENT_TEAMS:-}" ]] && ENABLE_AGENT_TEAMS="true"
+  # Keys introduced after older installs get their intended default here
+  # (custom has no profile conf); see _fill_late_feature_defaults in registry.sh.
+  _fill_late_feature_defaults
 
   _normalize_formatter_hooks
   _normalize_codex_state
