@@ -70,13 +70,15 @@ _nft_build_settings() {
 
 {
   test_name="native-file-tools: feature registry maps native-file-tools to ENABLE_NATIVE_FILE_TOOLS without scripts"
+  # `set -e` is inert inside an `if ( ... )` condition, so every assertion
+  # must exit explicitly; otherwise only the last command's status counts.
   if (
     set -euo pipefail
     source "$PROJECT_DIR/lib/features.sh"
-    [[ "${_FEATURE_FLAGS[native-file-tools]:-}" == "ENABLE_NATIVE_FILE_TOOLS" ]]
-    [[ " ${_FEATURE_ORDER[*]} " == *" native-file-tools "* ]]
-    [[ -z "${_FEATURE_HAS_SCRIPTS[native-file-tools]:-}" ]]
-    [[ ! -d "$_nft_feature_dir/scripts" ]]
+    [[ "${_FEATURE_FLAGS[native-file-tools]:-}" == "ENABLE_NATIVE_FILE_TOOLS" ]] || exit 1
+    [[ " ${_FEATURE_ORDER[*]} " == *" native-file-tools "* ]] || exit 1
+    [[ -z "${_FEATURE_HAS_SCRIPTS[native-file-tools]:-}" ]] || exit 1
+    [[ ! -d "$_nft_feature_dir/scripts" ]] || exit 1
   ); then
     pass "$test_name"
   else
@@ -102,16 +104,16 @@ _nft_build_settings() {
     set -euo pipefail
     source "$PROJECT_DIR/i18n/en/strings.sh"
     source "$PROJECT_DIR/wizard/registry.sh"
-    [[ " ${_CONFIG_KEYS[*]} " == *" ENABLE_NATIVE_FILE_TOOLS "* ]]
+    [[ " ${_CONFIG_KEYS[*]} " == *" ENABLE_NATIVE_FILE_TOOLS "* ]] || exit 1
     _idx=""
     for _i in "${!HOOK_KEYS[@]}"; do
       [[ "${HOOK_KEYS[$_i]}" == "ENABLE_NATIVE_FILE_TOOLS" ]] && _idx="$_i"
     done
-    [[ -n "$_idx" ]]
-    [[ "${HOOK_TOKENS[$_idx]}" == "native-tools" ]]
+    [[ -n "$_idx" ]] || exit 1
+    [[ "${HOOK_TOKENS[$_idx]:-}" == "native-tools" ]] || exit 1
     _init_hook_labels
-    [[ -n "${HOOK_LABELS[$_idx]}" ]]
-    [[ "${HOOK_LABELS[$_idx]}" == *"THRIFTY_SONIC"* ]]
+    [[ -n "${HOOK_LABELS[$_idx]:-}" ]] || exit 1
+    [[ "${HOOK_LABELS[$_idx]}" == *"THRIFTY_SONIC"* ]] || exit 1
   ); then
     pass "$test_name"
   else
@@ -321,9 +323,9 @@ _nft_noninteractive_fill() {
     STR_DISABLED="Disabled"
     source "$PROJECT_DIR/wizard/wizard.sh"
     _apply_hooks_csv "native-tools"
-    [[ "${ENABLE_NATIVE_FILE_TOOLS:-}" == "true" ]]
+    [[ "${ENABLE_NATIVE_FILE_TOOLS:-}" == "true" ]] || exit 1
     _apply_hooks_csv "safety-net"
-    [[ "${ENABLE_NATIVE_FILE_TOOLS:-}" == "false" ]]
+    [[ "${ENABLE_NATIVE_FILE_TOOLS:-}" == "false" ]] || exit 1
   ); then
     pass "$test_name"
   else

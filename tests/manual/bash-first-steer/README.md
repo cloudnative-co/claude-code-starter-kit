@@ -41,9 +41,12 @@ Each case runs `claude -p` with `--setting-sources project --strict-mcp-config`
 in a fresh copy of a synthetic git repository, so `~/.claude/settings.json`,
 `~/.claude/CLAUDE.md`, `~/.claude/rules/`, plugins and MCP servers are not
 loaded (verified via the `InstructionsLoaded` observer: only the fixture's own
-files appear). The user's real configuration is never modified. Session
-transcripts are still written under `~/.claude/projects/` (synthetic content
-only); each run directory records the path.
+files appear). In the default mode every hook the session runs lives inside the
+experiment directory, so the user's real configuration is never modified. In
+`BFS_KIT_SETTINGS` mode the hook commands are the real `~/.claude/hooks/*`
+scripts (see below). Session transcripts are still written under
+`~/.claude/projects/` (synthetic content only); each run directory records the
+path.
 
 Observables per run (`runs/<case>/`):
 
@@ -85,9 +88,14 @@ To verify a kit-generated `settings.json` verbatim (for example the output of
 `setup.sh --profile=full --hooks=doc-block,biome,doc-size,native-tools` in a
 throwaway `HOME`), pass it with `BFS_KIT_SETTINGS=<file>` and `flag=unset`;
 observers are then layered on with `--settings` so the file under test is
-byte-identical to the kit output. Drop the `SessionStart` reader first if the
-throwaway `HOME` is not the runtime `HOME` (it would read the real pending
-file).
+byte-identical to the kit output. The hook commands in that file are absolute
+paths under the real `~/.claude/hooks/`, so they must already resolve on this
+machine, and `run-case.sh` refuses a file that contains `SessionStart` /
+`SessionEnd` hooks: a stock Standard/Full `settings.json` would otherwise run
+the real auto-update hook (`git pull` + `setup.sh --update` on the real
+install), the web-content-update hook and the feature-recommendation reader
+inside the fixture session. Generate the file with a `--hooks` list that
+leaves those out, as in the example above.
 
 ## Expected outcomes (Claude Code 2.1.261, claude-fable-5-1, 2026-09-06)
 

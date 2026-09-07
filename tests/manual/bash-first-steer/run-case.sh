@@ -52,6 +52,17 @@ if [[ -n "${BFS_KIT_SETTINGS:-}" ]]; then
     echo "mode=bypass is not usable with a kit settings.json (disableBypassPermissionsMode=disable)" >&2
     exit 1
   fi
+  # The kit's hook commands are absolute paths under the real ~/.claude/hooks,
+  # so a Standard/Full settings.json would run the real SessionStart/SessionEnd
+  # hooks inside the fixture session: auto-update (git pull + setup.sh --update
+  # on the real install), web-content-update (npm update of the real skill
+  # deps) and the feature-recommendation reader. None of them is under test,
+  # so refuse instead of mutating the user's install.
+  if jq -e '((.hooks.SessionStart // []) | length) + ((.hooks.SessionEnd // []) | length) > 0' \
+      "$BFS_KIT_SETTINGS" >/dev/null 2>&1; then
+    echo "kit settings.json contains SessionStart/SessionEnd hooks (auto-update, web-content-update, feature-recommendation); they would run against the real ~/.claude. Generate it with a --hooks list that leaves them out, e.g. --hooks=doc-block,biome,doc-size,native-tools" >&2
+    exit 1
+  fi
 fi
 [[ -d "$T" ]] || { echo "fixture template missing; run make-fixture.sh first" >&2; exit 1; }
 [[ -e "$OUT" ]] && { echo "run dir exists: $OUT" >&2; exit 1; }
