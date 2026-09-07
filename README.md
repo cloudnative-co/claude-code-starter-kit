@@ -470,7 +470,7 @@ URL・公式ドキュメント・ブログ・ニュース・OSS ページを読�
 - **セキュリティ**: SSRF 多層防御（http(s) 限定・内部/プライベート IP 拒否・接続 IP pin・リダイレクト各ホップ検査）、非フェッチ DOM（外部サブリソース取得・スクリプト実行なし）、PDF は CJK 対応・解凍爆弾対策付き。開発時のみ `ALLOW_PRIVATE_URLS=true` で内部 URL を許可。
 - **依存の自動更新（opt-in）**: `web-content-update` フックが SessionStart でスキルの依存（defuddle/jsdom/pdfjs-dist/undici）を更新（24h スロットル・テストゲート+ロールバック）。**Full のみ既定有効**、Standard では opt-in。手動更新は `npm run update:deps`。
 
-### 🪝 フック（安全装置・11個）
+### 🪝 フック（安全装置・12個）
 
 フックは **自動で動作する安全装置** です。コードを書いたり保存したりしたときに、自動でチェックが走ります。
 
@@ -487,6 +487,7 @@ URL・公式ドキュメント・ブログ・ニュース・OSS ページを読�
 | ドキュメントサイズガード | CLAUDE.md/AGENTS.md の肥大化を警告（非ブロック・Full のみ） |
 | Web 取得スキル更新 | web-content-extraction スキルの依存を起動時に自動更新（opt-in・Full のみ既定有効） |
 | 機能レコメンド | 選択プロファイルで利用可能になった新機能を通知 |
+| ネイティブファイルツール | auto / bypassPermissions モードでも Read/Edit/Write を優先させ、上記の Edit\|Write 系フック・paths 付き Rules・ネストした CLAUDE.md・native rewind が効く状態を保つ（Standard / Full 既定有効） |
 
 #### Safety Net とは？
 
@@ -559,7 +560,31 @@ compact 実行（コンテキスト圧縮）
 
 復元したい場合は `git stash list` で `pre-compact snapshot` を探して `git stash apply` してください。git リポジトリ外のプロジェクトでは何も起きません（エラーにはなりません）。
 
-> **全プロファイルでデフォルト無効（opt-in）です。** 現行の Claude Code はネイティブの checkpoint / rewind を備えており、通常はこのフックは不要です。圧縮前の状態を git 側にも残したい場合のみ、ウィザードのフック選択で有効化してください。過去に有効化した設定（保存済み config）はアップデートで上書きされません。
+> **全プロファイルでデフォルト無効（opt-in）です。** 現行の Claude Code はネイティブの checkpoint / rewind を備えており、通常はこのフックは不要です。圧縮前の状態を git 側にも残したい場合のみ、ウィザードのフック選択で有効化してください。過去に有効化した設定（保存済み config）はアップデートで上書きされません。なお native rewind が復元できるのはファイル編集ツール（Edit / Write / NotebookEdit）で行った変更だけで、Bash（`sed -i` や heredoc）で行った変更は追跡されません（公式ドキュメント「Checkpointing」の Limitations に記載）。
+
+#### ネイティブファイルツールとは？
+
+Claude Code 2.1.261 は、**auto / bypassPermissions モード**のセッションに「ファイルの読み書きは Read/Edit/Write ではなく cat / sed / heredoc など Bash で行え」という指示（未文書化の feature flag `CLAUDE_CODE_THRIFTY_SONIC`。Fable 5.1 では強制有効、Opus 5 はコホート配信）を注入します。この状態では、モデルが Read/Edit/Write をほぼ使わなくなるため、次の仕組みが**無音で動かなくなります**（実 CLI で再現確認済み・詳細は `tests/manual/bash-first-steer/README.md`）。
+
+- `PostToolUse` `Edit|Write` の Prettier / Biome 自動フォーマット、`PreToolUse` `Write` の Doc ブロッカー、`PostToolUse` `Write` のドキュメントサイズガード
+- `paths:` 付きの Rules とサブディレクトリの CLAUDE.md（Read したときに読み込まれる仕組みのため、cat では読み込まれない）
+- native checkpoint / rewind による変更追跡、security-guidance プラグインの編集時パターン警告
+
+このフックは `CLAUDE_CODE_THRIFTY_SONIC=0` を `settings.json` の `env` に入れて指示の注入を解除します。
+
+```
+auto モードのセッション開始
+  ↓
+env.CLAUDE_CODE_THRIFTY_SONIC="0" が設定されている
+  ├── はい → Bash 優先の指示は注入されない → Read/Edit/Write が通常どおり選ばれ、フック・Rules が発火
+  └── いいえ → 指示が注入される → cat/sed/heredoc で読み書き → フック・paths Rules・rewind は素通り
+```
+
+- **保証範囲**: 通常のツール選択が戻ることです（同一課題で修正前 3 セッション中 3 セッションが Bash のみ、修正後 3 セッション中 3 セッションが Read/Write を使用）。Bash の使用を禁止するものではなく、モデルが意図的に Bash で編集した場合や、利用者が「Bash で編集して」と指示した場合は、従来どおりフック・paths Rules・rewind の対象外です
+- **auto / bypassPermissions 以外のモード**では、この指示は元々注入されません（バイナリ内の条件式は auto / bypassPermissions 以外で即座に空を返す。acceptEdits は実測でも未注入を確認、default / plan は条件式からの判断）。設定を入れても害はありません
+- **無効化**: ウィザードのフック選択、`--hooks` から `native-tools` を外す、または `~/.claude-starter-kit.conf` の `ENABLE_NATIVE_FILE_TOOLS=false`。Claude Code 側でこのフラグが撤去された場合は、キットのフラグメントからキーを外すだけで、次回アップデート時の 3-way merge がこのキーを変更していない利用者の `settings.json` から除去します（値を自分で変更していた利用者は従来どおり自分の値が保持される。未知の env は Claude Code に無視されるため残っても無害）
+
+> **Standard / Full プロファイルでデフォルト有効です。** 既存のインストールは `setup.sh --update` / 自動アップデートで有効になります（`~/.claude-starter-kit.conf` に明示的に `false` と書かれている場合は上書きしません）。
 
 ### 🧩 プラグイン（15個・マルチマーケットプレイス対応）
 
@@ -591,7 +616,7 @@ Standard / Full プロファイルではおすすめのプラグインが自動�
 | 層 | 実体 | 動き方 | プロファイル |
 |---|---|---|---|
 | 常時ガードレール | `rules/security.md` + `config/permissions.json`（全プロファイル）+ safety-net（Standard / Full） | 常時 | 全部（safety-net は Standard / Full） |
-| 自動レビュー | **security-guidance** プラグイン | 自動（編集時・ターン終了時・コミット時） | Standard / Full |
+| 自動レビュー | **security-guidance** プラグイン | 自動（編集時・ターン終了時・コミット時）。編集時のパターン警告は編集ツール（Edit / Write / MultiEdit / NotebookEdit）経由の変更にだけ働き、Bash 経由の変更はターン終了時の git diff レビューとコミット時レビューで拾う | Standard / Full |
 | 単発レビュー | Claude Code 組み込みの `/security-review` | 手動（現在のブランチの差分） | キット非管理 |
 | 深掘りスキャン | **claude-security** プラグイン | 手動（`/claude-security`） | Full |
 
@@ -889,7 +914,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --codex-plugin=false \
   --commit-attribution=false \
   --ghostty=true \
-  --hooks=safety-net,auto-update,tmux,prettier,pr-log,pre-commit,agent-teams \
+  --hooks=safety-net,auto-update,tmux,prettier,pr-log,pre-commit,agent-teams,native-tools \
   --plugins=security-guidance,commit-commands,pr-review-toolkit,document-skills@anthropic-agent-skills
 ```
 

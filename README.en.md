@@ -55,7 +55,7 @@ Claude Code Starter Kit bootstraps a consistent, high-quality Claude Code enviro
 - **8 rules**: coding-style, git-workflow, performance, security, testing, agents, anti-patterns, permissions-guide
 - **21 slash commands**: /plan, /tdd, /build-fix, /e2e, /verify, /research, /web-article, /oss-analyze, /web-source-review, /handover, /update-kit, and more
 - **13 skill modules**: backend-patterns, frontend-patterns, security-review, tdd-workflow, prompt-patterns, cloudnative-writing-baseline (Japanese business writing), and more
-- **11 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation
+- **12 optional hooks/settings**: safety net (cc-safety-net), auto update, web content update, tmux reminder, doc blocker, Prettier or Biome formatting, PR creation log, pre-compact snapshot (opt-in), statusline, doc size guard, feature recommendation, native file tools (keeps Read/Edit/Write in use under auto mode so the edit hooks and path-scoped rules keep firing)
 - **15 plugins** from multiple marketplaces: security-guidance, commit-commands, pr-review-toolkit, feature-dev, code-review, claude-md-management, superpowers, code-simplifier, document-skills, example-skills, typescript-lsp, gopls-lsp, pyright-lsp, rust-analyzer-lsp, claude-security
 - **i18n**: English & Japanese
 - **Codex Plugin** sub-agent integration (optional, supports ChatGPT sign-in or OpenAI API key auth)
@@ -84,7 +84,7 @@ The kit's security capabilities cover four different layers; they complement rat
 | Layer | Component | Activation | Profile |
 |---|---|---|---|
 | Always-on guardrails | `rules/security.md` + `config/permissions.json` (all profiles) + safety-net (Standard / Full) | Always | All (safety-net: Standard / Full) |
-| Automatic review | **security-guidance** plugin | On edits, turn completion, and commits | Standard / Full |
+| Automatic review | **security-guidance** plugin | On edits, turn completion, and commits. The edit-time pattern warnings only see changes made with the editing tools (Edit / Write / MultiEdit / NotebookEdit); Bash edits are covered later by the turn-completion git-diff review and the commit review | Standard / Full |
 | One-off review | Claude Code's built-in `/security-review` | Manual, for the current branch diff | Not managed by the kit |
 | Deep scan | **claude-security** plugin | Manual, with `/claude-security` | Full |
 
@@ -233,6 +233,7 @@ Hooks are automated safety checks that run automatically when Claude Code execut
 | Doc Size Guard | Warns when CLAUDE.md/AGENTS.md exceeds size-hygiene targets (non-blocking; Full only) |
 | Web Content Update | Auto-updates the web-content-extraction skill's deps on session start (opt-in; default in Full only) |
 | Feature Recommendation | Notifies about newly available features for the selected profile |
+| Native File Tools | Keeps Read/Edit/Write as the primary file tools in auto / bypassPermissions sessions so the Edit\|Write hooks above, path-scoped rules, nested CLAUDE.md and native rewind keep working (default in Standard / Full) |
 
 #### Safety Net
 
@@ -264,6 +265,22 @@ Automatically checks for new starter kit releases on GitHub on both `SessionStar
 - **Failure carry-over**: Background update failures are saved once and surfaced on the next hook run
 
 > **Enabled by default in Standard / Full profiles.** Disable with `ENABLE_AUTO_UPDATE=false` in the hooks selection.
+
+#### Native File Tools
+
+Claude Code 2.1.261 injects a "Bash-first" instruction into **auto / bypassPermissions** sessions: read files with cat / sed and change them with sed / heredocs instead of the Read, Edit and Write tools (undocumented feature flag `CLAUDE_CODE_THRIFTY_SONIC`; forced on for Fable 5.1 models, cohort-gated for Opus 5). Under that instruction the model almost never calls Read/Edit/Write, so the following stop working **silently** (reproduced with real CLI sessions; see `tests/manual/bash-first-steer/README.md`):
+
+- the `PostToolUse` `Edit|Write` formatters (Prettier / Biome), the `PreToolUse` `Write` doc blocker and the `PostToolUse` `Write` doc size guard
+- `.claude/rules/*.md` with `paths:` and nested `CLAUDE.md` files (they load when Claude *reads* a matching file, not when it runs cat)
+- native checkpoint / rewind tracking, and security-guidance's edit-time pattern warnings
+
+This hook writes `CLAUDE_CODE_THRIFTY_SONIC=0` into the `env` block of `settings.json`, which removes the instruction.
+
+- **What it guarantees**: normal tool selection comes back (on the same task, 3 of 3 sessions used Bash only before the fix and 3 of 3 used Read/Write after). It does not forbid Bash: a deliberate Bash edit, or a prompt that asks for one, still bypasses the hooks, path-scoped rules and rewind
+- **Other modes**: outside auto / bypassPermissions the instruction is not injected (the gating code returns nothing for any other mode; acceptEdits was also verified empirically, default / plan follow from the code), so the setting is harmless there
+- **Disable**: deselect it in the wizard's hook list, leave `native-tools` out of `--hooks`, or set `ENABLE_NATIVE_FILE_TOOLS=false` in `~/.claude-starter-kit.conf`. If Claude Code retires the flag, removing the key from the kit fragment lets the next update's 3-way merge drop it from the `settings.json` of every user who never changed the value (a user-modified value is kept, as usual; a leftover key is harmless because Claude Code ignores unknown env keys)
+
+> **Enabled by default in Standard / Full profiles.** Existing installs pick it up on `setup.sh --update` / auto update unless `~/.claude-starter-kit.conf` explicitly says `false`. Native rewind itself only restores changes made through Claude's file editing tools (Edit, Write, NotebookEdit); Bash edits (`sed -i`, heredocs) are never tracked (see Limitations in the official Checkpointing doc).
 
 ## Usage
 
@@ -362,7 +379,7 @@ NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/cloudna
   --new-init=true \
   --codex-plugin=false \
   --commit-attribution=false \
-  --hooks=safety-net,auto-update,tmux,prettier,pr-log,pre-commit,agent-teams \
+  --hooks=safety-net,auto-update,tmux,prettier,pr-log,pre-commit,agent-teams,native-tools \
   --plugins=security-guidance,commit-commands,pr-review-toolkit,document-skills@anthropic-agent-skills
 
 # Reuse a saved config

@@ -55,6 +55,7 @@ STR_CONFIRM_FONTS="Fonts"
 STR_CONFIRM_STATUSLINE="Status Line"
 STR_CONFIRM_NO_FLICKER="No Flicker"
 STR_CONFIRM_AGENT_TEAMS="Agent Teams (experimental)"
+STR_CONFIRM_NATIVE_FILE_TOOLS="Native File Tools"
 STR_CONFIRM_FEATURE_RECOMMENDATION="Feature Rec."
 
 # Font installation messages
@@ -93,6 +94,7 @@ STR_HOOKS_PR_LOG="PR Creation Log - Log PR URL after creation"
 STR_HOOKS_PRE_COMMIT="Pre-compact Snapshot - Stash tracked changes before context compaction (opt-in)"
 STR_HOOKS_DOC_SIZE="Doc Size Guard - Warn when CLAUDE.md/AGENTS.md is too large"
 STR_HOOKS_AGENT_TEAMS="Agent Teams (experimental) - Enable Claude Code agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)"
+STR_HOOKS_NATIVE_FILE_TOOLS="Native File Tools - Keep Read/Edit/Write as the primary file tools in auto / bypassPermissions sessions so Edit|Write hooks and path-scoped rules keep firing (CLAUDE_CODE_THRIFTY_SONIC=0)"
 STR_HOOKS_FEATURE_RECOMMENDATION="Feature Recommendation - Notify about new features on session start"
 
 # web-content-extraction skill dependency install (deploy-time messages)

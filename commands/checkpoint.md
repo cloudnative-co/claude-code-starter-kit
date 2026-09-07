@@ -4,6 +4,10 @@ Record cross-session git milestones. In-session rollback is handled by
 Claude Code's native checkpoint/rewind (Esc Esc / /rewind) — use this
 command only for multi-day milestones you want recorded in git.
 
+Native rewind only restores files changed through Claude's file editing tools
+(Edit, Write, NotebookEdit). Changes made with Bash (sed -i, heredocs, mv, cp)
+are not tracked; rely on git for those.
+
 ## Usage
 
 `/checkpoint [create|verify|list] [name]`

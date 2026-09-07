@@ -30,6 +30,7 @@ declare -g -A _FEATURE_FLAGS=(
   [doc-size-guard]=ENABLE_DOC_SIZE_GUARD
   [no-flicker]=ENABLE_NO_FLICKER
   [agent-teams]=ENABLE_AGENT_TEAMS
+  [native-file-tools]=ENABLE_NATIVE_FILE_TOOLS
   [feature-recommendation]=ENABLE_FEATURE_RECOMMENDATION
 )
 
@@ -57,7 +58,7 @@ declare -g -a _FEATURE_ORDER=(
   safety-net tmux-hooks doc-blocker prettier-hooks biome-hooks
   pr-creation-log pre-compact-commit
   auto-update web-content-update statusline doc-size-guard no-flicker agent-teams
-  feature-recommendation
+  native-file-tools feature-recommendation
 )
 
 # ---------------------------------------------------------------------------

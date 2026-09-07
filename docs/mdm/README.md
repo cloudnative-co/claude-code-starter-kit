@@ -116,6 +116,7 @@ production では対象のローカルアカウントと UID 501 以上が必要
 | `ENABLE_BIOME_HOOKS` | Biome による JS / TS 自動整形・lint hook | boolean。必要な Biome runtime は required component として検査する |
 | `ENABLE_PR_CREATION_LOG` | PR 作成後の URL 記録と review command 案内 hook | boolean。未指定時はプロファイル既定に従う |
 | `ENABLE_AGENT_TEAMS` | Claude Code の experimental Agent Teams 設定 | boolean。`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` を有効化する |
+| `ENABLE_NATIVE_FILE_TOOLS` | auto / bypassPermissions セッションでも Read/Edit/Write を優先させる設定 | boolean。`CLAUDE_CODE_THRIFTY_SONIC=0` を settings.json の env に入れる。未指定時はプロファイル既定（Standard / Full は true、Minimal は false）に従う |
 | `ENABLE_STATUSLINE` / `ENABLE_SAFETY_NET` / `ENABLE_DOC_SIZE_GUARD` / `ENABLE_FEATURE_RECOMMENDATION` / `ENABLE_PRE_COMPACT_COMMIT` / `ENABLE_NO_FLICKER` / `ENABLE_NEW_INIT` | その他 feature toggle | 未指定時はプロファイル既定に従う |
 
 `ENABLE_GHOSTTY_SETUP` / `ENABLE_FONTS_SETUP` だけは `PROFILE` にかかわらず MDM 既定 `false` で、CLI または管理設定ファイルによる明示的な `true` で opt-in できる。Ghostty の opt-in は、MDM が署名済みで `com.apple.quarantine` のない `/Applications/Ghostty.app` を先に配布することが前提で、対象ユーザーとして動く `setup.sh` は Homebrew cask の導入を試みず、署名・quarantine 検証とユーザー設定だけを行う。これにより非 admin アカウントで password / Gatekeeper prompt が発生しない。キットの auto-update、web updater、通常の marketplace plugin、Codex Plugin は MDM では常に無効にし、更新は新しい40桁 SHAを指定した MDM 再配布で行う。`SELECTED_PLUGINS` は MDM の許可キーではなく、指定すると `exit 50`。fresh / update とも profile preset や保存済みユーザー設定からこれらを再有効化しない。

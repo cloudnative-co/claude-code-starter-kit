@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.78.0] - 2026-09-07
+
+### Added
+- **Bash 優先指示の解除フック `native-file-tools` を追加（Standard / Full 既定有効）**: Claude Code 2.1.261 は auto / bypassPermissions モードのセッションに「ファイルの読み書きは Read/Edit/Write ではなく cat / sed / heredoc で行え」という指示を注入する（バイナリ内の未文書化 feature flag `CLAUDE_CODE_THRIFTY_SONIC`。Fable 5.1 系モデルでは強制有効、Opus 5 は GrowthBook のコホート配信、それ以外のモデルは既定で無効だが、サーバー配信の clientData やモデル別 capability からも強制され得る条件式になっている）。この状態ではモデルが Read/Edit/Write をほぼ使わないため、キットの `PostToolUse` `Edit|Write`（prettier-hooks / biome-hooks）、`PreToolUse` `Write`（doc-blocker）、`PostToolUse` `Write`（doc-size-guard）が発火せず、`paths:` 付き Rules とサブディレクトリの CLAUDE.md も読み込まれず、native checkpoint / rewind の追跡対象にもならない。新フックは `settings.json` の `env` に `CLAUDE_CODE_THRIFTY_SONIC="0"` を入れて指示の注入を解除する
+  - **実 CLI で再現・修正確認済み**: Claude Code 2.1.261 / claude-fable-5-1 / `--permission-mode auto` / `--setting-sources project`（利用者のグローバル設定・プラグイン・MCP を読み込まない隔離）で、同一の合成リポジトリと課題を新規セッションで比較した。フラグ未指定では 3 セッション中 3 セッションがツール呼び出しを Bash のみで済ませ、Biome 整形なし・doc-blocker の確認なし・doc-size-guard の警告なし・`InstructionsLoaded` イベントは session_start の 2 件のみ（paths Rules / nested CLAUDE.md の遅延ロードなし）。`env.CLAUDE_CODE_THRIFTY_SONIC="0"` では 3 セッション中 3 セッションが Read / Write を使い、Biome 整形・doc-blocker の `ask`・doc-size-guard の警告・`path_glob_match` / `nested_traversal` のロードがすべて観測された。トランスクリプトに永続化される `auto_mode` attachment の `bashFirst` 値（true / 消失）でも指示の有無を直接確認した。キットが生成した `settings.json` をそのまま使った検証でも同じ結果を得た
+  - **保証範囲と残る制約**: 復元されるのは通常のツール選択であって、Bash の使用が禁止されるわけではない。利用者が「Bash で編集して」と指示した対照ケースでは、フラグを入れても Bash のみで編集され、フック・paths Rules は従来どおり発火しない。auto / bypassPermissions 以外のモードでは元々この指示は注入されない（バイナリの条件式が他モードで即座に空を返す。`acceptEdits` は `"1"` を入れても注入されないことを実測で確認、`default` / `plan` は条件式からの判断で実測はしていない）。doc-blocker / doc-size-guard が Edit に反応しない点は従来からの制限で、今回の対象外
+  - **配布形態**: `agent-teams` / `no-flicker` と同じ env-only feature（`features/native-file-tools/hooks.json`）。`ENABLE_NATIVE_FILE_TOOLS` をレジストリ・profiles・wizard（フック選択の `native-tools` トークン、確認画面、非対話デフォルト）・MDM の許可キーに登録した。Standard / Full は既定 `true`、Minimal は `false`。既存インストールは `setup.sh --update` / 自動アップデートでプロファイル既定を受け取り、custom プロファイルは agent-teams と同じく `true` で補完する。`~/.claude-starter-kit.conf` に明示的に書かれた値は上書きしない。Claude Code 側でフラグが撤去された場合はフラグメントからキーを外すだけでよく、次回アップデートの 3-way merge がこのキーを変更していない利用者の `settings.json` から除去する（#120 の effortLevel 撤去と同じ kit-removed 経路。自分で値を変更していた利用者の値は従来どおり保持され、残っても未知の env は Claude Code に無視される）
+  - **回帰テスト**: `tests/unit/test-native-file-tools.sh`（Standard / Full の生成 `settings.json` に env キーが入ること、Minimal と明示 `false` では入らないこと、更新経路でのプロファイル既定補完と明示値の保持、`--hooks` トークン）。修正前のコードでは 17 件中 15 件が失敗する
+  - **実 CLI 検証ハーネスを同梱（CI 非連動）**: `tests/manual/bash-first-steer/` に合成 fixture 生成・ケース実行・集計スクリプトと期待結果表を置いた。モデルを実際に呼ぶため通常 CI には組み込まない。キット生成の `settings.json` をそのまま検証するモードでは、実環境の `~/.claude/hooks/` を動かしてしまう `SessionStart` / `SessionEnd` フック（auto-update・web-content-update・機能レコメンド）を含むファイルを拒否する
+
+### Changed
+- **README のセキュリティ機能・native rewind の説明を実測に合わせて修正**: security-guidance の「編集時」パターン警告は Edit / Write ツール経由の変更にだけ働き、Bash 経由の変更はターン終了時の git diff レビューとコミット時レビューで拾うことを明記した（導入版 2.0.7 の `hooks.json` / `security_reminder_hook.py` で確認）。コンパクト前スナップショットの説明と `commands/checkpoint.md` に、native rewind はファイル編集ツール（Edit / Write / NotebookEdit）による変更しか復元しない（公式ドキュメント「Checkpointing」の Limitations）ことを追記した
+- 後発キーのデフォルト補完（agent-teams / native-file-tools）を `wizard/registry.sh` の `_fill_late_feature_defaults` に集約し、更新経路（`_restore_config_from_manifest`）・非対話 fresh install（`_fill_noninteractive_defaults`）・対話ウィザードの保存設定再利用（`fill_missing_profile_defaults`）から呼ぶようにした
+
+### Fixed
+- **custom プロファイルで `setup.sh` を直接再実行し保存設定を再利用すると、agent-teams（と今回の native-file-tools）の env が配布されない問題を修正**: 対話ウィザードの「保存された設定を再利用する」分岐は `fill_missing_profile_defaults` でプロファイル conf を読むだけで、conf を持たない custom プロファイルでは後発キーが空のままになり、`_feature_deploy_enabled` が無効扱いして env フラグメントを出力していなかった（#138 の修正は `setup.sh --update` 経路のみを対象にしていた）。`install.sh` 経由の再実行は常に `--update` が付くため影響せず、README が案内する「リポジトリ更新後に `./setup.sh` を再実行」の手順でのみ発生する。`fill_missing_profile_defaults` からも `_fill_late_feature_defaults` を呼ぶようにし、回帰テストを追加した。保存済みの明示的な `false` は引き続き保持される
+
 ## [0.77.1] - 2026-08-31
 
 ### Fixed
