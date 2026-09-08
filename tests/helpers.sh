@@ -108,6 +108,38 @@ teardown_test_env() {
 trap 'teardown_test_env' EXIT
 
 # ---------------------------------------------------------------------------
+# Scenario callers discard setup.sh output (`>/dev/null 2>&1`), so a setup
+# failure used to leave no trace in the CI log — only "(setup failed)" or, when
+# the caller has no `|| rc=$?`, a bare set -e abort of the whole runner. Keep a
+# copy of the runner's original stdout on fd 3 and print the tail of a failed
+# setup.sh run there; the caller's fd 1/2 redirections do not affect fd 3.
+# ---------------------------------------------------------------------------
+if ! { true >&3; } 2>/dev/null; then
+  exec 3>&1
+fi
+_TEST_SETUP_LOG_TAIL="${_TEST_SETUP_LOG_TAIL:-20}"
+
+# _run_setup_logged [setup.sh args...]
+# Runs setup.sh, replays its combined output on stdout (so callers that
+# capture or grep the output keep working) and, on a non-zero exit, prints the
+# last $_TEST_SETUP_LOG_TAIL lines to fd 3. Returns the exit code of setup.sh.
+_run_setup_logged() {
+  local log rc=0
+  log="$(mktemp)"
+  bash "$PROJECT_DIR/setup.sh" "$@" >"$log" 2>&1 || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    {
+      printf '  [setup.sh exited %s: %s] last %s lines:\n' \
+        "$rc" "$*" "$_TEST_SETUP_LOG_TAIL"
+      tail -n "$_TEST_SETUP_LOG_TAIL" "$log" | sed 's/^/    | /'
+    } >&3
+  fi
+  cat "$log"
+  rm -f "$log"
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # run_setup - Run setup.sh with given args in the test environment
 #
 # Usage: run_setup [args...]
@@ -115,14 +147,14 @@ trap 'teardown_test_env' EXIT
 # Returns the exit code of setup.sh
 # ---------------------------------------------------------------------------
 run_setup() {
-  bash "$PROJECT_DIR/setup.sh" --non-interactive --language=en "$@" 2>&1
+  _run_setup_logged --non-interactive --language=en "$@"
 }
 
 # ---------------------------------------------------------------------------
 # run_setup_update - Run setup.sh in update mode
 # ---------------------------------------------------------------------------
 run_setup_update() {
-  bash "$PROJECT_DIR/setup.sh" --update --non-interactive "$@" 2>&1
+  _run_setup_logged --update --non-interactive "$@"
 }
 
 # ---------------------------------------------------------------------------
