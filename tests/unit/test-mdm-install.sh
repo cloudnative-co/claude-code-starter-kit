@@ -2096,7 +2096,7 @@ fi
         /bin/sleep 0.01
         _attempt=$((_attempt + 1))
       done
-      [[ -e "$_ready" && "$_actual_pgid" == "$_leader" ]]
+      [[ -e "$_ready" && "$_actual_pgid" == "$_leader" ]] || exit 1
       /bin/kill -STOP -- "-$_leader"
       _attempt=0
       while ! _mdm_launcher_group_quiesced "$_leader" \
@@ -2108,14 +2108,14 @@ fi
       _member_count="$(printf '%s\n' "$_listing" \
         | /usr/bin/awk -v pgid="$_leader" '$1 == pgid { count++ }
           END { print count + 0 }')"
-      [[ "$_member_count" -ge 2 ]]
-      _mdm_launcher_group_quiesced "$_leader"
+      [[ "$_member_count" -ge 2 ]] || exit 1
+      _mdm_launcher_group_quiesced "$_leader" || exit 1
       exec 2>/dev/null
       /bin/kill -KILL -- "-$_leader" 2>/dev/null || true
       _mdm_launcher_wait_child_bounded "$_leader" 100 || true
       _state=0
       _mdm_launcher_group_state "$_leader" || _state=$?
-      [[ "$_state" -eq 1 ]]
+      [[ "$_state" -eq 1 ]] || exit 1
       _leader=""
       trap - EXIT
     ) > "$_diagnostic" 2>&1 || _rc=$?
@@ -2145,7 +2145,7 @@ fi
           LC_ALL=C /bin/ps -p "$_quick_pid" -o pgid= 2>/dev/null || true
         )"
         _actual_pgid="${_actual_pgid//[[:space:]]/}"
-        [[ -z "$_actual_pgid" || "$_actual_pgid" == "$_quick_pgid" ]]
+        [[ -z "$_actual_pgid" || "$_actual_pgid" == "$_quick_pgid" ]] || exit 1
         wait "$_quick_pid"
         _quick_pid="" _quick_pgid="" _quick_starting=0
         _attempt=$((_attempt + 1))

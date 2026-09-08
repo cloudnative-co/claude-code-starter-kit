@@ -201,7 +201,7 @@ EOF
     done
     KIT_MDM_MANAGED=false
     _build_tmp="$(mktemp -d)"
-    build_settings_file "$_build_tmp/settings.json" >/dev/null 2>&1
+    build_settings_file "$_build_tmp/settings.json" >/dev/null 2>&1 || exit 1
     jq -e 'any(.hooks.SessionStart[]?.hooks[]?.command?;
       contains("feature-recommendation/check-pending.sh"))' \
       "$_build_tmp/settings.json" >/dev/null
@@ -221,7 +221,7 @@ EOF
     done
     KIT_MDM_MANAGED=true
     _build_tmp="$(mktemp -d)"
-    build_settings_file "$_build_tmp/settings.json" >/dev/null 2>&1
+    build_settings_file "$_build_tmp/settings.json" >/dev/null 2>&1 || exit 1
     ! jq -e 'any(.hooks.SessionStart[]?.hooks[]?.command?;
       contains("feature-recommendation/check-pending.sh"))' \
       "$_build_tmp/settings.json" >/dev/null

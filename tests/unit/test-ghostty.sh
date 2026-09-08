@@ -80,7 +80,7 @@ _ghostty_test_make_app() {
     mkdir -p "$_app/Contents/MacOS"
     printf 'outside' > "$_tmpdir/ghostty"
     chmod +x "$_tmpdir/ghostty"
-    ln -s "$_tmpdir/ghostty" "$_app/Contents/MacOS/ghostty"
+    ln -s "$_tmpdir/ghostty" "$_app/Contents/MacOS/ghostty" || exit 1
     _codesign_called=0
     _ghostty_codesign() { _codesign_called=1; return 0; }
     ! ghostty_mdm_is_trusted "$_app" \
@@ -97,7 +97,7 @@ _ghostty_test_make_app() {
   if (
     _tmpdir="$(mktemp -d)"
     _app="$_tmpdir/Ghostty.app"
-    _ghostty_test_make_app "$_app"
+    _ghostty_test_make_app "$_app" || exit 1
     _ghostty_codesign() { return 1; }
     ! ghostty_mdm_is_trusted "$_app"
   ); then
@@ -262,7 +262,7 @@ _ghostty_test_make_app() {
     mkdir -p "$_config_dir"
     printf 'old\n' > "$_config"
     printf 'new\n' > "$_template"
-    deploy_ghostty_config "$_template" >/dev/null 2>&1
+    deploy_ghostty_config "$_template" >/dev/null 2>&1 || exit 1
     _backups=("$_config".backup.*)
     [[ "$(cat "$_config")" == new && ! -e "${_backups[0]}" ]]
   ); then
@@ -288,7 +288,7 @@ _ghostty_test_make_app() {
     printf 'old\n' > "$_config"
     printf 'new\n' > "$_template"
     date() { printf '%s' 20000101000000; }
-    deploy_ghostty_config "$_template" >/dev/null 2>&1
+    deploy_ghostty_config "$_template" >/dev/null 2>&1 || exit 1
     [[ "$(cat "$_config")" == new \
       && "$(cat "$_config.backup.20000101000000")" == old ]]
   ); then
@@ -313,7 +313,7 @@ _ghostty_test_make_app() {
     printf 'old\n' > "$_config"
     printf 'new\n' > "$_template"
     date() { printf '%s' 20000101000000; }
-    deploy_ghostty_config "$_template" >/dev/null 2>&1
+    deploy_ghostty_config "$_template" >/dev/null 2>&1 || exit 1
     [[ "$(cat "$_config")" == new \
       && "$(cat "$_config.backup.20000101000000")" == old ]]
   ); then
