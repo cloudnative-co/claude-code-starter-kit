@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Security
 - **`@xmldom/xmldom` を脆弱性修正版へ更新（Dependabot #26）**: `defuddle@0.19.1` → `mathml-to-latex@1.8.0`（defuddle の optionalDependencies）経由の推移依存を 0.9.10 → 0.9.12 に更新（`mathml-to-latex` の `^0.9.10` 範囲内で lockfile のみ更新、`package.json` は変更なし）。GHSA-6gmq-8vp8-gcm6（Medium — `requireWellFormed` シリアライズ時に不正な `EntityReference.nodeName` を経由した XML フラグメント注入、影響範囲 `>=0.9.0 <=0.9.11`）を解消。本 skill が到達するのは `mathml-to-latex` が MathML の解析に使う `DOMParser` だけで、advisory の対象である `XMLSerializer` は呼ばれないため実行経路そのものには該当しないが、攻撃者由来の任意 Web ページを処理する以上パーサ層は最新に保つ
 - `npm audit` を 0 件にし、skill 自身のテスト（node `--test` 47 件）と `npm ci` 整合を確認済み。`@xmldom/xmldom` は `update-deps.mjs` の直接対象ではなく `defuddle` 更新時に推移的にしか追従しないため、キット同梱の lockfile は advisory 対応として手動で更新した
+- **MDM runtime bundle の期待 SHA256 ピンを更新**: `package-lock.json` の更新に伴い、`lib/deploy.sh`・`mdm/detect-mdm.sh`・`mdm/install-mdm.sh`・`docs/mdm/README.md`・関連テストの期待 lock ハッシュを `e235f673…` → `ddace3fb…` へ更新（`package.json` は不変のため package ハッシュ `711c13b0…` は変わらない）。**MDM 配布環境は新しいバンドルパス（`711c13b0…-ddace3fb…`）で root-owned runtime bundle を再ビルド・再配布する必要がある**（旧バンドルは検証で拒否される。v0.75.2 と同じ経路）
 
 ## [0.78.0] - 2026-09-07
 
