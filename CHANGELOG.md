@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.78.1] - 2026-09-08
+
+`web-content-extraction` skill の `@xmldom/xmldom` 脆弱性を解消（Dependabot alert #26）。
+
+### Security
+- **`@xmldom/xmldom` を脆弱性修正版へ更新（Dependabot #26）**: `defuddle@0.19.1` → `mathml-to-latex@1.8.0`（defuddle の optionalDependencies）経由の推移依存を 0.9.10 → 0.9.12 に更新（`mathml-to-latex` の `^0.9.10` 範囲内で lockfile のみ更新、`package.json` は変更なし）。GHSA-6gmq-8vp8-gcm6（Medium — `requireWellFormed` シリアライズ時に不正な `EntityReference.nodeName` を経由した XML フラグメント注入、影響範囲 `>=0.9.0 <=0.9.11`）を解消。本 skill が到達するのは `mathml-to-latex` が MathML の解析に使う `DOMParser` だけで、advisory の対象である `XMLSerializer` は呼ばれないため実行経路そのものには該当しないが、攻撃者由来の任意 Web ページを処理する以上パーサ層は最新に保つ
+- `npm audit` を 0 件にし、skill 自身のテスト（node `--test` 47 件）と `npm ci` 整合を確認済み。`@xmldom/xmldom` は `update-deps.mjs` の直接対象ではなく `defuddle` 更新時に推移的にしか追従しないため、キット同梱の lockfile は advisory 対応として手動で更新した
+
 ## [0.78.0] - 2026-09-07
 
 ### Added
