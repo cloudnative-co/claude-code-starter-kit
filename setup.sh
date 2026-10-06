@@ -1417,7 +1417,7 @@ _read_claude_plugin_list() { # <output-variable>
   local output_var="$1" plugin_snapshot=""
   printf -v "$output_var" '%s' ""
   command -v claude &>/dev/null || return 1
-  if ! plugin_snapshot="$(claude plugin list 2>/dev/null)"; then
+  if ! plugin_snapshot="$(_claude_cli plugin list 2>/dev/null)"; then
     return 1
   fi
   printf -v "$output_var" '%s' "$plugin_snapshot"
@@ -1521,7 +1521,7 @@ install_selected_plugins() {
       mp_repo="${_PLUGIN_INSTALL_REPOS[$i]}"
       [[ ",$registered_repos," == *",$mp_repo,"* ]] && continue
       mp_output=""
-      if ! _run_capture mp_output claude plugin marketplace add "$mp_repo"; then
+      if ! _run_capture mp_output _claude_cli plugin marketplace add "$mp_repo"; then
         warn "${STR_DEPLOY_PLUGINS_MARKETPLACE_FAILED:-Failed to add plugin marketplace} $p_mp"
         [[ -n "$mp_output" ]] && info "  $mp_output"
         failed_repos="${failed_repos:+${failed_repos},}${mp_repo}"
@@ -1632,7 +1632,7 @@ install_selected_plugins() {
 
     plugin_output=""
     if _run_capture plugin_output \
-        claude plugin install "$p" --scope user; then
+        _claude_cli plugin install "$p" --scope user; then
       post_install_plugins=""
       if ! _read_claude_plugin_list post_install_plugins; then
         warn "Could not verify installed plugin exactly: $p_qualified"

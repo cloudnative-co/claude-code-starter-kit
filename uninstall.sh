@@ -1749,14 +1749,17 @@ _claude_plugin_list_has() {
 }
 
 if command -v claude &>/dev/null; then
+  # Every `claude` call in this block detaches stdin: when stdin is /dev/tty (e.g. a
+  # `curl | bash` wrapper), the Bun-based CLI fails on macOS with
+  # "EINVAL: invalid argument, kqueue". Mirrors _claude_cli() in lib/codex-setup.sh.
   # Check for Codex plugin
-  _codex_plugin_list="$(claude plugin list 2>/dev/null || true)"
+  _codex_plugin_list="$(claude plugin list </dev/null 2>/dev/null || true)"
   if _claude_plugin_list_has "$_codex_plugin_list" "codex"; then
     printf "\n"
     read -r -p "$STR_CODEX_PLUGIN_REMOVE_ASK" _codex_plugin_confirm
     case "$_codex_plugin_confirm" in
       y|Y|yes|YES)
-        if claude plugin uninstall codex --scope user; then
+        if claude plugin uninstall codex --scope user </dev/null; then
           info "$STR_CODEX_PLUGIN_REMOVED"
         else
           warn "$STR_CODEX_PLUGIN_REMOVE_FAILED"
@@ -1774,13 +1777,13 @@ if command -v claude &>/dev/null; then
   # format), so match on an anchored "name:" prefix instead of the
   # plugin-list helper above — a bare `grep -qw "codex"` would also
   # false-positive on e.g. "codex-tools: ...".
-  _codex_mcp_list="$(claude mcp list 2>/dev/null || true)"
+  _codex_mcp_list="$(claude mcp list </dev/null 2>/dev/null || true)"
   if echo "$_codex_mcp_list" | grep -qE '^codex:' 2>/dev/null; then
     printf "\n"
     read -r -p "$STR_CODEX_MCP_REMOVE_ASK" _codex_mcp_confirm
     case "$_codex_mcp_confirm" in
       y|Y|yes|YES)
-        if claude mcp remove -s user codex; then
+        if claude mcp remove -s user codex </dev/null; then
           info "$STR_CODEX_MCP_REMOVED"
         else
           warn "$STR_CODEX_MCP_REMOVE_FAILED"

@@ -4,7 +4,7 @@
 #           wizard/wizard.sh (is_true)
 # Uses globals: ENABLE_CODEX_PLUGIN, WIZARD_NONINTERACTIVE, _SETUP_TMP_FILES[],
 #               STR_CODEX_*, STR_CHOICE
-# Exports: run_codex_setup(), _setup_codex_plugin(), _install_codex_cli(),
+# Exports: run_codex_setup(), _claude_cli(), _setup_codex_plugin(), _install_codex_cli(),
 #          _verify_openai_key(), _save_openai_key()
 # Dry-run: guarded externally (setup.sh logs EXTERNAL, does not call run_codex_setup)
 set -euo pipefail
@@ -31,6 +31,19 @@ _run_capture() {
   _output="$("$@" 2>&1)" || _rc=$?
   printf -v "$__outvar" '%s' "$_output"
   return "$_rc"
+}
+
+# _claude_cli(): run a non-interactive `claude` subcommand with stdin detached.
+# install.sh execs setup.sh with stdin redirected from /dev/tty so the wizard
+# can prompt during `curl | bash`. The native Claude CLI (a Bun binary)
+# registers stdin with kqueue in subcommands such as `plugin` and `mcp`, and
+# macOS kqueue rejects the /dev/tty alias device, so those calls died with
+# "EINVAL: invalid argument, kqueue" (a real /dev/ttysNNN, a pipe, or /dev/null
+# all work). None of these subcommands read input, so /dev/null is safe on
+# every platform. The CLI installer is unaffected: it runs under `curl | bash`,
+# so the binary inherits a pipe.
+_claude_cli() {
+  claude "$@" </dev/null
 }
 
 # _claude_plugin_list_has(): structured match against `claude plugin list`
@@ -378,12 +391,12 @@ _codex_fully_ready() {
 _has_codex_plugin() {
   local _plugin_list=""
   command -v claude &>/dev/null \
-    && _plugin_list="$(claude plugin list 2>/dev/null)" \
+    && _plugin_list="$(_claude_cli plugin list 2>/dev/null)" \
     && _claude_plugin_list_has "$_plugin_list" "codex"
 }
 
 _has_legacy_mcp() {
-  command -v claude &>/dev/null && claude mcp list 2>/dev/null | grep -qw "codex" 2>/dev/null
+  command -v claude &>/dev/null && _claude_cli mcp list 2>/dev/null | grep -qw "codex" 2>/dev/null
 }
 
 _install_codex_plugin() {
@@ -394,11 +407,11 @@ _install_codex_plugin() {
     return 1
   fi
   local _marketplace_output="" _install_output=""
-  if ! _run_capture _marketplace_output claude plugin marketplace add openai/codex-plugin-cc; then
+  if ! _run_capture _marketplace_output _claude_cli plugin marketplace add openai/codex-plugin-cc; then
     warn "${STR_CODEX_PLUGIN_MARKETPLACE_FAILED:-Failed to add Codex plugin marketplace. Continuing to install attempt:}"
     [[ -n "$_marketplace_output" ]] && info "  $_marketplace_output"
   fi
-  if _run_capture _install_output claude plugin install codex --scope user; then
+  if _run_capture _install_output _claude_cli plugin install codex --scope user; then
     return 0
   fi
   warn "${STR_CODEX_PLUGIN_FAILED:-Failed to install Codex plugin}"
@@ -411,7 +424,7 @@ _install_codex_plugin() {
 _remove_legacy_mcp() {
   if _has_legacy_mcp; then
     local _remove_output=""
-    if _run_capture _remove_output claude mcp remove codex; then
+    if _run_capture _remove_output _claude_cli mcp remove codex; then
       return 0
     fi
     warn "${STR_CODEX_MCP_REMOVE_FAILED:-Failed to remove Codex MCP. Remove manually:}"

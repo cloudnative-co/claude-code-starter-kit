@@ -98,7 +98,9 @@ _claude_cli_semver() {
     return 0
   fi
   _CLAUDE_SEMVER_CACHE_SET=true
-  raw="$(claude --version 2>/dev/null | head -1)"
+  # --version exits before touching stdin; detached anyway for consistency with
+  # _claude_cli() in lib/codex-setup.sh (macOS kqueue rejects a /dev/tty stdin).
+  raw="$(claude --version </dev/null 2>/dev/null | head -1)"
   if ! [[ "$raw" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
     _CLAUDE_SEMVER_CACHE=""
     return 1

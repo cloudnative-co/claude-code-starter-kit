@@ -202,6 +202,7 @@ Rules to remember: verify fresh install, `setup.sh --update`/`/update-kit`, and 
 - **Windows interop from WSL/MSYS**: Use `powershell.exe -NoProfile -Command '...'` for Windows-side operations (font install, WT config). Always `tr -d '\r'` on output to strip CRLF.
 - **Codex Plugin scope**: Always use `claude plugin install codex --scope user` (user scope, not project scope).
 - **Timeout portability**: Use `_run_with_timeout` wrapper (macOS lacks `timeout`).
+- **Claude CLI stdin**: Call non-interactive `claude` subcommands through `_claude_cli()` (`lib/codex-setup.sh`, runs `claude "$@" </dev/null`); `claude --version` in `lib/deploy.sh` and the self-contained `uninstall.sh` write `</dev/null` inline. `install.sh` execs `setup.sh` with stdin=`/dev/tty`, which the Bun-based CLI cannot register with kqueue on macOS (`EINVAL: invalid argument, kqueue`). A static guard in `tests/unit/test-codex-setup.sh` enforces this for `claude plugin|mcp|--version`.
 - **Config persistence**: `~/.claude-starter-kit.conf` uses `key="value"` format, parsed by `_safe_source_config()` (allowlisted key=value parser, never sourced as shell code).
 - **Temp file hygiene**: `setup.sh` sets `umask 077` at top, tracks temp files in `_SETUP_TMP_FILES` array, and registers `trap _cleanup_tmp EXIT INT TERM` for automatic cleanup.
 - **Credential safety**: Pass API keys via `curl --config -` (stdin) to avoid exposing in `ps` output. Never use `curl -H "Authorization: Bearer $key"` directly.
