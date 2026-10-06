@@ -490,8 +490,7 @@ def render_settings(checkout, values, language, logical_home, flags, order):
             continue
         if feature == "web-content-update" and not values["INSTALL_SKILLS"]:
             continue
-        suffix = ".legacy.json" if feature in ("auto-update", "pr-creation-log") else ".json"
-        fragment = parse_json(checkout, "features/{}/hooks{}".format(feature, suffix))
+        fragment = parse_json(checkout, "features/{}/hooks.json".format(feature))
         settings = merge_objects(settings, fragment, concatenate_arrays=True)
     settings["language"] = language
     environment = settings.get("env")
@@ -722,7 +721,6 @@ def write_output(
             "profile": profile,
             "language": language,
             "logical_home": logical_home,
-            "async_hooks": False,
             "required_components": components,
             "policy_sha256": policy_sha256,
             "files": paths,

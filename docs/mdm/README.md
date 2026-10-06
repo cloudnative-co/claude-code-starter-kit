@@ -121,6 +121,8 @@ production では対象のローカルアカウントと UID 501 以上が必要
 
 `ENABLE_GHOSTTY_SETUP` / `ENABLE_FONTS_SETUP` だけは `PROFILE` にかかわらず MDM 既定 `false` で、CLI または管理設定ファイルによる明示的な `true` で opt-in できる。Ghostty の opt-in は、MDM が署名済みで `com.apple.quarantine` のない `/Applications/Ghostty.app` を先に配布することが前提で、対象ユーザーとして動く `setup.sh` は Homebrew cask の導入を試みず、署名・quarantine 検証とユーザー設定だけを行う。これにより非 admin アカウントで password / Gatekeeper prompt が発生しない。キットの auto-update、web updater、通常の marketplace plugin、Codex Plugin は MDM では常に無効にし、更新は新しい40桁 SHAを指定した MDM 再配布で行う。`SELECTED_PLUGINS` は MDM の許可キーではなく、指定すると `exit 50`。fresh / update とも profile preset や保存済みユーザー設定からこれらを再有効化しない。
 
+**hook の形状と Claude Code の最小バージョン（v0.79.0 以降）**: `ENABLE_PR_CREATION_LOG` が有効な場合（Standard / Full の既定）、MDM が配備する `settings.json` の pr-creation-log hook は通常インストールと同じ `if: "Bash(gh pr create *)"` + `async: true` の形になる。v0.78.x までは Claude Code 2.1.89 未満との互換性を優先し、`if` / `async` を持たない旧形状へ固定していた。これに伴い MDM 配布でも Claude Code 2.1.89 以上を前提とする。`KIT_MDM_PREREQ_MODE=fail` や `KIT_MDM_INSTALL_CLAUDE_CLI=false` で Claude CLI を別途配布・固定している場合は 2.1.89 以上を配布する。v0.78.x 以前から v0.79.0 以降の SHA へ更新するときは、同じリリースの `install-mdm.sh` と `render-expected.py` を必ず再配布する（bundle 側と checkout 側の `render-expected.py` の SHA-256 が一致しないと remediation は失敗する）。renderer 引数と feature policy が同じなら `KIT_MDM_EXPECTED_POLICY_SHA256` の値は変わらない。
+
 ### MDM 固有キー（`KIT_MDM_` 接頭辞）
 
 | キー | 既定値 | 意味 |

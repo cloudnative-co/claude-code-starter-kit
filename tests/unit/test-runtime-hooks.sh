@@ -57,10 +57,50 @@
   fi
 }
 
+# ── Legacy hook path (Claude Code < 2.1.89) stays retired ───────────────────
+#
+# v0.79.0 (#136) removed the second hook shape the kit generated for Claude
+# Code < 2.1.89 together with the CLI version gate that selected it. These
+# guards keep a later change from quietly bringing either back.
 {
-  test_name="auto-update: runtime path no longer spawns claude --version"
-  if grep -q 'AUTO_UPDATE_LEGACY' "$PROJECT_DIR/features/auto-update/hooks.legacy.json" \
-    && ! grep -q '_auto_update_supports_async_hooks' "$PROJECT_DIR/features/auto-update/scripts/auto-update.sh"; then
+  test_name="legacy hook path: no hooks.legacy.json fragment is shipped"
+  _lhp_fragments="$(find "$PROJECT_DIR/features" -name 'hooks.legacy*' -print)"
+  if [[ -z "$_lhp_fragments" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name (found: $_lhp_fragments)"
+  fi
+}
+
+{
+  test_name="legacy hook path: shipped code has no reference to the retired version gate"
+  _lhp_gate='_versioned_hooks_fragment|_claude_supports_async_hooks|_claude_cli_semver|_CLAUDE_SEMVER_CACHE|_version_ge|_auto_update_hooks_fragment|_pr_creation_log_hooks_fragment|require_session_end|LEGACY_CACHE_(FILE|TTL)|_auto_update_(legacy_cache_fresh|touch_legacy_cache)|KIT_MDM_ASYNC_HOOKS|async_hooks'
+  _lhp_markers='hooks\.legacy|AUTO_UPDATE_LEGACY|PR_CREATION_LOG_LEGACY'
+  # lib/update.sh is the one place that still names the two legacy commands:
+  # _migrate_legacy_hook_entries has to recognise them to rewrite them.
+  _lhp_hits="$(
+    cd "$PROJECT_DIR" && {
+      grep -rnE "$_lhp_gate|$_lhp_markers" \
+        setup.sh install.sh install.ps1 uninstall.sh wizard mdm features \
+        config profiles i18n commands 2>/dev/null || true
+      find lib -type f ! -name update.sh -exec grep -nE "$_lhp_gate|$_lhp_markers" {} + 2>/dev/null || true
+      grep -nE "$_lhp_gate" lib/update.sh 2>/dev/null || true
+    }
+  )"
+  if [[ -z "$_lhp_hits" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name (hits: $(printf '%s' "$_lhp_hits" | tr '\n' ';'))"
+  fi
+}
+
+{
+  test_name="legacy hook path: auto-update and pr-creation-log scripts never start claude"
+  # The bare word only: paths such as ~/.claude and ~/.claude-starter-kit are
+  # everywhere in these scripts and are not invocations.
+  if ! grep -nE '(^|[^[:alnum:]_./~-])claude([^[:alnum:]_./-]|$)' \
+      "$PROJECT_DIR/features/auto-update/scripts/auto-update.sh" \
+      "$PROJECT_DIR/features/pr-creation-log/scripts/log-pr.sh" >/dev/null; then
     pass "$test_name"
   else
     fail "$test_name"

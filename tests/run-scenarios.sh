@@ -181,19 +181,24 @@ test_auto_update_session_hooks() {
   teardown_test_env
 }
 
-# --- 4c. auto-update-legacy-claude-fallback ---
-test_auto_update_legacy_claude_fallback() {
+# --- 4c. auto-update-old-claude-same-hooks ---
+# The hook shape no longer depends on the installed Claude Code (the < 2.1.89
+# fallback was retired in v0.79.0, #136): an old CLI gets the same async hooks.
+test_auto_update_old_claude_same_hooks() {
   setup_test_env
   export MOCK_CLAUDE_VERSION="2.1.88 (Claude Code)"
-  run_setup --profile=standard >/dev/null 2>&1 || { fail "auto-update-legacy-claude-fallback (setup failed)"; teardown_test_env; unset MOCK_CLAUDE_VERSION; return; }
+  run_setup --profile=standard >/dev/null 2>&1 || { fail "auto-update-old-claude-same-hooks (setup failed)"; teardown_test_env; unset MOCK_CLAUDE_VERSION; return; }
 
   if jq -e '
-    any(.hooks.SessionStart[]?.hooks[]?; ((.command? // "") | contains("auto-update")) and ((has("async") | not) or (.async != true))) and
-    (any(.hooks.SessionEnd[]?.hooks[]?; ((.command? // "") | contains("auto-update"))) | not)
-  ' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
-    pass "auto-update-legacy-claude-fallback"
+    def au($event):
+      [.hooks[$event][]?.hooks[]? | select((.command? // "") | contains("auto-update.sh"))];
+    (au("SessionStart") | length) == 1 and au("SessionStart")[0].async == true
+    and (au("SessionEnd") | length) == 1 and au("SessionEnd")[0].async == true
+  ' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
+    && assert_file_not_contains "$CLAUDE_DIR/settings.json" "_LEGACY=1"; then
+    pass "auto-update-old-claude-same-hooks"
   else
-    fail "auto-update-legacy-claude-fallback"
+    fail "auto-update-old-claude-same-hooks"
   fi
 
   unset MOCK_CLAUDE_VERSION
@@ -695,6 +700,61 @@ test_update_noninteractive_safe() {
     pass "update-noninteractive-safe"
   else
     fail "update-noninteractive-safe (user content changed)"
+  fi
+
+  teardown_test_env
+}
+
+# --- 21b. update-migrates-legacy-hooks ---
+# An install made by v0.78.x or earlier for Claude Code < 2.1.89 carries a
+# second shape of the auto-update and pr-creation-log hooks (retired in v0.79.0,
+# #136). With the user's own hooks in the same arrays, a non-interactive update
+# must end with exactly one current entry per kit hook and keep the user's.
+test_update_migrates_legacy_hooks() {
+  setup_test_env
+  run_setup --profile=standard >/dev/null 2>&1 || { fail "update-migrates-legacy-hooks (setup failed)"; teardown_test_env; return; }
+
+  local settings="$CLAUDE_DIR/settings.json"
+  local snapshot="$CLAUDE_DIR/.starter-kit-snapshot/settings.json"
+  if ! rewrite_settings_to_legacy_hooks "$settings" \
+    || ! rewrite_settings_to_legacy_hooks "$snapshot" \
+    || ! jq '.hooks.SessionStart += [{"matcher":"startup","hooks":[{"type":"command","command":"echo user-start"}]}]
+          | .hooks.PostToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":"echo user-post"}]}]' \
+        "$settings" > "$settings.tmp" \
+    || ! mv "$settings.tmp" "$settings" \
+    || ! grep -q 'AUTO_UPDATE_LEGACY=1' "$settings" \
+    || ! grep -q 'PR_CREATION_LOG_LEGACY=1' "$settings"; then
+    fail "update-migrates-legacy-hooks (could not stage the legacy install)"
+    teardown_test_env
+    return
+  fi
+
+  local rc=0
+  run_setup_update >/dev/null 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] \
+    && jq -e '
+      def kit($event; $suffix):
+        [.hooks[$event][]?.hooks[]? | select((.command? // "") | endswith($suffix))];
+      def user($event; $command):
+        [.hooks[$event][]?.hooks[]? | select(.command? == $command)] | length;
+      kit("SessionStart"; "/auto-update/auto-update.sh") as $start
+      | kit("SessionEnd"; "/auto-update/auto-update.sh") as $end
+      | kit("PostToolUse"; "/pr-creation-log/log-pr.sh") as $pr
+      | ($start | length) == 1 and $start[0].async == true
+        and ($end | length) == 1 and $end[0].async == true
+        and ($pr | length) == 1 and $pr[0].async == true
+        and $pr[0].if == "Bash(gh pr create *)"
+        and user("SessionStart"; "echo user-start") == 1
+        and user("PostToolUse"; "echo user-post") == 1
+    ' "$settings" >/dev/null 2>&1 \
+    && assert_file_not_contains "$settings" "_LEGACY=1" \
+    && assert_file_not_contains "$snapshot" "_LEGACY=1" \
+    && jq -e 'any(.hooks.SessionEnd[]?.hooks[]?; (.command? // "") | endswith("/auto-update/auto-update.sh"))' \
+      "$snapshot" >/dev/null 2>&1; then
+    pass "update-migrates-legacy-hooks"
+  else
+    fail "update-migrates-legacy-hooks"
   fi
 
   teardown_test_env
@@ -1525,7 +1585,7 @@ run_scenario update test_update_v019_to_latest_direct
 run_scenario update test_update_partial_failure_recovery
 run_scenario update test_update_progress_output
 run_scenario update test_auto_update_session_hooks
-run_scenario update test_auto_update_legacy_claude_fallback
+run_scenario update test_auto_update_old_claude_same_hooks
 run_scenario update test_auto_update_preserves_custom_config_binding
 run_scenario update test_update_kit_command_paths
 run_scenario update test_update_kit_repo_resolution
@@ -1540,6 +1600,7 @@ run_scenario update-merge test_claudemd_section_preserve
 run_scenario update-merge test_claudemd_kit_edit_conflict
 run_scenario update-merge test_update_from_v020_customized
 run_scenario update-merge test_update_noninteractive_safe
+run_scenario update-merge test_update_migrates_legacy_hooks
 run_scenario update-merge test_snapshot_format_v019_to_latest
 run_scenario update-merge test_snapshot_format_v020_compat
 run_scenario update-merge test_snapshot_double_marker_repair

@@ -3503,9 +3503,6 @@ mdm_build_drop_argv() {
     # MDM 管理マーカー: setup.sh（wizard）が update/fresh の設定復元後に
     # MDM 注入 env を再適用するためのフラグ（固定値・R2-High）
     "KIT_MDM_MANAGED=true"
-    # MDMの独立期待値レンダラーとsetupのhook schemaを固定する内部値。
-    # 公開設定にはせず、互換性を優先してlegacy schemaへ収束させる。
-    "KIT_MDM_ASYNC_HOOKS=false"
     "KIT_MDM_REQUIRE_NODE_RUNTIME=${KIT_MDM_REQUIRE_NODE_RUNTIME:-false}"
   )
   case "${_MDM_OUTER_TRANSACTION_ACTIVE:-false}" in
@@ -5914,7 +5911,7 @@ import sys
 
 manifest_path, policy_path, profile, language, home = sys.argv[1:]
 manifest_keys = [
-    "schema_version", "profile", "language", "logical_home", "async_hooks",
+    "schema_version", "profile", "language", "logical_home",
     "required_components", "policy_sha256", "files", "absent_files",
     "entries", "total_bytes",
 ]
@@ -5983,7 +5980,6 @@ try:
             or manifest["profile"] != profile
             or manifest["language"] != language
             or manifest["logical_home"] != home
-            or manifest["async_hooks"] is not False
             or type(required) is not list or required != sorted(set(required))
             or not required or not set(required).issubset(components)
             or type(files) is not list or files != sorted(set(files))

@@ -185,6 +185,41 @@ install_fixture() {
 }
 
 # ---------------------------------------------------------------------------
+# rewrite_settings_to_legacy_hooks - Rewrite a kit-built settings.json into the
+# shape v0.78.x and earlier generated for Claude Code < 2.1.89
+#
+# Usage: rewrite_settings_to_legacy_hooks <settings-file>
+#
+# The legacy fragments (hooks.legacy.json, retired in v0.79.0) can no longer be
+# built, so migration tests derive that shape from a current build: the
+# auto-update SessionStart command and the pr-creation-log command get their
+# env prefix and lose async/asyncTimeout/if, and the auto-update SessionEnd
+# entry is dropped. Commands are matched against the current $HOME.
+# ---------------------------------------------------------------------------
+rewrite_settings_to_legacy_hooks() {
+  local file="$1" tmp
+  tmp="$(mktemp)" || return 1
+  if jq --arg home "$HOME" '
+    ($home + "/.claude/hooks/auto-update/auto-update.sh") as $au
+    | ($home + "/.claude/hooks/pr-creation-log/log-pr.sh") as $pr
+    | .hooks.SessionStart |= map(.hooks |= map(
+        if .command == ("AUTO_UPDATE_HOOK=SessionStart " + $au)
+        then {type, command: ("AUTO_UPDATE_LEGACY=1 " + .command)} else . end))
+    | .hooks.PostToolUse |= map(.hooks |= map(
+        if .command == $pr
+        then {type, command: ("PR_CREATION_LOG_LEGACY=1 " + .command)} else . end))
+    | .hooks.SessionEnd |= map(select(
+        any(.hooks[]; .command == ("AUTO_UPDATE_HOOK=SessionEnd " + $au)) | not))
+    | if (.hooks.SessionEnd | length) == 0 then del(.hooks.SessionEnd) else . end
+  ' "$file" > "$tmp"; then
+    mv "$tmp" "$file"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Assertions
 # ---------------------------------------------------------------------------
 

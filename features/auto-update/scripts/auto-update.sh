@@ -6,10 +6,7 @@ KIT_DIR="${KIT_DIR:-${HOME}/.claude-starter-kit}"
 LOCK_DIR="${LOCK_DIR:-${HOME}/.claude/.starter-kit-update.lock}"
 BACKUP_PATH_FILE="${BACKUP_PATH_FILE:-$HOME/.claude/.starter-kit-last-backup}"
 STATUS_FILE="${STATUS_FILE:-$HOME/.claude/.starter-kit-update-status}"
-LEGACY_CACHE_FILE="${LEGACY_CACHE_FILE:-$HOME/.claude/.starter-kit-update-cache}"
-LEGACY_CACHE_TTL="${LEGACY_CACHE_TTL:-86400}"
 AUTO_UPDATE_HOOK="${AUTO_UPDATE_HOOK:-SessionStart}"
-AUTO_UPDATE_LEGACY="${AUTO_UPDATE_LEGACY:-0}"
 
 _LOCK_HELD=false
 
@@ -44,20 +41,6 @@ _auto_update_repo_exists() {
   [[ -d "${KIT_DIR}/.git" ]]
 }
 
-_auto_update_legacy_cache_fresh() {
-  local last_check now
-  [[ -f "$LEGACY_CACHE_FILE" ]] || return 1
-  last_check="$(cat "$LEGACY_CACHE_FILE" 2>/dev/null || echo "0")"
-  [[ "$last_check" =~ ^[0-9]+$ ]] || return 1
-  now="$(_auto_update_now)"
-  (( now - last_check < LEGACY_CACHE_TTL ))
-}
-
-_auto_update_touch_legacy_cache() {
-  mkdir -p "$(dirname "$LEGACY_CACHE_FILE")"
-  _auto_update_now > "$LEGACY_CACHE_FILE"
-}
-
 _auto_update_release_lock() {
   if [[ "$_LOCK_HELD" == "true" ]]; then
     rm -rf "$LOCK_DIR"
@@ -78,9 +61,6 @@ _auto_update_maybe_detach() {
       LOCK_DIR="$LOCK_DIR" \
       BACKUP_PATH_FILE="$BACKUP_PATH_FILE" \
       STATUS_FILE="$STATUS_FILE" \
-      LEGACY_CACHE_FILE="$LEGACY_CACHE_FILE" \
-      LEGACY_CACHE_TTL="$LEGACY_CACHE_TTL" \
-      AUTO_UPDATE_LEGACY="$AUTO_UPDATE_LEGACY" \
       "$0" >/dev/null 2>&1 &
     return 0
   fi
@@ -137,13 +117,6 @@ _auto_update_run() {
   _auto_update_maybe_detach && return 0
   _auto_update_emit_previous_failure
   _auto_update_repo_exists || return 0
-
-  if [[ "$AUTO_UPDATE_LEGACY" == "1" || "$AUTO_UPDATE_LEGACY" == "true" ]]; then
-    if _auto_update_legacy_cache_fresh; then
-      return 0
-    fi
-    _auto_update_touch_legacy_cache
-  fi
 
   _auto_update_acquire_lock || return 0
 

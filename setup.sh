@@ -582,9 +582,11 @@ _prepare_mdm_claude_root
 _rc=$?
 [[ "$_rc" -eq 0 ]] || return "$_rc"
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
-  # Remove legacy 24h update cache so the old auto-update.sh (pre-v0.39.0)
-  # won't skip the next check. Once the new hook scripts are deployed by this
-  # update, the cache file is no longer used.
+  # Remove the 24h update cache written by the auto-update hook of installs
+  # made for Claude Code < 2.1.89. That hook path was retired in v0.79.0 (#136)
+  # and the scripts deployed by this update neither read nor write the file.
+  # Leftover cleanup only: keep it for a release or two, then drop it together
+  # with the same path in uninstall.sh, lib/dryrun.sh and cleanup_paths_json().
   rm -f "$CLAUDE_DIR/.starter-kit-update-cache" 2>/dev/null || true
 
   if _has_user_customizations "$CLAUDE_DIR"; then

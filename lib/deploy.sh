@@ -69,93 +69,6 @@ _bool_to_string() {
   fi
 }
 
-_version_ge() {
-  local lhs="${1:-0}"
-  local rhs="${2:-0}"
-  local lhs_a lhs_b lhs_c rhs_a rhs_b rhs_c _
-
-  IFS='.' read -r lhs_a lhs_b lhs_c _ < <(printf '%s\n' "$lhs")
-  IFS='.' read -r rhs_a rhs_b rhs_c _ < <(printf '%s\n' "$rhs")
-  lhs_a="${lhs_a:-0}"; lhs_b="${lhs_b:-0}"; lhs_c="${lhs_c:-0}"
-  rhs_a="${rhs_a:-0}"; rhs_b="${rhs_b:-0}"; rhs_c="${rhs_c:-0}"
-
-  (( lhs_a > rhs_a )) && return 0
-  (( lhs_a < rhs_a )) && return 1
-  (( lhs_b > rhs_b )) && return 0
-  (( lhs_b < rhs_b )) && return 1
-  (( lhs_c >= rhs_c ))
-}
-
-_CLAUDE_SEMVER_CACHE="${_CLAUDE_SEMVER_CACHE-}"
-_CLAUDE_SEMVER_CACHE_SET="${_CLAUDE_SEMVER_CACHE_SET:-false}"
-
-_claude_cli_semver() {
-  local raw version
-  command -v claude &>/dev/null || return 1
-  if [[ "$_CLAUDE_SEMVER_CACHE_SET" == "true" ]]; then
-    [[ -n "$_CLAUDE_SEMVER_CACHE" ]] || return 1
-    printf '%s\n' "$_CLAUDE_SEMVER_CACHE"
-    return 0
-  fi
-  _CLAUDE_SEMVER_CACHE_SET=true
-  # --version exits before touching stdin; detached anyway for consistency with
-  # _claude_cli() in lib/codex-setup.sh (macOS kqueue rejects a /dev/tty stdin).
-  raw="$(claude --version </dev/null 2>/dev/null | head -1)"
-  if ! [[ "$raw" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-    _CLAUDE_SEMVER_CACHE=""
-    return 1
-  fi
-  version="${BASH_REMATCH[1]}"
-  _CLAUDE_SEMVER_CACHE="$version"
-  printf '%s\n' "$version"
-}
-
-_claude_supports_async_hooks() {
-  local min_version="${1:-2.1.89}"
-  local current_version=""
-
-  # The privileged MDM launcher pins this internal decision before running
-  # setup so both deployment and independent postcondition rendering use the
-  # same hook schema. It is deliberately not a public MDM config key.
-  if _deploy_mdm_managed; then
-    case "${KIT_MDM_ASYNC_HOOKS:-}" in
-      true) return 0 ;;
-      false) return 1 ;;
-    esac
-  fi
-
-  # Fail open when Claude is absent so generated config stays forward-looking
-  # during offline tests or first install. Fail closed when a present CLI has an
-  # unparsable version because we cannot prove async hook support.
-  if ! command -v claude &>/dev/null; then
-    return 0
-  fi
-
-  current_version="$(_claude_cli_semver 2>/dev/null || true)"
-  [[ -n "$current_version" ]] || return 1
-  _version_ge "$current_version" "$min_version"
-}
-
-_versioned_hooks_fragment() {
-  local feature="$1"
-  local src="$PROJECT_DIR/features/${feature}/hooks.json"
-  local legacy_src="$PROJECT_DIR/features/${feature}/hooks.legacy.json"
-
-  if _claude_supports_async_hooks "2.1.89"; then
-    printf '%s\n' "$src"
-  else
-    printf '%s\n' "$legacy_src"
-  fi
-}
-
-_auto_update_hooks_fragment() {
-  _versioned_hooks_fragment "auto-update"
-}
-
-_pr_creation_log_hooks_fragment() {
-  _versioned_hooks_fragment "pr-creation-log"
-}
-
 apply_settings_preferences() {
   local file="$1"
   local lang_name tmp_file attribution_enabled
@@ -1209,6 +1122,9 @@ _normalize_mdm_managed_modes() {
   done
 }
 
+# .starter-kit-update-cache is no longer written (the Claude Code < 2.1.89 hook
+# path that used it was retired in v0.79.0, #136). It stays listed so uninstall
+# still removes one left by an older install; see setup_deploy() in setup.sh.
 cleanup_paths_json() {
   jq -n \
     --arg claude_dir "$CLAUDE_DIR" \
@@ -1990,11 +1906,6 @@ build_settings_file() {
   local hook_fragments=()
   local tmp_files=()
 
-  # Prime the semver cache in THIS shell: the fragment helpers below run in
-  # $(...) subshells, so cache writes made there never persist and `claude
-  # --version` would otherwise be spawned once per fragment.
-  _claude_cli_semver >/dev/null 2>&1 || true
-
   # Assertion: safety-net must be first in _FEATURE_ORDER
   if [[ "${_FEATURE_ORDER[0]}" != "safety-net" ]]; then
     error "FATAL: safety-net must be first in _FEATURE_ORDER (got: ${_FEATURE_ORDER[0]:-empty})"
@@ -2017,11 +1928,6 @@ build_settings_file() {
       continue
     fi
     local hooks_json="$PROJECT_DIR/features/$name/hooks.json"
-    if [[ "$name" == "auto-update" ]]; then
-      hooks_json="$(_auto_update_hooks_fragment)"
-    elif [[ "$name" == "pr-creation-log" ]]; then
-      hooks_json="$(_pr_creation_log_hooks_fragment)"
-    fi
     [[ -f "$hooks_json" ]] && hook_fragments+=("$hooks_json")
   done
 

@@ -134,6 +134,8 @@ Claude Code をインストールしただけでは、まっさらな状態で�
 
 > **前提ツールは自動導入**: セットアップに必要な `git` `jq` `curl` GNU `sed` GNU `awk` `bash 4+` Node.js `22.19+` `tmux` `gh` は、見つからない場合や最低版を満たさない場合に自動で導入・更新を試みます。macOS の Bash 3.2 問題も自動検出して Bash 4+ へ切り替えます。自動導入に失敗した場合のみ、最後に手動コマンドを案内してセットアップを失敗として終了します。
 
+> **Claude Code のバージョン**: キットが生成する hook 設定は Claude Code `2.1.89` 以上を前提とします（v0.79.0 以降）。キットは CLI のバージョンを検査しないため、CLI のバージョンを固定している場合は `claude --version` で確認し、古い場合は `claude update` で更新してください。
+
 > **Linux について**: このキットは macOS と Windows を対象としています。Linux で利用する場合は、ディストリビューション（Ubuntu, Fedora 等）やデスクトップ環境（GNOME, KDE 等）に応じた調整が必要になる場合があります。方法 1 のワンライナーまたは方法 3 の手動インストールをお試しください。
 
 ---
@@ -532,13 +534,13 @@ SessionStart / SessionEnd フック発火
 - **SessionEnd は best-effort**: 異常終了時は start 側のチェックだけに依存します
 - **dirty check**: kit リポジトリにローカル変更がある場合は更新をスキップし、`git stash` を案内します
 - **復旧案内**: 更新に失敗した場合、バックアップパスと復元コマンドを表示します（`~/.claude.backup.<timestamp>` から復元可能）
-- **互換性**: Claude Code `2.1.89` で確認済みです。旧版を検出した場合は `SessionStart` + 24h cache の旧 hook へ自動フォールバックします
+- **互換性**: Claude Code `2.1.89` 以上が必要です。旧版向けの `SessionStart` + 24h cache へのフォールバックは v0.79.0 で廃止しました。`claude --version` で確認し、古い場合は `claude update` で更新してください
 - **失敗の持ち越し**: バックグラウンド更新に失敗した場合は結果を保存し、次回 hook 実行時に 1 回だけ警告します
 
-> **legacy auto-update の復旧**: 旧 24h cache 環境や auto-update 無効環境で、確実に最新版へ更新して hook を再配備したい場合は次を実行してください。
+> **auto-update の手動復旧**: auto-update 無効環境などで、確実に最新版へ更新して hook を再配備したい場合は次を実行してください。
 >
 > ```bash
-> test -z "$(git -C ~/.claude-starter-kit status --porcelain 2>/dev/null)" && rm -f ~/.claude/.starter-kit-update-cache && git -C ~/.claude-starter-kit fetch --tags && git -C ~/.claude-starter-kit pull --ff-only && bash ~/.claude-starter-kit/setup.sh --update || echo "Local changes detected in ~/.claude-starter-kit. Run: cd ~/.claude-starter-kit && git stash -u"
+> test -z "$(git -C ~/.claude-starter-kit status --porcelain 2>/dev/null)" && git -C ~/.claude-starter-kit fetch --tags && git -C ~/.claude-starter-kit pull --ff-only && bash ~/.claude-starter-kit/setup.sh --update || echo "Local changes detected in ~/.claude-starter-kit. Run: cd ~/.claude-starter-kit && git stash -u"
 > ```
 >
 > dirty な作業ツリーでは安全のため停止します。その場合は `git stash -u` などで退避してから再実行してください。

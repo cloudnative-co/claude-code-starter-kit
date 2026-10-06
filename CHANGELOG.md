@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.79.0] - 2026-10-06
+
+Claude Code 2.1.89 未満向けの旧 hook 形状（legacy hook 経路）を退役し、サポート最小 Claude Code を 2.1.89 と宣言する（#136）。
+
+### Changed
+- **サポート最小 Claude Code を 2.1.89 に引き上げ（#136）**: auto-update と pr-creation-log の hook を、導入時の CLI バージョンに関係なく常に 1 つの形状で生成するようにした（auto-update は `SessionStart` + `SessionEnd` の `async` 実行、pr-creation-log は `if: "Bash(gh pr create *)"` + `async`）。v0.39.0 / v0.41.0 で入れた 2.1.89 未満向けのフォールバック（auto-update は `SessionStart` のみ + 24h cache、pr-creation-log は `if` を使わずスクリプト側でコマンドを再判定する形）は、v0.70.0（#120）で宣言した退役条件（2.1.89 のリリースから 6 か月後以降の最初の minor）が成立したため廃止した。`setup.sh` / `setup.sh --update` は `settings.json` の生成時に `claude --version` を起動しなくなった
+  - **2.1.89 以上で導入済みの環境**: 生成される `settings.json` は v0.78.2 と同一で、差分は出ない（Standard / Full × 日本語 / 英語の 4 通りで、v0.78.2 が 2.1.89 向けに生成する内容とバイト単位で一致することを確認）。更新で内容が変わるのは `~/.claude/hooks/auto-update/auto-update.sh` と `~/.claude/hooks/pr-creation-log/log-pr.sh` の 2 本
+  - **旧形状で導入されていた環境**（導入時の CLI が 2.1.89 未満だった、または `claude --version` の出力を解析できなかった環境）: 次回の `setup.sh --update` / 自動アップデートで、旧形状の hook エントリが現行のエントリへ自動的に置き換わる（下の Fixed を参照）。`settings.json` を手で編集する必要はない
+  - **2.1.89 未満の CLI を使い続ける場合**: 動作は保証しない。hook の `async` / `if` を旧 CLI がどう扱うかは実機で確認していない。キットは CLI のバージョンを検査せず、警告も出さないため、CLI のバージョンを固定している場合は `claude --version` で確認し、`claude update` で 2.1.89 以上へ更新する。README.md / README.en.md の前提条件と auto-update の互換性の記述も同じ内容に改めた
+  - **pr-creation-log の絞り込みは hook の `if` に一本化**: `log-pr.sh` は `tool_input.command` を再判定しなくなった
+  - **テスト**: 退役後の不変条件として単体テスト 7 件を追加した（`hooks.legacy.json` が同梱されていないこと、同梱スクリプトに退役したバージョン判定への参照が残っていないこと、hook スクリプトが `claude` を起動しないこと、`build_settings_file` の出力が CLI のバージョン〔2.1.89 / 2.1.88 / 解析不能〕で変わらず `claude` を起動しないこと、pr-creation-log が旧 CLI でも同じ形になること、`AUTO_UPDATE_LEGACY` と 24h cache が更新確認を抑止しないこと、稼働確認の `SessionEnd` 要求が CLI に依存しないこと）。テストファイルを 1 つずつ実行した場合、修正前のコードではこのうち 6 件が失敗する。シナリオ `auto-update-legacy-claude-fallback` は、旧 CLI でも同じ hook になることを確認する `auto-update-old-claude-same-hooks` に置き換えた。旧形状を前提にしていた単体テスト 7 件は削除した
+- **auto-update の稼働確認は、CLI バージョンによらず `SessionStart` と `SessionEnd` の両方の登録を要求する**: 従来は、2.1.89 未満の CLI を検出した場合と CLI のバージョンを解析できない場合に、`SessionEnd` が未登録でも「有効」と表示していた
+- **MDM: 配備する pr-creation-log hook が通常インストールと同じ形状になる**: MDM 管理下の `settings.json` は、`ENABLE_PR_CREATION_LOG` が有効な場合（Standard / Full の既定）に pr-creation-log が `if` + `async` の形になる。従来は 2.1.89 未満との互換性を優先し、`if` / `async` を持たない旧形状へ固定していた（auto-update は MDM では常に無効のため対象外）。MDM の更新は `settings.json` 全体をキット生成版で置き換えるため、既存の管理端末は Fixed に記載した移行処理によらず、次回の remediation で新しい形状になる
+  - **install bundle の再配布が必要**: `mdm/render-expected.py` と `mdm/install-mdm.sh` を変更した。v0.78.x 以前から v0.79.0 以降の SHA へ更新する MDM 配布環境は、同じリリースの `install-mdm.sh` と `render-expected.py` を再配布する必要がある（bundle 側と checkout 側の `render-expected.py` の SHA-256 が一致しないと remediation は失敗する）
+  - renderer 引数と feature policy が同じなら `KIT_MDM_EXPECTED_POLICY_SHA256` は変わらない（Standard / Full × 日本語 / 英語と Minimal × 英語の 5 通りで、変更前後の `policy.json` がバイト単位で一致することを確認）
+  - renderer が出力する `manifest.json` から `async_hooks` キーを削除し、installer 側の検証も合わせた（`schema_version` は 1 のまま）。`KIT_MDM_PREREQ_MODE=fail` や `KIT_MDM_INSTALL_CLAUDE_CLI=false` で Claude CLI を別途配布・固定している場合は 2.1.89 以上を配布する。`docs/mdm/README.md` に同じ内容を追記した
+  - `tests/unit/test-mdm-expected.sh` を現行形状へ切り替え、描画した `settings.json` の pr-creation-log が `if` + `async` であることの検査を 1 件追加した
+
+### Removed
+- `features/auto-update/hooks.legacy.json` と `features/pr-creation-log/hooks.legacy.json`
+- `auto-update.sh` の `AUTO_UPDATE_LEGACY` / `LEGACY_CACHE_FILE` / `LEGACY_CACHE_TTL` と 24h cache の処理（`_auto_update_legacy_cache_fresh` / `_auto_update_touch_legacy_cache`）。`AUTO_UPDATE_LEGACY=1` を付けて起動しても無視され、`~/.claude/.starter-kit-update-cache` は読み書きされない
+- `log-pr.sh` の `PR_CREATION_LOG_LEGACY` 分岐
+- `lib/deploy.sh` の CLI バージョン判定（`_claude_cli_semver` / `_claude_supports_async_hooks` / `_versioned_hooks_fragment` / `_version_ge` とその呼び出し）、`lib/update.sh` の `require_session_end` 分岐
+- MDM の内部値 `KIT_MDM_ASYNC_HOOKS`
+- **残したもの**: `~/.claude/.starter-kit-update-cache` を掃除する処理（`setup.sh --update` 時の削除、`uninstall.sh` のフォールバック一覧、`lib/dryrun.sh` のコピー対象、`lib/deploy.sh` の `cleanup_paths`）は、旧環境に残ったファイルを片付けるために当面残す。1〜2 リリース後にまとめて削除する
+
+### Fixed
+- **旧形状の hook エントリが残った環境で、同じ hook が二重に登録される、または旧形状のまま残る問題を修正**: 旧形状と現行形状は hook のコマンド文字列が異なる（旧形状は `AUTO_UPDATE_LEGACY=1 ...` / `PR_CREATION_LOG_LEGACY=1 ...` の接頭辞を持つ）ため、v0.77.0 で導入した「コマンド集合による同一性」では対にならない。その結果、SessionStart / PostToolUse の配列に自分の hook を足している環境の非対話更新では、旧形状のエントリが「キットが削除した項目」として残り、現行のエントリと並んで二重登録になっていた。snapshot を持たない環境の bootstrap 更新では、旧形状のエントリが現行のエントリに置き換わらずに残っていた。どちらも v0.78.x 以前から、CLI を 2.1.89 未満から 2.1.89 以上へ上げた後のキット更新で起きていた
+  - 更新時に旧形状のエントリを現行のエントリへ書き換える `_migrate_legacy_hook_entries` を `lib/update.sh` に追加した。同じ配列に現行のコマンドが登録済みなら旧形状の hook を取り除き、未登録ならその場でキット現行の hook に置き換える（該当機能を無効にしていて、キットが生成する設定にその hook がない場合は取り除く）。対話・非対話のどちらの更新でも、3-way merge の実行有無にかかわらず毎回実行する
+  - 対象は、キット自身が生成した 2 つのコマンド文字列に完全一致する hook だけ。利用者が追加した hook、ほかのエントリとその並び順、手で書き換えた類似コマンドは変更しない。旧形状のエントリがない `settings.json` は書き換えない
+  - **移行されないケース**: 旧形状のコマンドを手で書き換えていた場合や、`settings.json` を生成したときと `$HOME` が変わっている場合は対象外で、エントリはそのまま残る。残った auto-update のエントリは `async` を持たず、24h cache も効かなくなるため、セッション開始のたびに更新確認を行う。該当する場合は、そのエントリをキットが生成する現行の形（`features/auto-update/hooks.json` / `features/pr-creation-log/hooks.json`）へ手で書き換える
+  - manifest を持たず既存の `settings.json` だけがある状態への新規インストールは、この移行を通らない（この経路は bootstrap merge だけを行う）。既存の退役 hook 掃除と同じ扱いで、今回は対象外
+  - **回帰テスト**: 移行関数の単体テスト 10 件を `tests/unit/test-retired-hooks.sh` に、更新の設定フェーズ（`_update_phase_settings`）のテスト 6 件（呼び出し順の検査 1 件と、実際のビルドを使って通す 5 件）を `tests/unit/test-update-refactor.sh` に、`setup.sh --update --non-interactive` を通すシナリオ `update-migrates-legacy-hooks` を追加した。修正前のコードでは、移行関数のテストが 10 件すべて、設定フェーズのテストが 4 件、シナリオが失敗する（設定フェーズの残り 2 件は、利用者が触っていない旧形状の環境と、すでに現行形状の環境が従来どおり扱われることの確認）
+
 ## [0.78.4] - 2026-10-07
 
 `web-content-extraction` skill の `undici` / `source-map-js` 脆弱性を解消（Dependabot alert #27〜#47）。
