@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.79.0] - 2026-10-06
+## [0.79.0] - 2026-10-07
 
 Claude Code 2.1.89 未満向けの旧 hook 形状（legacy hook 経路）を退役し、サポート最小 Claude Code を 2.1.89 と宣言する（#136）。
 
