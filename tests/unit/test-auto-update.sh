@@ -390,7 +390,7 @@ fi
 # off. A fresh process keeps shell state from the builds above out of it.
 mkdir -p "$_au_tmp/auh-old-cli"
 : > "$_au_spy_log"
-printf '%s'"{\"hooks\":{\"SessionStart\":[$_auh_start_au],\"SessionEnd\":[$_auh_end_other]}}" \
+printf '%s' "{\"hooks\":{\"SessionStart\":[$_auh_start_au],\"SessionEnd\":[$_auh_end_other]}}" \
   > "$_au_tmp/auh-old-cli/settings.json"
 _auh_out="$(
   AU_CLAUDE_SPY_LOG="$_au_spy_log" AU_CLAUDE_SPY_VERSION="2.1.88 (Claude Code)" \
