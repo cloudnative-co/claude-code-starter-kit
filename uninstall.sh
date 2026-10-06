@@ -1318,6 +1318,9 @@ _load_strings() {
       STR_CLI_UNINSTALL_FAILED="Claude Code CLI のアンインストールに失敗しました。手動で削除してください。"
       STR_CLI_UNINSTALL_SKIP="Claude Code CLI のアンインストールをスキップしました"
       STR_CLI_NOT_INSTALLED="Claude Code CLI はインストールされていません"
+      STR_CLI_UNINSTALL_MANUAL="インストール方法または配置を確認できないため、Claude Code CLI は自動削除しませんでした（検出: %s）。公式手順に沿って手動で削除してください:"
+      STR_CLI_UNINSTALL_KEPT_CONFIG="設定とセッション履歴（~/.claude、~/.claude.json）は削除していません"
+      STR_CLI_UNINSTALL_STILL_FOUND="claude コマンドがまだ見つかります: %s（別のインストールが残っている可能性があります）"
       STR_CODEX_PLUGIN_REMOVE_ASK="Codex プラグインを削除しますか？ [y/N] "
       STR_CODEX_PLUGIN_REMOVED="Codex プラグインを削除しました"
       STR_CODEX_PLUGIN_REMOVE_FAILED="Codex プラグインの削除に失敗しました。手動で実行してください:"
@@ -1354,6 +1357,9 @@ _load_strings() {
       STR_CLI_UNINSTALL_FAILED="Failed to uninstall Claude Code CLI. Please remove it manually."
       STR_CLI_UNINSTALL_SKIP="Skipped Claude Code CLI uninstall"
       STR_CLI_NOT_INSTALLED="Claude Code CLI is not installed"
+      STR_CLI_UNINSTALL_MANUAL="Could not confirm how Claude Code CLI was installed, so it was not removed automatically (found: %s). Remove it manually with the official steps:"
+      STR_CLI_UNINSTALL_KEPT_CONFIG="Settings and session history (~/.claude, ~/.claude.json) were not removed"
+      STR_CLI_UNINSTALL_STILL_FOUND="A claude command is still found: %s (another installation may remain)"
       STR_CODEX_PLUGIN_REMOVE_ASK="Remove Codex plugin? [y/N] "
       STR_CODEX_PLUGIN_REMOVED="Codex plugin removed"
       STR_CODEX_PLUGIN_REMOVE_FAILED="Failed to remove Codex plugin. Remove it manually:"
@@ -1797,60 +1803,153 @@ fi
 # ---------------------------------------------------------------------------
 # Claude Code CLI uninstall
 # ---------------------------------------------------------------------------
+# The CLI has no uninstall subcommand, and a word it does not know is taken as
+# a prompt that starts a session. Removal therefore follows the documented
+# per-method steps and never touches ~/.claude or ~/.claude.json, which hold
+# settings and session history.
+_CLAUDE_CLI_UNINSTALL_DOC="https://code.claude.com/docs/en/setup#uninstall-claude-code"
+_CLAUDE_CLI_NATIVE_LAUNCHER=""
+_CLAUDE_CLI_NATIVE_DATA=""
+
+_claude_cli_detect_native() {
+  # Return 0 and set _CLAUDE_CLI_NATIVE_LAUNCHER / _CLAUDE_CLI_NATIVE_DATA only
+  # for a native install in the documented default layout under the home
+  # directory. Return 1 when no native launcher exists, and 2 when one exists
+  # in any other shape (custom launcher, relocated or symlinked data
+  # directory); that shape is never removed automatically.
+  local base="${HOME:-}" launcher data target target_dir
+  _CLAUDE_CLI_NATIVE_LAUNCHER=""
+  _CLAUDE_CLI_NATIVE_DATA=""
+  if [[ "$_IS_MSYS" == "true" && -n "${USERPROFILE:-}" ]]; then
+    base="$(cygpath -u "$USERPROFILE" 2>/dev/null || true)"
+  fi
+  while [[ "$base" == */ ]]; do
+    base="${base%/}"
+  done
+  [[ -n "$base" && "$base" == /* ]] || return 1
+  launcher="$base/.local/bin/claude"
+  [[ "$_IS_MSYS" != "true" ]] || launcher="$launcher.exe"
+  [[ -e "$launcher" || -L "$launcher" ]] || return 1
+
+  # The data directory is addressed by its physical path, so a symlink at
+  # ~/.local, ~/.local/share or ~/.local/share/claude fails the comparison.
+  base="$(cd -P "$base" 2>/dev/null && pwd -P)" || return 2
+  data="$base/.local/share/claude"
+  [[ -d "$data" && ! -L "$data" ]] || return 2
+  [[ "$(cd -P "$data" 2>/dev/null && pwd -P)" == "$data" ]] || return 2
+  if [[ "$_IS_MSYS" == "true" ]]; then
+    [[ -f "$launcher" && ! -L "$launcher" ]] || return 2
+  else
+    # A native launcher is a symlink into <data>/versions; a regular file or a
+    # symlink to anywhere else is a custom launcher.
+    [[ -L "$launcher" ]] || return 2
+    target="$(readlink "$launcher" 2>/dev/null)" || return 2
+    [[ "$target" == /*/* ]] || return 2
+    target_dir="$(cd -P "${target%/*}" 2>/dev/null && pwd -P)" || return 2
+    [[ "$target_dir" == "$data/versions" ]] || return 2
+  fi
+  _CLAUDE_CLI_NATIVE_LAUNCHER="$launcher"
+  _CLAUDE_CLI_NATIVE_DATA="$data"
+}
+
+_claude_cli_remove_native() { # <launcher> <data-dir>, as set by _claude_cli_detect_native
+  # The layout is detected again right before deleting and must still be the
+  # pair that was shown to the user. The recursive delete then runs from inside
+  # the verified parent on a real (non-symlink) child, so it cannot follow a
+  # path that changed in between or reach outside the home directory.
+  local launcher="$1" data="$2" parent
+  _claude_cli_detect_native || return 1
+  [[ "$launcher" == "$_CLAUDE_CLI_NATIVE_LAUNCHER" \
+    && "$data" == "$_CLAUDE_CLI_NATIVE_DATA" ]] || return 1
+  parent="${data%/claude}"
+  [[ "$parent" == /* && "$parent/claude" == "$data" ]] || return 1
+  rm -f -- "$launcher" 2>/dev/null || return 1
+  (
+    cd -P "$parent" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$parent" && -d ./claude && ! -L ./claude ]] || exit 1
+    rm -rf -- ./claude 2>/dev/null
+  ) || return 1
+  [[ ! -e "$launcher" && ! -L "$launcher" && ! -e "$data" && ! -L "$data" ]]
+}
+
+_claude_cli_manual_steps() {
+  info "  $_CLAUDE_CLI_UNINSTALL_DOC"
+  if [[ "$_IS_MSYS" == "true" ]]; then
+    info "  native: Remove-Item -Path \"\$env:USERPROFILE\\.local\\bin\\claude.exe\" -Force"
+    info "          Remove-Item -Path \"\$env:USERPROFILE\\.local\\share\\claude\" -Recurse -Force"
+    info "  WinGet: winget uninstall Anthropic.ClaudeCode"
+  else
+    info "  native: rm -f ~/.local/bin/claude && rm -rf ~/.local/share/claude"
+    info "  brew:   brew uninstall --cask claude-code (or claude-code@latest)"
+  fi
+  info "  npm:    npm uninstall -g @anthropic-ai/claude-code"
+}
+
 if command -v claude &>/dev/null; then
   printf "\n"
   read -r -p "$STR_CLI_UNINSTALL_ASK " cli_confirm || cli_confirm="n"
   case "$cli_confirm" in
     y|Y|yes|YES)
-      if [[ "$_IS_MSYS" == "true" ]]; then
-        # Windows native (Git Bash): Claude was installed via PowerShell installer
-        # Binary is typically at %LOCALAPPDATA%\Programs\claude\claude.exe
+      _cli_found="$(command -v claude)"
+      _cli_removed=false
+      _cli_native_rc=0
+      _claude_cli_detect_native || _cli_native_rc=$?
+      if [[ "$_cli_native_rc" -eq 0 ]]; then
         info "$STR_CLI_UNINSTALL_NATIVE"
-        _win_claude_dir="$(cygpath -u "${LOCALAPPDATA:-}/Programs/claude" 2>/dev/null)"
-        if [[ -n "$_win_claude_dir" ]] && [[ -d "$_win_claude_dir" ]]; then
-          rm -rf "$_win_claude_dir" 2>/dev/null && ok "$STR_CLI_UNINSTALL_DONE" || warn "$STR_CLI_UNINSTALL_FAILED"
-        elif claude uninstall 2>/dev/null; then
+        info "  $_CLAUDE_CLI_NATIVE_LAUNCHER"
+        info "  $_CLAUDE_CLI_NATIVE_DATA"
+        if _claude_cli_remove_native "$_CLAUDE_CLI_NATIVE_LAUNCHER" "$_CLAUDE_CLI_NATIVE_DATA"; then
           ok "$STR_CLI_UNINSTALL_DONE"
+          _cli_removed=true
         else
           warn "$STR_CLI_UNINSTALL_FAILED"
+          _claude_cli_manual_steps
+        fi
+      elif [[ "$_cli_native_rc" -ne 1 ]]; then
+        # A launcher exists, but not in the default native layout.
+        # shellcheck disable=SC2059
+        warn "$(printf "$STR_CLI_UNINSTALL_MANUAL" "$_cli_found")"
+        _claude_cli_manual_steps
+      elif npm list -g @anthropic-ai/claude-code &>/dev/null; then
+        info "$STR_CLI_UNINSTALL_NPM"
+        if npm uninstall -g @anthropic-ai/claude-code 2>/dev/null; then
+          ok "$STR_CLI_UNINSTALL_DONE"
+          _cli_removed=true
+        else
+          warn "$STR_CLI_UNINSTALL_FAILED"
+          info "  npm uninstall -g @anthropic-ai/claude-code"
         fi
       else
-        # Unix (macOS / Linux / WSL)
-        local_bin_claude="$HOME/.local/bin/claude"
-        if [[ -f "$local_bin_claude" ]] || [[ -L "$local_bin_claude" ]]; then
-          # Native installer: use claude uninstall
-          info "$STR_CLI_UNINSTALL_NATIVE"
-          if claude uninstall 2>/dev/null; then
-            ok "$STR_CLI_UNINSTALL_DONE"
-          else
-            # Fallback: remove binary directly
-            rm -f "$local_bin_claude"
-            ok "$STR_CLI_UNINSTALL_DONE"
-          fi
-        elif npm list -g @anthropic-ai/claude-code &>/dev/null 2>&1; then
-          # npm installation
-          info "$STR_CLI_UNINSTALL_NPM"
-          if npm uninstall -g @anthropic-ai/claude-code 2>/dev/null; then
-            ok "$STR_CLI_UNINSTALL_DONE"
-          else
-            warn "$STR_CLI_UNINSTALL_FAILED"
-          fi
-        elif brew list claude-code &>/dev/null 2>&1; then
-          # Homebrew installation
+        _cli_brew_cask=""
+        if [[ "$_IS_MSYS" != "true" ]]; then
+          for _cli_cask in claude-code claude-code@latest; do
+            if brew list --cask "$_cli_cask" &>/dev/null; then
+              _cli_brew_cask="$_cli_cask"
+              break
+            fi
+          done
+        fi
+        if [[ -n "$_cli_brew_cask" ]]; then
           info "$STR_CLI_UNINSTALL_BREW"
-          if brew uninstall claude-code 2>/dev/null; then
+          if brew uninstall --cask "$_cli_brew_cask" 2>/dev/null; then
             ok "$STR_CLI_UNINSTALL_DONE"
+            _cli_removed=true
           else
             warn "$STR_CLI_UNINSTALL_FAILED"
+            info "  brew uninstall --cask $_cli_brew_cask"
           fi
         else
-          # Unknown installation method — try claude uninstall
-          info "$STR_CLI_UNINSTALL_NATIVE"
-          if claude uninstall 2>/dev/null; then
-            ok "$STR_CLI_UNINSTALL_DONE"
-          else
-            warn "$STR_CLI_UNINSTALL_FAILED"
-          fi
+          # shellcheck disable=SC2059
+          warn "$(printf "$STR_CLI_UNINSTALL_MANUAL" "$_cli_found")"
+          _claude_cli_manual_steps
+        fi
+      fi
+      if [[ "$_cli_removed" == "true" ]]; then
+        info "$STR_CLI_UNINSTALL_KEPT_CONFIG"
+        hash -r 2>/dev/null || true
+        if command -v claude &>/dev/null; then
+          # shellcheck disable=SC2059
+          warn "$(printf "$STR_CLI_UNINSTALL_STILL_FOUND" "$(command -v claude)")"
         fi
       fi
       ;;

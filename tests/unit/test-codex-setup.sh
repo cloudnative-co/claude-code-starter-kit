@@ -247,6 +247,35 @@ else
   fi
 fi
 
+# The CLI treats a word it does not know as a prompt (`claude [options]
+# [command] [prompt]`) and starts a session, so a shipped script must only pass
+# subcommands that exist. The allowlist holds the first-level subcommands the
+# shipped scripts call today; confirm a new one against `claude --help` before
+# adding it. Known invocations are marked (`claude=plugin`) rather than dropping
+# their whole line, so an unknown one sharing the line is still reported.
+# `_claude_cli` is matched anywhere; a bare `claude` only in command position,
+# which keeps display strings out. Not covered: flags before the word,
+# arguments held in variables, second-level subcommands, and wrappers other
+# than the listed keywords.
+if ! git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
+  skip "codex-setup: shipped scripts only call claude subcommands that exist" "needs a git checkout"
+else
+  _claude_known_subcommands='plugin|mcp'
+  _claude_grep_bol='^[^:]+:[0-9]+:'
+  _unknown_claude_calls="$(
+    cd "$PROJECT_DIR" && git grep -nE '(^|[^A-Za-z0-9_])(_claude_cli|claude)[[:space:]]+[a-z]' \
+      -- setup.sh install.sh uninstall.sh 'lib/*.sh' 'wizard/*.sh' 'mdm/*.sh' 'features/*.sh' \
+      | grep -vE "${_claude_grep_bol}[[:space:]]*#" \
+      | sed -E "s/(_claude_cli|claude)[[:space:]]+(${_claude_known_subcommands})([^A-Za-z0-9_-]|\$)/\\1=\\2\\3/g" \
+      | grep -E "((${_claude_grep_bol}|[;&|(){!\`])[[:space:]]*|(${_claude_grep_bol}|[^A-Za-z0-9_])(if|elif|while|until|then|do|else|exec|command|time)[[:space:]]+)claude[[:space:]]+[a-z]|(${_claude_grep_bol}|[^A-Za-z0-9_])_claude_cli[[:space:]]+[a-z]" || true
+  )"
+  if assert_equals "" "$_unknown_claude_calls"; then
+    pass "codex-setup: shipped scripts only call claude subcommands that exist"
+  else
+    fail "codex-setup: claude was called with a word that is not a known subcommand: $_unknown_claude_calls"
+  fi
+fi
+
 # Legacy MCP removal should rely on scope-agnostic CLI removal
 setup_fake_claude
 export MOCK_CLAUDE_LIST_OUTPUT=$'codex\n'

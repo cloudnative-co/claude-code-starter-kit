@@ -139,7 +139,9 @@ ln -s "$(command -v node)" "$_ut_bin/node"
 # the host. The e2e PATH keeps /usr/bin, where Linux distros commonly install
 # npm — stub it so `npm list -g cc-safety-net` fails and the prompt is
 # skipped deterministically. A controlled failing `claude` stub keeps its
-# unavoidable CLI-uninstall prompt harmless; queued answers always decline it.
+# unavoidable CLI-uninstall prompt harmless: the cases using this bin decline
+# it, and the CLI removal cases further down accept it only against their own
+# logging npm/brew/claude stubs.
 printf '#!/bin/sh\nexit 1\n' > "$_ut_bin/npm"
 chmod +x "$_ut_bin/npm"
 printf '%s\n' '#!/bin/bash
@@ -1474,6 +1476,353 @@ if [[ "$_ut_leaf_races_ok" == true ]]; then
   pass "uninstall: prompt-time security/tree inode exchanges cannot redirect cleanup"
 else
   fail "uninstall: prompt-time security/tree inode exchange reached replacement data"
+fi
+
+# ── Claude Code CLI removal ───────────────────────────────────────────────
+#
+# The CLI has no `uninstall` subcommand, and a word it does not know is taken
+# as a prompt. Accepting the CLI prompt must therefore remove a native install
+# in the documented default layout by path, hand npm / Homebrew installs to
+# their own uninstaller, and only print the manual steps for a layout it cannot
+# verify. These cases answer "y", so every external command has to resolve to a
+# logging stub: PATH is the case bin plus the system directories, never the
+# host's brew / npm / claude.
+_ut_cli_root="$_ut_tmp/cli-removal"
+_ut_cli_bin="$_ut_cli_root/bin"
+_ut_cli_bin_claude="$_ut_cli_root/bin-with-claude"
+mkdir -p "$_ut_cli_bin" "$_ut_cli_bin_claude"
+cat > "$_ut_cli_bin/npm" <<'EOF'
+#!/bin/bash
+printf 'npm %s\n' "$*" >> "${UNINSTALL_TOOL_LOG:-/dev/null}"
+[[ "${UNINSTALL_NPM_HAS_CLAUDE:-}" == "1" && "$*" == *" @anthropic-ai/claude-code" ]]
+EOF
+cat > "$_ut_cli_bin/brew" <<'EOF'
+#!/bin/bash
+printf 'brew %s\n' "$*" >> "${UNINSTALL_TOOL_LOG:-/dev/null}"
+[[ -n "${UNINSTALL_BREW_CASK:-}" && "$*" == *" --cask ${UNINSTALL_BREW_CASK}" ]]
+EOF
+cat > "$_ut_cli_bin_claude/claude" <<'EOF'
+#!/bin/bash
+printf 'claude %s\n' "$*" >> "${UNINSTALL_TOOL_LOG:-/dev/null}"
+exit 1
+EOF
+chmod +x "$_ut_cli_bin/npm" "$_ut_cli_bin/brew" "$_ut_cli_bin_claude/claude"
+ln -s "$_ut_bin/jq" "$_ut_cli_bin/jq"
+ln -s "$_ut_bin/node" "$_ut_cli_bin/node"
+for _ut_cli_tool in jq node npm brew; do
+  ln -s "$_ut_cli_bin/$_ut_cli_tool" "$_ut_cli_bin_claude/$_ut_cli_tool"
+done
+for _ut_cli_dir in "$_ut_cli_bin" "$_ut_cli_bin_claude"; do
+  for _ut_cli_tool in npm brew; do
+    if [[ "$(PATH="$_ut_cli_dir:/usr/bin:/bin:/usr/sbin:/sbin" command -v "$_ut_cli_tool" || true)" \
+      != "$_ut_cli_dir/$_ut_cli_tool" ]]; then
+      fail "uninstall: CLI removal e2e PATH did not bind the $_ut_cli_tool stub"
+      exit 1
+    fi
+  done
+done
+if [[ "$(PATH="$_ut_cli_bin_claude:/usr/bin:/bin:/usr/sbin:/sbin" command -v claude || true)" \
+  != "$_ut_cli_bin_claude/claude" ]]; then
+  fail "uninstall: CLI removal e2e PATH did not bind the claude stub"
+  exit 1
+fi
+
+_ut_cli_prepare() { # <name>; sets _ut_cli_home / _ut_cli_log / _ut_cli_out
+  _ut_cli_home="$_ut_cli_root/$1/home"
+  _ut_cli_log="$_ut_cli_root/$1/tool.log"
+  _ut_cli_out="$_ut_cli_root/$1/output"
+  mkdir -p "$_ut_cli_home/.claude" "$_ut_cli_home/tmp" "$_ut_cli_home/appdata" \
+    "$_ut_cli_home/localappdata" "$_ut_cli_home/npm" \
+    "$_ut_cli_home/.local/bin" "$_ut_cli_home/.local/state/claude"
+  : > "$_ut_cli_log"
+  printf '{"managed":true}\n' > "$_ut_cli_home/.claude/settings.json"
+  printf 'user data\n' > "$_ut_cli_home/.claude/user-file"
+  printf '{"installMethod":"native"}\n' > "$_ut_cli_home/.claude.json"
+  printf 'lock\n' > "$_ut_cli_home/.local/state/claude/lock"
+  jq -n --arg settings "$_ut_cli_home/.claude/settings.json" \
+    '{version:"2", profile:"standard", language:"en", timestamp:"test",
+      files:[$settings], cleanup_paths:[]}' \
+    > "$_ut_cli_home/.claude/.starter-kit-manifest.json"
+}
+
+_ut_cli_version_store() { # <data-dir>: versions/ holding a logging launcher target
+  mkdir -p "$1/versions"
+  cp "$_ut_cli_bin_claude/claude" "$1/versions/9.9.9"
+  printf 'older version\n' > "$1/versions/9.9.8"
+}
+
+_ut_cli_run() { # <answers> <bin> [ENV=value ...]; sets _ut_cli_rc
+  local answers="$1" bin="$2"
+  shift 2
+  _ut_cli_rc=0
+  printf '%b' "$answers" | env -i HOME="$_ut_cli_home" TMPDIR="$_ut_cli_home/tmp" \
+    APPDATA="$_ut_cli_home/appdata" LOCALAPPDATA="$_ut_cli_home/localappdata" \
+    NPM_CONFIG_PREFIX="$_ut_cli_home/npm" npm_config_prefix="$_ut_cli_home/npm" \
+    STARTER_KIT_DIR="$_ut_cli_home/nonexistent-kit" \
+    UNINSTALL_TOOL_LOG="$_ut_cli_log" \
+    PATH="$bin:/usr/bin:/bin:/usr/sbin:/sbin" LC_ALL=C TERM=dumb "$@" \
+    bash "$PROJECT_DIR/uninstall.sh" > "$_ut_cli_out" 2>&1 || _ut_cli_rc=$?
+}
+
+_ut_cli_gone() { [[ ! -e "$1" && ! -L "$1" ]]; }
+
+# Holds for every case: the run succeeds, settings and session data survive,
+# and the CLI is only ever run with the list subcommands of the Codex cleanup.
+_ut_cli_common_ok() {
+  local unexpected
+  unexpected="$(grep '^claude ' "$_ut_cli_log" \
+    | grep -vxE 'claude (plugin|mcp) list' || true)"
+  [[ "$_ut_cli_rc" -eq 0 && -z "$unexpected" ]] \
+    && grep -qx 'user data' "$_ut_cli_home/.claude/user-file" \
+    && [[ -f "$_ut_cli_home/.claude.json" ]] \
+    && [[ -f "$_ut_cli_home/.local/state/claude/lock" ]]
+}
+
+_ut_cli_manual_only() { # manual steps shown, nothing uninstalled
+  grep -q 'not removed automatically' "$_ut_cli_out" \
+    && grep -qF 'https://code.claude.com/docs/en/setup#uninstall-claude-code' "$_ut_cli_out" \
+    && ! grep -q 'Claude Code CLI uninstalled' "$_ut_cli_out" \
+    && ! grep -qE '^(npm|brew) uninstall' "$_ut_cli_log"
+}
+
+_ut_cli_fail() { # <message>; keeps the evidence in the test log
+  fail "$1 (rc=$_ut_cli_rc)"
+  {
+    printf '    --- tool log ---\n'
+    sed 's/^/    /' "$_ut_cli_log"
+    printf '    --- output tail ---\n'
+    tail -n 15 "$_ut_cli_out" | sed 's/^/    /'
+  } >&2 || true
+}
+
+# Native install in the default layout: launcher and version store both go.
+_ut_cli_prepare native
+_ut_cli_version_store "$_ut_cli_home/.local/share/claude"
+ln -s "$_ut_cli_home/.local/share/claude/versions/9.9.9" "$_ut_cli_home/.local/bin/claude"
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin"
+if _ut_cli_common_ok \
+  && _ut_cli_gone "$_ut_cli_home/.local/bin/claude" \
+  && _ut_cli_gone "$_ut_cli_home/.local/share/claude" \
+  && [[ -d "$_ut_cli_home/.local/bin" && -d "$_ut_cli_home/.local/share" ]] \
+  && grep -q 'Claude Code CLI uninstalled' "$_ut_cli_out" \
+  && grep -q 'were not removed' "$_ut_cli_out" \
+  && ! grep -q 'still found' "$_ut_cli_out" \
+  && ! grep -qE '^(npm|brew) uninstall' "$_ut_cli_log"; then
+  pass "uninstall: native CLI in the default layout is removed with its version store"
+else
+  _ut_cli_fail "uninstall: native CLI removal left the launcher or ~/.local/share/claude, or ran an unknown claude subcommand"
+fi
+
+# A regular file at ~/.local/bin/claude is a custom launcher, not a native install.
+_ut_cli_prepare custom-launcher
+mkdir -p "$_ut_cli_home/.local/share/claude/versions"
+printf 'kept\n' > "$_ut_cli_home/.local/share/claude/versions/keep"
+cp "$_ut_cli_bin_claude/claude" "$_ut_cli_home/.local/bin/claude"
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin"
+if _ut_cli_common_ok && _ut_cli_manual_only \
+  && [[ -f "$_ut_cli_home/.local/bin/claude" && ! -L "$_ut_cli_home/.local/bin/claude" ]] \
+  && grep -qx 'kept' "$_ut_cli_home/.local/share/claude/versions/keep"; then
+  pass "uninstall: custom launcher at ~/.local/bin/claude is kept and manual steps are shown"
+else
+  _ut_cli_fail "uninstall: custom launcher was removed or treated as a native install"
+fi
+
+# ~/.local/share/claude is a symlink: neither the link nor its referent goes.
+_ut_cli_prepare data-symlink
+_ut_cli_external="$_ut_cli_root/data-symlink/external"
+_ut_cli_version_store "$_ut_cli_external"
+mkdir -p "$_ut_cli_home/.local/share"
+ln -s "$_ut_cli_external" "$_ut_cli_home/.local/share/claude"
+ln -s "$_ut_cli_home/.local/share/claude/versions/9.9.9" "$_ut_cli_home/.local/bin/claude"
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin"
+if _ut_cli_common_ok && _ut_cli_manual_only \
+  && [[ -L "$_ut_cli_home/.local/bin/claude" ]] \
+  && [[ -L "$_ut_cli_home/.local/share/claude" ]] \
+  && [[ -f "$_ut_cli_external/versions/9.9.9" && -f "$_ut_cli_external/versions/9.9.8" ]]; then
+  pass "uninstall: symlinked ~/.local/share/claude and its referent are kept"
+else
+  _ut_cli_fail "uninstall: CLI removal followed a symlinked data directory"
+fi
+
+# A symlinked ancestor (~/.local/share) is no authority to delete its referent either.
+_ut_cli_prepare ancestor-symlink
+_ut_cli_external="$_ut_cli_root/ancestor-symlink/external-share"
+_ut_cli_version_store "$_ut_cli_external/claude"
+ln -s "$_ut_cli_external" "$_ut_cli_home/.local/share"
+ln -s "$_ut_cli_home/.local/share/claude/versions/9.9.9" "$_ut_cli_home/.local/bin/claude"
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin"
+if _ut_cli_common_ok && _ut_cli_manual_only \
+  && [[ -L "$_ut_cli_home/.local/bin/claude" ]] \
+  && [[ -L "$_ut_cli_home/.local/share" ]] \
+  && [[ -f "$_ut_cli_external/claude/versions/9.9.9" \
+    && -f "$_ut_cli_external/claude/versions/9.9.8" ]]; then
+  pass "uninstall: version store beneath a symlinked ~/.local/share is kept"
+else
+  _ut_cli_fail "uninstall: CLI removal crossed a symlinked ancestor"
+fi
+
+# Launcher pointing outside ~/.local/share/claude (e.g. XDG_DATA_HOME): the
+# relocated store is not removed, and neither is the unrelated default path.
+_ut_cli_prepare relocated
+_ut_cli_external="$_ut_cli_root/relocated/xdg/claude"
+_ut_cli_version_store "$_ut_cli_external"
+mkdir -p "$_ut_cli_home/.local/share/claude/versions"
+printf 'kept\n' > "$_ut_cli_home/.local/share/claude/versions/keep"
+ln -s "$_ut_cli_external/versions/9.9.9" "$_ut_cli_home/.local/bin/claude"
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin"
+if _ut_cli_common_ok && _ut_cli_manual_only \
+  && [[ -L "$_ut_cli_home/.local/bin/claude" ]] \
+  && grep -qx 'kept' "$_ut_cli_home/.local/share/claude/versions/keep" \
+  && [[ -f "$_ut_cli_external/versions/9.9.9" && -f "$_ut_cli_external/versions/9.9.8" ]]; then
+  pass "uninstall: relocated native install is kept and manual steps are shown"
+else
+  _ut_cli_fail "uninstall: CLI removal touched a relocated install or the default data path"
+fi
+
+# Only a `claude` on PATH: the install method is unknown, so nothing is run.
+_ut_cli_prepare unknown
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin_claude"
+if _ut_cli_common_ok && _ut_cli_manual_only \
+  && [[ -x "$_ut_cli_bin_claude/claude" ]] \
+  && grep -qx 'npm list -g @anthropic-ai/claude-code' "$_ut_cli_log" \
+  && grep -qx 'brew list --cask claude-code' "$_ut_cli_log" \
+  && grep -qx 'brew list --cask claude-code@latest' "$_ut_cli_log"; then
+  pass "uninstall: unknown CLI install method only prints the manual steps"
+else
+  _ut_cli_fail "uninstall: unknown CLI install method ran a command instead of printing manual steps"
+fi
+
+# npm global install: delegated to npm. The stub leaves its claude on PATH,
+# which is what the leftover-install warning reports.
+_ut_cli_prepare npm
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin_claude" UNINSTALL_NPM_HAS_CLAUDE=1
+if _ut_cli_common_ok \
+  && grep -qx 'npm uninstall -g @anthropic-ai/claude-code' "$_ut_cli_log" \
+  && ! grep -q '^brew uninstall' "$_ut_cli_log" \
+  && grep -q 'Claude Code CLI uninstalled' "$_ut_cli_out" \
+  && grep -q 'were not removed' "$_ut_cli_out" \
+  && grep -qF "still found: $_ut_cli_bin_claude/claude" "$_ut_cli_out"; then
+  pass "uninstall: npm CLI install is removed through npm uninstall -g"
+else
+  _ut_cli_fail "uninstall: npm CLI install was not handed to npm uninstall -g"
+fi
+
+# Homebrew: both casks are detected and removed with --cask.
+for _ut_cli_cask in claude-code claude-code@latest; do
+  _ut_cli_prepare "brew-$_ut_cli_cask"
+  _ut_cli_run 'y\ny\n' "$_ut_cli_bin_claude" UNINSTALL_BREW_CASK="$_ut_cli_cask"
+  if _ut_cli_common_ok \
+    && grep -qxF "brew uninstall --cask $_ut_cli_cask" "$_ut_cli_log" \
+    && [[ "$(grep -c '^brew uninstall' "$_ut_cli_log")" -eq 1 ]] \
+    && ! grep -q '^npm uninstall' "$_ut_cli_log" \
+    && grep -q 'Claude Code CLI uninstalled' "$_ut_cli_out"; then
+    pass "uninstall: Homebrew cask $_ut_cli_cask is removed through brew uninstall --cask"
+  else
+    _ut_cli_fail "uninstall: Homebrew cask $_ut_cli_cask was not handed to brew uninstall --cask"
+  fi
+done
+
+# Declining (an explicit "n", or EOF at the prompt) leaves a native install alone.
+for _ut_cli_answers in 'y\nn\n' 'y\n'; do
+  _ut_cli_prepare "declined-${#_ut_cli_answers}"
+  _ut_cli_version_store "$_ut_cli_home/.local/share/claude"
+  ln -s "$_ut_cli_home/.local/share/claude/versions/9.9.9" "$_ut_cli_home/.local/bin/claude"
+  _ut_cli_run "$_ut_cli_answers" "$_ut_cli_bin"
+  if _ut_cli_common_ok \
+    && [[ -L "$_ut_cli_home/.local/bin/claude" ]] \
+    && [[ -f "$_ut_cli_home/.local/share/claude/versions/9.9.9" \
+      && -f "$_ut_cli_home/.local/share/claude/versions/9.9.8" ]] \
+    && grep -q 'Skipped Claude Code CLI uninstall' "$_ut_cli_out" \
+    && ! grep -q 'Claude Code CLI uninstalled' "$_ut_cli_out" \
+    && ! grep -q 'claude-code' "$_ut_cli_log"; then
+    pass "uninstall: declining the CLI prompt (answers '$_ut_cli_answers') keeps a native install"
+  else
+    _ut_cli_fail "uninstall: declined CLI prompt (answers '$_ut_cli_answers') still changed the install"
+  fi
+done
+
+# The removal helper deletes only the pair it has just re-verified under HOME.
+# Empty, relative (resolving to the real install from the working directory),
+# and native-shaped paths outside HOME must all be refused; the same call with
+# the detected pair must then succeed, which keeps the refusals from passing
+# vacuously.
+_ut_cli_prepare remove-guard
+_ut_cli_version_store "$_ut_cli_home/.local/share/claude"
+ln -s "$_ut_cli_home/.local/share/claude/versions/9.9.9" "$_ut_cli_home/.local/bin/claude"
+_ut_cli_foreign="$_ut_cli_root/remove-guard/foreign"
+mkdir -p "$_ut_cli_foreign/.local/bin"
+_ut_cli_version_store "$_ut_cli_foreign/.local/share/claude"
+ln -s "$_ut_cli_foreign/.local/share/claude/versions/9.9.9" "$_ut_cli_foreign/.local/bin/claude"
+{
+  _ut_extract_fn "$PROJECT_DIR/uninstall.sh" "_claude_cli_detect_native"
+  _ut_extract_fn "$PROJECT_DIR/uninstall.sh" "_claude_cli_remove_native"
+} > "$_ut_cli_root/remove-guard/functions.sh"
+_ut_cli_guard_out="$(cd "$_ut_cli_home" && env -i HOME="$_ut_cli_home" \
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin" LC_ALL=C TERM=dumb bash -c '
+  set -euo pipefail
+  _IS_MSYS=false
+  source "$1"
+  accepted=""
+  _claude_cli_remove_native "" "" && accepted="${accepted}empty "
+  _claude_cli_remove_native ".local/bin/claude" ".local/share/claude" \
+    && accepted="${accepted}relative "
+  _claude_cli_remove_native "$2/.local/bin/claude" "$2/.local/share/claude" \
+    && accepted="${accepted}foreign "
+  _claude_cli_remove_native "$HOME/.local/bin/claude" "$2/.local/share/claude" \
+    && accepted="${accepted}mixed "
+  printf "accepted=[%s]" "$accepted"
+  [[ -L "$HOME/.local/bin/claude" && -f "$HOME/.local/share/claude/versions/9.9.9" ]] \
+    && printf " kept"
+  HOME="${HOME##*/}"
+  (cd "$3" && _claude_cli_detect_native) || printf " relative-home-rc=%s" "$?"
+  HOME="$3/${HOME}"
+  _claude_cli_detect_native \
+    && _claude_cli_remove_native "$_CLAUDE_CLI_NATIVE_LAUNCHER" "$_CLAUDE_CLI_NATIVE_DATA" \
+    && printf " removed"
+' _ "$_ut_cli_root/remove-guard/functions.sh" "$_ut_cli_foreign" \
+  "$_ut_cli_root/remove-guard" 2>&1 || true)"
+if [[ "$_ut_cli_guard_out" == "accepted=[] kept relative-home-rc=1 removed" ]] \
+  && _ut_cli_gone "$_ut_cli_home/.local/bin/claude" \
+  && _ut_cli_gone "$_ut_cli_home/.local/share/claude" \
+  && [[ -L "$_ut_cli_foreign/.local/bin/claude" ]] \
+  && [[ -f "$_ut_cli_foreign/.local/share/claude/versions/9.9.9" \
+    && -f "$_ut_cli_foreign/.local/share/claude/versions/9.9.8" ]]; then
+  pass "uninstall: native CLI removal refuses empty, relative, and outside-HOME paths"
+else
+  fail "uninstall: native CLI removal accepted a path it had not verified under HOME (got: $_ut_cli_guard_out)"
+fi
+
+# Git Bash branch, simulated with _IS_MSYS=true and a pass-through cygpath (no
+# real Windows involved): the layout is looked up under USERPROFILE, the
+# launcher is the regular file claude.exe, and a symlink in its place is not a
+# native install.
+_ut_cli_win="$_ut_cli_root/remove-guard/winhome"
+mkdir -p "$_ut_cli_win/.local/bin" "$_ut_cli_win/.local/share/claude/versions"
+printf 'binary\n' > "$_ut_cli_win/.local/bin/claude.exe"
+printf 'version\n' > "$_ut_cli_win/.local/share/claude/versions/9.9.9"
+_ut_cli_guard_out="$(env -i HOME="$_ut_cli_home" USERPROFILE="$_ut_cli_win" \
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin" LC_ALL=C TERM=dumb bash -c '
+  set -euo pipefail
+  _IS_MSYS=true
+  cygpath() { printf "%s\n" "$2"; }
+  source "$1"
+  mv "$USERPROFILE/.local/bin/claude.exe" "$USERPROFILE/.local/bin/real.exe"
+  ln -s "$USERPROFILE/.local/bin/real.exe" "$USERPROFILE/.local/bin/claude.exe"
+  _claude_cli_detect_native || printf "symlink-rc=%s" "$?"
+  rm -f "$USERPROFILE/.local/bin/claude.exe"
+  mv "$USERPROFILE/.local/bin/real.exe" "$USERPROFILE/.local/bin/claude.exe"
+  _claude_cli_detect_native \
+    && [[ "$_CLAUDE_CLI_NATIVE_LAUNCHER" == "$USERPROFILE/.local/bin/claude.exe" ]] \
+    && _claude_cli_remove_native "$_CLAUDE_CLI_NATIVE_LAUNCHER" "$_CLAUDE_CLI_NATIVE_DATA" \
+    && printf " removed"
+' _ "$_ut_cli_root/remove-guard/functions.sh" 2>&1 || true)"
+if [[ "$_ut_cli_guard_out" == "symlink-rc=2 removed" ]] \
+  && _ut_cli_gone "$_ut_cli_win/.local/bin/claude.exe" \
+  && _ut_cli_gone "$_ut_cli_win/.local/share/claude" \
+  && [[ -d "$_ut_cli_win/.local/bin" && -d "$_ut_cli_win/.local/share" ]]; then
+  pass "uninstall: simulated Git Bash layout resolves claude.exe under USERPROFILE"
+else
+  fail "uninstall: simulated Git Bash native CLI detection or removal misbehaved (got: $_ut_cli_guard_out)"
 fi
 
 _ut_host_claude_after="$(_ut_host_command_fingerprint claude)"
