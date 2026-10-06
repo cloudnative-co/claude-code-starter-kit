@@ -1319,7 +1319,7 @@ _load_strings() {
       STR_CLI_UNINSTALL_SKIP="Claude Code CLI のアンインストールをスキップしました"
       STR_CLI_NOT_INSTALLED="Claude Code CLI はインストールされていません"
       STR_CLI_UNINSTALL_MANUAL="インストール方法または配置を確認できないため、Claude Code CLI は自動削除しませんでした（検出: %s）。公式手順に沿って手動で削除してください:"
-      STR_CLI_UNINSTALL_KEPT_CONFIG="設定とセッション履歴（~/.claude、~/.claude.json）は削除していません"
+      STR_CLI_UNINSTALL_KEPT_CONFIG="CLI の削除では ~/.claude と ~/.claude.json（設定とセッション履歴）に触れていません"
       STR_CLI_UNINSTALL_STILL_FOUND="claude コマンドがまだ見つかります: %s（別のインストールが残っている可能性があります）"
       STR_CODEX_PLUGIN_REMOVE_ASK="Codex プラグインを削除しますか？ [y/N] "
       STR_CODEX_PLUGIN_REMOVED="Codex プラグインを削除しました"
@@ -1358,7 +1358,7 @@ _load_strings() {
       STR_CLI_UNINSTALL_SKIP="Skipped Claude Code CLI uninstall"
       STR_CLI_NOT_INSTALLED="Claude Code CLI is not installed"
       STR_CLI_UNINSTALL_MANUAL="Could not confirm how Claude Code CLI was installed, so it was not removed automatically (found: %s). Remove it manually with the official steps:"
-      STR_CLI_UNINSTALL_KEPT_CONFIG="Settings and session history (~/.claude, ~/.claude.json) were not removed"
+      STR_CLI_UNINSTALL_KEPT_CONFIG="Removing the CLI did not touch ~/.claude or ~/.claude.json (settings and session history)"
       STR_CLI_UNINSTALL_STILL_FOUND="A claude command is still found: %s (another installation may remain)"
       STR_CODEX_PLUGIN_REMOVE_ASK="Remove Codex plugin? [y/N] "
       STR_CODEX_PLUGIN_REMOVED="Codex plugin removed"
@@ -1815,9 +1815,9 @@ _claude_cli_detect_native() {
   # Return 0 and set _CLAUDE_CLI_NATIVE_LAUNCHER / _CLAUDE_CLI_NATIVE_DATA only
   # for a native install in the documented default layout under the home
   # directory. Return 1 when no native launcher exists, and 2 when one exists
-  # in any other shape (custom launcher, relocated or symlinked data
-  # directory); that shape is never removed automatically.
-  local base="${HOME:-}" launcher data target target_dir
+  # in any other shape (custom launcher, relocated or symlinked launcher or
+  # data directory); that shape is never removed automatically.
+  local base="${HOME:-}" bin launcher data target target_dir
   _CLAUDE_CLI_NATIVE_LAUNCHER=""
   _CLAUDE_CLI_NATIVE_DATA=""
   if [[ "$_IS_MSYS" == "true" && -n "${USERPROFILE:-}" ]]; then
@@ -1831,9 +1831,13 @@ _claude_cli_detect_native() {
   [[ "$_IS_MSYS" != "true" ]] || launcher="$launcher.exe"
   [[ -e "$launcher" || -L "$launcher" ]] || return 1
 
-  # The data directory is addressed by its physical path, so a symlink at
-  # ~/.local, ~/.local/share or ~/.local/share/claude fails the comparison.
+  # Both locations are addressed by their physical path, so a symlink at
+  # ~/.local, ~/.local/bin, ~/.local/share or ~/.local/share/claude fails the
+  # comparison instead of redirecting a delete to wherever it points.
   base="$(cd -P "$base" 2>/dev/null && pwd -P)" || return 2
+  bin="$base/.local/bin"
+  [[ "$(cd -P "$bin" 2>/dev/null && pwd -P)" == "$bin" ]] || return 2
+  launcher="$bin/${launcher##*/}"
   data="$base/.local/share/claude"
   [[ -d "$data" && ! -L "$data" ]] || return 2
   [[ "$(cd -P "$data" 2>/dev/null && pwd -P)" == "$data" ]] || return 2
@@ -1854,16 +1858,22 @@ _claude_cli_detect_native() {
 
 _claude_cli_remove_native() { # <launcher> <data-dir>, as set by _claude_cli_detect_native
   # The layout is detected again right before deleting and must still be the
-  # pair that was shown to the user. The recursive delete then runs from inside
-  # the verified parent on a real (non-symlink) child, so it cannot follow a
-  # path that changed in between or reach outside the home directory.
-  local launcher="$1" data="$2" parent
+  # pair that was shown to the user. Each delete then runs from inside its
+  # verified parent directory (the recursive one only on a real, non-symlink
+  # child), so it cannot follow a path that changed in between or reach outside
+  # the home directory.
+  local launcher="$1" data="$2" bin parent
   _claude_cli_detect_native || return 1
   [[ "$launcher" == "$_CLAUDE_CLI_NATIVE_LAUNCHER" \
     && "$data" == "$_CLAUDE_CLI_NATIVE_DATA" ]] || return 1
+  bin="${launcher%/*}"
   parent="${data%/claude}"
-  [[ "$parent" == /* && "$parent/claude" == "$data" ]] || return 1
-  rm -f -- "$launcher" 2>/dev/null || return 1
+  [[ "$bin" == /* && "$parent" == /* && "$parent/claude" == "$data" ]] || return 1
+  (
+    cd -P "$bin" 2>/dev/null || exit 1
+    [[ "$(pwd -P)" == "$bin" ]] || exit 1
+    rm -f -- "./${launcher##*/}" 2>/dev/null
+  ) || return 1
   (
     cd -P "$parent" 2>/dev/null || exit 1
     [[ "$(pwd -P)" == "$parent" && -d ./claude && ! -L ./claude ]] || exit 1
@@ -1890,11 +1900,14 @@ if command -v claude &>/dev/null; then
   read -r -p "$STR_CLI_UNINSTALL_ASK " cli_confirm || cli_confirm="n"
   case "$cli_confirm" in
     y|Y|yes|YES)
-      _cli_found="$(command -v claude)"
+      _cli_found="$(command -v claude 2>/dev/null || true)"
       _cli_removed=false
       _cli_native_rc=0
       _claude_cli_detect_native || _cli_native_rc=$?
-      if [[ "$_cli_native_rc" -eq 0 ]]; then
+      if [[ -z "$_cli_found" ]]; then
+        # Gone since the check above: removed elsewhere while the prompt waited.
+        info "$STR_CLI_NOT_INSTALLED"
+      elif [[ "$_cli_native_rc" -eq 0 ]]; then
         info "$STR_CLI_UNINSTALL_NATIVE"
         info "  $_CLAUDE_CLI_NATIVE_LAUNCHER"
         info "  $_CLAUDE_CLI_NATIVE_DATA"
