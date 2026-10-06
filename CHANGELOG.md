@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.78.5] - 2026-10-06
+## [0.78.4] - 2026-10-07
 
 `web-content-extraction` skill の `undici` / `source-map-js` 脆弱性を解消（Dependabot alert #27〜#47）。
 
