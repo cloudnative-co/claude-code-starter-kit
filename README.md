@@ -1024,7 +1024,7 @@ cd claude-code-starter-kit
 
 キットが導入したもののうち、キットより長く使う可能性があるものは自動削除せず個別に確認します（既定はすべて「残す」）。対象は Claude Code CLI、Codex プラグイン、`cc-safety-net`、そしてキットによる検証済みの導入履歴が記録された `security-guidance` が `~/.claude/security/` に作るローカルデータです。fresh / update の別や旧 manifest の選択内容にかかわらず、セットアップの導入前一覧にすでに存在したプラグインはこの履歴に採用せず、そのローカルデータには削除を提示しません。ローカルデータの削除を選んでも、Python 仮想環境・セッション状態・ログ等の既知の plugin-owned leaf だけを削除し、同じディレクトリにある未知のファイルやディレクトリは保持します。環境変数で別の場所へ移したデータは対象外です。
 
-Claude Code CLI の削除を選ぶと、CLI 本体だけを公式のアンインストール手順どおりに削除します。ネイティブ版は `~/.local/bin/claude` と `~/.local/share/claude`（ダウンロード済みの各バージョン）を削除し、npm 版と Homebrew cask（`claude-code` / `claude-code@latest`）はそれぞれのアンインストールコマンドを実行します。CLI の削除では、設定とセッション履歴（`~/.claude`、`~/.claude.json`）には触れません。カスタムランチャー、symlink になっている `~/.local/bin` やデータディレクトリ、`XDG_DATA_HOME` で移した配置など、インストール方法や配置を確認できない場合は自動削除せず、手動の手順を表示します。
+Claude Code CLI の削除を選ぶと、CLI 本体だけを公式のアンインストール手順どおりに削除します。ネイティブ版は `~/.local/bin/claude` と `~/.local/share/claude`（ダウンロード済みの各バージョン）を削除し、npm 版と Homebrew cask（`claude-code` / `claude-code@latest`）はそれぞれのアンインストールコマンドを実行します。CLI の削除では、設定とセッション履歴（`~/.claude`、`~/.claude.json`）には触れません。ネイティブ版として削除するのは、既定の配置だと確認できた場合だけです。カスタムランチャー、symlink になっている `~/.local/bin` やデータディレクトリ、`XDG_DATA_HOME` で移した配置は、このスクリプトからは削除しません。その場合も npm 版か Homebrew cask が見つかればそのアンインストールコマンドを実行し、見つからなければ手動の手順を表示します。
 
 ---
 

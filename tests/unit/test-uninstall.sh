@@ -1757,6 +1757,45 @@ for _ut_cli_cask in claude-code claude-code@latest; do
   fi
 done
 
+# A launcher at ~/.local/bin/claude outside the default native layout does not
+# hide an npm or Homebrew install. With npm's prefix set to ~/.local the
+# launcher is npm's own relative link into lib/node_modules, and a stale custom
+# script can sit there beside a Homebrew cask: each still goes to its package
+# manager. The stubs unlink nothing, so the launcher surviving shows that the
+# script deletes nothing at that path itself, and the leftover warning names it.
+_ut_cli_prepare npm-prefix-local
+_ut_cli_npm_pkg="$_ut_cli_home/.local/lib/node_modules/@anthropic-ai/claude-code"
+mkdir -p "$_ut_cli_npm_pkg"
+cp "$_ut_cli_bin_claude/claude" "$_ut_cli_npm_pkg/cli.js"
+ln -s "../lib/node_modules/@anthropic-ai/claude-code/cli.js" "$_ut_cli_home/.local/bin/claude"
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin" UNINSTALL_NPM_HAS_CLAUDE=1
+if _ut_cli_common_ok \
+  && grep -qx 'npm uninstall -g @anthropic-ai/claude-code' "$_ut_cli_log" \
+  && ! grep -q '^brew uninstall' "$_ut_cli_log" \
+  && grep -q 'Claude Code CLI uninstalled' "$_ut_cli_out" \
+  && ! grep -q 'not removed automatically' "$_ut_cli_out" \
+  && [[ -L "$_ut_cli_home/.local/bin/claude" && -f "$_ut_cli_npm_pkg/cli.js" ]] \
+  && grep -qF "still found: $_ut_cli_home/.local/bin/claude" "$_ut_cli_out"; then
+  pass "uninstall: npm CLI linked at ~/.local/bin/claude (prefix ~/.local) is handed to npm uninstall -g"
+else
+  _ut_cli_fail "uninstall: npm CLI linked at ~/.local/bin/claude was not handed to npm uninstall -g"
+fi
+
+_ut_cli_prepare brew-custom-launcher
+cp "$_ut_cli_bin_claude/claude" "$_ut_cli_home/.local/bin/claude"
+_ut_cli_run 'y\ny\n' "$_ut_cli_bin" UNINSTALL_BREW_CASK=claude-code
+if _ut_cli_common_ok \
+  && grep -qx 'brew uninstall --cask claude-code' "$_ut_cli_log" \
+  && ! grep -q '^npm uninstall' "$_ut_cli_log" \
+  && grep -q 'Claude Code CLI uninstalled' "$_ut_cli_out" \
+  && ! grep -q 'not removed automatically' "$_ut_cli_out" \
+  && [[ -f "$_ut_cli_home/.local/bin/claude" && ! -L "$_ut_cli_home/.local/bin/claude" ]] \
+  && grep -qF "still found: $_ut_cli_home/.local/bin/claude" "$_ut_cli_out"; then
+  pass "uninstall: Homebrew cask beside a custom ~/.local/bin/claude is removed and the launcher is kept"
+else
+  _ut_cli_fail "uninstall: Homebrew cask beside a custom ~/.local/bin/claude was not handed to brew, or the launcher was removed"
+fi
+
 # A removal that fails is reported as failed, with the way to finish by hand,
 # and never as done.
 _ut_cli_prepare npm-fails
@@ -1928,10 +1967,11 @@ fi
 # Git Bash branch, simulated with _IS_MSYS=true and a pass-through cygpath (no
 # real Windows involved): the layout is looked up under USERPROFILE, the
 # launcher is the regular file claude.exe, and a symlink in its place is not a
-# native install. This branch has no launcher target to compare, so a data or
-# launcher directory moved elsewhere and linked back is told apart from the
-# default layout by the physical-path checks alone: each must be refused and
-# leave claude.exe and the moved files in place.
+# native install. This branch has no launcher target to compare, so a data
+# directory, its parent (.local/share), or the launcher directory moved
+# elsewhere and linked back is told apart from the default layout by the
+# physical-path checks alone: each must be refused and leave claude.exe and
+# the moved files in place.
 _ut_cli_win="$_ut_cli_root/remove-guard/winhome"
 _ut_cli_win_external="$_ut_cli_root/remove-guard/win-external"
 mkdir -p "$_ut_cli_win/.local/bin" "$_ut_cli_win/.local/share/claude/versions" \
@@ -1950,7 +1990,7 @@ _ut_cli_guard_out="$(env -i HOME="$_ut_cli_home" USERPROFILE="$_ut_cli_win" \
   _claude_cli_detect_native || printf "symlink-rc=%s" "$?"
   rm -f "$win/.local/bin/claude.exe"
   mv "$win/.local/bin/real.exe" "$win/.local/bin/claude.exe"
-  for moved in data:share/claude bin:bin; do
+  for moved in data:share/claude bin:bin share:share; do
     label="${moved%%:*}"
     moved="$win/.local/${moved#*:}"
     mv "$moved" "$2/$label"
@@ -1969,7 +2009,7 @@ _ut_cli_guard_out="$(env -i HOME="$_ut_cli_home" USERPROFILE="$_ut_cli_win" \
     && printf " removed"
 ' _ "$_ut_cli_root/remove-guard/functions.sh" "$_ut_cli_win_external" 2>&1 || true)"
 if [[ "$_ut_cli_guard_out" \
-    == "symlink-rc=2 data-symlink-rc=2 bin-symlink-rc=2 kept removed" ]] \
+    == "symlink-rc=2 data-symlink-rc=2 bin-symlink-rc=2 share-symlink-rc=2 kept removed" ]] \
   && _ut_cli_gone "$_ut_cli_win/.local/bin/claude.exe" \
   && _ut_cli_gone "$_ut_cli_win/.local/share/claude" \
   && [[ -d "$_ut_cli_win/.local/bin" && -d "$_ut_cli_win/.local/share" ]]; then

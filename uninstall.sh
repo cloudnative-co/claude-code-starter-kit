@@ -1816,7 +1816,7 @@ _claude_cli_detect_native() {
   # for a native install in the documented default layout under the home
   # directory. Return 1 when no native launcher exists, and 2 when one exists
   # in any other shape (custom launcher, relocated or symlinked launcher or
-  # data directory); that shape is never removed automatically.
+  # data directory); this script never deletes that shape itself.
   local base="${HOME:-}" bin launcher data target target_dir
   _CLAUDE_CLI_NATIVE_LAUNCHER=""
   _CLAUDE_CLI_NATIVE_DATA=""
@@ -1918,11 +1918,10 @@ if command -v claude &>/dev/null; then
           warn "$STR_CLI_UNINSTALL_FAILED"
           _claude_cli_manual_steps
         fi
-      elif [[ "$_cli_native_rc" -ne 1 ]]; then
-        # A launcher exists, but not in the default native layout.
-        # shellcheck disable=SC2059
-        warn "$(printf "$STR_CLI_UNINSTALL_MANUAL" "$_cli_found")"
-        _claude_cli_manual_steps
+      # No native install in the default layout. A launcher in any other shape
+      # (npm's own link when its prefix is ~/.local, a custom script) is left
+      # where it is; npm and Homebrew are still asked whether they own the CLI
+      # before falling back to the manual steps.
       elif npm list -g @anthropic-ai/claude-code &>/dev/null; then
         info "$STR_CLI_UNINSTALL_NPM"
         if npm uninstall -g @anthropic-ai/claude-code 2>/dev/null; then
