@@ -1505,7 +1505,7 @@ refresh_fresh_wce_snapshot_pair() {
 # Covers fresh, fresh-with-existing, and update paths (called once after deploy).
 # ---------------------------------------------------------------------------
 _WCE_MDM_PACKAGE_SHA256="711c13b06916af27f643386615cae616114dc359b7c0463147b4fd607e2912c1"
-_WCE_MDM_LOCK_SHA256="ddace3fb92cc857f7fbcc73159fc68fb0438e1c03c1fe7dfcfd8ea654b994832"
+_WCE_MDM_LOCK_SHA256="09fe234e762293042638d58be874b74e794569db8d1d03e52239f36db07c31e7"
 
 _wce_mdm_trust_base() {
   printf '%s' "/Library/Application Support"

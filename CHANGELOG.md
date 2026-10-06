@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.78.5] - 2026-10-06
+
+`web-content-extraction` skill の `undici` / `source-map-js` 脆弱性を解消（Dependabot alert #27〜#47）。
+
+### Security
+- **`undici` を脆弱性修正版へ更新（Dependabot #27〜#47）**: 直接依存を 8.10.0 → 8.11.2（`package.json` の `^8.10.0` 範囲内）、`jsdom@29.1.1` 経由の推移依存を 7.29.0 → 7.30.0（`jsdom` の `undici@^7.25.0` 範囲内）に更新（lockfile のみ更新、`package.json` は変更なし）。修正境界は 8.10.2 / 7.29.1。対象のアラート 21 件（8.x 系 11 件、7.x 系 10 件）が指す advisory 11 種を解消: GHSA-rfgv-xxqx-mfg5（High — 要求していない WebSocket subprotocol を返されるとプロセスが異常終了する DoS）、GHSA-w293-vg96-wgc3（High — `BalancedPool` が関数値の `connect` / `tls` オプションを落とし、独自の TLS 証明書検証が迂回される）、GHSA-vp8m-p9jh-q5pm（High — `interceptors.cache()` / `interceptors.deduplicate()` のキーに宛先 origin が入らないことによるクロスオリジンのキャッシュ汚染、影響範囲 `>=8.10.0 <8.10.2`）、GHSA-3xpg-4rpp-hhhm（Medium — `interceptors.decompress()` の展開後サイズが無制限であることによる DoS）、GHSA-pmjh-fq2x-6v4x（Medium — `RetryHandler` がレスポンス body を未完了のまま残すことによる DoS）、GHSA-2jfj-6hjv-fm6j（Medium — shared cache が `Set-Cookie` を保存・再送することによる利用者間の Cookie 漏えい）、GHSA-rx4f-c7p8-82vq（Medium — `WebSocketStream` の異常切断による DoS）、GHSA-3wwx-pv8p-q78v（Medium — WebSocket permessage-deflate 展開時の未処理エラーによる DoS）、GHSA-8436-99hf-9mmv（Low — cache interceptor が unsafe メソッドのレスポンスを保存・再生する）、GHSA-r53p-7pc4-xj5r（Low — retry interceptor 経由の下流レスポンス分割）、GHSA-2gqq-gqf2-x968（Low — dump interceptor が chunked の超過レスポンスを切り詰めて返す）。本 skill が `undici` から使うのは `Agent` と `fetch` だけで（`scripts/defuddle-url.mjs`）、これらの advisory が対象とする interceptor・`RetryHandler`・WebSocket / `WebSocketStream`・`BalancedPool` は呼び出しておらず、`jsdom` もサブリソース取得とスクリプト実行を有効にせずに使っている。このため実行経路そのものには該当しないと判断しているが（`undici` / `jsdom` 内部の呼び出し経路までは追っていない）、攻撃者由来の任意 URL を取得する HTTP 層なので修正版へ上げる
+- **`source-map-js` を脆弱性修正版へ更新**: `jsdom@29.1.1` → `css-tree@3.2.1` 経由の推移依存を 1.2.1 → 1.2.2 に更新（`css-tree` の `^1.2.1` 範囲内で lockfile のみ更新）。GHSA-68fv-2mgg-jv7q（High — indexed source map の section offset が検証されず、巨大な値でイベントループを長時間ブロックされる DoS、影響範囲 `>=1.0.0 <1.2.2`）を解消。この advisory の Dependabot アラートは本エントリの作成時点で発行されていないが、同じ lockfile に対して `npm audit` が報告するため、lockfile 更新と MDM runtime bundle の再配布を 1 回で済ませられるよう同じリリースに含めた
+- 更新前の lockfile では `npm audit` が high 2 件（`undici`、`source-map-js`）を報告していたが、0 件になった。skill 自身のテスト（node `--test` 47 件）が Node.js 24.18.0 と 22.23.2 で全件通ることと、`npm ci` 整合を確認済み。`undici` は `update-deps.mjs` の自動更新対象（defuddle / jsdom / pdfjs-dist / undici）だが、それを起動する `web-content-update` フックは Full プロファイルのみ既定有効（Standard 以下は opt-in、MDM 管理下は常に無効）なので、キット同梱の lockfile は advisory 対応として手動で更新した。`source-map-js` は推移依存で `update-deps.mjs` の対象に含まれない
+- **既存インストールへの取り込み範囲**: fresh install と、`web-content-update` フックが依存を一度も更新していない（deploy 時の lockfile が snapshot と一致する）インストールは、`setup.sh --update` / 自動アップデートで新しい lockfile に置き換わり、Node.js と npm がある環境では続けて実行される `npm ci` で `node_modules` も入れ直される。フックが一度でも依存を更新したインストールでは lockfile の `.packages` が runtime 所有として保持される（`lib/update.sh` の package pair merge）ため、キットの更新では変わらない。その場合は `cd ~/.claude/skills/web-content-extraction && npm update undici source-map-js` で手動更新できる（いずれも既存の範囲内なので `package.json` は変わらず、以後のアップデートでも保持される）。結果は `npm ls undici source-map-js` と `npm audit` で確認できる。フックが有効な環境でも `source-map-js` はフックの更新では 1.2.1 のまま残るため、同じ手動更新が必要になる（フックと同じ `npm install` を最新版の defuddle 0.19.4 / jsdom 30.1.2 / pdfjs-dist 6.4.299 / undici 8.11.2 で再現して確認）。MDM 管理下は runtime bundle の再配布で更新されるため、利用者側での手動更新は不要
+- **MDM runtime bundle の期待 SHA256 ピンを更新**: `package-lock.json` の更新に伴い、`lib/deploy.sh`・`mdm/detect-mdm.sh`・`mdm/install-mdm.sh`・`docs/mdm/README.md`・関連テストの期待 lock ハッシュを v0.78.1 の値から `09fe234e…` へ更新（`package.json` は不変のため package ハッシュ `711c13b0…` は変わらない）。**MDM 配布環境は新しいバンドルパス（`711c13b0…-09fe234e…`）で root-owned runtime bundle を再ビルド・再配布する必要がある**（旧バンドルは検証で拒否される。v0.75.2 / v0.78.1 と同じ経路）
+
 ## [0.78.3] - 2026-10-07
 
 ### Fixed
@@ -14,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   - 設定とセッション履歴（`~/.claude`、`~/.claude.json`）は従来どおり CLI の削除では触らず、削除後にその旨を表示する。確認プロンプトの数と順序、未入力（EOF）を「残す」として扱う点は変えていない
   - **回帰テスト**: `tests/unit/test-uninstall.sh` に、使い捨ての HOME とスタブの `claude` / `npm` / `brew` で CLI 削除プロンプト以降の経路を確かめる検証を 20 件追加した（ネイティブ版の既定配置、カスタムランチャー、symlink のデータディレクトリ、symlink の親ディレクトリ、symlink の `~/.local/bin`、既定以外の場所への配置、判別不能、npm、Homebrew cask 2 種、`~/.local/bin/claude` に既定配置以外のランチャーがある状態の npm 版と Homebrew cask、npm・Homebrew・ネイティブ版それぞれの削除失敗が完了ではなく失敗として表示されること、n と EOF での辞退、プロンプト待機中に `claude` が削除された場合、削除関数が空・相対・HOME 外のパスと、検出後に symlink へ差し替えられた `~/.local/bin` を拒否すること、Git Bash 分岐の擬似環境）。修正前のコードでは 20 件中 18 件が失敗する（辞退の 2 件は従来から通る）。`tests/unit/test-codex-setup.sh` には、同梱スクリプトがコマンド位置で呼ぶ `claude <語>` / `_claude_cli <語>` の第 1 階層が、現在使っている `plugin` / `mcp` 以外でないことの静的検査を追加した。修正前のコードでは `uninstall.sh` の 3 箇所を検出する
   - **既存インストールへの影響**: 以前に y を選んでランチャーだけが削除された環境には `~/.local/share/claude` が残っている場合がある。不要なら `rm -rf ~/.local/share/claude` で削除できる。今後ネイティブ版で y を選ぶと、これまで残っていた `~/.local/share/claude`（ダウンロード済みの全バージョン）も削除される
+
 
 ## [0.78.2] - 2026-10-06
 

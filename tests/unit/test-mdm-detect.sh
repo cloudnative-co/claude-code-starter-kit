@@ -2321,7 +2321,7 @@ if _mdm_is_darwin; then
     "$_mdm_detect_wce/package-lock.json"
 fi
 printf '%s\n' \
-  "{\"arch\":\"$_mdm_detect_wce_arch\",\"lock_sha256\":\"ddace3fb92cc857f7fbcc73159fc68fb0438e1c03c1fe7dfcfd8ea654b994832\",\"node_version\":\"v24.18.0\",\"npm_version\":\"11.16.0\",\"package_sha256\":\"711c13b06916af27f643386615cae616114dc359b7c0463147b4fd607e2912c1\",\"registry\":\"https://registry.npmjs.org/\",\"schema_version\":1}" \
+  "{\"arch\":\"$_mdm_detect_wce_arch\",\"lock_sha256\":\"09fe234e762293042638d58be874b74e794569db8d1d03e52239f36db07c31e7\",\"node_version\":\"v24.18.0\",\"npm_version\":\"11.16.0\",\"package_sha256\":\"711c13b06916af27f643386615cae616114dc359b7c0463147b4fd607e2912c1\",\"registry\":\"https://registry.npmjs.org/\",\"schema_version\":1}" \
   > "$_mdm_detect_wce/.claude-code-starter-kit-wce-runtime.json"
 printf 'runtime\n' > "$_mdm_detect_wce/node_modules/runtime.js"
 for _mdm_detect_wce_dependency in defuddle jsdom pdfjs-dist undici; do
@@ -2381,7 +2381,7 @@ if _mdm_wce_runtime_marker_is_valid "$_mdm_detect_wce" \
   && [[ "$(_mdm_sha256 "$_mdm_detect_wce/package.json")" \
       == 711c13b06916af27f643386615cae616114dc359b7c0463147b4fd607e2912c1 \
     && "$(_mdm_sha256 "$_mdm_detect_wce/package-lock.json")" \
-      == ddace3fb92cc857f7fbcc73159fc68fb0438e1c03c1fe7dfcfd8ea654b994832 ]]; then
+      == 09fe234e762293042638d58be874b74e794569db8d1d03e52239f36db07c31e7 ]]; then
   pass "mdm-detect: WCE marker/source hash正常系"
 else
   fail "mdm-detect: valid WCE marker/source hashを拒否"
