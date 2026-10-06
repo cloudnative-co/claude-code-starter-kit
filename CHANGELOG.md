@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.78.4] - 2026-10-06
+## [0.78.3] - 2026-10-07
 
 ### Fixed
 - **`uninstall.sh` が存在しない `claude uninstall` サブコマンドを呼んでいた問題を修正（#175）**: 「Claude Code CLI もアンインストールしますか？」に y と答えると、ネイティブ版（`~/.local/bin/claude` がある場合）、インストール方法を判別できない場合、Git Bash で `%LOCALAPPDATA%\Programs\claude` が無い場合に `claude uninstall` を実行していた。Claude Code 2.1.291 の `claude --help` のコマンド一覧に `uninstall` はなく、Usage は `claude [options] [command] [prompt]` なので、この語は削除コマンドではなくプロンプトとして渡る形になる（実 CLI で `claude uninstall` を実行した結果は確認していない）。ネイティブ版の分岐は、この呼び出しが失敗すると `~/.local/bin/claude` だけを削除して「アンインストールしました」と表示しており、ダウンロード済みの各バージョンが入った `~/.local/share/claude` が残っていた
