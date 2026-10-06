@@ -4,11 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.78.2] - 2026-10-05
+## [0.78.2] - 2026-10-06
 
 ### Fixed
-- **macOS の対話インストールでプラグインマーケットプレイスの追加とプラグインのインストールが失敗する問題を修正**: `install.sh` は `curl | bash` でもウィザードが入力を受け取れるように `setup.sh` の stdin を `/dev/tty` へ付け替えて起動する。ネイティブ版 Claude Code CLI（Bun でビルドされたバイナリ）はこの stdin を kqueue で監視しようとするが、macOS の kqueue は `/dev/tty` という別名デバイスを受け付けないため、`claude plugin marketplace add` / `claude plugin list` / `claude plugin install` が `error: EINVAL: invalid argument, kqueue` で異常終了していた。その結果、新規 Mac では `claude-plugins-official` / `anthropic-agent-skills` の追加失敗に続いて「Could not refresh installed plugins after marketplace setup」が表示され、既定プラグインが 1 つも入らなかった。この失敗で `install_selected_plugins` が非 0 を返すため、後続の Codex Plugin セットアップ（有効時）と Claude CLI の最終確認も実行されずに終了していた。stdin が `/dev/null` の場合や、`/dev/tty` ではなく実際の pty デバイスの場合は発生しないため、`bash setup.sh` を直接実行した場合や非対話インストールでは再現しない
-  - キットから実行する非対話の `claude` 呼び出し（`setup.sh` のプラグイン導入、`lib/codex-setup.sh` の Codex プラグイン導入とレガシー MCP 削除、`lib/deploy.sh` のバージョン取得、`uninstall.sh` の Codex 後片付け）を、すべて stdin を `/dev/null` にして実行するよう変更した。新設の `_claude_cli()` を経由させ、自己完結が必要な `uninstall.sh` だけはリダイレクトを直接書いている。これらのサブコマンドは入力を読まないため挙動は変わらない。`uninstall.sh` の確認プロンプトは従来どおり利用者の入力を読む
+- **macOS の対話インストールでプラグインマーケットプレイスの追加とプラグインのインストールが失敗する問題を修正**: `install.sh` は `curl | bash` でもウィザードが入力を受け取れるように `setup.sh` の stdin を `/dev/tty` へ付け替えて起動する。ネイティブ版 Claude Code CLI（Bun でビルドされたバイナリ）はこの stdin を kqueue で監視しようとするが、macOS の kqueue は `/dev/tty` という別名デバイスを受け付けないため、`claude plugin marketplace add` / `claude plugin list` / `claude plugin install` が `error: EINVAL: invalid argument, kqueue` で異常終了していた。その結果、新規 Mac では `claude-plugins-official`（Full プロファイルでは `anthropic-agent-skills` も）の追加失敗に続いて「Could not refresh installed plugins after marketplace setup」が表示され、既定プラグインが 1 つも入らなかった。この失敗で `install_selected_plugins` が非 0 を返すため、後続の Codex Plugin セットアップ（有効時）と Claude CLI の最終確認も実行されずに終了していた。stdin が `/dev/null` の場合や、`/dev/tty` ではなく実際の pty デバイスの場合は発生しないため、`bash setup.sh` を直接実行した場合や非対話インストールでは再現しない
+  - キットから実行する `claude plugin` / `claude mcp` / `claude --version` の呼び出し（`setup.sh` のプラグイン導入、`lib/codex-setup.sh` の Codex プラグイン導入とレガシー MCP 削除、`lib/deploy.sh` のバージョン取得、`uninstall.sh` の Codex 後片付け）を、すべて stdin を `/dev/null` にして実行するよう変更した。新設の `_claude_cli()` を経由させ、自己完結が必要な `uninstall.sh` だけはリダイレクトを直接書いている。これらのサブコマンドは入力を読まないため挙動は変わらない。`uninstall.sh` の確認プロンプトは従来どおり利用者の入力を読む
   - **回帰テスト**: `tests/unit/test-codex-setup.sh` に、`_claude_cli` が呼び出し元の stdin を引き継がないことの検証と、同梱スクリプト内の `claude plugin|mcp|--version` 呼び出しが `_claude_cli` か `</dev/null` を経由していることの静的検査を追加した。修正前のコードでは静的検査が 13 箇所を検出する
   - **既存インストールへの影響**: 一度失敗した環境は、更新後に `install.sh` を再実行する（更新モードで全プラグインの再導入を試みる）か、Claude Code 内で `/plugin marketplace add anthropics/claude-plugins-official` などを実行すれば復旧できる
 

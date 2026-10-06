@@ -220,25 +220,29 @@ else
   fail "codex-setup: _claude_cli must run claude with stdin from /dev/null"
 fi
 
-# Every shipped non-interactive `claude` call must detach stdin, either via
+# Every shipped `claude plugin|mcp|--version` call must detach stdin, either via
 # _claude_cli or an explicit </dev/null (uninstall.sh is self-contained).
+# Display lines are excluded only when the logging command starts the line and
+# no command separator precedes the claude text, and the redirect only counts
+# inside the claude command itself, so a bare call combined with `|| warn ...`,
+# `warn ...; claude ...` or `; cat </dev/null` is still reported.
 if ! git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
-  skip "codex-setup: shipped claude CLI calls never inherit stdin" "needs a git checkout"
+  skip "codex-setup: shipped claude plugin/mcp/--version calls never inherit stdin" "needs a git checkout"
 else
-_bare_claude_calls="$(
-  cd "$PROJECT_DIR" && git grep -nE '(^|[^A-Za-z0-9_./-])claude[[:space:]]+(plugin|mcp|--version)' \
-    -- setup.sh 'lib/*.sh' uninstall.sh 'mdm/*.sh' 'features/*.sh' \
-    | grep -vE ':[0-9]+:[[:space:]]*#' \
-    | grep -vE '(info|warn|printf|echo|_dryrun_log)[[:space:]]' \
-    | grep -vE '"claude plugin (marketplace add|install) ' \
-    | grep -vE '`claude plugin install`' \
-    | grep -v '</dev/null' || true
-)"
-if assert_equals "" "$_bare_claude_calls"; then
-  pass "codex-setup: shipped claude CLI calls never inherit stdin"
-else
-  fail "codex-setup: claude CLI calls must use _claude_cli or </dev/null: $_bare_claude_calls"
-fi
+  _bare_claude_calls="$(
+    cd "$PROJECT_DIR" && git grep -nE '(^|[^A-Za-z0-9_./-])claude[[:space:]]+(plugin|mcp|--version)' \
+      -- setup.sh install.sh uninstall.sh 'lib/*.sh' 'wizard/*.sh' 'mdm/*.sh' 'features/*.sh' \
+      | grep -vE ':[0-9]+:[[:space:]]*#' \
+      | grep -vE ':[0-9]+:[[:space:]]*(info|warn|printf|echo|_dryrun_log)[[:space:]][^;|&]*claude[[:space:]]+(plugin|mcp|--version)' \
+      | grep -vE '"claude plugin (marketplace add|install) ' \
+      | grep -vE '`claude plugin install`' \
+      | grep -vE 'claude[[:space:]]+(plugin|mcp|--version)([^|;&#]|>&|&>)*<[[:space:]]*/dev/null' || true
+  )"
+  if assert_equals "" "$_bare_claude_calls"; then
+    pass "codex-setup: shipped claude plugin/mcp/--version calls never inherit stdin"
+  else
+    fail "codex-setup: claude CLI calls must use _claude_cli or </dev/null: $_bare_claude_calls"
+  fi
 fi
 
 # Legacy MCP removal should rely on scope-agnostic CLI removal
