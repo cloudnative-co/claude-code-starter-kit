@@ -557,13 +557,25 @@ _setup_deploy_fresh() {
   [[ -e "$current_dir" || -L "$current_dir" ]] && skill_preexisted=true
   [[ -e "$current_dir/logs" || -L "$current_dir/logs" ]] \
     && logs_preexisted=true
+
+  # Settle the dependency lock before creating anything: wait for a running
+  # owner, recover a lock whose owner process is gone, or stop with a
+  # diagnosis. Keep this a simple command so errexit stays active inside.
+  local _rc=0
+  _wce_runtime_update_lock_preflight "$current_dir"
+  _rc=$?
+  [[ "$_rc" -eq 0 ]] || return "$_rc"
+
   if [[ "$root_preexisted" != true ]]; then
     mkdir -p "$CLAUDE_DIR" || return 1
   fi
 
-  local state_file _rc=0
+  local state_file
   state_file="$(mktemp)" || return 1
   _SETUP_TMP_FILES+=("$state_file")
+  # A failed release (74) stops setup before the manifest, saved config, and
+  # plugin setup; the helper's diagnosis appends this note.
+  local _WCE_RUNTIME_LOCK_RELEASE_NOTE="${STR_WCE_LOCK_RELEASE_NOTE:-This run stopped before its remaining steps, including the install manifest, saving the settings, and plugin setup. Resolve the lock and run the same command again.}"
   _wce_with_runtime_update_lock "$current_dir" \
     _setup_deploy_fresh_body true "$root_preexisted" \
     "$skills_preexisted" "$skill_preexisted" "$logs_preexisted" \
@@ -582,6 +594,21 @@ _prepare_mdm_claude_root
 _rc=$?
 [[ "$_rc" -eq 0 ]] || return "$_rc"
 if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+  # run_update takes the web-content-extraction dependency lock only after
+  # Step 2, so a lock that cannot be acquired used to surface after the backup
+  # and after settings.json / CLAUDE.md were rewritten. Settle it first: wait
+  # for a running owner, recover a lock whose owner process is gone, or stop
+  # here with a diagnosis and no file changed. Dry-run works on a simulation
+  # directory; setup_finish_dryrun reports the real lock instead.
+  if [[ "${DRY_RUN:-false}" != "true" ]] \
+    && _update_requires_wce_lock "$PROJECT_DIR" "$CLAUDE_DIR" \
+      "$CLAUDE_DIR/.starter-kit-snapshot"; then
+    _wce_runtime_update_lock_preflight \
+      "$CLAUDE_DIR/skills/web-content-extraction"
+    _rc=$?
+    [[ "$_rc" -eq 0 ]] || return "$_rc"
+  fi
+
   # Remove the 24h update cache written by the auto-update hook of installs
   # made for Claude Code < 2.1.89. That hook path was retired in v0.79.0 (#136)
   # and the scripts deployed by this update neither read nor write the file.
@@ -1790,6 +1817,11 @@ if [[ "${DRY_RUN:-false}" == "true" ]]; then
   _dryrun_collect_deletions "$_ORIG_CLAUDE_DIR"
 
   _dryrun_show_results "$_ORIG_CLAUDE_DIR"
+
+  # The simulation directory never contains the dependency lock. Inspect the
+  # real one read-only so the preview does not promise an update that the
+  # real run would refuse to start.
+  _wce_runtime_update_lock_dryrun_notice "$_ORIG_CLAUDE_DIR"
   exit 0
 fi
 }

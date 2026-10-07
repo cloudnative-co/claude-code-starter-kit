@@ -1009,6 +1009,119 @@ test_update_progress_output() {
   teardown_test_env
 }
 
+# --- 30b-30d. web-content-extraction dependency lock ---
+# Shared fixture: a standard install (skills enabled) whose live and snapshot
+# settings.json carry the same marker the current kit does not produce, and
+# whose manifest claims an older kit. A completed update removes the marker
+# from both and rewrites the manifest; an update that stops before writing
+# leaves the whole tree byte-identical.
+setup_wce_lock_scenario() {
+  run_setup --profile=standard --fonts=false --ghostty=false >/dev/null 2>&1 \
+    || return 1
+  local snapshot_settings="$CLAUDE_DIR/.starter-kit-snapshot/settings.json"
+  local manifest="$CLAUDE_DIR/.starter-kit-manifest.json"
+  jq '.old_kit_marker = true' "$snapshot_settings" > "$snapshot_settings.tmp" \
+    && mv "$snapshot_settings.tmp" "$snapshot_settings" || return 1
+  cp "$snapshot_settings" "$CLAUDE_DIR/settings.json" || return 1
+  jq '.kit_version = "v0.0.0-wce-lock-fixture"' "$manifest" > "$manifest.tmp" \
+    && mv "$manifest.tmp" "$manifest" || return 1
+  mkdir -p "$CLAUDE_DIR/skills/web-content-extraction/logs/.update.lock"
+}
+
+count_claude_backups() {
+  find "$HOME" -maxdepth 1 -name '.claude.backup.*' -print | wc -l | tr -d '[:space:]'
+}
+
+# The owner is not a token the kit recognizes, so nothing may reclaim it. The
+# update must stop before the backup and before Step 1 instead of rewriting
+# settings.json / CLAUDE.md and then exiting 75 without a word.
+test_update_blocked_wce_lock() {
+  setup_test_env
+  setup_wce_lock_scenario \
+    || { fail "update-blocked-wce-lock (setup failed)"; teardown_test_env; return; }
+  local lock="$CLAUDE_DIR/skills/web-content-extraction/logs/.update.lock"
+  printf 'foreign-updater\n' > "$lock/owner"
+
+  local before after backups_before backups_after output rc=0
+  before="$(snapshot_dir_checksum "$CLAUDE_DIR")"
+  backups_before="$(count_claude_backups)"
+  output="$(run_setup_update 2>&1)" || rc=$?
+  after="$(snapshot_dir_checksum "$CLAUDE_DIR")"
+  backups_after="$(count_claude_backups)"
+
+  if [[ $rc -eq 75 ]] \
+    && grep -qF "$lock" < <(printf '%s\n' "$output") \
+    && ! grep -q "Step 1/5" < <(printf '%s\n' "$output") \
+    && [[ "$before" == "$after" ]] \
+    && [[ "$backups_before" == "$backups_after" ]] \
+    && [[ "$(cat "$lock/owner")" == "foreign-updater" ]]; then
+    pass "update-blocked-wce-lock"
+  else
+    fail "update-blocked-wce-lock (rc=$rc, changed=$([[ "$before" != "$after" ]] && echo yes || echo no), backups=$backups_before->$backups_after)"
+  fi
+
+  teardown_test_env
+}
+
+# The owner is a dependency-updater token whose process no longer exists and
+# the lock is old: the update recovers it and then runs to completion.
+test_update_recovers_stale_wce_lock() {
+  setup_test_env
+  setup_wce_lock_scenario \
+    || { fail "update-recovers-stale-wce-lock (setup failed)"; teardown_test_env; return; }
+  local logs="$CLAUDE_DIR/skills/web-content-extraction/logs"
+  local lock="$logs/.update.lock" dead_pid
+  sh -c 'exit 0' &
+  dead_pid=$!
+  wait "$dead_pid" 2>/dev/null || true
+  printf '%s:33613976-dc7b-422d-aa54-8c4cb5ab84fb\n' "$dead_pid" > "$lock/owner"
+  touch -t 200001010000 "$lock/owner"
+
+  local output rc=0 residue
+  output="$(run_setup_update 2>&1)" || rc=$?
+  residue="$(find "$logs" -maxdepth 1 -name '.update.lock*' -print | wc -l | tr -d '[:space:]')"
+
+  if [[ $rc -eq 0 ]] \
+    && grep -qF "$lock" < <(printf '%s\n' "$output") \
+    && grep -q "Step 5/5:" < <(printf '%s\n' "$output") \
+    && [[ "$residue" == "0" ]] \
+    && ! jq -e '.old_kit_marker' "$CLAUDE_DIR/settings.json" >/dev/null 2>&1 \
+    && ! jq -e '.old_kit_marker' "$CLAUDE_DIR/.starter-kit-snapshot/settings.json" >/dev/null 2>&1 \
+    && [[ "$(jq -r '.kit_version' "$CLAUDE_DIR/.starter-kit-manifest.json")" != "v0.0.0-wce-lock-fixture" ]]; then
+    pass "update-recovers-stale-wce-lock"
+  else
+    fail "update-recovers-stale-wce-lock (rc=$rc, residue=$residue)"
+  fi
+
+  teardown_test_env
+}
+
+# Dry-run simulates in a temp dir that has no lock, so it used to promise a
+# clean update the real run could not deliver. It must report the real lock
+# without touching it, and still exit 0.
+test_update_dry_run_warns_wce_lock() {
+  setup_test_env
+  setup_wce_lock_scenario \
+    || { fail "update-dry-run-warns-wce-lock (setup failed)"; teardown_test_env; return; }
+  local lock="$CLAUDE_DIR/skills/web-content-extraction/logs/.update.lock"
+  printf 'foreign-updater\n' > "$lock/owner"
+
+  local before after output rc=0
+  before="$(snapshot_dir_checksum "$CLAUDE_DIR")"
+  output="$(run_setup_update --dry-run 2>&1)" || rc=$?
+  after="$(snapshot_dir_checksum "$CLAUDE_DIR")"
+
+  if [[ $rc -eq 0 ]] \
+    && grep -qF "$lock" < <(printf '%s\n' "$output") \
+    && [[ "$before" == "$after" ]]; then
+    pass "update-dry-run-warns-wce-lock"
+  else
+    fail "update-dry-run-warns-wce-lock (rc=$rc, changed=$([[ "$before" != "$after" ]] && echo yes || echo no))"
+  fi
+
+  teardown_test_env
+}
+
 # --- 32. dry-run-progress-output ---
 test_dry_run_progress_output() {
   setup_test_env
@@ -1584,6 +1697,9 @@ run_scenario update test_update_from_no_manifest
 run_scenario update test_update_v019_to_latest_direct
 run_scenario update test_update_partial_failure_recovery
 run_scenario update test_update_progress_output
+run_scenario update test_update_blocked_wce_lock
+run_scenario update test_update_recovers_stale_wce_lock
+run_scenario update test_update_dry_run_warns_wce_lock
 run_scenario update test_auto_update_session_hooks
 run_scenario update test_auto_update_old_claude_same_hooks
 run_scenario update test_auto_update_preserves_custom_config_binding

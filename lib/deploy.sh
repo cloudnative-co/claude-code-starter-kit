@@ -1820,19 +1820,24 @@ maybe_install_web_content_deps() {
     return 1
   fi
   local npm_rc=0
+  # In update mode this is a second acquisition after run_update released the
+  # lock, so a writer can take it in between. Every kit file is already in
+  # place by then, but setup stops on a 74/75 before its final steps
+  # (manifest, saved config, plugins); the helper's diagnosis appends the
+  # matching note.
+  local _WCE_RUNTIME_LOCK_FAILURE_NOTE="${STR_WCE_LOCK_DEPS_NOTE:-The starter-kit files were already updated by this run, but the web-content-extraction dependency install (npm ci) and the remaining steps (the install manifest, saving the settings, and plugin setup) did not run. Resolve the lock and run the same command again.}"
+  local _WCE_RUNTIME_LOCK_RELEASE_NOTE="${STR_WCE_LOCK_RELEASE_NOTE:-This run stopped before its remaining steps, including the install manifest, saving the settings, and plugin setup. Resolve the lock and run the same command again.}"
   _wce_with_runtime_update_lock \
     "$skill_dir" _wce_run_non_mdm_npm_ci "$skill_dir" || npm_rc=$?
   case "$npm_rc" in
     0)
       ok "${STR_WCE_NPM_DONE:-web-content-extraction dependencies installed}"
       ;;
-    74)
-      warn "web-content-extraction dependency lock could not be released; retry setup"
-      return 1
-      ;;
-    75)
-      warn "web-content-extraction dependency update is already active; retry setup after it finishes"
-      return 1
+    74|75)
+      # The lock helper already reported the lock path, owner, PID state, and
+      # recovery steps on stderr, naming this exit code; keep it so the
+      # process exits with the code the diagnosis announced.
+      return "$npm_rc"
       ;;
     129|130|143)
       return "$npm_rc"

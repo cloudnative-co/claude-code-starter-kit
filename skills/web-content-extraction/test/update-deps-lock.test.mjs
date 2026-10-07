@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
+import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import {
   existsSync,
   copyFileSync,
@@ -7,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -45,6 +48,212 @@ test('dependency lock never reclaims an existing stale inode', (t) => {
   assert.equal(readFileSync(join(lockFile, 'owner'), 'utf8'), `${token}\n`)
   assert.equal(releaseLock(token, lockFile), true)
   assert.equal(existsSync(lockFile), false)
+})
+
+test('dependency lock backs off while the kit reclaim mutex exists', (t) => {
+  // setup.sh recovers an abandoned lock under `<lock>.reclaim` and re-reads
+  // the lock only after creating that mutex. An acquisition completed after
+  // the mutex appeared would go unseen, so acquireLock checks for the mutex
+  // after writing its owner and fails when it is there. A mutex that outlasts
+  // the withdrawal wait (here one left by a killed reclaimer) does not prove
+  // the reclaimer dead, so the lock is left in place rather than renamed.
+  const root = mkdtempSync(join(tmpdir(), 'wce-update-lock-mutex-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const logs = join(root, 'logs')
+  const lockFile = join(logs, '.update.lock')
+  const mutex = `${lockFile}.reclaim`
+  mkdirSync(logs)
+  mkdirSync(mutex)
+
+  assert.equal(acquireLock(lockFile), null)
+  assert.match(readFileSync(join(lockFile, 'owner'), 'utf8'), /^\d+:[0-9a-f-]{36}\n$/)
+  assert.equal(lstatSync(mutex).isDirectory(), true)
+  assert.equal(acquireLock(lockFile), null)
+
+  rmSync(mutex, { recursive: true })
+  rmSync(lockFile, { recursive: true })
+  const token = acquireLock(lockFile)
+  assert.equal(typeof token, 'string')
+  assert.equal(releaseLock(token, lockFile), true)
+})
+
+test('dependency lock fails when a recovery displaced it before the mutex check', (t) => {
+  // A whole kit recovery can run between the owner write and the mutex
+  // check: it moves this directory aside (read-to-rename race), cannot put it
+  // back because writer B took the canonical name, and releases the mutex.
+  // The mutex check then passes, so acquisition must verify the canonical
+  // owner or both writers would proceed.
+  const root = mkdtempSync(join(tmpdir(), 'wce-update-lock-displaced-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const lockFile = join(root, 'logs', '.update.lock')
+  const quarantine = `${lockFile}.stale-test`
+  const writeFile = fs.writeFileSync
+  t.after(() => {
+    fs.writeFileSync = writeFile
+    syncBuiltinESMExports()
+  })
+  let displaced = false
+  fs.writeFileSync = function (path, ...rest) {
+    const result = writeFile.call(this, path, ...rest)
+    if (!displaced && path === join(lockFile, 'owner')) {
+      displaced = true
+      fs.renameSync(lockFile, quarantine)
+      fs.mkdirSync(lockFile)
+      writeFile(join(lockFile, 'owner'), 'writer-b\n')
+    }
+    return result
+  }
+  syncBuiltinESMExports()
+
+  assert.equal(acquireLock(lockFile), null)
+  fs.writeFileSync = writeFile
+  syncBuiltinESMExports()
+  assert.equal(displaced, true)
+  assert.equal(readFileSync(join(lockFile, 'owner'), 'utf8'), 'writer-b\n')
+  // The displaced directory stays where the reclaimer left it.
+  assert.match(readFileSync(join(quarantine, 'owner'), 'utf8'), /^\d+:[0-9a-f-]{36}\n$/)
+})
+
+test('dependency lock withdrawal never removes another writer\'s lock', (t) => {
+  // The mutex check sees the recovery, but before the withdrawal runs the
+  // recovery moves this directory aside and writer B takes the canonical
+  // name. Withdrawing must check the token and leave B's lock in place.
+  const root = mkdtempSync(join(tmpdir(), 'wce-update-lock-withdraw-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const lockFile = join(root, 'logs', '.update.lock')
+  const quarantine = `${lockFile}.stale-test`
+  const writeFile = fs.writeFileSync
+  t.after(() => {
+    fs.writeFileSync = writeFile
+    syncBuiltinESMExports()
+  })
+  let displaced = false
+  fs.writeFileSync = function (path, ...rest) {
+    const result = writeFile.call(this, path, ...rest)
+    if (!displaced && path === join(lockFile, 'owner')) {
+      displaced = true
+      fs.mkdirSync(`${lockFile}.reclaim`)
+      fs.renameSync(lockFile, quarantine)
+      fs.mkdirSync(lockFile)
+      writeFile(join(lockFile, 'owner'), 'writer-b\n')
+    }
+    return result
+  }
+  syncBuiltinESMExports()
+
+  assert.equal(acquireLock(lockFile), null)
+  fs.writeFileSync = writeFile
+  syncBuiltinESMExports()
+  assert.equal(displaced, true)
+  assert.equal(readFileSync(join(lockFile, 'owner'), 'utf8'), 'writer-b\n')
+  assert.deepEqual(readdirSync(lockFile), ['owner'])
+  assert.match(readFileSync(join(quarantine, 'owner'), 'utf8'), /^\d+:[0-9a-f-]{36}\n$/)
+})
+
+test('dependency lock withdrawal waits for the reclaimer before renaming', (t) => {
+  // The reclaimer is active when the mutex check runs. If the withdrawal
+  // checked its owner and renamed while the reclaimer still worked, the
+  // reclaimer could move this lock aside between the two steps, writer B
+  // could take the canonical name after the mutex is released, and the
+  // rename would move B's lock (writer C then takes the free name). Waiting
+  // for the mutex first leaves the withdrawal nothing to rename.
+  const root = mkdtempSync(join(tmpdir(), 'wce-update-lock-withdraw-wait-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const lockFile = join(root, 'logs', '.update.lock')
+  const mutex = `${lockFile}.reclaim`
+  const quarantine = `${lockFile}.stale-test`
+  const writeFile = fs.writeFileSync
+  const lstat = fs.lstatSync
+  const rename = fs.renameSync
+  const restore = () => {
+    fs.writeFileSync = writeFile
+    fs.lstatSync = lstat
+    fs.renameSync = rename
+    syncBuiltinESMExports()
+  }
+  t.after(restore)
+  let mutexLooks = 0
+  let recovered = false
+  // The reclaimer moves this lock aside and finishes; writer B acquires.
+  const finishRecoveryThenB = () => {
+    if (recovered) return
+    recovered = true
+    rename(lockFile, quarantine)
+    fs.rmdirSync(mutex)
+    fs.mkdirSync(lockFile)
+    writeFile(join(lockFile, 'owner'), 'writer-b\n')
+  }
+  fs.writeFileSync = function (path, ...rest) {
+    const result = writeFile.call(this, path, ...rest)
+    if (path === join(lockFile, 'owner') && !existsSync(mutex)) {
+      fs.mkdirSync(mutex)
+    }
+    return result
+  }
+  fs.lstatSync = function (path, ...rest) {
+    // The first look is the mutex check; later looks happen while waiting.
+    if (path === mutex && ++mutexLooks > 1) finishRecoveryThenB()
+    return lstat.call(this, path, ...rest)
+  }
+  fs.renameSync = function (from, to) {
+    if (from === lockFile && String(to).startsWith(`${lockFile}.release-`)) {
+      finishRecoveryThenB()
+    } else if (to === lockFile && !existsSync(lockFile)) {
+      fs.mkdirSync(lockFile)
+      writeFile(join(lockFile, 'owner'), 'writer-c\n')
+    }
+    return rename.call(this, from, to)
+  }
+  syncBuiltinESMExports()
+
+  assert.equal(acquireLock(lockFile), null)
+  restore()
+  assert.equal(recovered, true)
+  assert.equal(readFileSync(join(lockFile, 'owner'), 'utf8'), 'writer-b\n')
+  assert.deepEqual(readdirSync(lockFile), ['owner'])
+  assert.match(readFileSync(join(quarantine, 'owner'), 'utf8'), /^\d+:[0-9a-f-]{36}\n$/)
+  assert.deepEqual(readdirSync(join(root, 'logs')).sort(),
+    ['.update.lock', '.update.lock.stale-test'])
+})
+
+test('dependency lock fails without renaming when the mutex outlasts the wait', (t) => {
+  // A mutex still there after the wait does not prove the reclaimer dead: it
+  // may be stalled between its own read and rename, and the token-checked
+  // release is not atomic. Withdrawing now could move a successor's lock, so
+  // the acquisition must fail and leave its lock and the mutex in place.
+  const root = mkdtempSync(join(tmpdir(), 'wce-update-lock-withdraw-stalled-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const lockFile = join(root, 'logs', '.update.lock')
+  const mutex = `${lockFile}.reclaim`
+  const writeFile = fs.writeFileSync
+  const rename = fs.renameSync
+  const restore = () => {
+    fs.writeFileSync = writeFile
+    fs.renameSync = rename
+    syncBuiltinESMExports()
+  }
+  t.after(restore)
+  const renames = []
+  fs.writeFileSync = function (path, ...rest) {
+    const result = writeFile.call(this, path, ...rest)
+    if (path === join(lockFile, 'owner') && !existsSync(mutex)) {
+      fs.mkdirSync(mutex)
+    }
+    return result
+  }
+  fs.renameSync = function (from, to) {
+    renames.push([from, to])
+    return rename.call(this, from, to)
+  }
+  syncBuiltinESMExports()
+
+  assert.equal(acquireLock(lockFile), null)
+  restore()
+  assert.deepEqual(renames, [])
+  assert.equal(existsSync(mutex), true)
+  assert.match(readFileSync(join(lockFile, 'owner'), 'utf8'), /^\d+:[0-9a-f-]{36}\n$/)
+  assert.deepEqual(readdirSync(join(root, 'logs')).sort(),
+    ['.update.lock', '.update.lock.reclaim'])
 })
 
 test('dependency lock rejects non-directories and exact-owner violations', {

@@ -394,6 +394,99 @@ source "$PROJECT_DIR/lib/update.sh"
 }
 
 {
+  # A run that rewrote the CLAUDE.md kit section and then stopped before the
+  # snapshot phase (the dependency lock after Step 2) leaves current == new
+  # kit with an older snapshot. That is not a user edit: the next update must
+  # keep the content and refresh the baseline, not warn and keep a stale
+  # snapshot forever. A kit section that really differs still warns.
+  test_name="update: CLAUDE.md kit section already at the new content refreshes the snapshot"
+  _ucm_tmp="$(mktemp -d)"
+  _SETUP_TMP_FILES+=("$_ucm_tmp")
+  _ucm_write() { # <file> <kit-body> [user-body]
+    {
+      printf '<!-- BEGIN STARTER-KIT-MANAGED -->\n%s\n<!-- END STARTER-KIT-MANAGED -->\n' "$2"
+      printf '\n# User Settings\n\n%s\n' "${3:-}"
+    } > "$1"
+  }
+  _ucm_write "$_ucm_tmp/new-kit.md" "kit v2"
+  _ucm_write "$_ucm_tmp/old-kit.md" "kit v1"
+  _extract_kit_section "$_ucm_tmp/old-kit.md" > "$_ucm_tmp/snapshot-kit"
+  _ucm_write "$_ucm_tmp/current.md" "kit v2" "my rule"
+  cp "$_ucm_tmp/current.md" "$_ucm_tmp/current.saved"
+  _ucm_write "$_ucm_tmp/edited.md" "kit v1 with my edit" "my rule"
+  cp "$_ucm_tmp/edited.md" "$_ucm_tmp/edited.saved"
+  _ucm_run() { # <current> <output>
+    local rc=0
+    (
+      # shellcheck disable=SC2034 # consumed indirectly by the function under test
+      KIT_MDM_MANAGED=false _MERGE_INTERACTIVE=false
+      # shellcheck disable=SC2034 # consumed indirectly by the function under test
+      STR_CLAUDEMD_KIT_CONFLICT_KEPT=conflict-kept-marker
+      _update_claude_md "$1" "$_ucm_tmp/snapshot-kit" "$_ucm_tmp/new-kit.md"
+    ) > "$2" 2>&1 || rc=$?
+    printf '%s' "$rc"
+  }
+  _ucm_rc="$(_ucm_run "$_ucm_tmp/current.md" "$_ucm_tmp/current.out")"
+  _ucm_edited_rc="$(_ucm_run "$_ucm_tmp/edited.md" "$_ucm_tmp/edited.out")"
+  if [[ "$_ucm_rc" == 3 ]] \
+    && cmp -s "$_ucm_tmp/current.md" "$_ucm_tmp/current.saved" \
+    && ! grep -q conflict-kept-marker "$_ucm_tmp/current.out" \
+    && [[ "$_ucm_edited_rc" == 1 ]] \
+    && cmp -s "$_ucm_tmp/edited.md" "$_ucm_tmp/edited.saved" \
+    && grep -q conflict-kept-marker "$_ucm_tmp/edited.out"; then
+    pass "$test_name"
+  else
+    fail "$test_name (current rc=$_ucm_rc edited rc=$_ucm_edited_rc)"
+  fi
+
+  # Through the phases: no "updated" or conflict message, content untouched,
+  # and the snapshot now holds the new kit section.
+  test_name="update: CLAUDE.md baseline-only refresh reaches the snapshot phase"
+  _ucm_claude="$_ucm_tmp/claude"
+  mkdir -p "$_ucm_claude/.starter-kit-snapshot"
+  cp "$_ucm_tmp/current.md" "$_ucm_claude/CLAUDE.md"
+  cp "$_ucm_tmp/snapshot-kit" "$_ucm_claude/.starter-kit-snapshot/CLAUDE.md"
+  _extract_kit_section "$_ucm_tmp/new-kit.md" > "$_ucm_tmp/expected-snapshot"
+  _ucm_phase_rc=0
+  (
+    # shellcheck disable=SC2034 # consumed indirectly by the phases under test
+    KIT_MDM_MANAGED=false _MERGE_INTERACTIVE=false DRY_RUN=false
+    # shellcheck disable=SC2034 # consumed indirectly by the phases under test
+    STR_UPDATE_CLAUDEMD="claude-md" STR_UPDATE_SNAPSHOT="snapshot"
+    # shellcheck disable=SC2034 # consumed indirectly by the phases under test
+    STR_UPDATE_SNAPSHOT_DONE="snapshot-done"
+    # shellcheck disable=SC2034 # consumed indirectly by the phases under test
+    STR_CLAUDEMD_KIT_UPDATED="kit-updated-marker"
+    # shellcheck disable=SC2034 # consumed indirectly by the phases under test
+    STR_CLAUDEMD_KIT_UNCHANGED="kit-unchanged-marker"
+    # shellcheck disable=SC2034 # consumed indirectly by the phases under test
+    STR_CLAUDEMD_KIT_CONFLICT_KEPT="conflict-kept-marker"
+    # shellcheck disable=SC2034 # consumed indirectly by the phases under test
+    STR_CLAUDEMD_KIT_BASELINE_REFRESHED="baseline-refreshed-marker"
+    _progress_step() { :; }
+    build_claude_md_to_file() { cp "$_ucm_tmp/new-kit.md" "$1"; }
+    _claude_md_user_section_has_content() { return 1; }
+    _UPDATE_ALL_UPDATED_FILES=()
+    _UPDATE_ALL_SKIPPED_FILES=()
+    _update_phase_claude_md "$_ucm_claude" "$_ucm_claude/.starter-kit-snapshot"
+    _update_phase_snapshot "$_ucm_claude" "$_ucm_claude/.starter-kit-snapshot"
+  ) > "$_ucm_tmp/phase.out" 2>&1 || _ucm_phase_rc=$?
+  if [[ "$_ucm_phase_rc" -eq 0 ]] \
+    && cmp -s "$_ucm_claude/CLAUDE.md" "$_ucm_tmp/current.saved" \
+    && cmp -s "$_ucm_claude/.starter-kit-snapshot/CLAUDE.md" \
+      "$_ucm_tmp/expected-snapshot" \
+    && grep -q baseline-refreshed-marker "$_ucm_tmp/phase.out" \
+    && ! grep -q kit-updated-marker "$_ucm_tmp/phase.out" \
+    && ! grep -q conflict-kept-marker "$_ucm_tmp/phase.out"; then
+    pass "$test_name"
+  else
+    echo "  rc=$_ucm_phase_rc" >&2
+    sed 's/^/    | /' "$_ucm_tmp/phase.out" >&2 || true
+    fail "$test_name"
+  fi
+}
+
+{
   test_name="update: user-section content detection drives the rules/user-* tip"
   _ust_tmp="$(mktemp -d)"
   _SETUP_TMP_FILES+=("$_ust_tmp")

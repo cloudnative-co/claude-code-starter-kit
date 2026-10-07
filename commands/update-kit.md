@@ -183,6 +183,8 @@ Before running the update:
    - If successful: show the previous and new version printed by the update block
    - If the kit is already up to date: report "Already on the latest version"
    - If it fails: show the error and suggest manual steps
+   - If it exits with code 75: the web-content-extraction dependency lock (`~/.claude/skills/web-content-extraction/logs/.update.lock`) could not be acquired. `setup.sh` prints the lock path, its owner, its creation time, the owner PID and whether that PID is running, and a recovery command. Relay those lines unchanged, then follow **Recovery**. The closing note says how far the run got (the wording follows the configured language): no starter-kit file was changed (stopped before the backup and before Step 1); settings.json and CLAUDE.md were processed but the remaining kit files were not (stopped after Step 2); or the kit files were updated but the dependency install (`npm ci`) did not run. Whatever the note says, the run stopped before its final steps (writing the install manifest, saving the config, plugin setup), so after resolving the lock rerun the same update block; do not substitute a manual `npm ci`
+   - If it exits with code 74: the lock could not be released cleanly. The kit files written before that point are in place, but the run stopped before its remaining steps (writing the install manifest, saving the config, plugin setup, and the dependency install if it had not run yet). Relay the printed lines, follow **Recovery** for the lock, then run the same update block again
 4. After a successful update, tell the user how to reload the new configuration:
    - Always suggest `/compact` to refresh the current session cleanly.
    - Also mention that some changes may require starting a new Claude Code session or opening a new terminal, especially settings/env changes, hook updates, MCP-related changes, or newly added slash commands.
@@ -400,6 +402,29 @@ If an update goes wrong:
 - To reset saved merge decisions, rerun the self-contained update block with
   its final setup command changed to
   `(cd "$kit_repo_physical" && bash setup.sh --update --reset-prefs)`
+
+If the update stops with exit code 75 (web-content-extraction dependency lock):
+- `setup.sh --update` checks the lock before the backup. It waits up to 60
+  seconds for a running owner, and removes the lock by itself only when the
+  owner is a token the kit writes, that PID no longer exists, and the lock is
+  at least 60 minutes old. Every other case stops with exit 75
+- To recover by hand: confirm that the PID `setup.sh` printed does not exist
+  and that no `update-deps.mjs`, `setup.sh`, or `npm ci` process is running,
+  get the user's approval, run the printed
+  `rm -f <lock>/owner && rmdir <lock>` command, then rerun the update block
+- Do not remove the lock while the printed PID is running one of those
+  processes. If the PID is running but is an unrelated process (a PID can be
+  reused), tell the user so and let them decide
+- If `setup.sh` also names `<lock>.reclaim`, an earlier recovery was
+  interrupted; remove it with the printed `rmdir` command after the same check.
+  While it exists, no lock can be acquired even when `<lock>` itself is absent
+- If `setup.sh` reports that the lock path is a symlink or not a directory, no
+  lock is held and no `rm`/`rmdir` command is printed. Show the user the path
+  it names (the skill directory, `logs`, or `<lock>`) and let them decide what
+  to replace or remove; do not delete anything through that path
+- If `setup.sh` names a `<lock>.stale-*` directory it left for inspection, a
+  lock taken by another writer during recovery could not be put back. Show it
+  to the user; remove it only after the same check as for the lock
 
 ### Notes
 

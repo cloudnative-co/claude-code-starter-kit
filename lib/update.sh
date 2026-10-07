@@ -271,6 +271,15 @@ _update_claude_md() {
     return 1
   fi
 
+  if ! _file_changed "$current_kit_section" "$new_kit_section"; then
+    # The kit section already holds this version's content while the snapshot
+    # is older: an earlier run wrote it and stopped before refreshing the
+    # baseline (for example on the dependency lock after Step 2). That is not
+    # a user edit. Leave the file as it is and let the caller refresh the
+    # snapshot so the next update compares against the right baseline.
+    return 3
+  fi
+
   # Both changed → conflict on kit section
   if [[ "${_MERGE_INTERACTIVE:-true}" != "true" ]]; then
     # Non-interactive: keep current (non-destructive). Without this warning the
@@ -592,14 +601,566 @@ _wce_runtime_update_lock_owner_only() { # <lock-dir>
   [[ "$count" -eq 1 ]]
 }
 
+# ---------------------------------------------------------------------------
+# Lock inspection, diagnosis, and bounded recovery
+#
+# A writer that is killed while holding the lock (SIGKILL, power loss, an async
+# hook torn down with its session) cannot release it. Acquisition never takes
+# over an existing lock, so such a lock used to block every later update with
+# a bare exit 75. The helpers below (1) classify what is on disk without
+# changing it, (2) explain a failure, and (3) let the pre-write preflight — and
+# only the preflight — remove a lock whose owner provably no longer exists.
+# ---------------------------------------------------------------------------
+
+# Minimum age of the owner file before an ownerless lock may be recovered.
+# Deliberately not overridable from the environment.
+_WCE_RUNTIME_LOCK_STALE_MINUTES=60
+# How long an acquisition that found the reclaim mutex waits for the
+# reclaimer to finish before withdrawing (update-deps.mjs uses the same).
+_WCE_RUNTIME_LOCK_WITHDRAW_WAIT_SECONDS=3
+
+_WCE_LOCK_STATE=""      # free | busy | stale | unknown | unusable
+_WCE_LOCK_OWNER=""      # exact token when recognized; display-safe otherwise
+_WCE_LOCK_OWNER_PID=""  # set only for a recognized token
+_WCE_LOCK_PID_STATE=""  # alive | dead | unknown
+_WCE_LOCK_CREATED=""    # owner file mtime, for display
+_WCE_LOCK_UNUSABLE=""   # the symlink / non-directory that makes the path unusable
+_WCE_LOCK_MUTEX=false   # whether the reclaim mutex exists beside the lock
+
+# Git Bash cannot tell whether a lock owner is alive: Windows node.exe and
+# MSYS use different PID spaces.
+_wce_runtime_update_lock_pid_probe_unsupported() {
+  if declare -F is_msys >/dev/null 2>&1 && is_msys; then
+    return 0
+  fi
+  case "$(uname -s 2>/dev/null || true)" in
+    MSYS_NT*|MINGW*_NT*|CLANG*_NT*|UCRT*_NT*) return 0 ;;
+  esac
+  return 1
+}
+
+_wce_runtime_update_lock_pid_state() { # <pid> -> alive | dead | unknown
+  local pid="$1" ps_out="" ps_rc=0
+  case "$pid" in
+    ""|0*|*[!0123456789]*) printf 'unknown'; return 0 ;;
+  esac
+  if _wce_runtime_update_lock_pid_probe_unsupported; then
+    printf 'unknown'
+    return 0
+  fi
+  if kill -0 "$pid" 2>/dev/null; then
+    printf 'alive'
+    return 0
+  fi
+  # `kill -0` fails the same way for "no such process" and "not permitted"
+  # (another user's process that reused the PID), so ask the process table.
+  if [[ -d /proc/self ]]; then
+    if [[ -e "/proc/$pid" ]]; then
+      printf 'alive'
+    else
+      printf 'dead'
+    fi
+    return 0
+  fi
+  ps_out="$(ps -p "$pid" -o pid= 2>/dev/null)" || ps_rc=$?
+  ps_out="${ps_out//[[:space:]]/}"
+  if [[ "$ps_rc" -eq 0 && "$ps_out" == "$pid" ]]; then
+    printf 'alive'
+  elif [[ "$ps_rc" -eq 1 && -z "$ps_out" ]]; then
+    printf 'dead'
+  else
+    printf 'unknown'
+  fi
+  return 0
+}
+
+_wce_runtime_update_lock_owner_mtime() { # <owner-file> -> "YYYY-MM-DD HH:MM:SS +ZZZZ"
+  local file="$1" out=""
+  local stamp_re='^([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?( [-+][0-9]{4})?$'
+  # BSD stat first. GNU stat rejects these operands with a non-zero status, so
+  # its unrelated stdout is replaced by the fallback assignment.
+  out="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S %z' "$file" 2>/dev/null)" \
+    || out="$(stat -c '%y' "$file" 2>/dev/null)" || out=""
+  if [[ "$out" =~ $stamp_re ]]; then
+    printf '%s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
+  fi
+  return 0
+}
+
+_wce_runtime_update_lock_owner_is_aged() { # <lock-dir>
+  local lock_dir="$1" aged=""
+  # -mmin +N is "more than N minutes" on BSD, GNU, and BusyBox find. A symlink
+  # is not followed and never matches -type f.
+  aged="$(find "$lock_dir/owner" -prune -type f \
+    -mmin "+$_WCE_RUNTIME_LOCK_STALE_MINUTES" -print 2>/dev/null)" || return 1
+  [[ -n "$aged" ]]
+}
+
+# Classify one lock directory without modifying anything.
+#
+#   free     - nothing exists at the path
+#   busy     - recognized owner token whose PID is running
+#   stale    - recognized owner token whose PID does not exist
+#   unusable - the lock path itself is a symlink or not a directory. No lock
+#              is held; the recovery commands for a lock must not be offered
+#              because `rm -f <lock>/owner` would resolve through a symlink
+#   unknown  - everything else: a missing or non-regular owner, any entry
+#              besides `owner`, an owner that is not exactly one LF-terminated
+#              line of a recognized token, or a PID whose state cannot be
+#              determined
+#
+# _WCE_LOCK_MUTEX records whether `<lock>.reclaim` exists. Acquisition backs
+# off while it does, so a mutex left by a killed reclaimer blocks the lock
+# even when nothing holds the canonical name.
+#
+# Recognized tokens are the two this kit writes: `<pid>:<uuid>` from
+# update-deps.mjs and `starter-kit-update-<pid>-<random>-<epoch>` from setup.
+_wce_runtime_update_lock_inspect_dir() { # <lock-dir>
+  local lock_dir="$1" owner_file="$1/owner"
+  local bytes="" raw="" shown="" rest="" pid=""
+  local updater_re='^([1-9][0-9]{0,9}):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  local setup_re='^([1-9][0-9]{0,9})-[0-9]+-[0-9]+$'
+  _WCE_LOCK_STATE=unknown
+  _WCE_LOCK_OWNER=""
+  _WCE_LOCK_OWNER_PID=""
+  _WCE_LOCK_PID_STATE=""
+  _WCE_LOCK_CREATED=""
+  _WCE_LOCK_UNUSABLE=""
+  _WCE_LOCK_MUTEX=false
+  if [[ -e "${lock_dir}.reclaim" || -L "${lock_dir}.reclaim" ]]; then
+    _WCE_LOCK_MUTEX=true
+  fi
+
+  if [[ ! -e "$lock_dir" && ! -L "$lock_dir" ]]; then
+    _WCE_LOCK_STATE=free
+    return 0
+  fi
+  if [[ ! -d "$lock_dir" || -L "$lock_dir" ]]; then
+    _WCE_LOCK_STATE=unusable
+    _WCE_LOCK_UNUSABLE="$lock_dir"
+    return 0
+  fi
+  [[ -f "$owner_file" && ! -L "$owner_file" ]] || return 0
+
+  _WCE_LOCK_CREATED="$(_wce_runtime_update_lock_owner_mtime "$owner_file")" \
+    || _WCE_LOCK_CREATED=""
+  # For display only: first line, bounded, restricted to a safe alphabet so a
+  # foreign owner file cannot inject terminal control sequences.
+  { IFS= read -r -n 64 shown < "$owner_file" || true; } 2>/dev/null
+  _WCE_LOCK_OWNER="${shown//[^A-Za-z0-9._:@+=,-]/?}"
+
+  _wce_runtime_update_lock_owner_only "$lock_dir" || return 0
+  bytes="$(LC_ALL=C wc -c < "$owner_file" 2>/dev/null | tr -d '[:space:]')" \
+    || return 0
+  case "$bytes" in ""|*[!0123456789]*) return 0 ;; esac
+  [[ "$bytes" -ge 2 && "$bytes" -le 128 ]] || return 0
+  # `read` fails without the LF terminator; the byte count rejects a second
+  # line, NUL bytes, and multibyte content.
+  { IFS= read -r raw < "$owner_file"; } 2>/dev/null || return 0
+  [[ "$bytes" == "$((${#raw} + 1))" ]] || return 0
+
+  # Explicit character lists first: bracket ranges are locale-dependent.
+  case "$raw" in
+    starter-kit-update-*)
+      rest="${raw#starter-kit-update-}"
+      case "$rest" in *[!0123456789-]*) return 0 ;; esac
+      [[ "$rest" =~ $setup_re ]] || return 0
+      ;;
+    *)
+      case "$raw" in *[!0123456789abcdef:-]*) return 0 ;; esac
+      [[ "$raw" =~ $updater_re ]] || return 0
+      ;;
+  esac
+  pid="${BASH_REMATCH[1]}"
+
+  _WCE_LOCK_OWNER="$raw"
+  _WCE_LOCK_OWNER_PID="$pid"
+  _WCE_LOCK_PID_STATE="$(_wce_runtime_update_lock_pid_state "$pid")" \
+    || _WCE_LOCK_PID_STATE=unknown
+  case "$_WCE_LOCK_PID_STATE" in
+    alive) _WCE_LOCK_STATE=busy ;;
+    dead) _WCE_LOCK_STATE=stale ;;
+    *) _WCE_LOCK_PID_STATE=unknown ;;
+  esac
+  return 0
+}
+
+# Same classification for the canonical lock of a skill directory. The skill
+# and logs directories must be real directories, exactly as acquisition
+# requires; anything else is `unusable` so a symlink is never followed and
+# no lock-removal command is offered for a lock that does not exist.
+_wce_runtime_update_lock_inspect() { # <current-dir>
+  local current_dir="$1" log_dir="$1/logs" ancestor
+  for ancestor in "$current_dir" "$log_dir"; do
+    if [[ -e "$ancestor" || -L "$ancestor" ]] \
+      && [[ ! -d "$ancestor" || -L "$ancestor" ]]; then
+      _WCE_LOCK_STATE=unusable
+      _WCE_LOCK_OWNER=""
+      _WCE_LOCK_OWNER_PID=""
+      _WCE_LOCK_PID_STATE=""
+      _WCE_LOCK_CREATED=""
+      _WCE_LOCK_UNUSABLE="$ancestor"
+      _WCE_LOCK_MUTEX=false
+      return 0
+    fi
+  done
+  _wce_runtime_update_lock_inspect_dir "$log_dir/.update.lock"
+  return 0
+}
+
+# Recovery is refused wherever "the owner PID does not exist" is not evidence:
+# MDM (which never takes this lock) and Git Bash (no shared PID space).
+_wce_runtime_update_lock_reclaim_allowed() {
+  _update_mdm_managed && return 1
+  _wce_runtime_update_lock_pid_probe_unsupported && return 1
+  return 0
+}
+
+# True when the lock inspected last meets every recovery condition that does
+# not change by waiting: recognized owner, PID gone, old enough, allowed here.
+# Read-only. The reclaim mutex is checked by the reclaimer itself.
+_wce_runtime_update_lock_reclaim_eligible() { # <current-dir>
+  [[ "$_WCE_LOCK_STATE" == stale ]] || return 1
+  _wce_runtime_update_lock_reclaim_allowed || return 1
+  _wce_runtime_update_lock_owner_is_aged "$1/logs/.update.lock"
+}
+
+# Put a quarantined lock directory back under the canonical name. `mv dir
+# name` would move the directory *into* a lock that a writer created at that
+# name in the meantime, so the name is claimed with an atomic mkdir first and
+# the entries are moved one by one. Returns 1 and leaves the quarantine in
+# place when the name is taken; the caller reports the path.
+_wce_runtime_update_lock_restore_quarantine() { # <quarantine> <lock-dir>
+  local quarantine="$1" lock_dir="$2" entry
+  (umask 077; mkdir "$lock_dir") 2>/dev/null || return 1
+  while IFS= read -r -d '' entry; do
+    mv "$entry" "$lock_dir/" 2>/dev/null || return 1
+  done < <(find "$quarantine" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  rmdir "$quarantine" 2>/dev/null || return 1
+  return 0
+}
+
+# Runs with HUP/INT/TERM ignored (see the wrapper below). Every exit path after
+# the mkdir releases the mutex; nothing here may abort early.
+_wce_runtime_update_lock_reclaim_stale_locked() { # <current-dir> <observed-owner>
+  local current_dir="$1" observed="$2"
+  local lock_dir="$current_dir/logs/.update.lock"
+  local mutex="${lock_dir}.reclaim"
+  local quarantine="${lock_dir}.stale-$$-${RANDOM}"
+  local rc=1
+
+  # mkdir is atomic, so exactly one reclaimer proceeds. A mutex left behind by
+  # a killed reclaimer is never removed here: recovery then stays manual.
+  # Acquisition (bash and update-deps.mjs) fails when it finds this mutex
+  # after writing its owner (withdrawing its lock once the mutex is gone, or
+  # leaving it in place if the mutex outlasts its wait), so a writer that
+  # completed an acquisition after this point is impossible; one that
+  # completed before it is seen by the inspection below. A release
+  # (_wce_runtime_update_lock_release) holds the same mutex from its owner
+  # check through its rename, so it never renames while this runs.
+  (umask 077; mkdir "$mutex") 2>/dev/null || return 1
+
+  # Re-read everything under the mutex. The caller's observation may be old:
+  # another reclaimer can have recovered that lock and a new writer acquired
+  # the name since. Only the exact owner that was observed may be removed.
+  _wce_runtime_update_lock_inspect "$current_dir"
+  if [[ "$_WCE_LOCK_STATE" == stale && "$_WCE_LOCK_OWNER" == "$observed" ]] \
+    && _wce_runtime_update_lock_owner_is_aged "$lock_dir" \
+    && [[ ! -e "$quarantine" && ! -L "$quarantine" ]] \
+    && mv "$lock_dir" "$quarantine" 2>/dev/null; then
+    # rename(2) moved whichever inode held the name at that instant. Verify
+    # the quarantined one before deleting anything.
+    _wce_runtime_update_lock_inspect_dir "$quarantine"
+    if [[ "$_WCE_LOCK_STATE" == stale && "$_WCE_LOCK_OWNER" == "$observed" ]] \
+      && _wce_runtime_update_lock_owner_is_aged "$quarantine"; then
+      if rm -f "$quarantine/owner" 2>/dev/null \
+        && rmdir "$quarantine" 2>/dev/null; then
+        rc=0
+      fi
+    elif ! _wce_runtime_update_lock_restore_quarantine \
+        "$quarantine" "$lock_dir"; then
+      # A different lock won the read-to-rename race and a third writer has
+      # taken the canonical name since. Keep the quarantine for inspection.
+      # Releasing the mutex below stays safe: a writer whose directory this
+      # is may pass its mutex check afterwards, but acquisition (here and in
+      # update-deps.mjs) then requires its token on the canonical path, which
+      # the third writer holds, and fails.
+      warn "${STR_WCE_LOCK_QUARANTINE_LEFT:-A lock that was moved aside during recovery could not be put back and was left for inspection:}" >&2
+      info "    $quarantine" >&2
+    fi
+  fi
+  rmdir "$mutex" 2>/dev/null || rc=1
+  return "$rc"
+}
+
+# Remove a lock whose recognized owner no longer exists. Preflight only.
+_wce_runtime_update_lock_reclaim_stale() { # <current-dir> <observed-owner>
+  local current_dir="$1" observed="$2"
+  local reclaim_pid="" reclaim_rc=0 wait_rc=0
+  [[ -n "$observed" ]] || return 1
+  _wce_runtime_update_lock_reclaim_allowed || return 1
+  (
+    trap '' HUP INT TERM
+    _wce_runtime_update_lock_reclaim_stale_locked "$current_dir" "$observed" \
+      || exit 1
+    exit 0
+  ) &
+  reclaim_pid=$!
+  # A trapped signal interrupts wait(1), not the signal-ignoring child.
+  while true; do
+    wait_rc=0
+    wait "$reclaim_pid" 2>/dev/null || wait_rc=$?
+    case "$wait_rc" in
+      129|130|143) continue ;;
+      *) reclaim_rc="$wait_rc"; break ;;
+    esac
+  done
+  [[ "$reclaim_rc" -eq 0 ]]
+}
+
+# Path / owner / creation time / PID lines for the lock inspected last. stderr.
+_wce_runtime_update_lock_print_details() { # <current-dir>
+  local lock_dir="$1/logs/.update.lock" pid_label=""
+  info "  ${STR_WCE_LOCK_LABEL_PATH:-Lock}: $lock_dir" >&2
+  if [[ -n "$_WCE_LOCK_UNUSABLE" ]]; then
+    info "  ${STR_WCE_LOCK_LABEL_UNUSABLE:-Not a directory}: $_WCE_LOCK_UNUSABLE" >&2
+  fi
+  if [[ -n "$_WCE_LOCK_OWNER" ]]; then
+    info "  ${STR_WCE_LOCK_LABEL_OWNER:-Owner}: $_WCE_LOCK_OWNER" >&2
+  fi
+  if [[ -n "$_WCE_LOCK_CREATED" ]]; then
+    info "  ${STR_WCE_LOCK_LABEL_CREATED:-Created}: $_WCE_LOCK_CREATED" >&2
+  fi
+  if [[ -n "$_WCE_LOCK_OWNER_PID" ]]; then
+    case "$_WCE_LOCK_PID_STATE" in
+      alive) pid_label="${STR_WCE_LOCK_PID_ALIVE:-running}" ;;
+      dead) pid_label="${STR_WCE_LOCK_PID_DEAD:-not running}" ;;
+      *) pid_label="${STR_WCE_LOCK_PID_UNKNOWN:-cannot be determined}" ;;
+    esac
+    info "  ${STR_WCE_LOCK_LABEL_PID:-Owner PID}: $_WCE_LOCK_OWNER_PID ($pid_label)" >&2
+  fi
+  return 0
+}
+
+# What to do about the lock inspected last, by state. stderr.
+_wce_runtime_update_lock_print_recovery() { # <current-dir>
+  local lock_dir="$1/logs/.update.lock"
+  local mutex="${lock_dir}.reclaim"
+  local quoted_owner="" quoted_lock="" quoted_mutex=""
+  printf -v quoted_owner '%q' "$lock_dir/owner"
+  printf -v quoted_lock '%q' "$lock_dir"
+  printf -v quoted_mutex '%q' "$mutex"
+  case "$_WCE_LOCK_STATE" in
+    free)
+      # Nothing to remove. Only the mutex hint below may apply.
+      ;;
+    unusable)
+      # No lock is held: the path itself is a symlink or not a directory.
+      # Removing "the lock" would act on whatever that path points to.
+      info "${STR_WCE_LOCK_HINT_UNUSABLE:-Check what that path is and replace it with a regular directory (or remove it), then run the same command again. Do not remove anything through it.}" >&2
+      ;;
+    busy)
+      info "${STR_WCE_LOCK_HINT_BUSY:-Wait for it to finish, then run the same command again. Only if that PID is not update-deps.mjs, setup.sh, or npm (a PID can be reused), remove the lock:}" >&2
+      info "    rm -f $quoted_owner && rmdir $quoted_lock" >&2
+      ;;
+    stale)
+      info "${STR_WCE_LOCK_HINT_STALE:-setup.sh recovers it automatically once it is 60 minutes old. To recover now, confirm that PID is not running, then run:}" >&2
+      info "    rm -f $quoted_owner && rmdir $quoted_lock" >&2
+      ;;
+    *)
+      info "${STR_WCE_LOCK_HINT_UNKNOWN:-Confirm that no update-deps.mjs, setup.sh, or npm ci process is running, then remove the lock and run the same command again:}" >&2
+      info "    rm -f $quoted_owner && rmdir $quoted_lock" >&2
+      ;;
+  esac
+  if [[ -e "$mutex" || -L "$mutex" ]]; then
+    info "${STR_WCE_LOCK_HINT_MUTEX:-An interrupted recovery left a marker that disables automatic recovery. After the same check, remove it too:}" >&2
+    info "    rmdir $quoted_mutex" >&2
+  fi
+  return 0
+}
+
+# Explain an exit 75 (could not acquire) or 74 (could not release) from the
+# lock inspected last. stderr.
+_wce_runtime_update_lock_report_last() { # <current-dir> <74|75>
+  local current_dir="$1" code="${2:-75}"
+  if [[ "$code" == 74 ]]; then
+    error "${STR_WCE_LOCK_RELEASE_FAILED:-The web-content-extraction dependency lock could not be released cleanly (exit 74).}"
+  else
+    case "$_WCE_LOCK_STATE" in
+      busy)
+        error "${STR_WCE_LOCK_BUSY:-Another web-content-extraction dependency update or kit setup is still running, so this run stopped (exit 75).}"
+        ;;
+      stale)
+        error "${STR_WCE_LOCK_STALE:-A web-content-extraction dependency lock was left behind by a process that is no longer running, so this run stopped (exit 75).}"
+        ;;
+      free)
+        if [[ "$_WCE_LOCK_MUTEX" == true ]]; then
+          error "${STR_WCE_LOCK_MUTEX_BLOCKED:-The web-content-extraction dependency lock could not be acquired because a marker from an interrupted recovery exists, so this run stopped (exit 75).}"
+        else
+          error "${STR_WCE_LOCK_UNAVAILABLE:-The web-content-extraction dependency lock could not be acquired, so this run stopped (exit 75). Nothing holds it right now: run the same command again, and if this repeats, check that its parent is a writable directory.}"
+        fi
+        ;;
+      unusable)
+        error "${STR_WCE_LOCK_UNUSABLE:-The web-content-extraction dependency lock path cannot be used because it is a symlink or not a directory, so this run stopped (exit 75). No lock is held.}"
+        ;;
+      *)
+        error "${STR_WCE_LOCK_UNKNOWN:-The web-content-extraction dependency lock is held in a form the kit cannot verify, so it was left untouched and this run stopped (exit 75).}"
+        ;;
+    esac
+  fi
+  _wce_runtime_update_lock_print_details "$current_dir"
+  _wce_runtime_update_lock_print_recovery "$current_dir"
+  # The caller's note describes what an acquisition failure left undone. A
+  # release failure (74) comes after the callback finished, so it gets the
+  # caller's release note instead: setup stops on a 74 before its remaining
+  # steps (manifest, saved config, plugins) just as on a 75.
+  if [[ "$code" == 74 ]]; then
+    if [[ -n "${_WCE_RUNTIME_LOCK_RELEASE_NOTE:-}" ]]; then
+      warn "$_WCE_RUNTIME_LOCK_RELEASE_NOTE"
+    fi
+  elif [[ -n "${_WCE_RUNTIME_LOCK_FAILURE_NOTE:-}" ]]; then
+    warn "$_WCE_RUNTIME_LOCK_FAILURE_NOTE"
+  fi
+  return 0
+}
+
+_wce_runtime_update_lock_report() { # <current-dir> <74|75>
+  _wce_runtime_update_lock_inspect "$1"
+  _wce_runtime_update_lock_report_last "$1" "${2:-75}"
+  return 0
+}
+
+# Settle the lock before the caller writes anything.
+#
+#   free                     -> 0
+#   busy                     -> wait up to _WCE_RUNTIME_LOCK_WAIT_SECONDS (60)
+#   stale, old, recoverable  -> remove it under the reclaim mutex, then 0
+#   anything else            -> diagnosis on stderr, 75
+#
+# A writer can still take the lock between this check and the caller's own
+# acquisition; that later failure is diagnosed by the lock helper itself.
+_wce_runtime_update_lock_preflight() { # <current-dir>
+  local current_dir="$1"
+  local wait_limit="${_WCE_RUNTIME_LOCK_WAIT_SECONDS:-60}"
+  local waited=0 relooks=0 changes=0 announced=false seen=""
+  case "$wait_limit" in ""|*[!0123456789]*) wait_limit=60 ;; esac
+  while true; do
+    _wce_runtime_update_lock_inspect "$current_dir"
+    seen="$_WCE_LOCK_STATE|$_WCE_LOCK_OWNER|$_WCE_LOCK_MUTEX"
+    case "$_WCE_LOCK_STATE" in
+      free)
+        [[ "$_WCE_LOCK_MUTEX" == true ]] || return 0
+        # A reclaimer that is finishing holds the mutex for a moment after
+        # the lock is gone. Acquisition backs off while it exists, so a mutex
+        # that stays is reported rather than passed through to a later 75.
+        if [[ "$relooks" -lt 2 && "$waited" -lt "$wait_limit" ]]; then
+          relooks=$((relooks + 1))
+          sleep 1
+          waited=$((waited + 1))
+          continue
+        fi
+        ;;
+      unusable)
+        # A symlink or non-directory does not go away by waiting.
+        ;;
+      busy)
+        if [[ "$waited" -lt "$wait_limit" ]]; then
+          if [[ "$announced" != true ]]; then
+            announced=true
+            info "${STR_WCE_LOCK_WAITING:-Waiting for a running web-content-extraction dependency update or kit setup to finish} (PID $_WCE_LOCK_OWNER_PID)..."
+          fi
+          sleep 1
+          waited=$((waited + 1))
+          continue
+        fi
+        ;;
+      stale)
+        if _wce_runtime_update_lock_reclaim_eligible "$current_dir"; then
+          if _wce_runtime_update_lock_reclaim_stale \
+            "$current_dir" "$_WCE_LOCK_OWNER"; then
+            warn "${STR_WCE_LOCK_RECOVERED:-Recovered a web-content-extraction dependency lock left behind by a process that is no longer running.}"
+            _wce_runtime_update_lock_print_details "$current_dir"
+            return 0
+          fi
+          # A concurrent reclaimer holds the mutex for a moment and then
+          # frees the lock; losing to it is not a failure. Look again before
+          # giving up. A mutex that is still there afterwards was left by a
+          # killed reclaimer and is reported.
+          if [[ "$relooks" -lt 2 && "$waited" -lt "$wait_limit" ]]; then
+            relooks=$((relooks + 1))
+            sleep 1
+            waited=$((waited + 1))
+            continue
+          fi
+        fi
+        ;;
+      *)
+        # Acquisition is mkdir followed by the owner write, so a writer that
+        # is acquiring right now looks ownerless for an instant. Look again
+        # before calling the lock unverifiable.
+        if [[ "$relooks" -lt 2 && "$waited" -lt "$wait_limit" ]]; then
+          relooks=$((relooks + 1))
+          sleep 1
+          waited=$((waited + 1))
+          continue
+        fi
+        ;;
+    esac
+    # Every branch above falls through to here to give up. Do that only for a
+    # lock that is still the one this pass evaluated: a concurrent reclaimer
+    # or writer can remove or replace it between the look at the top and the
+    # checks that followed (the age probe then fails on a path that is gone).
+    _wce_runtime_update_lock_inspect "$current_dir"
+    if [[ "$_WCE_LOCK_STATE" == free && "$_WCE_LOCK_MUTEX" != true ]]; then
+      return 0
+    fi
+    if [[ "$_WCE_LOCK_STATE|$_WCE_LOCK_OWNER|$_WCE_LOCK_MUTEX" != "$seen" \
+      && "$changes" -lt 5 ]]; then
+      changes=$((changes + 1))
+      continue
+    fi
+    _wce_runtime_update_lock_report_last "$current_dir" 75
+    warn "${STR_WCE_LOCK_UNTOUCHED_NOTE:-No starter-kit file was changed by this run.}"
+    return 75
+  done
+}
+
+# Dry-run simulates in a temp dir that has no lock, so the real one is checked
+# here, read-only. Warns only; the dry-run exit status is unchanged.
+_wce_runtime_update_lock_dryrun_notice() { # <real-claude-dir>
+  local current_dir="$1/skills/web-content-extraction"
+  local mutex="$current_dir/logs/.update.lock.reclaim"
+  _update_mdm_managed && return 0
+  _wce_runtime_update_lock_inspect "$current_dir"
+  if [[ "$_WCE_LOCK_STATE" == free && "$_WCE_LOCK_MUTEX" != true ]]; then
+    return 0
+  fi
+  if _wce_runtime_update_lock_reclaim_eligible "$current_dir" \
+    && [[ ! -e "$mutex" && ! -L "$mutex" ]]; then
+    warn "${STR_WCE_LOCK_DRYRUN_RECOVERABLE:-A web-content-extraction dependency lock was left behind by a process that is no longer running. The real run recovers it automatically before updating.}"
+    _wce_runtime_update_lock_print_details "$current_dir"
+  else
+    warn "${STR_WCE_LOCK_DRYRUN_BLOCKED:-The web-content-extraction dependency lock is held. The real run waits up to 60 seconds for a running owner and otherwise stops (exit 75) before changing any file.}"
+    _wce_runtime_update_lock_print_details "$current_dir"
+    _wce_runtime_update_lock_print_recovery "$current_dir"
+  fi
+  return 0
+}
+
 _wce_runtime_update_lock_acquire() { # <current-dir> <token-output-var>
   local current_dir="$1" output_var="$2"
   local current_parent current_grandparent
   local log_dir="$current_dir/logs"
   local lock_file="$log_dir/.update.lock"
   local generated_token now acquire_pid acquire_rc=0 wait_rc=0
+  local withdraw_waited=0
   now="$(date +%s)" || return 1
-  generated_token="starter-kit-update-$$-${RANDOM}-$now"
+  # Record the process that holds the lock, not the top-level shell ($$).
+  # _wce_with_runtime_update_lock calls this from the subshell that runs the
+  # writer callback, and that subshell outlives a parent killed on its own
+  # (SIGKILL to setup.sh only). With $$ such a live writer would look
+  # abandoned and become reclaimable.
+  generated_token="starter-kit-update-${BASHPID}-${RANDOM}-$now"
 
   _WCE_RUNTIME_ACQUIRE_WAITER_PID="$BASHPID"
   (
@@ -627,11 +1188,52 @@ _wce_runtime_update_lock_acquire() { # <current-dir> <token-output-var>
     fi
 
     # mkdir is atomic and never opens an existing FIFO, symlink, or device.
-    # Never reclaim by age; stale state requires explicit operator recovery.
+    # Acquisition itself never takes over an existing lock, whatever its age
+    # or owner. The only recovery path is the pre-write preflight
+    # (_wce_runtime_update_lock_preflight): recognized owner token, PID
+    # provably gone, owner file old enough, all rechecked under a mutex.
     (umask 077; mkdir "$lock_file") 2>/dev/null || exit 1
-    if ! (umask 077; printf '%s\n' "$generated_token" \
+    # noclobber, like the 'wx' flag in update-deps.mjs: between the mkdir and
+    # this write a reclaimer can move this directory aside and another writer
+    # can take the canonical name. A plain > would truncate that writer's
+    # owner and replace it with this token, and both would hold the lock.
+    if ! (umask 077; set -C; printf '%s\n' "$generated_token" \
         > "$lock_file/owner") 2>/dev/null; then
       rmdir "$lock_file" 2>/dev/null || true
+      exit 1
+    fi
+    # The preflight reclaims an abandoned lock under `<lock>.reclaim`. It
+    # re-reads the lock after taking that mutex, so a lock whose owner was
+    # written before the mutex appeared is seen and left alone. A lock
+    # completed after the mutex appeared would not be, so withdraw it: this
+    # check runs after the owner write, which makes one of the two orderings
+    # certain. The withdrawal is best effort because the reclaimer may have
+    # moved this directory aside already; it then puts it back (busy) or
+    # keeps it for inspection, and this run stops with a diagnosis either way.
+    # Withdraw through the token-checked release: by now the recovery may
+    # have finished and another writer may hold the canonical name, and that
+    # writer's lock must not be removed.
+    # Wait for the reclaimer to finish first. The release checks the owner
+    # and then renames; while the reclaimer is active it can move this lock
+    # aside between those two steps, and after it releases the mutex another
+    # writer can take the canonical name, which the rename would then move.
+    # Once the mutex is gone nothing else renames this live, fresh lock. A
+    # mutex that outlasts the wait does not prove the reclaimer dead (it may
+    # only be stalled), so the same race stays open: leave this lock in place
+    # and fail. Its owner names this subshell, so once that exits the lock is
+    # a recognized abandoned lock that the preflight diagnoses or recovers.
+    if [[ -e "${lock_file}.reclaim" || -L "${lock_file}.reclaim" ]]; then
+      withdraw_waited=0
+      while [[ -e "${lock_file}.reclaim" || -L "${lock_file}.reclaim" ]] \
+        && [[ "$withdraw_waited" -lt "${_WCE_RUNTIME_LOCK_WITHDRAW_WAIT_SECONDS:-3}" ]]; do
+        sleep 1
+        withdraw_waited=$((withdraw_waited + 1))
+      done
+      if [[ -e "${lock_file}.reclaim" || -L "${lock_file}.reclaim" ]]; then
+        exit 1
+      fi
+      _wce_runtime_update_lock_release "$current_dir" "$generated_token" \
+        >/dev/null 2>&1 || true
       exit 1
     fi
   ) &
@@ -649,7 +1251,9 @@ _wce_runtime_update_lock_acquire() { # <current-dir> <token-output-var>
     # removes only a directory it created when its own owner write fails.
     return 1
   fi
-  # Revalidate the child result before publishing the bearer token.
+  # Revalidate the child result before publishing the bearer token. This runs
+  # after the child's mutex check, so it also catches a recovery that moved
+  # the lock aside and finished between the owner write and that check.
   _wce_runtime_update_lock_owner_matches \
     "$current_dir" "$generated_token" || return 1
   _wce_runtime_update_lock_owner_only "$lock_file" || return 1
@@ -657,7 +1261,36 @@ _wce_runtime_update_lock_acquire() { # <current-dir> <token-output-var>
   return 0
 }
 
+# Release under the reclaim mutex. The owner check and the rename below are
+# two steps, and the release runs in a child of the lock holder whose PID is
+# in the token. If only the holder is killed while the child is stalled
+# between those steps, the lock is stale; a reclaimer could remove it, writer
+# A take the name, the resumed rename move A's lock, and writer B take the
+# freed name, leaving A and B both running. The reclaimer only acts under
+# this mutex, so holding it from the check through the rename closes that.
+# A mutex that outlasts the wait may belong to a stalled reclaimer: fail and
+# rename nothing. An acquirer that writes its owner while this is held
+# withdraws (it treats the mutex as a reclaimer), which is safe.
 _wce_runtime_update_lock_release() { # <current-dir> <token>
+  local current_dir="$1" token="$2"
+  local mutex="$current_dir/logs/.update.lock.reclaim"
+  local waited=0 rc=0
+  case "$token" in ""|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  until (umask 077; mkdir "$mutex") 2>/dev/null; do
+    # mkdir failed for a reason other than an existing mutex (missing or
+    # unwritable logs directory): nothing to wait for.
+    [[ -e "$mutex" || -L "$mutex" ]] || return 1
+    [[ "$waited" -lt "${_WCE_RUNTIME_LOCK_WITHDRAW_WAIT_SECONDS:-3}" ]] \
+      || return 1
+    sleep 1
+    waited=$((waited + 1))
+  done
+  _wce_runtime_update_lock_release_locked "$current_dir" "$token" || rc=1
+  rmdir "$mutex" 2>/dev/null || rc=1
+  return "$rc"
+}
+
+_wce_runtime_update_lock_release_locked() { # <current-dir> <token>
   local current_dir="$1" token="$2"
   local lock_file="$current_dir/logs/.update.lock"
   local quarantine="${lock_file}.release-${token}"
@@ -678,11 +1311,10 @@ _wce_runtime_update_lock_release() { # <current-dir> <token>
       "$current_dir" "$token" "$quarantine" \
     || ! _wce_runtime_update_lock_owner_only "$quarantine"; then
     # The inode renamed into quarantine was replaced after our first check.
-    # Put that foreign directory back when no successor owns the canonical
-    # name; otherwise retain both paths for manual inspection.
-    if [[ ! -e "$lock_file" && ! -L "$lock_file" ]]; then
-      mv "$quarantine" "$lock_file" 2>/dev/null || true
-    fi
+    # Put that foreign directory back unless a successor owns the canonical
+    # name; then retain both paths for manual inspection.
+    _wce_runtime_update_lock_restore_quarantine "$quarantine" "$lock_file" \
+      || true
     return 1
   fi
   if ! rm -f "$quarantine/owner"; then
@@ -741,7 +1373,10 @@ _wce_with_runtime_update_lock() { # <current-dir> <callback> [args...]
             *) release_rc="$wait_rc"; break ;;
           esac
         done
-        [[ "$release_rc" -eq 0 ]] || release_rc=74
+        if [[ "$release_rc" -ne 0 ]]; then
+          release_rc=74
+          _wce_runtime_update_lock_report "$current_dir" 74 || true
+        fi
       fi
       trap - HUP INT TERM
       [[ "$cleanup_pending_signal" -eq 0 ]] || cleanup_rc="$cleanup_pending_signal"
@@ -760,6 +1395,9 @@ _wce_with_runtime_update_lock() { # <current-dir> <callback> [args...]
       || acquire_rc=$?
     if [[ "$acquire_rc" -ne 0 ]]; then
       [[ "$cleanup_pending_signal" -eq 0 ]] || exit "$cleanup_pending_signal"
+      # Callers invoke this helper as a simple command under errexit, so the
+      # exit below ends the whole run. Say why here; nobody else can.
+      _wce_runtime_update_lock_report "$current_dir" 75 || true
       exit 75
     fi
     _WCE_RUNTIME_LOCK_TOKEN="$runtime_lock_token"
@@ -987,10 +1625,12 @@ _update_auto_managed_wce_package_pair() { # <current-dir> <snapshot-dir> <newkit
   local current_dir="$1" snapshot_dir="$2" newkit_dir="$3"
   local update_rc=0
 
-  # update-deps.mjs uses this exact lock for its complete read/mutate/test
-  # cycle. Hold it across validation, rendering, and both renames so neither
-  # writer can derive output from a moving package/lock pair. The subshell
-  # boundary preserves caller traps while guaranteeing signal-time release.
+  # update-deps.mjs uses this exact lock for its mutate/test cycle: its
+  # registry check runs without the lock, and it re-reads the installed
+  # versions after acquiring. Hold it across validation, rendering, and both
+  # renames so neither writer can derive output from a moving package/lock
+  # pair. The subshell boundary preserves caller traps while guaranteeing
+  # signal-time release.
   _wce_with_runtime_update_lock "$current_dir" \
     _update_auto_managed_wce_package_pair_locked \
     "$current_dir" "$snapshot_dir" "$newkit_dir" || update_rc=$?
@@ -1903,7 +2543,7 @@ _update_phase_claude_md() {
   local current_claude_md="${claude_dir}/CLAUDE.md"
   local snapshot_claude_md="${snapshot_dir}/CLAUDE.md"
 
-  local _updated=false
+  local _updated=false _baseline_only=false
   if _update_mdm_managed; then
     # MDM always converges CLAUDE.md to desired state. Keep this call out of
     # an `if` condition so errexit remains active throughout its call tree.
@@ -1915,13 +2555,21 @@ _update_phase_claude_md() {
       _updated=true
     else
       update_rc=$?
-      [[ "$update_rc" -eq 1 ]] || return 1
+      case "$update_rc" in
+        1) ;;
+        # Content already current, snapshot behind: refresh the baseline only.
+        # Listing the file as updated is what drives the snapshot phase.
+        3) _updated=true; _baseline_only=true ;;
+        *) return 1 ;;
+      esac
     fi
   fi
 
   if [[ "$_updated" == "true" ]]; then
     _UPDATE_ALL_UPDATED_FILES+=("$current_claude_md")
-    if [[ "$_dr" == "true" ]]; then
+    if [[ "$_baseline_only" == "true" ]]; then
+      info "${STR_CLAUDEMD_KIT_BASELINE_REFRESHED:-CLAUDE.md kit section already matches this version; snapshot refreshed}"
+    elif [[ "$_dr" == "true" ]]; then
       info "CLAUDE.md kit section will be updated"
     else
       ok "$STR_CLAUDEMD_KIT_UPDATED"
@@ -2242,10 +2890,15 @@ run_update() {
   _update_phase_settings "$claude_dir" "$snapshot_dir"
   _update_phase_claude_md "$claude_dir" "$snapshot_dir"
   if _update_requires_wce_lock "$project_dir" "$claude_dir" "$snapshot_dir"; then
-    # This is the transaction boundary shared with update-deps.mjs and fresh
-    # deployment: every WCE source update, retired-file removal, and baseline
-    # refresh completes under one token-bound lock. A contending writer fails
-    # before any live or snapshot WCE byte is read or changed.
+    # This is the transaction boundary shared with update-deps.mjs (its apply
+    # phase) and fresh deployment: every WCE source update, retired-file
+    # removal, and baseline refresh completes under one token-bound lock. A
+    # contending writer fails before any live or snapshot WCE byte is read or
+    # changed. setup_deploy already settled the lock before the backup, so
+    # contention here means a writer started in the last few seconds; the
+    # helper reports it and appends this note about the two finished steps.
+    local _WCE_RUNTIME_LOCK_FAILURE_NOTE="${STR_WCE_LOCK_PARTIAL_NOTE:-settings.json and CLAUDE.md were already processed by this run; the remaining kit files were not. Resolve the lock and run the same command again to apply the rest.}"
+    local _WCE_RUNTIME_LOCK_RELEASE_NOTE="${STR_WCE_LOCK_RELEASE_NOTE:-This run stopped before its remaining steps, including the install manifest, saving the settings, and plugin setup. Resolve the lock and run the same command again.}"
     _wce_with_runtime_update_lock \
       "$claude_dir/skills/web-content-extraction" \
       _update_tail_with_wce_lock "$project_dir" "$claude_dir" "$snapshot_dir"
