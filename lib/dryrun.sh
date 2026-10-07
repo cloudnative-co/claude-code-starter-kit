@@ -44,6 +44,9 @@ _dryrun_copy_path() {
 #
 # Copies only files needed for install/update simulation. Runtime-heavy user
 # state such as projects/ session transcripts is intentionally excluded.
+# .starter-kit-update-cache is no longer written since v0.79.0 (#136); it is
+# still copied so the simulated update starts from the same state as a real
+# one when an older install left the file (see setup_deploy() in setup.sh).
 # ---------------------------------------------------------------------------
 _dryrun_init() {
   local real_dir="$1"

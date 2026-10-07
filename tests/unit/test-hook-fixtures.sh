@@ -197,7 +197,7 @@ printf 'fixture-previous-failure\n' >"$_auf_home/.claude/.starter-kit-update-sta
 
 _auf_rc=0
 HOME="$_auf_home" KIT_DIR="$_auf_home/.claude-starter-kit-missing" \
-  AUTO_UPDATE_HOOK=SessionStart AUTO_UPDATE_LEGACY=0 \
+  AUTO_UPDATE_HOOK=SessionStart \
   bash "$PROJECT_DIR/features/auto-update/scripts/auto-update.sh" \
   <"$_hook_fixture_dir/sessionstart-startup.json" >/dev/null 2>"$_auf_err" || _auf_rc=$?
 

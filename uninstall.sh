@@ -1557,6 +1557,8 @@ fi
 # ---------------------------------------------------------------------------
 # Remove manifest-declared runtime artifacts. Older manifests may not have this
 # list yet; the fallback below covers the legacy v2 transition.
+# .starter-kit-update-cache is no longer written since v0.79.0 (#136); it stays
+# in the fallback so a file left by an older install is still removed.
 # ---------------------------------------------------------------------------
 _cleanup_paths_seen=false
 while IFS= read -r _cleanup_path; do

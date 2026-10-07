@@ -428,3 +428,172 @@ MD
     fail "$test_name (scaffold=$_ust_rc_scaffold content=$_ust_rc_content markerless=$_ust_rc_markerless)"
   fi
 }
+
+# ── Legacy hook shape (Claude Code < 2.1.89) converges on update ────────────
+#
+# v0.78.x and earlier generated a second shape of the auto-update and
+# pr-creation-log hooks for Claude Code < 2.1.89 (retired in v0.79.0, #136).
+# These cases drive the real _update_phase_settings against a real kit build:
+# an install that still carries that shape must end up with exactly one current
+# entry per hook, user hooks intact, and an install already on the current
+# shape must not be rewritten at all.
+{
+  test_name="update: legacy hook migration runs between the retired and superseded sweeps"
+  _lgu_order="$(declare -f _update_phase_settings \
+    | grep -nE '_strip_retired_hook_entries|_migrate_legacy_hook_entries|_strip_superseded_kit_hook_generations' \
+    | sed -E 's/^[0-9]+:[[:space:]]*([A-Za-z_]+).*/\1/' | tr '\n' ' ')"
+  if [[ "$_lgu_order" == "_strip_retired_hook_entries _migrate_legacy_hook_entries _strip_superseded_kit_hook_generations " ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name (got: $_lgu_order)"
+  fi
+}
+
+_lgu_tmp="$(mktemp -d)"
+_SETUP_TMP_FILES+=("$_lgu_tmp")
+_lgu_prepare_rc=0
+(
+  set +e +u
+  export HOME="$_lgu_tmp/home"
+  mkdir -p "$HOME"
+  # shellcheck source=lib/progress.sh
+  source "$PROJECT_DIR/lib/progress.sh"
+  # shellcheck source=i18n/en/strings.sh
+  source "$PROJECT_DIR/i18n/en/strings.sh"
+  # shellcheck source=profiles/standard.conf
+  source "$PROJECT_DIR/profiles/standard.conf"
+  # shellcheck disable=SC2034 # consumed by the sourced builder and updater
+  LANGUAGE=en COMMIT_ATTRIBUTION=false KIT_MDM_MANAGED=false DRY_RUN=false
+  # shellcheck disable=SC2034 # consumed by the sourced merge library
+  _MERGE_INTERACTIVE=false
+
+  build_settings_file "$_lgu_tmp/kit.json" >/dev/null 2>&1 || exit 1
+  cp "$_lgu_tmp/kit.json" "$_lgu_tmp/legacy.json"
+  rewrite_settings_to_legacy_hooks "$_lgu_tmp/legacy.json" || exit 1
+  grep -q 'AUTO_UPDATE_LEGACY=1' "$_lgu_tmp/legacy.json" || exit 1
+  grep -q 'PR_CREATION_LOG_LEGACY=1' "$_lgu_tmp/legacy.json" || exit 1
+
+  _lgu_user='.hooks.SessionStart += [{"matcher":"startup","hooks":[{"type":"command","command":"echo user-start"}]}]
+    | .hooks.PostToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":"echo user-post"}]}]'
+  jq "$_lgu_user" "$_lgu_tmp/legacy.json" > "$_lgu_tmp/legacy-user.json" || exit 1
+  jq "$_lgu_user" "$_lgu_tmp/kit.json" > "$_lgu_tmp/kit-user.json" || exit 1
+  # What a v0.78.x update left behind once the CLI crossed 2.1.89 with a
+  # user-touched array: the legacy entries next to the current ones.
+  jq --slurpfile legacy "$_lgu_tmp/legacy.json" '
+    def legacy_entries($event):
+      [$legacy[0].hooks[$event][] | select(any(.hooks[]; .command | contains("_LEGACY=1")))];
+    .hooks.SessionStart += legacy_entries("SessionStart")
+    | .hooks.PostToolUse += legacy_entries("PostToolUse")' \
+    "$_lgu_tmp/kit-user.json" > "$_lgu_tmp/duplicated.json" || exit 1
+
+  _lgu_case() { # <label> <snapshot-file> <current-file> <snapshot-bootstrapped>
+    local dir="$_lgu_tmp/$1" rc=0
+    mkdir -p "$dir/.starter-kit-snapshot" || return 1
+    cp "$2" "$dir/.starter-kit-snapshot/settings.json" || return 1
+    cp "$3" "$dir/settings.json" || return 1
+    # shellcheck disable=SC2012 # one known path; only the inode column is read
+    ls -i "$dir/settings.json" | awk '{print $1}' > "$dir/inode-before"
+    # shellcheck disable=SC2034 # consumed by the sourced merge library
+    CLAUDE_DIR="$dir" _MERGE_PREFS_FILE="" _MERGE_PREFS_LOADED=false
+    # shellcheck disable=SC2034 # consumed by _update_phase_settings
+    _SNAPSHOT_BOOTSTRAPPED="$4"
+    _UPDATE_ALL_UPDATED_FILES=()
+    _update_phase_settings "$dir" "$dir/.starter-kit-snapshot" \
+      > "$dir/phase.log" 2>&1 || rc=$?
+    printf '%s\n' "$rc" > "$dir/rc"
+  }
+  _lgu_case user-hooks "$_lgu_tmp/legacy.json" "$_lgu_tmp/legacy-user.json" false
+  _lgu_case bootstrap "$_lgu_tmp/legacy.json" "$_lgu_tmp/legacy.json" true
+  _lgu_case untouched "$_lgu_tmp/legacy.json" "$_lgu_tmp/legacy.json" false
+  _lgu_case duplicated "$_lgu_tmp/kit.json" "$_lgu_tmp/duplicated.json" false
+  _lgu_case current-shape "$_lgu_tmp/kit.json" "$_lgu_tmp/kit-user.json" false
+) || _lgu_prepare_rc=$?
+
+# Exactly one current entry per kit hook and no legacy command anywhere.
+_lgu_converged() { # <settings-file>
+  jq -e '
+    def cmds($event; $suffix):
+      [.hooks[$event][]?.hooks[]? | select((.command? // "") | endswith($suffix))];
+    cmds("SessionStart"; "/auto-update/auto-update.sh") as $start
+    | cmds("SessionEnd"; "/auto-update/auto-update.sh") as $end
+    | cmds("PostToolUse"; "/pr-creation-log/log-pr.sh") as $pr
+    | ($start | length) == 1 and $start[0].async == true
+      and ($end | length) == 1 and $end[0].async == true
+      and ($pr | length) == 1 and $pr[0].async == true
+      and $pr[0].if == "Bash(gh pr create *)"
+      and ([.. | objects | .command? | strings | select(contains("_LEGACY=1"))] | length) == 0
+  ' "$1" >/dev/null 2>&1
+}
+
+# Same entries as the given reference in the two arrays the merge may reorder,
+# and an identical document everywhere else.
+_lgu_same_as() { # <settings-file> <reference-file>
+  jq -e --slurpfile want "$2" '
+    (.hooks.SessionStart | sort) == ($want[0].hooks.SessionStart | sort)
+    and (.hooks.PostToolUse | sort) == ($want[0].hooks.PostToolUse | sort)
+    and del(.hooks.SessionStart, .hooks.PostToolUse)
+      == ($want[0] | del(.hooks.SessionStart, .hooks.PostToolUse))
+  ' "$1" >/dev/null 2>&1
+}
+
+{
+  test_name="update: a legacy-shaped install with user hooks converges without duplicate kit hooks"
+  if [[ "$_lgu_prepare_rc" -eq 0 \
+    && "$(cat "$_lgu_tmp/user-hooks/rc" 2>/dev/null)" == "0" ]] \
+    && _lgu_converged "$_lgu_tmp/user-hooks/settings.json" \
+    && _lgu_same_as "$_lgu_tmp/user-hooks/settings.json" "$_lgu_tmp/kit-user.json"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="update: a bootstrap merge over a legacy-shaped install adopts the current hooks"
+  if [[ "$_lgu_prepare_rc" -eq 0 \
+    && "$(cat "$_lgu_tmp/bootstrap/rc" 2>/dev/null)" == "0" ]] \
+    && _lgu_converged "$_lgu_tmp/bootstrap/settings.json" \
+    && _lgu_same_as "$_lgu_tmp/bootstrap/settings.json" "$_lgu_tmp/kit.json"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="update: an untouched legacy-shaped install is replaced by the current build"
+  if [[ "$_lgu_prepare_rc" -eq 0 \
+    && "$(cat "$_lgu_tmp/untouched/rc" 2>/dev/null)" == "0" ]] \
+    && cmp -s "$_lgu_tmp/untouched/settings.json" "$_lgu_tmp/kit.json"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="update: legacy entries left next to the current ones by an earlier update are healed"
+  if [[ "$_lgu_prepare_rc" -eq 0 \
+    && "$(cat "$_lgu_tmp/duplicated/rc" 2>/dev/null)" == "0" ]] \
+    && ! _lgu_converged "$_lgu_tmp/duplicated.json" \
+    && _lgu_converged "$_lgu_tmp/duplicated/settings.json" \
+    && _lgu_same_as "$_lgu_tmp/duplicated/settings.json" "$_lgu_tmp/kit-user.json"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="update: an install already on the current hook shape is not rewritten"
+  # shellcheck disable=SC2012 # one known path; only the inode column is read
+  if [[ "$_lgu_prepare_rc" -eq 0 \
+    && "$(cat "$_lgu_tmp/current-shape/rc" 2>/dev/null)" == "0" ]] \
+    && cmp -s "$_lgu_tmp/current-shape/settings.json" "$_lgu_tmp/kit-user.json" \
+    && [[ "$(ls -i "$_lgu_tmp/current-shape/settings.json" | awk '{print $1}')" \
+      == "$(cat "$_lgu_tmp/current-shape/inode-before")" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}

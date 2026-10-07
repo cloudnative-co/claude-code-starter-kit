@@ -14,7 +14,7 @@ local _profile_override_render _safety_override_render _biome_override_render
 local _policy_base _policy_peer _policy_hash _peer_hash _policy_variant
 local _policy_drift_fail _variant_hash _policy_check _variant_output
 local _variant_args _oracle_log _renderer_policy_args _missing_arg_fail
-local _c1_first _c1_last _c1_rejected
+local _c1_first _c1_last _c1_rejected _pr_hook_check
 _expected_tmp="$(mktemp -d)"
 chmod 700 "$_expected_tmp"
 _renderer_policy_args=(--editor none --claude-cli-required true)
@@ -72,7 +72,6 @@ if [[ "$profile/$language" == standard/ja ]]; then
 fi
 LANGUAGE="$language"
 KIT_MDM_MANAGED=true
-KIT_MDM_ASYNC_HOOKS=false
 _SETUP_TMP_FILES=()
 source "$PROJECT_DIR/lib/features.sh"
 source "$PROJECT_DIR/lib/template.sh"
@@ -209,6 +208,36 @@ else
   fail "mdm-expected: settings.json differs from the shell builder"
 fi
 
+# The hook shape once pinned for Claude Code < 2.1.89 is retired (#136): an
+# MDM deployment carries the same pr-creation-log entry as a normal install.
+_pr_hook_check="$($PYTHON - "$_renderer_output/tree/settings.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    raw = source.read()
+hooks = [
+    hook
+    for entry in json.loads(raw).get("hooks", {}).get("PostToolUse", [])
+    for hook in entry.get("hooks", [])
+    if hook.get("command", "").endswith("/.claude/hooks/pr-creation-log/log-pr.sh")
+]
+valid = (
+    len(hooks) == 1
+    and hooks[0].get("command")
+        == "/Users/mdm-fixture/.claude/hooks/pr-creation-log/log-pr.sh"
+    and hooks[0].get("if") == "Bash(gh pr create *)"
+    and hooks[0].get("async") is True
+    and "_LEGACY=" not in raw
+)
+print("yes" if valid else "no")
+PY
+)"
+if [[ "$_pr_hook_check" == yes ]]; then
+  pass "mdm-expected: pr-creation-log is rendered in the current if/async hook shape"
+else
+  fail "mdm-expected: pr-creation-log hook is not in the current if/async shape"
+fi
+
 if cmp -s "$_shell_claude" "$_renderer_output/tree/CLAUDE.md" \
   && [[ "$(tail -c 1 "$_renderer_output/tree/CLAUDE.md" | od -An -tuC | tr -d ' ')" == 10 ]]; then
   pass "mdm-expected: CLAUDE.md managed section has strict byte parity and trailing LF"
@@ -267,7 +296,7 @@ with open(sys.argv[1], encoding="utf-8") as source:
 valid = (
     value.get("profile") == "standard"
     and value.get("language") == "ja"
-    and value.get("async_hooks") is False
+    and "async_hooks" not in value
     and value.get("files") == sorted(value.get("files", []))
     and value.get("absent_files") == sorted(value.get("absent_files", []))
     and not set(value.get("files", [])).intersection(value.get("absent_files", []))

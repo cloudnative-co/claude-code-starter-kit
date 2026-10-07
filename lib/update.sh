@@ -1442,6 +1442,104 @@ _strip_superseded_kit_hook_generations() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# _migrate_legacy_hook_entries - Rewrite hook entries generated for
+# Claude Code < 2.1.89
+#
+# Usage: _migrate_legacy_hook_entries <settings-file> <kit-built-file>
+#
+# Until v0.78.x the kit generated a second shape of the auto-update and
+# pr-creation-log hooks for Claude Code < 2.1.89 (hooks.legacy.json, retired
+# in v0.79.0, #136). Those commands carry an env prefix, so they are a
+# different identity from the current entries: a user-touched hooks array
+# keeps the legacy hook NEXT TO the kit's current one (non-interactive 3-way
+# merge treats it as "removed by the kit" and keeps it), and a bootstrap merge
+# keeps it INSTEAD of the current one. Neither _merge_arrays_3way nor
+# _strip_superseded_kit_hook_generations can pair them. The current scripts
+# ignore the prefix, so a leftover auto-update entry (no `async`) would check
+# for updates on every session start without the former 24h throttle.
+#
+# Per hooks array, for each of the two exact commands the kit itself wrote:
+#   - the current command is already registered there -> the legacy hook is
+#     removed;
+#   - otherwise the first legacy hook is replaced in place by the kit's
+#     current hook object for that script (removed when the freshly built kit
+#     settings do not ship it, e.g. the feature is disabled) and any further
+#     copy is removed.
+# An entry left without hooks is dropped, and so is an array left empty. Only
+# the legacy hooks are touched: other hooks, other entries and their order stay
+# as they are, and a file without a legacy hook is not rewritten at all.
+# Matching is exact against this $HOME (same premise as
+# _strip_retired_hook_entries); a hand-edited variant is left alone.
+# ---------------------------------------------------------------------------
+_migrate_legacy_hook_entries() {
+  local settings_file="$1"
+  local kit_file="$2"
+  [[ -f "$settings_file" ]] || return 1
+  [[ -f "$kit_file" ]] || return 0
+  local filter='
+    def current_command:
+      if type != "string" then null
+      elif . == ("AUTO_UPDATE_LEGACY=1 AUTO_UPDATE_HOOK=SessionStart " + $home
+                 + "/.claude/hooks/auto-update/auto-update.sh")
+        then "AUTO_UPDATE_HOOK=SessionStart " + $home
+             + "/.claude/hooks/auto-update/auto-update.sh"
+      elif . == ("PR_CREATION_LOG_LEGACY=1 " + $home
+                 + "/.claude/hooks/pr-creation-log/log-pr.sh")
+        then $home + "/.claude/hooks/pr-creation-log/log-pr.sh"
+      else null end;
+    def cmd: if type == "object" then .command else null end;
+    def inner: if type == "object" and (.hooks | type) == "array"
+               then .hooks else [] end;
+    def has_legacy: any(.[]; any(inner[]; (cmd | current_command) != null));
+    def migrate($K):
+      . as $L
+      | [$L[] | inner[] | cmd | strings] as $registered
+      | reduce $L[] as $entry ({out: [], done: []};
+          if [$entry] | has_legacy then
+            (reduce $entry.hooks[] as $hook ({hooks: [], done: .done};
+               ($hook | cmd | current_command) as $now
+               | if $now == null then .hooks += [$hook]
+                 elif any(($registered + .done)[]; . == $now) then .
+                 else ([$K[]? | inner[] | select(cmd == $now)] | first) as $kit_hook
+                   | if $kit_hook == null then .
+                     else .hooks += [$kit_hook] | .done += [$now] end
+                 end)) as $result
+            | .done = $result.done
+            | if ($result.hooks | length) > 0
+              then .out += [$entry | .hooks = $result.hooks] else . end
+          else .out += [$entry] end)
+      | .out;
+    ($kit[0].hooks // {}) as $KH'
+  local probe_rc=0
+  jq -e --arg home "$HOME" --slurpfile kit "$kit_file" "$filter"' |
+    any((.hooks // {}) | to_entries[] | .value;
+        type == "array" and has_legacy)
+  ' "$settings_file" >/dev/null 2>&1 || probe_rc=$?
+  case "$probe_rc" in
+    0) ;;
+    1) return 0 ;;
+    *) return 0 ;;  # unreadable kit build or settings — nothing safe to do
+  esac
+  local tmp
+  tmp="$(mktemp)" || return 1
+  _SETUP_TMP_FILES+=("$tmp")
+  if jq --arg home "$HOME" --slurpfile kit "$kit_file" "$filter"' |
+    .hooks |= with_entries(
+      ($KH[.key] // []) as $K
+      | if (.value | type) == "array" and (.value | has_legacy)
+        then .value |= migrate($K) | select((.value | length) > 0)
+        else . end)
+  ' "$settings_file" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$settings_file" || return 1
+    ok "Migrated hook entries generated for Claude Code < 2.1.89 to the current kit hooks"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+    warn "Could not migrate legacy hook entries in settings.json"
+    return 1
+  fi
+}
+
 _retired_relative_path_is_safe() {
   local rel="$1"
   [[ -n "$rel" && "$rel" != /* && ! "$rel" =~ [[:cntrl:]] ]] || return 1
@@ -1756,6 +1854,12 @@ _update_phase_settings() {
   # which would leave commands pointing at scripts the retired-file sweep
   # deletes. Strip them explicitly.
   _strip_retired_hook_entries "$current_settings" || return 1
+
+  # Hook entries generated for Claude Code < 2.1.89 (retired in v0.79.0, #136)
+  # carry a different command, so neither the merge above nor the sweep below
+  # can pair them with the kit's current entry. Rewrite them first; the sweep
+  # then sees only current commands.
+  _migrate_legacy_hook_entries "$current_settings" "$new_settings" || return 1
 
   # Heal arrays that already carry a stale kit hook generation next to the
   # kit's current entry (#163). The 3-way merge above only runs when snapshot,
@@ -2165,13 +2269,8 @@ _check_auto_update_health() {
   local issues=()
   local has_session_start=false
   local has_session_end=false
-  local require_session_end=false
   local hook_state_known=true
   local hook_issue=false
-
-  if _claude_supports_async_hooks "2.1.89"; then
-    require_session_end=true
-  fi
 
   # `.hooks.<Event>[]?.hooks[]?.command | contains(...)` emits one output per
   # registered hook, and `jq -e` derives its exit code from the LAST output
@@ -2210,7 +2309,7 @@ _check_auto_update_health() {
   if [[ "$hook_state_known" == "true" ]]; then
     if [[ "$has_session_start" != "true" ]]; then
       hook_issue=true
-    elif [[ "$require_session_end" == "true" ]] && [[ "$has_session_end" != "true" ]]; then
+    elif [[ "$has_session_end" != "true" ]]; then
       hook_issue=true
     fi
   fi
