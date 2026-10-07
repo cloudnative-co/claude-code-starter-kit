@@ -22,6 +22,8 @@ npm test   # node --test
 - `test/defuddle-core.test.mjs` — charCount/cjkCharCount
 - `test/extract-smoke.test.mjs` — **実抽出スモーク（HTML: defuddle+jsdom / PDF: pdfjs）**
 - `test/defuddle-url.test.mjs` — URL 抽出 CLI の exit code 契約
+- `test/update-deps-lock.test.mjs` / `test/update-deps-run.test.mjs` — 依存 updater の lock
+  （取得・解放・奪取しないこと、最新版チェック中は保持しないこと。npm は偽物に差し替え）
 
 DNS非依存・オフラインの決定的テストのみ。
 CI はキットリポジトリの `.github/workflows/skill-web-content-extraction.yml`（Node 22/24 マトリクス）で、`skills/web-content-extraction/**` 変更時に起動する。`~/.claude` へ deploy されたコピーでは CI は走らない。
@@ -99,10 +101,16 @@ CI はキットリポジトリの `.github/workflows/skill-web-content-extractio
   `package.json` / `package-lock.json` を自動ロールバック**して元の版に戻す。破壊的リリースで
   skill が壊れない。
 - **スロットル**: 起動毎の負荷を避けるため **24時間に1回**だけチェック（`logs/.last-update-check`）。
-- **多重実行防止**: ロックファイル（`logs/.update.lock`）で、依存 updater・kit update・
-  `npm ci` の競合を回避。通常終了と HUP / INT / TERM では所有 token を照合して解除する。
-  経過時間だけで stale lock を自動奪取すると複数 reclaimer が同時に所有権を得られるため、
-  既存 lock は時刻にかかわらず fail-closed で扱う。
+  ただし中断された更新（`logs/.update-in-progress`）があれば、この期間中でも起動時に
+  lock を取得して再テストする（最新版チェックは行わない）。
+- **多重実行防止**: ロック（`logs/.update.lock`）で、依存更新の適用（`npm install` /
+  `npm test` / ロールバック）・kit の setup / update・`npm ci` を直列化する。最新版チェック
+  （`npm view`）の間は保持せず、取得後にインストール済みバージョンを読み直して適用要否を
+  判定し直す。チェック中に別の実行の更新が中断されていた（`logs/.update-in-progress` が
+  残っている）場合は、更新候補が無くても lock を取得して再テストしてから終了する。
+  通常終了では所有 token を照合して解除する。HUP / INT / TERM でも解除するが、
+  npm を同期実行している間はシグナル処理が npm の終了まで走らないため、その間に強制終了
+  されると lock が残り得る。依存 updater 自身は、既存 lock を時刻にかかわらず奪取しない。
 - **非ブロッキング**: `async` 実行なので起動を待たせない。
 - **結果**: すべて `logs/update.log` に記録（通知はログのみ）。
 
@@ -113,9 +121,32 @@ cd ~/.claude/skills/web-content-extraction && npm run update:deps   # = update-d
 tail -f ~/.claude/skills/web-content-extraction/logs/update.log
 ```
 
-`SIGKILL`・電源断等で lock が残った場合は、依存更新・kit setup・`npm ci` のプロセスが
-動いていないことを確認してから `logs/.update.lock` を明示削除し、setup または手動更新を
-再実行する。実行中プロセスを確認せずに lock を削除してはならない。
+`SIGKILL`・電源断等で lock が残った場合の扱い:
+
+- **自動回収**: kit の setup / update（`setup.sh`、`/update-kit`、自動アップデート）は、
+  ファイルを書き換える前に lock を確認する。owner が kit の書く形式（依存 updater の
+  `<PID>:<UUID>`、setup の `starter-kit-update-<PID>-…`）で、その PID のプロセスが存在せず、
+  owner ファイルが 60 分以上前のものである場合に限り、回収用 mutex
+  （`logs/.update.lock.reclaim`）の下で照合し直してから取り除く。経過時間だけを根拠にした
+  奪取はしない。Git Bash（MSYS）と MDM 管理下では回収しない。owner のプロセスが実行中なら
+  最大 60 秒待つ。PID は同じ PID 名前空間の中でしか照合できないため、コンテナとホストで
+  `~/.claude` を共有している場合、別の名前空間で実行中の owner は存在しないように見える。
+  その場合に誤回収を防ぐのは 60 分の条件だけである。回収中は lock の取得側（setup と
+  `update-deps.mjs`）が mutex の存在を見て自分の lock を取り下げるため、回収と並行して
+  取得が成立することはない。
+- **手動復旧**: 上の条件を満たさない lock（60 分未満、owner が上記以外の形式、PID の生存を
+  判定できない、`logs/.update.lock.reclaim` が残っている）は残る。setup / update は lock の
+  パス・owner・作成時刻・PID の状態を表示し、終了コード 75 で止まる。依存更新・kit setup・
+  `npm ci` のプロセスが動いていないことを確認してから次を実行し、setup または手動更新を
+  再実行する。実行中プロセスを確認せずに lock を削除してはならない。skill ディレクトリ・
+  `logs`・lock のパスが symlink やディレクトリ以外の場合は lock は保持されておらず、そのパスが
+  表示される（下のコマンドは案内されない）。そのパスを経由して削除せず、何であるかを確認
+  してから置き換える。
+
+  ```bash
+  rm -f ~/.claude/skills/web-content-extraction/logs/.update.lock/owner \
+    && rmdir ~/.claude/skills/web-content-extraction/logs/.update.lock
+  ```
 
 > 注: 自動更新ゲートは `npm test` に依存する。テストが実抽出（HTML/PDF）を検証しているため
 > ゲートは実効的だが、サイト固有の挙動変化までは捕捉できない。重要更新後は実URLでの確認を推奨。

@@ -165,6 +165,7 @@ fi
    - **Files to skip**: User-owned files that would be preserved
    - **External operations**: Actions like plugin installs, shown as `[WOULD RUN]`
    - **settings.json diff**: Unified diff of what would change in settings
+   - **Dependency lock warning** (only when present): if the real `~/.claude/skills/web-content-extraction/logs/.update.lock` is held, the preview ends with a warning that names the lock, its owner and PID state, and says whether `/update-kit` would recover it automatically or stop with exit code 75. The preview only reads the lock and still exits 0
 3. After showing the summary, let the user know:
    - If they want to proceed: run `/update-kit`
    - If they want to cancel: no starter-kit deployment was applied; the selected

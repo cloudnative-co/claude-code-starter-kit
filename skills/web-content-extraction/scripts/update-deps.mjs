@@ -8,7 +8,10 @@
 //
 // Safety:
 //   - Throttled to once per 24h (override with --force).
-//   - Lock file prevents concurrent runs (e.g. multiple sessions starting).
+//   - A lock serializes the apply phase (npm install / test / rollback) with
+//     other sessions and with kit setup / update / npm ci. The registry check
+//     (`npm view`) runs without it, so a run killed while checking leaves no
+//     lock behind.
 //   - package.json + package-lock.json are backed up and restored on test fail.
 //   - All output is appended to logs/update.log; never writes to stdout JSON.
 //
@@ -132,12 +135,67 @@ export function acquireLock(lockFile = LOCK_FILE) {
       flag: 'wx',
       mode: 0o600,
     })
-    return token
   } catch (error) {
     // The directory is ours because this call created it. Remove only the
     // expected empty/owner-only shape; any foreign addition fails closed.
     try { rmdirSync(lockFile) } catch { /* leave residue for inspection */ }
     throw error
+  }
+  // The kit's setup recovers an abandoned lock under `<lock>.reclaim`. It
+  // re-reads the lock after creating that mutex, so an owner written before
+  // the mutex appeared is seen and left alone; one completed after it would
+  // not be. This check runs after the owner write, which makes one of the two
+  // orderings certain: withdraw the lock when the mutex is there. The
+  // reclaimer may already have moved this directory aside, in which case the
+  // removals fail and it puts the directory back or keeps it for inspection.
+  // Withdraw through the token-checked release: by now the recovery may have
+  // finished and another writer may hold the canonical name, and that
+  // writer's lock must not be removed.
+  // Wait for the reclaimer to finish first. The release checks the owner and
+  // then renames; while the reclaimer is active it can move this lock aside
+  // between those two steps, and after it releases the mutex another writer
+  // can take the canonical name, which the rename would then move. Once the
+  // mutex is gone nothing else renames this live, fresh lock. A mutex that
+  // outlasts the wait does not prove the reclaimer dead (it may only be
+  // stalled), so the same race stays open: leave this lock in place and
+  // fail. Its owner names this process, so once it exits the lock is a
+  // recognized abandoned lock that the kit's preflight diagnoses or recovers.
+  if (reclaimMutexExists(lockFile)) {
+    if (!waitForReclaimMutex(lockFile)) return null
+    releaseLock(token, lockFile)
+    return null
+  }
+  // A whole recovery can also start and finish between the owner write and
+  // the mutex check above: the reclaimer moves this directory aside in a
+  // read-to-rename race and then cannot put it back because another writer
+  // took the canonical name in the meantime. The mutex is gone again, so only
+  // the canonical path tells which writer holds the lock. Succeed only while
+  // it still carries this token; otherwise leave everything where the
+  // reclaimer left it (it names that path) and report the lock as held.
+  const owned = openOwnedLock(token, lockFile)
+  const ours = owned !== null && lockOwnerOnly(lockFile)
+  closeOwnedLock(owned)
+  return ours ? token : null
+}
+
+// Same bound as _WCE_RUNTIME_LOCK_WITHDRAW_WAIT_SECONDS in the kit's setup.
+const RECLAIM_WITHDRAW_WAIT_MS = 3000
+
+function waitForReclaimMutex(lockFile) {
+  const pause = new Int32Array(new SharedArrayBuffer(4))
+  const deadline = Date.now() + RECLAIM_WITHDRAW_WAIT_MS
+  while (reclaimMutexExists(lockFile) && Date.now() < deadline) {
+    Atomics.wait(pause, 0, 0, 50)
+  }
+  return !reclaimMutexExists(lockFile)
+}
+
+function reclaimMutexExists(lockFile) {
+  try {
+    lstatSync(`${lockFile}.reclaim`)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -359,45 +417,92 @@ function main() {
     log('skip: dependency versions are pinned by MDM expected state')
     return 0
   }
-  if (throttled()) return 0
+  // The marker of an interrupted apply phase bypasses the throttle. A run that
+  // found no marker can still stamp 24h after another run's apply phase left
+  // one (that run can be killed between this run's marker check and its
+  // stamp). Checking the marker first makes the next start recover it anyway.
+  const isThrottled = throttled()
+  if (isThrottled && !existsSync(IN_PROGRESS_FILE)) return 0
   let lockToken = null
   const removeLockSignalHandlers = installLockSignalHandlers(() => lockToken)
+  const dropLock = () => {
+    if (!lockToken) return
+    if (!releaseLock(lockToken)) {
+      log('lock release skipped: lock owner token changed or lock is missing')
+    }
+    lockToken = null
+  }
   let outcome = 'ok' // becomes 'failed' on any check/install/test failure -> short backoff
+  // True once this run reached a result of its own. A run that only lost the
+  // lock to another writer leaves the timer to that writer.
+  let completed = false
   try {
+    // An apply phase that died mid-way left its marker. Re-testing (and a
+    // possible rollback) mutates the package pair and node_modules, so it
+    // runs under the lock, which is dropped again before the registry check.
+    if (existsSync(IN_PROGRESS_FILE)) {
+      lockToken = acquireLock()
+      if (!lockToken) {
+        log('skip: another update run is active (lock held)')
+        return 0
+      }
+      completed = true
+      if (!recoverInterruptedUpdate()) {
+        outcome = 'failed'
+        return 1
+      }
+      dropLock()
+      if (isThrottled) {
+        // Only the recovery was due; the registry check keeps its timer. A
+        // failed recovery above still stamps the short backoff.
+        log('done: registry check throttled')
+        completed = false
+        return 0
+      }
+    }
+    if (isThrottled) return 0
+
+    // The registry check holds no lock. This process is started by an async
+    // SessionStart hook and can be killed at any point, and the HUP/INT/TERM
+    // handlers cannot run while execFileSync blocks on npm. A lock held across
+    // `npm view` stayed behind when the process was killed there, and then
+    // blocked every later kit update.
+    log('check start')
+    const check = checkForUpdates()
+    if (check.failed) outcome = 'failed'
+    completed = true
+    // Another run's apply phase may have been interrupted while this check
+    // ran: the installed versions then look current, but they are untested
+    // and the marker is still there. Stamping 24h here would hide it from
+    // every later run, so such a run goes through the locked path below.
+    if (check.updates.length === 0 && !existsSync(IN_PROGRESS_FILE)) {
+      log('done: all dependencies up-to-date')
+      return 0
+    }
+
+    // Only the apply phase needs exclusion from kit setup / update / npm ci.
     lockToken = acquireLock()
     if (!lockToken) {
       log('skip: another update run is active (lock held)')
+      completed = false
       return 0
     }
     if (!recoverInterruptedUpdate()) {
       outcome = 'failed'
       return 1
     }
-    log('check start')
-
+    // The check ran unlocked, so another run may have applied these updates
+    // (or a kit update may have replaced node_modules) since. Decide again
+    // from what is installed now.
     const updates = []
-    for (const pkg of TARGETS) {
-      const installed = installedVersion(pkg)
-      if (!installed) {
-        log(`${pkg}: not installed, skipping`)
-        continue
-      }
-      let latest
-      try {
-        latest = latestVersion(pkg)
-      } catch (error) {
-        log(`${pkg}: 最新版の取得に失敗 (${error?.message ?? error}) — skip`)
-        outcome = 'failed' // a target could not be checked -> retry sooner
-        continue
-      }
-      if (compareVersions(latest, installed) > 0) {
-        log(`${pkg} ${installed} -> ${latest} (update available)`)
-        updates.push({ pkg, installed, latest })
+    for (const candidate of check.updates) {
+      const installed = installedVersion(candidate.pkg)
+      if (installed && compareVersions(candidate.latest, installed) > 0) {
+        updates.push({ ...candidate, installed })
       } else {
-        log(`${pkg} up-to-date (${installed})`)
+        log(`${candidate.pkg} no longer needs ${candidate.latest} (installed: ${installed ?? 'none'})`)
       }
     }
-
     if (updates.length === 0) {
       log('done: all dependencies up-to-date')
       return 0
@@ -451,26 +556,57 @@ function main() {
     return 0
   } finally {
     // Stamp AFTER a completed run: 24h on a clean run, 1h backoff on failure, so
-    // transient npm/network failures retry sooner. Runs skipped by
-    // throttle/lock do not own a token and therefore do not reset the timer.
-    if (lockToken) {
-      log(`run outcome: ${outcome}`)
-      try {
-        stampOutcome(outcome)
-      } catch (error) {
-        // The stamp is advisory. Preserve main's original result while still
-        // guaranteeing release of the token-bound writer lock.
-        log(`outcome stamp failed: ${error?.message ?? error}`)
-      } finally {
-        if (!releaseLock(lockToken)) {
-          log('lock release skipped: lock owner token changed or lock is missing')
+    // transient npm/network failures retry sooner. Runs skipped by throttle,
+    // or stopped by another writer's lock, do not reset the timer.
+    try {
+      if (completed) {
+        log(`run outcome: ${outcome}`)
+        try {
+          stampOutcome(outcome)
+        } catch (error) {
+          // The stamp is advisory. Preserve main's original result while still
+          // guaranteeing release of the token-bound writer lock.
+          log(`outcome stamp failed: ${error?.message ?? error}`)
         }
       }
+    } finally {
+      dropLock()
     }
     // Keep signal cleanup installed through one event-loop turn so a signal
     // queued during a synchronous release syscall can publish status 128+n.
     setImmediate(removeLockSignalHandlers)
   }
+}
+
+/**
+ * Compare installed versions with the registry. Takes no lock: it only reads
+ * node_modules and runs `npm view`.
+ */
+function checkForUpdates() {
+  const updates = []
+  let failed = false
+  for (const pkg of TARGETS) {
+    const installed = installedVersion(pkg)
+    if (!installed) {
+      log(`${pkg}: not installed, skipping`)
+      continue
+    }
+    let latest
+    try {
+      latest = latestVersion(pkg)
+    } catch (error) {
+      log(`${pkg}: 最新版の取得に失敗 (${error?.message ?? error}) — skip`)
+      failed = true // a target could not be checked -> retry sooner
+      continue
+    }
+    if (compareVersions(latest, installed) > 0) {
+      log(`${pkg} ${installed} -> ${latest} (update available)`)
+      updates.push({ pkg, installed, latest })
+    } else {
+      log(`${pkg} up-to-date (${installed})`)
+    }
+  }
+  return { updates, failed }
 }
 
 function rollback(backups) {
