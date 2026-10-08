@@ -48,17 +48,10 @@
 			"Edit(./.env.*)",
 			"Edit(./**/.env)",
 			"Edit(./**/.env.*)",
-			"Write(./.env)",
-			"Write(./.env.*)",
-			"Write(./**/.env)",
-			"Write(./**/.env.*)",
 			"Read(/secrets/**)",
 			"Edit(/secrets/**)",
-			"Write(/secrets/**)",
 			"Edit(~/.zshrc)",
-			"Write(~/.zshrc)",
-			"Edit(~/.bashrc)",
-			"Write(~/.bashrc)"
+			"Edit(~/.bashrc)"
 		],
 		"allow": [
 			"Read",

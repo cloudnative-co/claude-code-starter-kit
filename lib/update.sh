@@ -2014,6 +2014,65 @@ _strip_retired_hook_entries() {
   fi
 }
 
+# Write(path) deny rules config/permissions.json shipped until v0.79.1. Claude
+# Code 2.1.210+ ignores Write(path) rules (file permission checks only match
+# Edit(path), which covers every file-editing tool) and prints a startup
+# warning for each one. Their Edit(path) pairs stay in the kit, so dropping
+# them does not change what is protected. Historical list: never add to it.
+_INEFFECTIVE_KIT_PERMISSION_RULES=(
+  "Write(./.env)"
+  "Write(./.env.*)"
+  "Write(./**/.env)"
+  "Write(./**/.env.*)"
+  "Write(/secrets/**)"
+  "Write(~/.zshrc)"
+  "Write(~/.bashrc)"
+)
+
+# _strip_ineffective_permission_rules - Remove the kit's former Write(path)
+# deny rules from settings.json.
+#
+# Usage: _strip_ineffective_permission_rules <settings-file>
+#
+# A user-touched permissions.deny keeps kit-removed values through the
+# non-interactive 3-way merge (and the bootstrap merge keeps every existing
+# value), so the rules would survive the v0.79.2 update and keep the warnings.
+# Only exact matches of the strings above are removed from permissions.deny;
+# other rules (including Write rules the user added), their order and every
+# other key stay as they are, and a file without a match is not rewritten.
+_strip_ineffective_permission_rules() {
+  local settings_file="$1"
+  [[ -f "$settings_file" ]] || return 1
+  local rules_json
+  rules_json="$(printf '%s\n' "${_INEFFECTIVE_KIT_PERMISSION_RULES[@]}" \
+    | jq -R . | jq -cs .)" || return 1
+  local filter='
+    def ineffective: type == "string" and (. as $r | $rules | index($r) != null);'
+  local probe_rc=0
+  jq -e --argjson rules "$rules_json" "$filter"'
+    [.permissions? | objects | .deny? | arrays | .[] | select(ineffective)]
+    | length > 0
+  ' "$settings_file" >/dev/null 2>&1 || probe_rc=$?
+  case "$probe_rc" in
+    0) ;;
+    1) return 0 ;;
+    *) return 1 ;;
+  esac
+  local tmp
+  tmp="$(mktemp)" || return 1
+  _SETUP_TMP_FILES+=("$tmp")
+  if jq --argjson rules "$rules_json" "$filter"'
+    .permissions.deny |= map(select(ineffective | not))
+  ' "$settings_file" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$settings_file" || return 1
+    ok "Removed Write(path) permission rules Claude Code ignores from settings.json"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+    warn "Could not remove ineffective Write(path) permission rules from settings.json"
+    return 1
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # _strip_superseded_kit_hook_generations - Drop stale generations of kit hooks
 #
@@ -2506,6 +2565,11 @@ _update_phase_settings() {
   # current and new kit all differ, so without this sweep an already-duplicated
   # array persists until the kit next edits that very array.
   _strip_superseded_kit_hook_generations "$current_settings" "$new_settings" || return 1
+
+  # A user-touched permissions.deny keeps the Write(path) rules the kit shipped
+  # until v0.79.1 (the non-interactive merge keeps kit-removed values), and
+  # Claude Code 2.1.210+ warns about each of them at startup. Drop them.
+  _strip_ineffective_permission_rules "$current_settings" || return 1
 }
 
 # _claude_md_user_section_has_content - Returns 0 when the user section of a

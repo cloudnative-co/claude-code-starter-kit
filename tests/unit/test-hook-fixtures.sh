@@ -209,3 +209,32 @@ if [[ "$_auf_rc" -eq 0 ]] \
 else
   fail "hook-fixtures: auto-update should consume SessionStart fixture without network access"
 fi
+
+# Claude Code 2.1.210+ ignores Write(path) / NotebookEdit(path) / Glob(path)
+# permission rules and prints a startup warning for each one: file permission
+# checks only match Edit(path) (which covers every file-editing tool) and
+# Read(path). Every permission source the settings builder merges must avoid
+# them.
+_perm_bad_rules=""
+for _perm_src in "$PROJECT_DIR/config/settings-base.json" \
+    "$PROJECT_DIR/config/permissions.json" \
+    "$PROJECT_DIR"/features/*/hooks*.json; do
+  [[ -f "$_perm_src" ]] || continue
+  _perm_found=""
+  if ! _perm_found="$(jq -r '
+      (.permissions // {}) | to_entries[]
+      | select(.value | type == "array") | .value[]
+      | select(type == "string" and test("^(Write|NotebookEdit|Glob)\\("))
+    ' "$_perm_src" 2>/dev/null)"; then
+    _perm_found="(unreadable)"
+  fi
+  while IFS= read -r _perm_rule; do
+    [[ -n "$_perm_rule" ]] || continue
+    _perm_bad_rules+="${_perm_src#"$PROJECT_DIR"/}: ${_perm_rule}"$'\n'
+  done <<< "$_perm_found"
+done
+if [[ -z "$_perm_bad_rules" ]]; then
+  pass "hook-fixtures: permission rules avoid the Write/NotebookEdit/Glob(path) forms Claude Code ignores"
+else
+  fail "hook-fixtures: permission rules must use Edit(path)/Read(path); found $(printf '%s' "$_perm_bad_rules" | grep -c .): $(printf '%s' "$_perm_bad_rules" | tr '\n' ' ')"
+fi
