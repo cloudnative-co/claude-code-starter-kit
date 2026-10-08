@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.79.2] - 2026-10-08
+
+### Fixed
+- **キット導入後、Claude Code の起動時に `Permission deny rule (...settings.json): Write(./.env) is not matched by file permission checks — only Edit(path) rules are. ...` という警告が 7 行表示される問題を修正**: `config/permissions.json` の `permissions.deny` に `Write(path)` 形式のルールが 7 件（`Write(./.env)` / `Write(./.env.*)` / `Write(./**/.env)` / `Write(./**/.env.*)` / `Write(/secrets/**)` / `Write(~/.zshrc)` / `Write(~/.bashrc)`）含まれていた。Claude Code はファイルの権限チェックに `Edit(path)` ルールだけを使い（`Edit` ルールはファイルを編集するすべての組み込みツールに適用される）、`Write(path)` ルールは一致させない。2.1.210 以降はこの形式のルールごとに起動時の警告を表示する
+  - **修正**: 7 件の `Write(path)` ルールを `config/permissions.json` から削除した。同じパスの `Edit(path)` ルールは以前から併記されているため、拒否されるファイル操作は変わらない（削除したルールはもともと一致していなかった）。`allow` と他の deny ルールは変更していない
+  - **既存インストールへの影響**: 次回の `setup.sh --update`（`/update-kit`、自動アップデート、`install.sh` の再実行）で、`settings.json` の `permissions.deny` から上の 7 件が取り除かれる。`permissions.deny` を手で編集していた環境では、非対話更新の 3-way merge が「キットが削除した項目」を利用者側の値として残すため、更新時にこの 7 つの文字列に完全一致するルールだけを取り除く `_strip_ineffective_permission_rules` を `lib/update.sh` に追加した。対話・非対話のどちらの更新でも、3-way merge の実行有無にかかわらず毎回実行する。利用者が追加したルール（7 件以外の `Write(path)` ルールを含む）、ルールの並び順、`allow` / `ask` などほかのキーは変更せず、該当するルールがない `settings.json` は書き換えない
+  - **対象外のケース**: manifest を持たず既存の `settings.json` だけがある状態への新規インストールは更新処理を通らない（bootstrap merge だけを行う）ため、その `settings.json` に 7 件のルールが残っていれば警告も残る。該当する場合は `permissions.deny` から上の 7 件を手で削除する
+  - **MDM**: `mdm/render-expected.py` は `config/permissions.json` から `settings.json` を描画するため、配備される `settings.json` から 7 件のルールがなくなる（MDM の更新は `settings.json` 全体を置き換える）。`KIT_MDM_EXPECTED_POLICY_SHA256` は変わらない（Minimal / Standard / Full × 日本語の 3 通りで、変更前後の `policy.json` の SHA-256 が一致することを確認）。renderer と installer は変更していないため、install bundle の再配布は不要
+  - **回帰テスト**: アサーションを 12 件追加した。`tests/unit/test-hook-fixtures.sh` に、`config/settings-base.json` / `config/permissions.json` / `features/*/hooks*.json` の `permissions` に `Write(path)` / `NotebookEdit(path)` / `Glob(path)` 形式のルールがないことの静的検査を 1 件、`tests/unit/test-retired-hooks.sh` に掃除関数の単体テストを 6 件（7 件の削除と並び順の保持、キットが出荷していない `Write` ルールと deny 以外のリストを変えないこと、該当がなければ書き換えないこと、`permissions.deny` がない・形が想定外の設定で壊れないこと、不正な JSON で失敗して書き換えないこと、掃除対象が v0.79.1 の 7 件に固定されていること）、`tests/unit/test-update-refactor.sh` に更新の設定フェーズ（`_update_phase_settings`）のテストを 5 件（呼び出しの検査 1 件と、実際のビルドを使って通す 4 件：`permissions.deny` を編集した環境の非対話更新、bootstrap merge、未編集の環境、7 件を持たない環境は書き換えないこと）。修正前のコードでは 12 件中 10 件が失敗する（静的検査は 7 件を検出する。成功する 2 件は、不正な JSON で失敗することと、7 件を持たない環境を書き換えないことの確認）
+
 ## [0.79.1] - 2026-10-07
 
 ### Fixed

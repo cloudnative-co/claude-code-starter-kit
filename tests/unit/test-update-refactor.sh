@@ -690,3 +690,129 @@ _lgu_same_as() { # <settings-file> <reference-file>
     fail "$test_name"
   fi
 }
+
+# Up to v0.79.1 config/permissions.json shipped seven Write(path) deny rules,
+# which Claude Code 2.1.210+ ignores with a startup warning per rule. An
+# install whose permissions.deny the user edited keeps them through the
+# non-interactive 3-way merge ("removed by the kit"), so the update must sweep
+# them out of settings.json regardless of which merge path ran. The v0.79.1
+# shape is derived from a current build by putting the seven rules back.
+{
+  test_name="update: the permission sweep runs in the settings phase"
+  if declare -f _update_phase_settings \
+    | grep -qE '^[[:space:]]*_strip_ineffective_permission_rules "\$current_settings" \|\| return 1'; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+_pwu_tmp="$(mktemp -d)"
+_SETUP_TMP_FILES+=("$_pwu_tmp")
+_pwu_write='["Write(./.env)","Write(./.env.*)","Write(./**/.env)","Write(./**/.env.*)","Write(/secrets/**)","Write(~/.zshrc)","Write(~/.bashrc)"]'
+_pwu_user_rule='Read(~/my-notes/**)'
+_pwu_prepare_rc=0
+(
+  set +e +u
+  export HOME="$_pwu_tmp/home"
+  mkdir -p "$HOME"
+  # shellcheck source=lib/progress.sh
+  source "$PROJECT_DIR/lib/progress.sh"
+  # shellcheck source=i18n/en/strings.sh
+  source "$PROJECT_DIR/i18n/en/strings.sh"
+  # shellcheck source=profiles/standard.conf
+  source "$PROJECT_DIR/profiles/standard.conf"
+  # shellcheck disable=SC2034 # consumed by the sourced builder and updater
+  LANGUAGE=en COMMIT_ATTRIBUTION=false KIT_MDM_MANAGED=false DRY_RUN=false
+  # shellcheck disable=SC2034 # consumed by the sourced merge library
+  _MERGE_INTERACTIVE=false
+
+  build_settings_file "$_pwu_tmp/kit.json" >/dev/null 2>&1 || exit 1
+  jq --argjson w "$_pwu_write" '.permissions.deny |= (. + ($w - .))' \
+    "$_pwu_tmp/kit.json" > "$_pwu_tmp/v0791.json" || exit 1
+  jq --arg r "$_pwu_user_rule" '.permissions.deny += [$r]' \
+    "$_pwu_tmp/v0791.json" > "$_pwu_tmp/v0791-user.json" || exit 1
+  jq --arg r "$_pwu_user_rule" '.permissions.deny += [$r]' \
+    "$_pwu_tmp/kit.json" > "$_pwu_tmp/kit-user.json" || exit 1
+
+  _pwu_case() { # <label> <snapshot-file> <current-file> <snapshot-bootstrapped>
+    local dir="$_pwu_tmp/$1" rc=0
+    mkdir -p "$dir/.starter-kit-snapshot" || return 1
+    cp "$2" "$dir/.starter-kit-snapshot/settings.json" || return 1
+    cp "$3" "$dir/settings.json" || return 1
+    # shellcheck disable=SC2012 # one known path; only the inode column is read
+    ls -i "$dir/settings.json" | awk '{print $1}' > "$dir/inode-before"
+    # shellcheck disable=SC2034 # consumed by the sourced merge library
+    CLAUDE_DIR="$dir" _MERGE_PREFS_FILE="" _MERGE_PREFS_LOADED=false
+    # shellcheck disable=SC2034 # consumed by _update_phase_settings
+    _SNAPSHOT_BOOTSTRAPPED="$4"
+    _UPDATE_ALL_UPDATED_FILES=()
+    _update_phase_settings "$dir" "$dir/.starter-kit-snapshot" \
+      > "$dir/phase.log" 2>&1 || rc=$?
+    printf '%s\n' "$rc" > "$dir/rc"
+  }
+  _pwu_case user-deny "$_pwu_tmp/v0791.json" "$_pwu_tmp/v0791-user.json" false
+  _pwu_case bootstrap "$_pwu_tmp/v0791.json" "$_pwu_tmp/v0791-user.json" true
+  _pwu_case untouched "$_pwu_tmp/v0791.json" "$_pwu_tmp/v0791.json" false
+  _pwu_case current-shape "$_pwu_tmp/kit.json" "$_pwu_tmp/kit-user.json" false
+) || _pwu_prepare_rc=$?
+
+# No Write(path) rule left, the user's own rule kept, and the document equal to
+# the current kit build plus that rule.
+_pwu_converged() { # <settings-file>
+  jq -e --slurpfile kit "$_pwu_tmp/kit.json" --arg r "$_pwu_user_rule" '
+    ([.permissions.deny[] | select(startswith("Write("))] | length) == 0
+    and (.permissions.deny | index($r)) != null
+    and (.permissions.deny | sort) == (($kit[0].permissions.deny + [$r]) | sort)
+    and del(.permissions.deny) == ($kit[0] | del(.permissions.deny))
+  ' "$1" >/dev/null 2>&1
+}
+
+{
+  test_name="update: a user-edited permissions.deny loses the kit Write(path) rules in a non-interactive update"
+  if [[ "$_pwu_prepare_rc" -eq 0 \
+    && "$(cat "$_pwu_tmp/user-deny/rc" 2>/dev/null)" == "0" ]] \
+    && [[ "$(jq '[.permissions.deny[] | select(startswith("Write("))] | length' "$_pwu_tmp/v0791-user.json")" == "7" ]] \
+    && _pwu_converged "$_pwu_tmp/user-deny/settings.json"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="update: a bootstrap merge over a v0.79.1 install drops the kit Write(path) rules"
+  if [[ "$_pwu_prepare_rc" -eq 0 \
+    && "$(cat "$_pwu_tmp/bootstrap/rc" 2>/dev/null)" == "0" ]] \
+    && _pwu_converged "$_pwu_tmp/bootstrap/settings.json"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="update: an untouched v0.79.1 install is replaced by the current build"
+  if [[ "$_pwu_prepare_rc" -eq 0 \
+    && "$(cat "$_pwu_tmp/untouched/rc" 2>/dev/null)" == "0" ]] \
+    && cmp -s "$_pwu_tmp/untouched/settings.json" "$_pwu_tmp/kit.json" \
+    && ! grep -q '"Write(' "$_pwu_tmp/untouched/settings.json"; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="update: an install without the kit Write(path) rules is not rewritten"
+  # shellcheck disable=SC2012 # one known path; only the inode column is read
+  if [[ "$_pwu_prepare_rc" -eq 0 \
+    && "$(cat "$_pwu_tmp/current-shape/rc" 2>/dev/null)" == "0" ]] \
+    && cmp -s "$_pwu_tmp/current-shape/settings.json" "$_pwu_tmp/kit-user.json" \
+    && [[ "$(ls -i "$_pwu_tmp/current-shape/settings.json" | awk '{print $1}')" \
+      == "$(cat "$_pwu_tmp/current-shape/inode-before")" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}

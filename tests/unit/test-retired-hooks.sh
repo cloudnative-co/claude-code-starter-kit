@@ -561,4 +561,139 @@ printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command"
   fi
 }
 
+# ── _strip_ineffective_permission_rules ────────────────────────────────────
+#
+# Up to v0.79.1 the kit shipped seven Write(path) deny rules next to their
+# Edit(path) pairs. Claude Code 2.1.210+ ignores Write(path) rules and prints a
+# startup warning for each one. A user-touched permissions.deny keeps them
+# through the non-interactive 3-way merge ("removed by the kit"), so this sweep
+# removes exactly those seven strings on every update.
+_rh_perm() { # <settings-file>
+  HOME=/home/u "${BASH:-bash}" -c '
+    set -uo pipefail
+    PROJECT_DIR="'"$PROJECT_DIR"'"
+    ok(){ :; }; warn(){ :; }; info(){ :; }; is_true(){ [[ "$1" == "true" ]]; }
+    _SETUP_TMP_FILES=()
+    source "$PROJECT_DIR/lib/features.sh"
+    source "$PROJECT_DIR/lib/snapshot.sh"
+    source "$PROJECT_DIR/lib/update.sh" 2>/dev/null || true
+    _strip_ineffective_permission_rules "'"$1"'"
+  '
+}
+
+_rh_kit_write_rules='["Write(./.env)","Write(./.env.*)","Write(./**/.env)","Write(./**/.env.*)","Write(/secrets/**)","Write(~/.zshrc)","Write(~/.bashrc)"]'
+
+{
+  test_name="permission-sweep: the seven kit Write(path) deny rules are removed, other rules keep their order"
+  _rh_pm="$_rh_tmp/perm-strip.json"
+  printf '%s\n' '{"permissions":{
+    "allow":["Read","Write","Edit"],
+    "deny":["Bash(sudo *)","Edit(./.env)","Write(./.env)","Write(./.env.*)","Bash(my-own *)",
+            "Write(./**/.env)","Write(./**/.env.*)","Read(/secrets/**)","Edit(/secrets/**)",
+            "Write(/secrets/**)","Edit(~/.zshrc)","Write(~/.zshrc)","Edit(~/.bashrc)",
+            "Write(~/.bashrc)","Read(~/my-notes/**)"],
+    "defaultMode":"default"},
+    "env":{"A":"1"}}' > "$_rh_pm"
+  _rh_rc=0; _rh_perm "$_rh_pm" >/dev/null 2>&1 || _rh_rc=$?
+  if [[ "$_rh_rc" -eq 0 ]] \
+    && jq -e '
+      .permissions.deny == ["Bash(sudo *)","Edit(./.env)","Bash(my-own *)","Read(/secrets/**)",
+                            "Edit(/secrets/**)","Edit(~/.zshrc)","Edit(~/.bashrc)","Read(~/my-notes/**)"]
+      and .permissions.allow == ["Read","Write","Edit"]
+      and .permissions.defaultMode == "default"
+      and .env == {"A":"1"}' "$_rh_pm" >/dev/null 2>&1; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="permission-sweep: Write rules the kit never shipped and non-deny lists are untouched"
+  _rh_pm="$_rh_tmp/perm-user-write.json"
+  printf '{"permissions":{"allow":["Write(./.env)"],"ask":["Write(~/.zshrc)"],"deny":["Write(./.env.local)","Write(~/.ssh/config)"," Write(./.env)"]}}\n' > "$_rh_pm"
+  _rh_before="$(cat "$_rh_pm")"
+  _rh_inode_before="$(_rh_inode "$_rh_pm")"
+  _rh_rc=0; _rh_perm "$_rh_pm" >/dev/null 2>&1 || _rh_rc=$?
+  if [[ "$_rh_rc" -eq 0 && "$(cat "$_rh_pm")" == "$_rh_before" \
+    && "$(_rh_inode "$_rh_pm")" == "$_rh_inode_before" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="permission-sweep: settings without a kit Write rule are not rewritten"
+  _rh_pm="$_rh_tmp/perm-clean.json"
+  # Compact, key order the kit never writes: any jq round trip changes bytes.
+  printf '{"permissions":{"deny":["Edit(./.env)","Read(./.env)"],"allow":["Edit"]},"env":{"A":"1"}}\n' > "$_rh_pm"
+  _rh_before="$(cat "$_rh_pm")"
+  _rh_inode_before="$(_rh_inode "$_rh_pm")"
+  _rh_rc=0; _rh_perm "$_rh_pm" >/dev/null 2>&1 || _rh_rc=$?
+  if [[ "$_rh_rc" -eq 0 && "$(cat "$_rh_pm")" == "$_rh_before" \
+    && "$(_rh_inode "$_rh_pm")" == "$_rh_inode_before" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="permission-sweep: settings without permissions.deny (or with odd shapes) are left alone"
+  _rh_ok=true
+  _rh_i=0
+  for _rh_doc in '{"env":{"A":"1"}}' '{"permissions":{"allow":["Edit"]}}' \
+      '{"permissions":{"deny":null}}' '{"permissions":{"deny":"Write(./.env)"}}' \
+      '{"permissions":"Write(./.env)"}' '{"permissions":{"deny":[{"rule":"Write(./.env)"},7]}}' \
+      '[]' '{}'; do
+    _rh_i=$((_rh_i + 1))
+    _rh_pm="$_rh_tmp/perm-shape-$_rh_i.json"
+    printf '%s\n' "$_rh_doc" > "$_rh_pm"
+    _rh_rc=0; _rh_perm "$_rh_pm" >/dev/null 2>&1 || _rh_rc=$?
+    if [[ "$_rh_rc" -ne 0 || "$(cat "$_rh_pm")" != "$_rh_doc" ]]; then
+      _rh_ok=false
+    fi
+  done
+  if [[ "$_rh_ok" == "true" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="permission-sweep: invalid settings fail without being rewritten"
+  _rh_pm="$_rh_tmp/perm-broken.json"
+  printf '{"permissions": ' > "$_rh_pm"
+  _rh_rc=0; _rh_perm "$_rh_pm" >/dev/null 2>&1 || _rh_rc=$?
+  _rh_rc_missing=0; _rh_perm "$_rh_tmp/no-such-settings.json" >/dev/null 2>&1 || _rh_rc_missing=$?
+  if [[ "$_rh_rc" -ne 0 && "$_rh_rc_missing" -ne 0 \
+    && "$(cat "$_rh_pm")" == '{"permissions": ' ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name"
+  fi
+}
+
+{
+  test_name="permission-sweep: the swept list is exactly the Write rules v0.79.1 shipped"
+  # Pin the sweep to the historical kit rules; a new kit rule must never be
+  # added to this list (the static check in test-hook-fixtures.sh keeps
+  # config/permissions.json free of the form).
+  _rh_swept="$(HOME=/home/u "${BASH:-bash}" -c '
+    PROJECT_DIR="'"$PROJECT_DIR"'"
+    ok(){ :; }; warn(){ :; }; info(){ :; }; is_true(){ [[ "$1" == "true" ]]; }
+    source "$PROJECT_DIR/lib/features.sh"
+    source "$PROJECT_DIR/lib/snapshot.sh"
+    source "$PROJECT_DIR/lib/update.sh" 2>/dev/null || true
+    printf "%s\n" "${_INEFFECTIVE_KIT_PERMISSION_RULES[@]}"
+  ' 2>/dev/null | jq -R . | jq -cs .)"
+  if [[ "$_rh_swept" == "$(jq -c . <<< "$_rh_kit_write_rules")" ]]; then
+    pass "$test_name"
+  else
+    fail "$test_name (got: $_rh_swept)"
+  fi
+}
+
 rm -rf "$_rh_tmp"
