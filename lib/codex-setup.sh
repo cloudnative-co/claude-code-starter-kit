@@ -123,7 +123,7 @@ _smoke_test_openai_key() {
     curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
     --config - \
     -X POST \
-    -d '{"model":"gpt-4o-mini","input":"test"}' \
+    -d '{"model":"gpt-6-luna","input":"test"}' \
     https://api.openai.com/v1/responses 2>/dev/null || echo "000")"
   [[ "$_models_code" == "200" ]] && [[ "$_responses_code" != "401" ]] && [[ "$_responses_code" != "403" ]]
 }
